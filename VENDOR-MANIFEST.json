@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "100e84c5a79e7541a4fe74a994abdcef7d4caf4a2d7b480d289765a3d2adfb90",
-      "bytes": 36638,
+      "sha256": "5cbfea00f54f92aa02833ec28960b36376946cf6f08e397dd149db8c5cb11b55",
+      "bytes": 37376,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -17,6 +17,7 @@
       ],
       "imports": [
         "tools/lib/good-when.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/traceability.mjs",
         "tools/lib/validator.mjs"
       ],
@@ -73,8 +74,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "28f9f2669390b02432f3a85343f336b2c4afd995c05d581d1aee0c66b146a8b6",
-      "bytes": 25239,
+      "sha256": "0809ddf0910403e2b262110b03e6c2e2358a163926dc59c487293a9049b3a96f",
+      "bytes": 25540,
       "exports": [
         "REDACTED_CHANNEL_VALUE",
         "UNRESOLVED_CHANNEL_PREFIX",
@@ -91,6 +92,7 @@
       ],
       "imports": [
         "tools/lib/artefact-classify.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/promql-canon.mjs"
       ],
       "npm": [],
@@ -427,8 +429,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "e5d543a66b9ea26e3d9c91f95bb41948446703347de0364620466cf0a46ba898",
-      "bytes": 135101,
+      "sha256": "08e156a1f1b582dbbec85059843066da32e3771a054c59b76c253e2ad795583d",
+      "bytes": 140651,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -446,6 +448,7 @@
         "tools/lib/backend-products.mjs",
         "tools/lib/exporter-metrics.mjs",
         "tools/lib/l2x.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
         "tools/lib/promql.mjs",
         "tools/lib/sli-inference.mjs",
@@ -544,8 +547,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "cb2f8be454aa9ad87b4624fbcd714936c9a42da27cde28b64a814c5fb6d1b10f",
-      "bytes": 40725,
+      "sha256": "f276f83d62f43458511e5e6a97a23697f14b57563290dc0468923d2a5bb76544",
+      "bytes": 43992,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -556,6 +559,7 @@
         "tools/lib/artefact-model.mjs",
         "tools/lib/exporter-metrics.mjs",
         "tools/lib/identity-modes.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/live-fetch.mjs"
       ],
       "npm": [],
@@ -757,6 +761,23 @@
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/lifecycle.mjs": {
+      "sha256": "5adfa802f9072bac0df802a9ac72d5fc08fed207aae463452cefd9ad087a2587",
+      "bytes": 7167,
+      "exports": [
+        "LIFECYCLE_ANNOTATION",
+        "LIFECYCLE_STATES",
+        "lifecycleBySymbol",
+        "lifecycleStateFor",
+        "normalizeLifecycleEnvironment",
+        "readLifecycleBlock",
+        "sameDeployment"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/live-fetch.mjs": {
       "sha256": "8bfbcdf7d472765f7983cdd39fa564cefc2904927ef92615e366320951dd9293",
@@ -1067,8 +1088,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/remediation-flow.mjs": {
-      "sha256": "2e77ce4c873dacb591bbf56520fbed45a74adc0cf91cf949fd492722c843d61a",
-      "bytes": 27163,
+      "sha256": "f0fb4350dd30a5434e92e67b3f5ea5a655aece1ffb38f724ca5d744882c7d350",
+      "bytes": 27274,
       "exports": [
         "BLOCKING_STATES",
         "FLOW_STATES",

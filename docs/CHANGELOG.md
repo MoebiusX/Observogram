@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added: rules authored ahead of an environment say so — `# observogram-lifecycle:`, and the diff parks them as declared ahead
+A team writes a rules file before its service reaches prod, and every rule in it read *declared, not live*. The downstream carried a comment block and a diff change for this, whose new keys moved every diff golden; this is that shape, re-implemented with every key conditional.
+- **`tools/lib/lifecycle.mjs`** (new module; `LIFECYCLE_ANNOTATION`, `LIFECYCLE_STATES`, `readLifecycleBlock`, `lifecycleBySymbol`, `lifecycleStateFor`, `normalizeLifecycleEnvironment`) reads the block from a file's raw text and the `observogram.lifecycle` annotation. A state is `deployed`, `planned` or `not-deployed`. The block must open the file, so a rule's description quoting one is not a statement.
+- **`tools/lib/crawler.mjs`** writes the annotation (`summary.discovered.lifecycleStatements`). A symbol is covered only when every file that speaks for it carries a block with the same deployment, whatever reads it counting too, down the chain, so a statement can only hide what its own file, or files that say the same, declare. A block that does not read, or that covers nothing, is a warning that never quotes the file.
+- **`tools/lib/adapter.mjs`** stamps `lifecycle` on SLIs, SLOs, recording rules, alert rules, burn-rate alerts and declared metrics; **`tools/lib/artefact-model.mjs`** `foldMetricFamilies` keeps it only when every series carries the same deployment.
+- **`tools/lib/diff.mjs`** takes `opts.environment` (else each pack's own, and the statement must hold for both) and parks an unpaired group whose every artefact states a state other than `deployed` in `layers.<L>.declaredAhead`, on either side, out of the union; `notObserved` wins, and on side B service scope does too. `summary.declaredAhead` and `summary.lifecycleEnvironments` and the bucket exist only when a pack carries the annotation, so **no golden moved**. **`tools/lib/remediation-flow.mjs`** reads a parked alert as `unverified`. **`tools/lib/journey.mjs`** records the count beside the alignment and takes `gate.maxDeclaredAhead`.
+- **The studio**: Compare's summary gets a *declared ahead* cell, the drift drill and the verdict screens a note, the diagnostic grade a clause, and each artefact's card the reason.
+- **Not caught**: a statement nobody updates keeps a rule parked, and a statement does not expire. Parked artefacts leave the union, so a pack with everything parked reads 100%; the count stays beside it. Requirement chains do not read the statement. A live pack does not record which stack it read, and a `PrometheusRule` custom resource is not walked, so a rule in one does not keep a series visible.
+- **Tests**: `tools/test-lifecycle.mjs`. **Docs**: `docs/DIFF.md` (*Declared ahead of an environment*), `docs/ADAPTER.md`, `docs/DOWNSTREAM.md`.
+
 ### Changed: a pack can keep a service's recording-rule names as they are — spec 1.4's 2026-11-01 revision
 The spec now takes any Prometheus metric name with at least one `:` and no empty segment as `recording_rules[].name` (the three-segment form becomes a SHOULD), so a pack that imports a service's two-segment or mixed-case rules validates.
 - **`vendor/observability-pack-spec/`** synced from upstream.

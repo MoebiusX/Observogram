@@ -29,6 +29,7 @@
 //     requireGradePass: true
 //     minAlignmentPct: 85
 //     maxDeclaredNotLive: 0
+//     maxDeclaredAhead: 0   # rules a lifecycle block parks as not deployed yet
 //     maxDrifted: 5
 //     maxLiveAgeHours: 24
 //     failOnPartialEvidence: true   # any probe family FAILED → the verdict is not trustworthy
@@ -812,6 +813,9 @@ export function evaluateGate(gate, facts) {
   if (Number.isFinite(gate.maxDeclaredNotLive) && facts.declaredNotLive > gate.maxDeclaredNotLive) {
     add('maxDeclaredNotLive', `${facts.declaredNotLive} declared artefact(s) not confirmed live (max ${gate.maxDeclaredNotLive})`);
   }
+  if (Number.isFinite(gate.maxDeclaredAhead) && (facts.declaredAhead ?? 0) > gate.maxDeclaredAhead) {
+    add('maxDeclaredAhead', `${facts.declaredAhead} declared artefact(s) stated as not deployed yet (max ${gate.maxDeclaredAhead})`);
+  }
   if (Number.isFinite(gate.maxDrifted) && facts.drifted > gate.maxDrifted) {
     add('maxDrifted', `${facts.drifted} drifted artefact(s) (max ${gate.maxDrifted})`);
   }
@@ -1233,6 +1237,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     gradePass: !!audit.passes,
     alignmentPct: Math.round((diff.summary?.alignment ?? 0) * 100),
     declaredNotLive: diff.summary?.onlyInA ?? 0,
+    declaredAhead: diff.summary?.declaredAhead ?? 0,
     liveNotDeclared: diff.summary?.onlyInB ?? 0,
     drifted: diff.summary?.drifted ?? 0,
     aligned: diff.summary?.aligned ?? 0,
@@ -1329,6 +1334,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       aligned: facts.aligned,
       drifted: facts.drifted,
       declaredNotLive: facts.declaredNotLive,
+      // Only when a lifecycle block parked something: out of the alignment above.
+      ...(facts.declaredAhead ? { declaredAhead: facts.declaredAhead } : {}),
       liveNotDeclared: facts.liveNotDeclared,
       outOfScope: diff.summary?.outOfScope ?? 0,
       // Placeholders parked on either side (never paired, never counted).
@@ -1621,7 +1628,7 @@ export function renderJourneyMarkdown(r) {
     `| Scope | env=${r.scope.env || '-'} service=${r.scope.service || '-'} mode=${r.scope.scopeMode || 'default'} |`,
     `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%) |`,
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
-    `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.liveNotDeclared} live-not-declared |`,
+    `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.declaredAhead ? `${r.drift.declaredAhead} declared ahead · ` : ''}${r.drift.liveNotDeclared} live-not-declared |`,
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
     `| Live probes | ${probesLine(r)} |`,
     `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,

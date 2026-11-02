@@ -21,9 +21,10 @@
 // for the engineer to fill in.
 // ============================================================
 
+import { LIFECYCLE_ANNOTATION, readLifecycleBlock, sameDeployment } from './lifecycle.mjs';
 import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from './mini-yaml.mjs';
 import {
-  inferSlisFromRecordingRules, ruleNameToSliId,
+  inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
   operationalAlertRules, isGrafanaManagedRule, alertRuleExpr,
   isSpecRecordingRuleName, canonicalRuleDuration, SPEC_DURATION_RE,
@@ -34,7 +35,7 @@ import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import {
-  DYNAMIC_FAMILY_LIMITS, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
+  DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
 
@@ -963,6 +964,15 @@ export function crawlFiles(filesInput, opts = {}) {
   const exporterAnnotations = {
     ...buildExporterAnnotations(exporters),
     ...buildMetricFamilyAnnotations(metricFamilies),
+    ...buildLifecycleAnnotations(classified, {
+      recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary,
+      linkedSlo: (expr) => recordedSloForExpr(expr, (id) => sloMap.has(id)),
+      // The ids an alert derives when the repo records no SLI (the loop above).
+      derivedIds: haveRecordedSlis ? null : (slo) => {
+        const sloId = symbolId(slo, `${repoNs}_slo`);
+        return { sloId, sliId: symbolId(sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId, `${repoNs}_sli`) };
+      },
+    }),
   };
 
   // ----- canonical assembly -----
@@ -1827,6 +1837,105 @@ function buildMetricFamilyAnnotations(families) {
     'crawler.discovered.metric_families': annotationJson(sorted),
     'crawler.discovered.metric_families_count': String(sorted.length),
   };
+}
+
+// observogram.lifecycle: what each rules file's lifecycle block covers
+// (tools/lib/lifecycle.mjs). A symbol is covered only when every file that speaks
+// for it states the same. Whatever reads a series speaks for it too, down the chain:
+// an alert or a dashboard in another file keeps the SLO behind it, its rules and
+// their metrics visible. So a statement can only ever hide what its own file, or
+// files that say the same, declare.
+function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, derivedIds }) {
+  const blocks = new Map();
+  for (const f of classified) {
+    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template') continue;
+    const read = readLifecycleBlock(f.content);
+    if (!read) continue;
+    if (read.problem) summary.warnings.push(`${f.relPath}: the lifecycle block is not read: ${read.problem}.`);
+    else blocks.set(f.relPath, read.statement);
+  }
+  if (!blocks.size) return {};
+  const owners = new Map();
+  const own = (symbol, file) => {
+    if (!owners.has(symbol)) owners.set(symbol, new Set());
+    owners.get(symbol).add(file);
+  };
+  const fileOf = (origin) => String(origin ?? '').split('#')[0];
+  const rulesByName = new Map(recordingRules.map((rule) => [rule.name, rule]));
+  // A rule the spec cannot declare is still a reader of what its expression names.
+  const omittedRuleExprs = new Map(metricDefinitions
+    .filter((metric) => metric.originKind === 'recording-rule-output' && !rulesByName.has(metric.name))
+    .map((metric) => [metric.name, metric.query]));
+  const ownExpr = (expr, file, seen = new Set()) => {
+    for (const raw of extractPrometheusMetricNames(expr)) {
+      const name = normalizePrometheusMetricName(raw);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      own(`metrics.${name}`, file);
+      if (rulesByName.has(name)) ownRule(rulesByName.get(name), file, seen);
+      else if (omittedRuleExprs.has(name)) ownExpr(omittedRuleExprs.get(name), file, seen);
+    }
+  };
+  const ownRule = (rule, file, seen) => {
+    own(`queries.recording_rules.${rule.name}`, file);
+    const sliId = ruleNameToSliId(rule.name);
+    if (sliId) {
+      own(`slis.${sliId}`, file);
+      own(`slos.${ruleNameToSloId(rule.name)}`, file);
+    }
+    ownExpr(rule.expr, file, seen);
+  };
+  recordingRules.forEach((rule, i) => {
+    ownRule(rule, fileOf(evidence[`QRY-${i + 1}-${slug(rule.name).slice(0, 16)}`]), new Set());
+  });
+  for (const { rule, relPath } of alertRules) {
+    const file = fileOf(relPath);
+    const { alertName, expr, slo } = burnCandidateFromAlertRule(rule);
+    const linked = linkedSlo(expr);
+    if (linked) {
+      own(`policy.burn_rate_alerts.${linked}`, file);
+      own(`slos.${linked}`, file);
+      own(`slis.${linked.replace(/_99$/, '')}`, file);
+    } else if (derivedIds) {
+      const { sloId, sliId } = derivedIds(slo);
+      own(`policy.burn_rate_alerts.${sloId}`, file);
+      own(`slos.${sloId}`, file);
+      own(`slis.${sliId}`, file);
+    } else {
+      own(`alerting.rules.${String(alertName).trim()}`, file);
+    }
+    ownExpr(expr, file);
+  }
+  // Every other reader of a series: a dashboard, the code, a rule the spec omits.
+  for (const metric of metricDefinitions) {
+    const file = fileOf(metric.origin);
+    own(`metrics.${metric.name}`, file);
+    if (rulesByName.has(metric.name)) ownRule(rulesByName.get(metric.name), file, new Set([metric.name]));
+    else if (omittedRuleExprs.has(metric.name)) ownExpr(omittedRuleExprs.get(metric.name), file, new Set([metric.name]));
+  }
+  // A burn alert no rule wrote (synthesized for an SLO) goes with its SLO.
+  for (const { slo } of burnRateAlerts) {
+    const symbol = `policy.burn_rate_alerts.${slo}`;
+    if (!owners.has(symbol)) for (const file of owners.get(`slos.${slo}`) || []) own(symbol, file);
+  }
+  // A manifest's dynamic family declares the names it matches.
+  for (const family of metricFamilies) {
+    const { re } = compileMetricFamilyPattern(family.pattern, { timed: false });
+    if (!re) continue;
+    for (const { name } of metricDefinitions) if (re.test(name)) own(`metrics.${name}`, family.file);
+  }
+  const statements = [...blocks.keys()].sort().map((source) => ({
+    source,
+    ...blocks.get(source),
+    symbols: [...owners]
+      .filter(([, files]) => files.has(source) && [...files].every((file) => blocks.has(file) && sameDeployment(blocks.get(file), blocks.get(source))))
+      .map(([symbol]) => symbol).sort(),
+  }));
+  for (const { source, symbols } of statements) {
+    if (!symbols.length) summary.warnings.push(`${source}: the lifecycle block covers nothing: every rule of this file is also read or declared elsewhere.`);
+  }
+  summary.discovered.lifecycleStatements = statements.length;
+  return { [LIFECYCLE_ANNOTATION]: annotationJson(statements) };
 }
 
 // crawler.discovered.exporters: each prebuilt exporter the crawl learned

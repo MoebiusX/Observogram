@@ -92,6 +92,7 @@ The adapter walks each top-level spec section into a deterministic family of lay
 | `spec.profiling` | **L2X** | `PROF-01` | Extended surface from spec §5.12.4 |
 | `metadata.annotations.mcp.discovered.scrape_jobs` | L2 | `SCRAPE-{NN}` | Expand-level live scrape evidence |
 | `metadata.annotations.mcp.discovered.metric_names_sample` | L2 | `METRIC-{NN}` | Expand-level live metric inventory |
+| `metadata.annotations.observogram.lifecycle` | every layer it names | `lifecycle` on the artefact | A statement that rules were authored ahead of an environment: `[{ source, maturity?, deployment: { <env>: deployed \| planned \| not-deployed }, symbols: [...] }]`. A symbol is `slis.<id>`, `slos.<id>`, `queries.recording_rules.<name>`, `alerting.rules.<name>`, `policy.burn_rate_alerts.<slo>` or `metrics.<name>`. What does not read is left out, and the first statement naming a symbol holds it. No statement, no key (`docs/DIFF.md`, *Declared ahead of an environment*). |
 | `metadata.annotations.crawler.discovered.metric_families` | L2 | `METRIC-FAM-{NN}` | A manifest's dynamic families, one artefact per pattern (`spec.name_pattern`, `spec.origin_kind: exporter-family`); [DIFF.md](DIFF.md), *Dynamic metric families* |
 | `spec.network` | **L2X** | `NET-01` | |
 | `spec.policy_engine` | **L2X** | `POE-01` | |

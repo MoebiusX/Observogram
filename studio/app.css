@@ -9522,7 +9522,8 @@ select.build-edit-input { appearance: auto; }
    the cell is a .compare-cell (its card background). Text in --ink / --ink-2 / --ink-3 only, measured on --card by the
    AA scan in tools/test-build-model.mjs; ux.css and reskin.css restyle no .compare-identity- rule (asserted). ==== */
 .compare-summary.has-mode { grid-template-columns: repeat(6, 1fr); }
-.compare-summary.has-mode.has-unchecked { grid-template-columns: repeat(7, 1fr); }
+.compare-summary.has-mode.has-unchecked, .compare-summary.has-mode.has-ahead { grid-template-columns: repeat(7, 1fr); }
+.compare-summary.has-mode.has-unchecked.has-ahead { grid-template-columns: repeat(8, 1fr); }
 .compare-cell.c-mode { border-top: 1px solid var(--line); }
 .compare-cell.c-mode .c-val { font: 600 16px/1.4 var(--sans); font-style: normal; color: var(--ink); }
 .compare-identity { margin: 10px 28px 0; padding: 6px 12px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); }
@@ -9534,7 +9535,7 @@ select.build-edit-input { appearance: auto; }
 .compare-identity-option input:disabled ~ .compare-identity-label { color: var(--ink-3); }
 .compare-identity-note { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
 .compare-identity-unavailable { margin: 6px 0 0; font: 12.5px/1.45 var(--sans); color: var(--ink-2); }
-@media (max-width: 900px) { .compare-summary.has-mode, .compare-summary.has-mode.has-unchecked { grid-template-columns: 1fr 1fr; } .compare-identity-options { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .compare-summary.has-mode, .compare-summary.has-mode.has-unchecked, .compare-summary.has-mode.has-ahead, .compare-summary.has-mode.has-unchecked.has-ahead { grid-template-columns: 1fr 1fr; } .compare-identity-options { grid-template-columns: 1fr; } }
 /* ==== MCP server settings (rebadge batch 4, D2): the MCP panel's Server settings modal — studio/mcp-settings-view.mjs,
    drawn into #mss-host (appended last to <body>) over a scrim, in the .set-editor pattern. The dialog is the card
    (--card); every other .mss- rule draws no surface of its own, and the tones (warn, error, ok) are a left border, never

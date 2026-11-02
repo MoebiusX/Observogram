@@ -1264,13 +1264,15 @@ function diffDigest(diff, packB, lens) {
     return productSurface(art, lens, pack);
   };
 
-  const totals = { aligned: 0, byPattern: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, notObserved: 0 };
+  const totals = { aligned: 0, byPattern: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, notObserved: 0, declaredAhead: 0 };
   const rows = [];
   for (const L of LAYERS_FOR_DIFF) {
     const bucket = diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
     // Artefacts one pack holds in a family the other had no way to observe
     // (the engine's `notObserved`): unchecked — not a difference, not a match.
     const notObserved = (bucket.notObserved || []).filter(e => passesLens(e, e.side === 'b' ? 'b' : 'a'));
+    // Authored ahead of the compared environment, by a statement in its file.
+    const declaredAhead = (bucket.declaredAhead || []).filter(e => passesLens(e, e.side === 'b' ? 'b' : 'a'));
     // inBoth = shared identity. Split it: structurally-equal pairs are
     // aligned; same-identity-but-divergent pairs are drifted. Matching is
     // an object comparison, not a name check.
@@ -1292,7 +1294,7 @@ function diffDigest(diff, packB, lens) {
     // platform inventory. Shown muted, never counted as drift.
     const outOfScope = (bucket.outOfScope || []).filter(e => passesLens(e, 'b'));
     if (aligned.length === 0 && drifted.length === 0 && onlyInA.length === 0
-        && onlyInB.length === 0 && outOfScope.length === 0 && scaffold.length === 0 && notObserved.length === 0) continue;
+        && onlyInB.length === 0 && outOfScope.length === 0 && scaffold.length === 0 && notObserved.length === 0 && declaredAhead.length === 0) continue;
     totals.aligned += aligned.length;
     totals.byPattern += aligned.filter(e => e.matchedBy === 'declared-family').length;
     totals.drifted += drifted.length;
@@ -1301,7 +1303,8 @@ function diffDigest(diff, packB, lens) {
     totals.outOfScope += outOfScope.length;
     totals.scaffold += scaffold.length;
     totals.notObserved += notObserved.length;
-    rows.push({ L, name: COMPARE_LAYERS.find(x => x.id === L)?.name || L, aligned, drifted, onlyInA, onlyInB, outOfScope, scaffold, notObserved });
+    totals.declaredAhead += declaredAhead.length;
+    rows.push({ L, name: COMPARE_LAYERS.find(x => x.id === L)?.name || L, aligned, drifted, onlyInA, onlyInB, outOfScope, scaffold, notObserved, declaredAhead });
   }
   totals.shared = totals.aligned + totals.drifted;
   totals.universe = totals.shared + totals.onlyInA + totals.onlyInB;
@@ -1527,6 +1530,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
     </table>
     ${totScaffold ? `<p class="drift-oos-note">${totScaffold} template placeholder${totScaffold === 1 ? '' : 's'} (scaffold) had no source evidence in the selected environment. Shown in the pack, not counted as differences.</p>` : ''}
     ${digest.totals.notObserved ? `<p class="drift-oos-note">${plural(digest.totals.notObserved, 'artefact')} could not be checked: the other pack had no way to observe ${digest.totals.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Not counted as differences; Compare lists each with the reason.</p>` : ''}
+    ${digest.totals.declaredAhead ? `<p class="drift-oos-note">${digest.totals.declaredAhead} artefact${digest.totals.declaredAhead === 1 ? '' : 's'} declared ahead of the environment compared: ${digest.totals.declaredAhead === 1 ? 'its file states' : 'their files state'} ${digest.totals.declaredAhead === 1 ? 'it is' : 'they are'} not deployed there yet. Neither missing nor matched, and not counted, so check the statement still holds. Compare lists each with the reason.</p>` : ''}
     ${totOOS ? `<p class="drift-oos-note">${totOOS} live artefact${totOOS === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.
       <button type="button" class="ctrl-link drift-oos-widen" title="Switch the live scope to 'All live' so the parked inventory is classified instead of parked">show them — widen scope</button></p>` : ''}
     ${diagUx.disclosureHtml('How differences are weighted', weightsBody, { cls: 'diag-weights-disclosure' })}
@@ -2545,8 +2549,14 @@ function buildCompareKeySets(diff) {
     for (const e of bucket.onlyInA || []) mark(a, e.artefact, 'only', 'a', e.key);
     for (const e of bucket.onlyInB || []) mark(b, e.artefact, 'only', 'b', e.key);
     // Held by one pack in a family the other could not observe: unchecked.
-    for (const e of bucket.notObserved || []) {
-      mark(e.side === 'b' ? b : a, e.artefact, 'unchecked', e.side === 'b' ? 'b' : 'a', e.key);
+    // Or that its file states is not deployed in the environment compared: the
+    // other pack was read, so this one is not "unchecked" and says so.
+    const parkedEntries = [
+      ...(bucket.notObserved || []).map(e => [e, 'unchecked']),
+      ...(bucket.declaredAhead || []).map(e => [e, 'ahead']),
+    ];
+    for (const [e, status] of parkedEntries) {
+      mark(e.side === 'b' ? b : a, e.artefact, status, e.side === 'b' ? 'b' : 'a', e.key);
       for (const id of [e.artefact?.id, ...(e.artefact?.memberIds || [])]) {
         if (id) (e.side === 'b' ? bReason : aReason).set(`${L}:${id}`, e.reason || '');
       }
@@ -2573,8 +2583,9 @@ function entryMemberArtefacts(entry, pack, L) {
   return held.length ? held : [art].filter(Boolean);
 }
 
-// 'both' | 'only' | 'unchecked' | null for one card. 'unchecked' = the other
-// pack had no way to observe this artefact's family; null = not part of the
+// 'both' | 'only' | 'unchecked' | 'ahead' | null for one card. 'unchecked' = the
+// other pack had no way to observe this artefact's family; 'ahead' = its file
+// states it is not deployed in the environment compared; null = not part of the
 // comparison (panels are excluded from the diff; out-of-scope live artefacts
 // are parked).
 function compareStatusFor(side, L, art, sets) {
@@ -3376,10 +3387,10 @@ function renderCompareLayerColumn(side, L, items, sets) {
     // The members of a metric family sit together, at the family's place.
     for (const id of [art?.id, ...(art?.memberIds || [])]) if (id && !pairAt.has(id)) pairAt.set(id, i);
   });
-  const groups = { both: [], only: [], unchecked: [], rest: [] };
+  const groups = { both: [], only: [], ahead: [], unchecked: [], rest: [] };
   for (const art of items) {
     const status = compareStatusFor(side, L, art, sets);
-    groups[['both', 'only', 'unchecked'].includes(status) ? status : 'rest'].push(art);
+    groups[['both', 'only', 'ahead', 'unchecked'].includes(status) ? status : 'rest'].push(art);
   }
   groups.both.sort((x, y) => (pairAt.get(x.id) ?? Infinity) - (pairAt.get(y.id) ?? Infinity));
   const letter = side.toUpperCase();
@@ -3403,17 +3414,19 @@ function renderCompareLayerColumn(side, L, items, sets) {
   const otherIsLive = side === 'a' ? isLivePack(state.packB, state.compareBId) : isLivePack(state.pack, state.selectedPackId);
   const onlyWhy = readersSentence(readersDigest([...onlyByEntry.values()]), { holder: letter, other, otherIsLive });
   const reasons = [...new Set(groups.unchecked.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
+  const aheadReasons = [...new Set(groups.ahead.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
   const titles = {
     both: ['In both', `In both packs, matched by ${sets.pairing?.matchedBy || DEFAULT_PAIRING}. The same order on both sides.`],
     only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${other}.`],
     unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} had no way to observe ${groups.unchecked.length === 1 ? 'this family' : 'these families'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
+    ahead: ['Declared ahead', `In Pack ${letter}, whose file states ${groups.ahead.length === 1 ? 'it is' : 'they are'} not deployed in the environment compared yet. Neither matched nor missing, and not counted, so check the statement still holds.`],
     rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
   };
   const def = { id: L, num: L, name: L };
-  for (const k of ['both', 'only', 'unchecked', 'rest']) {
+  for (const k of ['both', 'only', 'ahead', 'unchecked', 'rest']) {
     if (!groups[k].length) continue;
     const h = document.createElement('div');
-    h.className = `compare-col-group is-${k}`;
+    h.className = `compare-col-group is-${k === 'ahead' ? 'unchecked' : k}`;
     h.title = titles[k][1];
     // The number is what the summary counts: artefacts. A metric is one
     // artefact however many series (cards) it is exposed as, so when the
@@ -3426,12 +3439,13 @@ function renderCompareLayerColumn(side, L, items, sets) {
       : '';
     h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${artefacts}</span>${cardsNote}`;
     col.appendChild(h);
-    if (k === 'unchecked' && reasons.length) {
+    const groupReasons = k === 'unchecked' ? reasons : k === 'ahead' ? aheadReasons : [];
+    if (groupReasons.length) {
       // The reason is the point of this group: say it on the screen, not
       // only in a tooltip.
       const why = document.createElement('p');
       why.className = 'compare-col-group-why';
-      why.textContent = reasons.length === 1 ? reasons[0] : reasons.join(' · ');
+      why.textContent = groupReasons.join(' · ');
       col.appendChild(why);
     }
     if (k === 'only' && onlyWhy) {
@@ -3528,12 +3542,13 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const inBoth = status === 'both';
   const isOnlySide = status === 'only';
   const isUnchecked = status === 'unchecked';
+  const isAhead = status === 'ahead';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'card compare-side-card';
   if (inBoth) btn.classList.add('is-both');
   if (isOnlySide) btn.classList.add('is-only', `is-only-${side}`);
-  if (isUnchecked) btn.classList.add('is-unchecked');
+  if (isUnchecked || isAhead) btn.classList.add('is-unchecked');
   const ckey = cardKey(def.id, sublayerKey, artefact.id);
   btn.dataset.key = ckey;
   if ((side === 'a' && ckey === state.activeCardKeyA) ||
@@ -3557,6 +3572,8 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
     const otherLetter = side === 'a' ? 'B' : 'A';
     const why = compareUncheckedReason(side, def.id, artefact, sets);
     statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} had no way to observe this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
+  } else if (isAhead) {
+    statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`${compareUncheckedReason(side, def.id, artefact, sets)} Not counted as a difference.`)}">declared ahead</span>`;
   }
 
   // What reads a metric only this side holds, in this pack's own words.
@@ -3674,13 +3691,16 @@ export function renderComparePicker() {
 // same lensed digest as the summary so every number on the screen agrees;
 // the cells are named by the A / B letters of the cards above them.
 function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
-  const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0, notObserved: 0 };
+  const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0, notObserved: 0, declaredAhead: 0 };
   const jaccard = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
   // Shown only when there is something to say: artefacts one pack holds in
   // a family the other had no way to observe. They are outside the union,
   // so they do not lower the match.
   const unchecked = t.notObserved
     ? `<div class="compare-cell c-unchecked" title="Held by one pack in a family the other had no way to observe (no tool for it, or its probe failed). Neither matched nor missing; outside the union."><div class="c-key">not checked</div><div class="c-val">${t.notObserved}</div></div>`
+    : '';
+  const ahead = t.declaredAhead
+    ? `<div class="compare-cell c-unchecked" title="Held by one pack, whose file states it is not deployed in the environment compared yet. Neither matched nor missing; outside the union."><div class="c-key">declared ahead</div><div class="c-val">${t.declaredAhead}</div></div>`
     : '';
   const wrap = document.createElement('div');
   wrap.className = 'compare-summary';
@@ -3691,10 +3711,12 @@ function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
     <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">union</div><div class="c-val">${t.universe}</div></div>
     <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'jaccard')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${jaccard}</div></div>
     ${unchecked}
+    ${ahead}
     <div class="compare-cell c-mode" title="Which key paired A with B (the Pair by switch below)"><div class="c-key">paired by</div><div class="c-val">${escapeHtml(matchedBy)}</div></div>
   `;
   wrap.classList.add('has-mode');
   if (t.notObserved) wrap.classList.add('has-unchecked');
+  if (t.declaredAhead) wrap.classList.add('has-ahead');
   return wrap;
 }
 
@@ -4541,6 +4563,7 @@ function compareSummaryHtml(digest, cmp, ctx) {
   if (t.scaffold) sItems.push(`<li class="ux-tone-muted"><strong>${t.scaffold}</strong> template placeholder${s(t.scaffold)} (scaffold) — not counted</li>`);
   // Unchecked is said as plainly as missing would be: how many, and that
   // the other pack had no way to look — Side by side prints each reason.
+  if (t.declaredAhead) sItems.push(`<li class="ux-tone-warn">${t.declaredAhead} artefact${t.declaredAhead === 1 ? '' : 's'} declared ahead of the environment compared: ${t.declaredAhead === 1 ? 'its file states' : 'their files state'} ${t.declaredAhead === 1 ? 'it is' : 'they are'} not deployed there yet. Neither missing nor matched, and not counted, so check the statement still holds.</li>`);
   if (t.notObserved) sItems.push(`<li class="ux-tone-warn"><strong>${t.notObserved}</strong> artefact${s(t.notObserved)} could not be checked — the other pack had no way to observe ${t.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Neither matched nor missing, not counted</li>`);
   const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : null;
   const structuralPanel = `

@@ -25,6 +25,7 @@
 //
 // Pure ESM, no Node APIs — the studio imports this same file in the browser.
 
+import { sameDeployment } from './lifecycle.mjs';
 import { canonicalizePromql } from './promql-canon.mjs';
 import { familyOf } from './artefact-classify.mjs';
 
@@ -537,8 +538,11 @@ export function foldMetricFamilies(aItems, bItems) {
       const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y), 'en'));
       const head = members.find((x) => nameOf(x) === slot.family) || members[0];
       if (members.length === 1 && nameOf(head) === slot.family) return head;
+      // A lifecycle statement covers the family only when every series carries it.
+      const { lifecycle, ...rest } = head;
       return {
-        ...head,
+        ...rest,
+        ...(lifecycle && members.every((x) => x.lifecycle && sameDeployment(x.lifecycle, lifecycle)) ? { lifecycle } : {}),
         title: slot.family,
         spec: { ...head.spec, name: slot.family },
         series: [...new Set(members.map((x) => String(x.spec?.name || '')))].sort(),
