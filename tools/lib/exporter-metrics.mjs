@@ -10,7 +10,11 @@
 //   1. a metrics manifest  — `metrics-manifest.json` / `*.metrics-manifest.json`,
 //      { exporter, version?, source?, generatedAt?, metrics: [{ name, type,
 //      help?, labels? }] }; `packc emit --exporter <url>` writes one from a
-//      live /metrics endpoint (originKind 'exporter-manifest', declared);
+//      live /metrics endpoint (originKind 'exporter-manifest', declared).
+//      A manifest may also carry `dynamicFamilies: [{ pattern, type?, help?,
+//      labels? }]`, the names the exporter mints at runtime and no list can
+//      hold (one counter per queue, per event): written by hand, read here,
+//      kept by a later `packc emit`, compared by tools/lib/diff.mjs;
 //   2. an exposition snapshot — a saved /metrics response (`.prom`,
 //      `.metrics`), its # HELP / # TYPE lines and the label names of its
 //      samples (originKind 'exporter-snapshot', declared);
@@ -24,6 +28,7 @@
 // connname is an address); only label names, types and help text.
 // ============================================================
 
+import { compileBoundedPattern } from './artefact-classify.mjs';
 import { EXPORTER_CATALOGUE as BUILTIN_CATALOGUE } from './exporter-catalogue.mjs';
 
 /** The exposition types a manifest entry or a # TYPE line may state (text format 0.0.4 and OpenMetrics). */
@@ -233,12 +238,137 @@ export function manifestFromExposition(text, { exporter, version, source, genera
 }
 
 /**
- * Read a metrics manifest's text. `{ ok: true, manifest, skipped }` with the
- * entries that are not `{ name: <metric name>, type: <exposition type> }`
- * counted in `skipped` (a repeated name keeps its first entry), or
- * `{ ok: false, error }` when the text is not a manifest at all.
+ * How many dynamic families a pack holds; the longest live name one is tested
+ * against (the length a pattern is timed at); the shortest literal prefix a
+ * pattern opens with, and how much more a prefix that is a platform's own needs;
+ * the most unbounded quantifiers (`*`, `+`, `{n,}`) and the most choice points
+ * (`|`, `?`) a pattern may hold, which bound what it can cost on any name.
  */
-export function readMetricsManifest(text) {
+export const DYNAMIC_FAMILY_LIMITS = Object.freeze({ families: 64, nameLength: 256, prefixLength: 3, platformSuffix: 3, unbounded: 3, choices: 6 });
+
+/** Metric prefixes that belong to a platform, not to one exporter or service. */
+export const GENERIC_METRIC_PREFIXES = new Set([
+  'alert', 'alertmanager', 'alerts', 'container', 'go', 'grafana', 'grpc',
+  'http', 'jvm', 'jaeger', 'kube', 'kubelet', 'loki', 'node', 'nodejs',
+  'otel', 'otelcol', 'pg', 'pod', 'process', 'prometheus', 'promtail',
+  'pushgateway', 'rabbitmq', 'redis', 'tempo', 'vm',
+]);
+
+// The metric-name characters a pattern opens with, up to the first thing that
+// is not one: `^ibmmq_queue_[a-z]+$` → `ibmmq_queue_`. A character a quantifier
+// makes optional is not part of it.
+export function metricFamilyPrefix(pattern) {
+  const m = /^\^([A-Za-z_:][A-Za-z0-9_:]*)(.?)/s.exec(String(pattern ?? ''));
+  if (!m) return '';
+  return m[2] === '?' || m[2] === '*' || m[2] === '{' ? m[1].slice(0, -1) : m[1];
+}
+
+// What a pattern's shape breaks, read without running it: an alternative
+// outside every group is not under the `^`; a lookaround or a backreference
+// can make a name match that the prefix does not explain, and no name needs
+// one; and past a few quantifiers and choice points backtracking grows beyond
+// anything one timed pass can see.
+function familyPatternProblem(pattern) {
+  let depth = 0;
+  let inClass = false;
+  let unbounded = 0;
+  let choices = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') {
+      if (/[1-9k]/.test(pattern[i + 1] ?? '')) return 'a backreference is not allowed';
+      i++;
+    } else if (inClass) inClass = c !== ']';
+    else if (c === '[') inClass = true;
+    else if (c === '(') {
+      if (/^\?(?:[=!]|<)/.test(pattern.slice(i + 1, i + 3))) return 'a lookaround or named group is not allowed';
+      if (pattern.startsWith('?:', i + 1)) i += 2;
+      depth++;
+    } else if (c === ')') depth--;
+    else if (c === '|') {
+      if (depth === 0) return 'an alternative outside a group is not anchored';
+      choices++;
+    } else if (c === '?') choices++;
+    else if (c === '*' || c === '+' || (c === '{' && /^\{\d+,/.test(pattern.slice(i)))) unbounded++;
+  }
+  if (unbounded > DYNAMIC_FAMILY_LIMITS.unbounded) return `more than ${DYNAMIC_FAMILY_LIMITS.unbounded} unbounded quantifiers`;
+  if (choices > DYNAMIC_FAMILY_LIMITS.choices) return `more than ${DYNAMIC_FAMILY_LIMITS.choices} choice points`;
+  return null;
+}
+
+// The names a pattern is timed against: each opens with its literal prefix, or
+// it fails on the first character and the timer measures nothing.
+function familyProbes(prefix) {
+  const room = DYNAMIC_FAMILY_LIMITS.nameLength - prefix.length;
+  const filled = (unit) => prefix + unit.repeat(Math.ceil(room / unit.length)).slice(0, room);
+  return [...['a', 'ab', 'A', '0', '_', 'a_', ':'].map(filled), `${prefix}${'x'.repeat(Math.max(0, room - 1))}!`];
+}
+
+/**
+ * The one rule for a dynamic family's pattern, at the manifest and again in
+ * the diff (a pack's annotation is anyone's text). A name a family matches
+ * reads as declared, so the pattern must say whose names it claims: a literal
+ * prefix of at least three characters, more than a platform's own `node_` or
+ * `kube_`, and no alternative outside a group; `^.*$` would align a whole
+ * store. And it runs on every unpaired name of a live estate, so its shape is
+ * bounded (`familyPatternProblem`) and it is timed against names that open with
+ * its prefix (`compileBoundedPattern`, which also holds its length and refuses a
+ * quantified group; an optional group counts as a choice point).
+ * @returns {{ re: RegExp } | { reason: string }}
+ */
+export function compileMetricFamilyPattern(pattern, { timed = true } = {}) {
+  const shape = compileBoundedPattern(pattern, { timed: false });
+  if (shape.reason) return { reason: shape.reason.startsWith('invalid regex') ? 'invalid regex' : shape.reason };
+  const problem = familyPatternProblem(pattern);
+  if (problem) return { reason: problem };
+  const prefix = metricFamilyPrefix(pattern);
+  if (prefix.length < DYNAMIC_FAMILY_LIMITS.prefixLength) {
+    return { reason: `pattern must open with a literal metric-name prefix of at least ${DYNAMIC_FAMILY_LIMITS.prefixLength} characters` };
+  }
+  const [segment] = prefix.toLowerCase().split(/[_:]/);
+  if (GENERIC_METRIC_PREFIXES.has(segment) && prefix.length - segment.length - 1 < DYNAMIC_FAMILY_LIMITS.platformSuffix) {
+    return { reason: `the prefix ${segment} belongs to a platform: name what follows it` };
+  }
+  return compileBoundedPattern(pattern, { timed, ids: familyProbes(prefix) });
+}
+
+// A manifest's `dynamicFamilies`: the entries it can read, and why not for the
+// rest (by position, never quoting them).
+function readDynamicFamilies(list, timed) {
+  const out = { families: [], refused: [] };
+  if (list === undefined) return out;
+  if (!Array.isArray(list)) { out.refused.push({ index: null, reason: 'it is not an array' }); return out; }
+  const seen = new Set();
+  list.forEach((entry, index) => {
+    const pattern = isMapping(entry) && typeof entry.pattern === 'string' ? entry.pattern : '';
+    const type = typeof entry?.type === 'string' ? entry.type.trim().toLowerCase() : '';
+    let reason = null;
+    if (out.families.length >= DYNAMIC_FAMILY_LIMITS.families) reason = `over the limit of ${DYNAMIC_FAMILY_LIMITS.families}`;
+    else if (!pattern) reason = 'it has no `pattern`';
+    else if (seen.has(pattern)) reason = 'it repeats a pattern';
+    else if (type && !TYPE_SET.has(type)) reason = 'its `type` is not an exposition type';
+    else reason = compileMetricFamilyPattern(pattern, { timed }).reason ?? null;
+    if (reason) { out.refused.push({ index, reason }); return; }
+    seen.add(pattern);
+    out.families.push({
+      pattern,
+      type,
+      help: typeof entry.help === 'string' ? entry.help : '',
+      labels: Array.isArray(entry.labels) ? [...new Set(entry.labels.filter(l => typeof l === 'string' && LABEL_RE.test(l)))].slice(0, LABEL_CAP) : [],
+    });
+  });
+  return out;
+}
+
+/**
+ * Read a metrics manifest's text. `{ ok: true, manifest, skipped,
+ * refusedFamilies }` with the entries that are not `{ name: <metric name>,
+ * type: <exposition type> }` counted in `skipped` (a repeated name keeps its
+ * first entry) and the `dynamicFamilies` entries it cannot read listed by
+ * position with the reason, or `{ ok: false, error }` when the text is not a
+ * manifest at all.
+ */
+export function readMetricsManifest(text, { timed = true } = {}) {
   let obj;
   // Never the parser's message: it quotes the start of the text, which in a
   // file that is not a manifest may be a key.
@@ -263,15 +393,18 @@ export function readMetricsManifest(text) {
     });
   }
   const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  const dynamic = readDynamicFamilies(obj.dynamicFamilies, timed);
   return {
     ok: true,
     skipped,
+    refusedFamilies: dynamic.refused,
     manifest: {
       exporter,
       version: str(obj.version) || (typeof obj.version === 'number' ? String(obj.version) : ''),
       source: safeSourceUrl(str(obj.source)),
       generatedAt: str(obj.generatedAt),
       metrics,
+      dynamicFamilies: dynamic.families,
     },
   };
 }

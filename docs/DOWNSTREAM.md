@@ -1917,6 +1917,38 @@ a password may hold `/` or `@`). A value with a `?` or `#` before its last
 `@` is not recorded at all.
 Label values are never part of a manifest.
 
+An exporter that mints metric names at runtime (one counter per queue, per
+event) cannot list them. Its manifest declares them as patterns, in an optional
+array written by hand:
+
+```json
+{
+  "exporter": "demo-exporter",
+  "metrics": [{ "name": "demo_up", "type": "gauge" }],
+  "dynamicFamilies": [
+    { "pattern": "^demo_queue_[a-z0-9_]+_total$", "type": "counter", "help": "One counter per queue", "labels": ["qmgr"] }
+  ]
+}
+```
+
+`pattern` is required; `type`, `help` and `labels` are optional. A name a family
+matches reads as declared, so a pattern must say whose names it claims: it opens
+with a literal metric-name prefix of at least three characters, more than a
+platform's own (`^node_`, `^kube_`, `^go_` are refused, `^node_hwmon_` is not),
+and has no alternative outside a group. It runs on every unpaired name of a live
+estate, so its shape is bounded too: anchored, 200 characters, no quantified
+group, lookaround or backreference, at most three unbounded quantifiers and six
+choice points (`|`, `?`), and it must finish within the budget on 256-character
+names that open with its prefix. At most 64 families are read. An entry that
+breaks a rule is not read and the crawl's warning names its position and the
+rule, never its text. Families reach the pack as
+`crawler.discovered.metric_families` (`[{ pattern, type, help, labels, exporter,
+file }]`, sorted, with `_count`); the first file that declares a pattern keeps
+it. The adapter projects each as `METRIC-FAM-NN`, and the diff tests the other
+side's unpaired metric names against it (docs/DIFF.md, *Dynamic metric
+families*). `packc emit` over an existing manifest keeps its `dynamicFamilies`
+as they stand and says how many.
+
 `packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a
 live endpoint — run it in the exporter's build pipeline against the image it
 just built:

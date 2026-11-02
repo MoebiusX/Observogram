@@ -34,7 +34,7 @@ import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import {
-  isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
+  DYNAMIC_FAMILY_LIMITS, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
 
@@ -584,6 +584,7 @@ export function crawlFiles(filesInput, opts = {}) {
   const metricDefinitions = [];
   const scrapeJobs = [];
   const exporters = new Map();   // exporter name → the files that say what it exposes
+  const metricFamilies = [];     // the dynamic families those manifests declare
   // A collector config with no pipelines names its metrics exporter only by
   // guess; the guesses are settled after every file is walked against the
   // metrics pipelines the walk found (a config split across --config files
@@ -642,7 +643,7 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
         case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorState); break;
-        case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence); break;
+        case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, metricFamilies, exporters, summary, evidence); break;
         case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
@@ -959,7 +960,10 @@ export function crawlFiles(filesInput, opts = {}) {
   curateMetricDefinitions(metricDefinitions, summary);
   const metricAnnotations = buildMetricDefinitionAnnotations(metricDefinitions);
   const scrapeAnnotations = buildScrapeJobAnnotations(scrapeJobs);
-  const exporterAnnotations = buildExporterAnnotations(exporters);
+  const exporterAnnotations = {
+    ...buildExporterAnnotations(exporters),
+    ...buildMetricFamilyAnnotations(metricFamilies),
+  };
 
   // ----- canonical assembly -----
   const canonical = {
@@ -1812,6 +1816,19 @@ function buildScrapeJobAnnotations(scrapeJobs) {
   };
 }
 
+// crawler.discovered.metric_families: the names an exporter mints at runtime,
+// as its manifest declares them. No metric definition can hold one (a name is
+// a name, addMetricDefinition refuses the rest), so they have their own
+// annotation, and the adapter projects them as METRIC-FAM-NN.
+function buildMetricFamilyAnnotations(families) {
+  if (!families.length) return {};
+  const sorted = [...families].sort((x, y) => (x.pattern < y.pattern ? -1 : x.pattern > y.pattern ? 1 : 0));
+  return {
+    'crawler.discovered.metric_families': annotationJson(sorted),
+    'crawler.discovered.metric_families_count': String(sorted.length),
+  };
+}
+
 // crawler.discovered.exporters: each prebuilt exporter the crawl learned
 // metrics from, and the files that said what it exposes (a manifest, a saved
 // exposition, its own config).
@@ -2556,7 +2573,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
 // ---------- prebuilt exporters ----------
 
 // A metrics manifest: each entry is a declared metric of the exporter.
-function walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence) {
+function walkMetricsManifest(f, metricDefinitions, metricFamilies, exporters, summary, evidence) {
   const read = readMetricsManifest(f.content);
   if (!read.ok) {
     summary.warnings.push(`${f.relPath} is not a metrics manifest (${read.error}); it is not read.`);
@@ -2578,10 +2595,27 @@ function walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence)
   if (read.skipped) {
     summary.warnings.push(`${f.relPath}: ${read.skipped} metric entr${read.skipped === 1 ? 'y is' : 'ies are'} not read (each needs a metric name not listed before and an exposition type: ${['counter', 'gauge', 'histogram', 'summary', 'untyped'].join(', ')}, …).`);
   }
+  let familiesRead = 0;
+  for (const family of m.dynamicFamilies) {
+    const other = metricFamilies.find(x => x.pattern === family.pattern);
+    if (other) {
+      summary.warnings.push(`${f.relPath}: a dynamic family repeats a pattern ${other.file} declares; the first is kept.`);
+    } else if (metricFamilies.length >= DYNAMIC_FAMILY_LIMITS.families) {
+      summary.warnings.push(`${f.relPath}: a dynamic family is not read: the crawl holds ${DYNAMIC_FAMILY_LIMITS.families} already.`);
+    } else {
+      metricFamilies.push({ ...family, exporter: m.exporter, file: f.relPath });
+      familiesRead++;
+      summary.discovered.dynamicFamilies = (summary.discovered.dynamicFamilies || 0) + 1;
+    }
+  }
+  for (const { index, reason } of read.refusedFamilies) {
+    summary.warnings.push(`${f.relPath}: ${index === null ? '`dynamicFamilies` is' : `dynamic family ${index + 1} is`} not read: ${reason}.`);
+  }
   recordExporter(exporters, m.exporter, {
     origin_kind: 'exporter-manifest',
     file: f.relPath,
     metrics: m.metrics.length,
+    ...(familiesRead ? { dynamic_families: familiesRead } : {}),
     ...(m.version ? { version: m.version } : {}),
     ...(m.source ? { source: m.source } : {}),
     ...(m.generatedAt ? { generated_at: m.generatedAt } : {}),

@@ -412,6 +412,48 @@ function adaptStorage(ctx) {
 // metric artefacts with origin metadata, so the graph can link an SLI series
 // back to the file/service that emits it.
 function adaptSourceMetricDefinitions(ctx) {
+  return [...adaptSourceMetricNames(ctx), ...adaptDynamicMetricFamilies(ctx)];
+}
+
+// A manifest's dynamic families (crawler.discovered.metric_families): one
+// artefact per pattern, `spec.name` the pattern so its identity is its own and
+// `spec.name_pattern` what tools/lib/diff.mjs recognises (with the origin) and
+// tests the other side's unmatched metric names against. The diff compiles it
+// under the same rule the manifest's reader did: an annotation is text.
+function adaptDynamicMetricFamilies(ctx) {
+  const raw = ctx.canonical?.metadata?.annotations?.['crawler.discovered.metric_families'];
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  let list;
+  try { list = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(f => typeof f?.pattern === 'string' && f.pattern)
+    .map((f, i) => ({
+      id: `METRIC-FAM-${pad(i + 1)}`,
+      title: f.pattern,
+      desc: f.file ? `dynamic metric family declared in ${f.file}` : 'dynamic metric family',
+      tool: 'Dynamic metric family',
+      tags: ['metric', 'declared', 'dynamic-family', f.exporter, f.type].filter(Boolean),
+      source: 'Declared',
+      expand: true,
+      parent: 'telemetry.metric_inventory',
+      spec: {
+        name: f.pattern,
+        name_pattern: f.pattern,
+        source: 'crawler.discovered',
+        origin_kind: 'exporter-family',
+        origin_file: f.file || null,
+        origin_service: f.exporter || null,
+        metric_type: f.type || null,
+        confidence: 'declared',
+        candidate: false,
+        help: f.help || null,
+        origin_labels: Array.isArray(f.labels) ? f.labels : [],
+      },
+    }));
+}
+
+function adaptSourceMetricNames(ctx) {
   const ann = ctx.canonical?.metadata?.annotations || {};
   const names = annotationList(
     ann['crawler.discovered.metric_names'],

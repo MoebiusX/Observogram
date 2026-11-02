@@ -243,6 +243,63 @@ A family's entry carries `series` (the names it stands for on that side) and
 `memberIds` (the ids of the artefacts it replaces). A metric alone in its
 family is passed through untouched.
 
+## Dynamic metric families
+
+An exporter that mints metric names at runtime declares them as a pattern in
+its manifest (docs/DOWNSTREAM.md §18.1), which a pack carries as a
+`METRIC-FAM-NN` artefact (`spec.origin_kind: exporter-family`,
+`spec.name_pattern`). Without it, every name such an exporter mints reads
+`live, not declared`, and no list could ever keep up.
+
+- A family is **lifted out of its side before the fold**. It never pairs by
+  name; it answers for what is left.
+- A metric on the other side with **no pair of its own** whose name, or any
+  series it stands for, the pattern matches goes to `inBoth`: `match: aligned`,
+  `matchedBy: declared-family`, no deltas, the family as that side's artefact.
+  Names are tested as listed (Prometheus names are case-sensitive), and one
+  longer than the 256 characters a pattern is timed against is not tested.
+- A **literal pair wins**: a name the pack also declares pairs with the literal.
+  Among families the first in the pack's order holds the member.
+- Either side may declare one, and the **same pattern on both sides pairs with
+  itself** (`metric::family:<pattern>`), so a self-diff stays fully aligned. A
+  side that says it cannot observe metrics claims nothing through a family.
+- A family with **no member is never `onlyInA`**: a queue with no traffic mints
+  nothing. It is named in `summary.dynamicFamilies.unmatched`, unless it did
+  match names that went elsewhere first (its row's `covered`: they paired by name,
+  or an earlier family holds them), or a side could
+  not list metrics, or the other side read them within a scope that does not
+  cover the family's prefix (its row's `notObserved`, with the reason).
+- The pattern is compiled again here under the manifest's rule, because a pack's
+  annotation is anyone's text. A **refused pattern claims nothing**, sits in no
+  bucket, and is listed in `summary.dynamicFamilies.refused` with the reason, as
+  is a family past the limit of 64.
+- Declaring a family speaks for the metric family of artefacts (`aKinds`) and its
+  exporter's name goes to `scope.exporterTokens`. The first segment of its literal
+  prefix joins `scope.metricPrefixes` unless a platform owns it, so the other live
+  metrics of `acme_` read `live, not declared` while those of `rabbitmq_` stay out
+  of scope in service mode. A pattern is not counted in `scope.declaredMetricCount`.
+
+`summary.dynamicFamilies` is present **only when a side declares a family**, so
+a pack without one keeps its bytes:
+
+```json
+{
+  "declared": 1,
+  "members": 2,
+  "unmatched": [],
+  "refused": [],
+  "families": [{ "pattern": "^demo_queue_", "side": "a", "exporter": "demo-exporter", "file": "metrics-manifest.json", "members": 2 }]
+}
+```
+
+Members count in `inBoth`, `aligned` and `union`, and **stay out of `jaccard` and
+`alignment`**. A pattern matched them, which is weaker than a name declared one
+by one: a family neither lowers the score (they are not undeclared) nor raises
+it (200 minted names must not hide five declared metrics that are gone), so a
+gate on `alignment` reads what the pack declares by name. The studio's compare
+digest leaves them out of its aligned count too, its head says how many there
+are, and a member's card names the pattern that answered for it.
+
 ## Addresses a source does not state
 
 An alert route's channels are compared by kind and address. Two readers can
@@ -335,6 +392,10 @@ diffPacks(aLayered, bLayered, { scopeMode, service, identity }); // scopeMode se
   route as channel drift, never as missing-in-live;
 - surplus duplicate controls are reported as drift rather than dropped;
 - empty arrays normalise like absent fields;
+- dynamic metric families (members, literal pairs first, series of a folded
+  metric, case, name length, first match, unmatched and not checked, refused
+  patterns, either side, a self-diff, the kind and the scope, no key without
+  one);
 - metric families (each folding rule, and the lone `_count` that is not
   folded), `notObserved` in both directions and outside the union, and an
   address one side withholds.

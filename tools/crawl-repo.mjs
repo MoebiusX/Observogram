@@ -215,6 +215,7 @@ async function main() {
     `#   metric definitions: ${summary.discovered.metricDefinitions}`,
     `#   scrape jobs       : ${summary.discovered.scrapeJobs}`,
     ...(summary.discovered.exporters ? [`#   exporters        : ${summary.discovered.exporters}`] : []),
+    ...(summary.discovered.dynamicFamilies ? [`#   dynamic families : ${summary.discovered.dynamicFamilies}`] : []),
     `#   dashboards       : ${summary.discovered.dashboards}`,
     `#   alerting routes  : ${summary.discovered.alertingRoutes}`,
     `#   pipelines        : ${summary.discovered.pipelines}`,

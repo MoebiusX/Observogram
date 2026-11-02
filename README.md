@@ -1367,8 +1367,9 @@ The crawler reads source files such as:
 - A prebuilt exporter's metrics: its `metrics-manifest.json`, a saved
   `/metrics` (`.prom`, `.metrics`), or its config read against an exporter
   catalogue (`--exporter-catalogue <file.json>` adds or replaces entries).
-  `packc emit --exporter <url>` writes the manifest from a live endpoint
-  ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
+  `packc emit --exporter <url>` writes the manifest from a live endpoint, and
+  its `dynamicFamilies` declare by pattern the names an exporter mints at
+  runtime ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no

@@ -31,11 +31,14 @@ import { spawnSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { crawlFiles, detectArtefactKind, scanReadsPath } from './lib/crawler.mjs';
 import {
+  DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, metricFamilyPrefix,
   parseExposition, manifestFromExposition, readMetricsManifest, safeSourceUrl, resolveExporterCatalogue,
 } from './lib/exporter-metrics.mjs';
 import { EXPORTER_CATALOGUE as BUILTIN } from './lib/exporter-catalogue.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { isCrawlerFile, isExporterCandidateFile, selectCrawlerFiles } from '../server/github-crawl.mjs';
+import { adapt } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness({ truncate: 600 });
@@ -522,6 +525,100 @@ data:
   assert(m.ok && m.manifest.source === 'https://h/metrics', 'a manifest\'s source is recorded without userinfo or query', m.manifest);
 }
 
+// ---------- dynamic families ----------
+{
+  const OK = '^acme_queue_[a-z0-9_]+_total$';
+  const read = readMetricsManifest(JSON.stringify({
+    exporter: 'acme-exporter', metrics: [{ name: 'acme_up', type: 'gauge' }],
+    dynamicFamilies: [
+      { pattern: OK, type: 'Counter', help: 'one per queue', labels: ['qmgr', 'not a label', 'qmgr'] },
+      { pattern: '^acme_event_' },
+      { type: 'gauge' },
+      { pattern: OK },
+      { pattern: '^acme_x_', type: 'nonsense' },
+      { pattern: '^.*$' },
+      { pattern: '^acme|.*' },
+      { pattern: '^ac' },
+      { pattern: 'acme_' },
+      { pattern: '^acme_(a+)+$' },
+      { pattern: '^acme_(SECRETP' },
+      7,
+    ],
+  }));
+  assert(read.ok && JSON.stringify(read.manifest.dynamicFamilies) === JSON.stringify([
+    { pattern: OK, type: 'counter', help: 'one per queue', labels: ['qmgr'] },
+    { pattern: '^acme_event_', type: '', help: '', labels: [] },
+  ]), 'a manifest\'s families: the pattern required, the rest optional, the type read as the metrics\' is', read.manifest.dynamicFamilies);
+  assert(JSON.stringify(read.refusedFamilies.map(r => r.index)) === JSON.stringify([2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    && /no `pattern`/.test(read.refusedFamilies[0].reason) && /repeats/.test(read.refusedFamilies[1].reason) && /exposition type/.test(read.refusedFamilies[2].reason)
+    && /literal metric-name prefix/.test(read.refusedFamilies[3].reason) && /alternative outside a group/.test(read.refusedFamilies[4].reason)
+    && /literal metric-name prefix/.test(read.refusedFamilies[5].reason) && /anchored/.test(read.refusedFamilies[6].reason) && read.refusedFamilies[7].reason === 'nested quantifier'
+    && read.refusedFamilies[8].reason === 'invalid regex', 'each entry it cannot read, by position, with the rule it broke', read.refusedFamilies);
+  assert(!JSON.stringify(read.refusedFamilies).includes('SECRETP'), 'a refusal never quotes the pattern (an invalid one included)', read.refusedFamilies);
+  assert(JSON.stringify(readMetricsManifest(JSON.stringify({ exporter: 'x', metrics: [], dynamicFamilies: 'nope' })).refusedFamilies) === JSON.stringify([{ index: null, reason: 'it is not an array' }]),
+    'a dynamicFamilies that is not an array is one refusal');
+  const none = readMetricsManifest(JSON.stringify({ exporter: 'x', metrics: [] }));
+  assert(none.ok && none.manifest.dynamicFamilies.length === 0 && none.refusedFamilies.length === 0, 'a manifest without families reads as before');
+  const many = readMetricsManifest(JSON.stringify({ exporter: 'x', metrics: [], dynamicFamilies: Array.from({ length: DYNAMIC_FAMILY_LIMITS.families + 2 }, (_, i) => ({ pattern: `^acme_${i}_` })) }));
+  assert(many.manifest.dynamicFamilies.length === DYNAMIC_FAMILY_LIMITS.families && many.refusedFamilies.length === 2 && /over the limit/.test(many.refusedFamilies[0].reason), 'the families of a manifest are capped, said per entry', many.refusedFamilies);
+
+  // The rule on its own: what counts as the literal prefix, what as an alternative.
+  const passes = (p) => Boolean(compileMetricFamilyPattern(p).re);
+  assert(metricFamilyPrefix('^acme_queue_[a-z]+$') === 'acme_queue_' && metricFamilyPrefix('^abc?_') === 'ab' && metricFamilyPrefix('^abc*') === 'ab' && metricFamilyPrefix('^abc{2}') === 'ab' && metricFamilyPrefix('^abc+') === 'abc'
+    && metricFamilyPrefix('^[a-z]+') === '' && metricFamilyPrefix('^9abc') === '' && metricFamilyPrefix('') === '' && metricFamilyPrefix(null) === '' && metricFamilyPrefix('^app:rule_') === 'app:rule_',
+    'the literal prefix stops at the first thing that is not a name character, less what a quantifier makes optional');
+  assert(!passes('^abc?_x') && passes('^abcd?_x') && passes('^acme_(?:a|b)_total$') && passes('^acme_[|]+$') && passes('^acme_\\|$') && !passes('^acme_(?:a)|b$') && !passes('^[a-z]+_total$') && !passes(7),
+    'an alternative counts only outside every group and class; the prefix needs three characters');
+
+  // A pattern that cannot say whose names it claims, or could hang a comparison.
+  const why = (p) => compileMetricFamilyPattern(p).reason;
+  for (const p of ['^node_', '^kube_', '^go_', '^process_', '^rabbitmq_', '^node']) assert(/belongs to a platform/.test(why(p)), `${p} is a platform's whole namespace`, why(p));
+  for (const p of ['^node_hwmon_', '^kube_pod_info', '^rabbitmq_queue_', '^acme_']) assert(passes(p), `${p} names what is its own`, why(p));
+  assert(/backreference/.test(why('^acme_(a)\\1$')) && /lookaround/.test(why('^acme_(?!x)')) && /lookaround/.test(why('^acme_(?<n>a)')), 'a backreference or lookaround is refused');
+  assert(/unbounded quantifiers/.test(why('^acme_[a-z]*[a-z]*[a-z]*[a-z]*[a-z]*[a-z]*[a-z]*!$')) && /unbounded quantifiers/.test(why('^acme_a{1,}b{2,}c+d*')),
+    'more than three unbounded quantifiers is refused without running the pattern');
+  assert(/choice points/.test(why(`^acme_${'(\\w|\\w)?'.repeat(24)}!$`)) && /choice points/.test(why(`^acme_${'(?:a|a)'.repeat(7)}$`)),
+    'more than six choice points is refused without running the pattern');
+  assert(passes('^acme_event_(?:\\d+|blank|_+[a-z0-9_]*)_total$') && passes('^acme_[a-z]+_seconds(?:_bucket)?$'), 'a real name shape fits the limits');
+  assert(/too slow/.test(why(`^acme_${'(?:a|a)'.repeat(6)}[a-z]*[a-z]*[a-z]*!$`)), 'the timer runs on names that open with the prefix, and sees what the limits let through', why(`^acme_${'(?:a|a)'.repeat(6)}[a-z]*[a-z]*[a-z]*!$`));
+
+  // Crawled: a manifest with families, one with none, one that repeats.
+  const r = crawlFiles({
+    'a/metrics-manifest.json': JSON.stringify({ exporter: 'acme-exporter', metrics: [{ name: 'acme_up', type: 'gauge' }], dynamicFamilies: [{ pattern: OK, type: 'counter', help: 'one per queue' }, { pattern: '^acme_event_' }, { pattern: '^.*$' }] }),
+    'b/x.metrics-manifest.json': JSON.stringify({ exporter: 'other-exporter', metrics: [], dynamicFamilies: [{ pattern: '^acme_event_' }, { pattern: '^other_' }] }),
+  }, { repoName: 'fam', now: NOW });
+  assert(JSON.stringify(json(r, 'crawler.discovered.metric_families')) === JSON.stringify([
+    { pattern: OK, type: 'counter', help: 'one per queue', labels: [], exporter: 'acme-exporter', file: 'a/metrics-manifest.json' },
+    { pattern: '^acme_event_', type: '', help: '', labels: [], exporter: 'acme-exporter', file: 'a/metrics-manifest.json' },
+    { pattern: '^other_', type: '', help: '', labels: [], exporter: 'other-exporter', file: 'b/x.metrics-manifest.json' },
+  ].sort((x, y) => (x.pattern < y.pattern ? -1 : 1))), 'the crawl annotates each family with its exporter and file, sorted, the first of a repeat kept', ann(r)['crawler.discovered.metric_families']);
+  assert(ann(r)['crawler.discovered.metric_families_count'] === '3' && r.summary.discovered.dynamicFamilies === 3, 'counted in the annotation and the summary', r.summary.discovered);
+  const exp = json(r, 'crawler.discovered.exporters');
+  assert(exp['acme-exporter'].sources[0].dynamic_families === 2 && exp['other-exporter'].sources[0].dynamic_families === 1, 'the exporter\'s source says how many families it read', exp);
+  assert(r.summary.warnings.some(x => x === 'a/metrics-manifest.json: dynamic family 3 is not read: pattern must open with a literal metric-name prefix of at least 3 characters.')
+    && r.summary.warnings.some(x => x === 'b/x.metrics-manifest.json: a dynamic family repeats a pattern a/metrics-manifest.json declares; the first is kept.'), 'a refusal and a repeat are warnings', r.summary.warnings);
+  assert(validateCanonical(r.canonical).ok !== false, 'the canonical still validates', validateCanonical(r.canonical));
+  assert(!JSON.stringify(json(r, 'crawler.discovered.metric_names')).includes('^'), 'a pattern is never a metric name', json(r, 'crawler.discovered.metric_names'));
+  const plain = crawlFiles({ 'metrics-manifest.json': JSON.stringify({ exporter: 'x', metrics: [{ name: 'm', type: 'gauge' }] }) }, { repoName: 'p', now: NOW });
+  assert(!('crawler.discovered.metric_families' in ann(plain)) && !('dynamicFamilies' in plain.summary.discovered) && !('dynamic_families' in json(plain, 'crawler.discovered.exporters').x.sources[0]),
+    'a manifest without families adds no key');
+
+  // End to end: the manifest's pattern answers for what the store lists.
+  const scan = crawlFiles({
+    'metrics-manifest.json': JSON.stringify({ exporter: 'acme-exporter', metrics: [{ name: 'acme_up', type: 'gauge' }], dynamicFamilies: [{ pattern: OK, type: 'counter' }] }),
+  }, { repoName: 'acme-exporter', now: NOW });
+  const live = JSON.parse(JSON.stringify(scan.canonical));
+  const liveAnn = live.metadata.annotations;
+  for (const k of Object.keys(liveAnn)) if (k.startsWith('crawler.discovered.')) delete liveAnn[k];
+  liveAnn['mcp.discovered.metric_names'] = JSON.stringify(['acme_up', 'acme_queue_orders_total', 'acme_queue_refunds_total', 'acme_new_total']);
+  liveAnn['mcp.discovered.metric_names_count'] = '4';
+  const d = diffPacks(adapt(scan.canonical), adapt(live));
+  const pairs = d.layers.L2.inBoth.filter(x => x.matchedBy === 'declared-family');
+  assert(pairs.length === 2 && pairs.every(x => x.a.id === 'METRIC-FAM-01') && d.summary.dynamicFamilies.members === 2
+    && d.layers.L2.inBoth.some(x => x.key.includes('acme_up') && !x.matchedBy) && d.layers.L2.onlyInB.some(x => x.key.includes('acme_new_total')),
+    'crawl, adapt, diff: members under the family, the literal by name, the unknown name live-not-declared', d.layers.L2);
+}
+
 // ---------- H. no exporter evidence: none of the new keys ----------
 {
   const r = crawlFiles({
@@ -597,6 +694,17 @@ try {
   assert(JSON.stringify(json(crawled, 'crawler.discovered.metric_names')) === '["ibmmq_qmgr_status","ibmmq_queue_depth"]', 'the crawler reads what emit writes');
   assert(JSON.stringify(manifestFromExposition(EXPOSITION, { exporter: 'ibm-mq', version: '5.6.0', source: `${base}/metrics`, generatedAt: NOW })) === JSON.stringify(written),
     'the CLI writes exactly manifestFromExposition\'s manifest');
+
+  // A family is written by hand: a later run over the file keeps it, as it stands.
+  const FAMILIES = [{ pattern: '^ibmmq_queue_[a-z]+_total$', type: 'counter', note: 'by hand' }];
+  writeFileSync(join(tmp, 'kept.json'), JSON.stringify({ exporter: 'ibm-mq', metrics: [], dynamicFamilies: FAMILIES }));
+  const kept = await run(['--exporter', `${base}/metrics`, '--name', 'ibm-mq', '--out', 'kept.json', '--no-timestamp']);
+  const keptBack = JSON.parse(readFileSync(join(tmp, 'kept.json'), 'utf8'));
+  assert(kept.status === 0 && kept.stdout === 'wrote kept.json: 2 metric families of ibm-mq, 1 dynamic family kept\n'
+    && JSON.stringify(keptBack.dynamicFamilies) === JSON.stringify(FAMILIES) && keptBack.metrics.length === 2, 'a re-run keeps the hand-written families and says so', kept);
+  writeFileSync(join(tmp, 'notjson.json'), 'not a manifest');
+  const over = await run(['--exporter', `${base}/metrics`, '--name', 'ibm-mq', '--out', 'notjson.json', '--no-timestamp']);
+  assert(over.status === 0 && !('dynamicFamilies' in JSON.parse(readFileSync(join(tmp, 'notjson.json'), 'utf8'))), 'a file that is not a manifest keeps nothing');
 
   const viaPackc = await run(['emit', `--exporter=${base}/metrics`, '--out=-', '--no-timestamp'], CLI);
   const piped = JSON.parse(viaPackc.stdout);
