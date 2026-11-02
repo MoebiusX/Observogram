@@ -106,6 +106,7 @@ export const ARTEFACT_KINDS = [
   ['METRIC-SRC-', 'Metric defined in the code',   'A metric the service repository defines.'],
   ['SCRAPE-SRC-', 'Scrape job in the repository', 'A collection job the repository configures.'],
   ['SCRAPE-',     'Live scrape job',              'A collection job the live platform runs.'],
+  ['METRIC-FAM-', 'Dynamic metric family',        'A pattern for the metric names an exporter mints at runtime.'],
   ['METRIC-',     'Live metric',                  'A metric the live platform reports.'],
   ['PROF-',       'Profiling',                    'Collects continuous profiles.'],
   ['NET-',        'Network telemetry',            'Observes network flows.'],

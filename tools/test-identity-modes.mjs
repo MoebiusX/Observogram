@@ -335,6 +335,27 @@ test('parity: diffPacks over the JSON the server answers for two packs equals GE
 
 // ---------- the studio's Pair by (studio/compare-identity.mjs) ----------
 
+test('studio: the compare head counts what dynamic families answered for, and says nothing without one', async () => {
+  const { dynamicFamilyCount } = await import('../studio/compare-identity.mjs');
+  assert.equal(dynamicFamilyCount(undefined), '');
+  assert.equal(dynamicFamilyCount({ declared: 0 }), '');
+  assert.equal(dynamicFamilyCount({ declared: 1, members: 1, unmatched: [], refused: [] }), ' · 1 metric under 1 dynamic family');
+  assert.equal(dynamicFamilyCount({ declared: 3, members: 12, unmatched: ['^a'], refused: [{}] }), ' · 12 metrics under 3 dynamic families (1 matched nothing) · 1 refused');
+});
+
+test('studio: a member\'s card knows the family that answered for it, on either side, a folded metric\'s series too', async () => {
+  const { familyMemberPatterns } = await import('../studio/compare-identity.mjs');
+  const family = { id: 'METRIC-FAM-01', spec: { name_pattern: '^acme_' } };
+  const patterns = familyMemberPatterns({ layers: { L2: { inBoth: [
+    { matchedBy: 'declared-family', a: family, b: { id: 'METRIC-04', memberIds: ['METRIC-05', 'METRIC-06'] } },
+    { matchedBy: 'declared-family', a: { id: 'METRIC-07' }, b: family },
+    { a: { id: 'METRIC-SRC-01' }, b: { id: 'METRIC-08' } },
+  ] } } });
+  assert.deepEqual([...patterns.keys()].sort(), ['METRIC-04', 'METRIC-05', 'METRIC-06', 'METRIC-07']);
+  assert.equal(patterns.get('METRIC-07'), '^acme_');
+  assert.equal(familyMemberPatterns(undefined).size, 0);
+});
+
 test('studio: the switch\'s modes are the registry\'s; behaviour shows the server\'s diff itself, name and id re-key the packs on screen', async () => {
   const studio = await import('../studio/compare-identity.mjs');
   const lib = await import('./lib/identity-modes.mjs');

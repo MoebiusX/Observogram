@@ -53,6 +53,21 @@
 //   metric (artefact-model.mjs, foldMetricFamilies). A family's entry carries
 //   `series`, the names it stands for on that side.
 //
+// DYNAMIC FAMILIES
+//   An exporter that mints metric names at runtime (one counter per queue)
+//   declares them as a pattern in its manifest (METRIC-FAM-NN, spec.name_pattern;
+//   tools/lib/exporter-metrics.mjs). A family never pairs by name and is never
+//   folded: it is lifted out of its side first, and a metric the other side
+//   holds with no pair of its own whose name it matches goes to inBoth,
+//   aligned, `matchedBy: 'declared-family'`, the family as that side's artefact.
+//   The first family that matches wins, a literal pair always wins over a
+//   family. Two sides declaring one pattern pair with each other. A family
+//   with no member is never onlyInA: it is counted in
+//   `summary.dynamicFamilies`, a key present only when a family is declared.
+//   A pattern is weaker evidence than a name: members stay out of `jaccard` and
+//   `alignment`, so a family neither lowers nor raises what the pack's declared
+//   artefacts score.
+//
 // IDENTITY MODES
 //   `diffPacks(a, b, { identity })` pairs by another key: a mode id of
 //   tools/lib/identity-modes.mjs (`'behaviour'`, `'name'`, `'id'`) or a
@@ -79,6 +94,7 @@ import {
 } from './artefact-model.mjs';
 import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
 import { identityMode, DEFAULT_IDENTITY_MODE } from './identity-modes.mjs';
+import { DYNAMIC_FAMILY_LIMITS, GENERIC_METRIC_PREFIXES, compileMetricFamilyPattern, metricFamilyPrefix } from './exporter-metrics.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -161,6 +177,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   // The families each pack read only within a scope (a live snapshot's).
   const aScoped = scopeOf(aLayered?.meta?.annotations);
   const bScoped = scopeOf(bLayered?.meta?.annotations);
+  const familyLedger = new Map();
   const layers = {};
   const collisions = [];
   let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
@@ -173,10 +190,12 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     // schema-forced fallback on the other side.
     // Metrics pair as families (see the header), folded with what both
     // sides know about which series belong together.
-    const folded = foldMetricFamilies(
-      aAll.filter((x) => !isScaffoldArtefact(x)),
-      bAll.filter((x) => !isScaffoldArtefact(x)),
-    );
+    // A dynamic family is a pattern, not a metric: it stays out of the fold
+    // and out of pairing, and claims what is left unpaired below.
+    const concrete = (x) => !isScaffoldArtefact(x) && !isDynamicFamilyArtefact(x);
+    const aFamilies = familyMatchers(aAll, 'a', familyLedger);
+    const bFamilies = familyMatchers(bAll, 'b', familyLedger);
+    const folded = foldMetricFamilies(aAll.filter(concrete), bAll.filter(concrete));
     const aItems = folded.a;
     const bItems = folded.b;
     const parked = [
@@ -198,6 +217,10 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     // of that family's live members become in-scope (genuine shadow signal).
     const aKinds = new Set();
     for (const k of aByKey.keys()) aKinds.add(k.slice(0, k.indexOf('::')));
+    if (aFamilies.length) aKinds.add('metric');
+    // A side that says it cannot observe metrics claims nothing through a family.
+    const aClaims = aBlind.has('metric') ? [] : aFamilies;
+    const bClaims = bBlind.has('metric') ? [] : bFamilies;
 
     const bucket = { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [], scaffold: [], notObserved: [] };
 
@@ -205,7 +228,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       const kind = k.slice(0, k.indexOf('::'));
       if (bByKey.has(k)) {
         matchGroups(k, aGroup, bByKey.get(k), bucket);
-      } else {
+      } else if (!claimByFamily(k, aGroup, bClaims, 'a', bucket)) {
         // B never looked at this family, or read it only within a scope this
         // artefact is not in: A's artefact is unchecked, not absent.
         const unchecked = bBlind.has(kind) ? bBlind.get(kind) : outsideScope(kind, aGroup, bScoped, 'a');
@@ -214,7 +237,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       }
     }
     for (const [k, bGroup] of bByKey) {
-      if (aByKey.has(k)) continue;
+      if (aByKey.has(k) || claimByFamily(k, bGroup, aClaims, 'b', bucket)) continue;
       const kind = k.slice(0, k.indexOf('::'));
       const unchecked = aBlind.has(kind) ? aBlind.get(kind) : outsideScope(kind, bGroup, aScoped, 'b');
       if (unchecked) {
@@ -227,6 +250,10 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       }
     }
+
+    pairDeclaredFamilies(aFamilies, bFamilies, bucket);
+    noteOtherCover(aClaims, bItems);
+    noteOtherCover(bClaims, aItems);
 
     // Stable order — alphabetical by key — so the UI doesn't reshuffle on
     // every load.
@@ -260,6 +287,11 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     notObserved += bucket.notObserved.length;
   }
 
+  const dynamicFamilies = familySummary([...familyLedger.values()], { a: aBlind, b: bBlind }, { a: aScoped, b: bScoped });
+  // What a pattern answered for is not in the ratios (see DYNAMIC FAMILIES).
+  const familyMembers = dynamicFamilies?.members || 0;
+  const ratioUnion = onlyInA + onlyInB + inBoth - familyMembers;
+
   return {
     a: packMeta(aLayered),
     b: packMeta(bLayered),
@@ -288,17 +320,20 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // Artefacts one side holds in a family the other side could not
       // observe: unchecked, not missing. Never paired, never counted.
       notObserved,
+      // Only when a side declares a dynamic family, so a pack without one
+      // keeps its bytes: what each family claimed, and what it could not.
+      ...(dynamicFamilies ? { dynamicFamilies } : {}),
       union: onlyInA + onlyInB + inBoth,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
-      jaccard: (onlyInA + onlyInB + inBoth) === 0
+      jaccard: ratioUnion === 0
         ? 1
-        : Math.round((inBoth / (onlyInA + onlyInB + inBoth)) * 100) / 100,
+        : Math.round(((inBoth - familyMembers) / ratioUnion) * 100) / 100,
       // True alignment ratio: only structurally-equal matches count, over
       // the full union. Identity-only matches that drifted are excluded.
-      alignment: (onlyInA + onlyInB + inBoth) === 0
+      alignment: ratioUnion === 0
         ? 1
-        : Math.round((aligned / (onlyInA + onlyInB + inBoth)) * 100) / 100,
+        : Math.round(((aligned - familyMembers) / ratioUnion) * 100) / 100,
     },
     layers,
   };
@@ -340,13 +375,6 @@ const GENERIC_SERVICE_TOKENS = new Set([
   'victoriametrics',
 ]);
 
-const GENERIC_METRIC_PREFIXES = new Set([
-  'alert', 'alertmanager', 'alerts', 'container', 'go', 'grafana', 'grpc',
-  'http', 'jaeger', 'jvm', 'kube', 'kubelet', 'loki', 'node', 'nodejs',
-  'otel', 'otelcol', 'pg', 'pod', 'process', 'prometheus', 'promtail',
-  'pushgateway', 'rabbitmq', 'redis', 'tempo', 'vm',
-]);
-
 function buildServiceScope(layered, serviceOverride) {
   const explicit = new Set();
   const addExplicit = (value) => addNameTokens(explicit, value, { allowShort: false });
@@ -369,7 +397,12 @@ function buildServiceScope(layered, serviceOverride) {
     for (const artefact of layerArtefacts(layered, layerId)) {
       const kind = classify(artefact);
       const spec = artefact?.spec || {};
-      if (kind === 'metric') {
+      if (isDynamicFamilyArtefact(artefact)) {
+        // A pattern is no metric name, but it says whose names they are: the
+        // exporter's other metrics stay this pack's business.
+        const prefix = metricPrefix(metricFamilyPrefix(spec.name_pattern));
+        if (isUsefulMetricPrefix(prefix)) metricPrefixes.add(prefix);
+      } else if (kind === 'metric') {
         const metric = String(spec.name || artefact.title || '').trim();
         if (!metric) continue;
         declaredMetrics.add(metric.toLowerCase());
@@ -403,7 +436,7 @@ function buildServiceScope(layered, serviceOverride) {
 // file's basename, which is as often the service itself
 // (`checkout-api/docs/checkout-api.prom`) as a third party (`ibm-mq.prom`),
 // and the annotation keeps that origin over the code's; it stays explicit.
-const EXPORTER_EMITTER_ORIGINS = new Set(['exporter-manifest', 'exporter-config']);
+const EXPORTER_EMITTER_ORIGINS = new Set(['exporter-manifest', 'exporter-config', 'exporter-family']);
 
 function isExporterOrigin(spec) {
   return EXPORTER_EMITTER_ORIGINS.has(spec?.origin_kind);
@@ -678,6 +711,125 @@ function pushNotObserved(target, baseKey, group, side, reason) {
   group.forEach((artefact, i) => {
     target.push({ key: occurrenceKey(baseKey, i, suffix), side, artefact, reason });
   });
+}
+
+// ---------- dynamic metric families ----------
+
+function isDynamicFamilyArtefact(artefact) {
+  return artefact?.spec?.origin_kind === 'exporter-family' && typeof artefact.spec.name_pattern === 'string';
+}
+
+// The families of one side and layer that compile, each with its row in the
+// ledger (one per side and pattern, whichever layers repeat it); the ones that
+// do not compile, or come past the limit, are recorded there and claim nothing.
+function familyMatchers(items, side, ledger) {
+  const out = [];
+  for (const artefact of items.filter(isDynamicFamilyArtefact)) {
+    const pattern = artefact.spec.name_pattern;
+    if (out.some((family) => family.pattern === pattern)) continue;
+    const key = `${side}\0${pattern}`;
+    const known = ledger.get(key);
+    const taken = [...ledger.values()].filter((row) => row.side === side && !row.refused).length;
+    const compiled = !known && taken >= DYNAMIC_FAMILY_LIMITS.families
+      ? { reason: `over the limit of ${DYNAMIC_FAMILY_LIMITS.families}` }
+      : compileMetricFamilyPattern(pattern);
+    const row = known || {
+      pattern: pattern.slice(0, 200),
+      side,
+      ...(artefact.spec.origin_service ? { exporter: artefact.spec.origin_service } : {}),
+      ...(artefact.spec.origin_file ? { file: artefact.spec.origin_file } : {}),
+      members: 0,
+      ...(compiled.reason ? { refused: compiled.reason } : {}),
+    };
+    ledger.set(key, row);
+    if (compiled.re) out.push({ artefact, pattern, re: compiled.re, row });
+  }
+  return out;
+}
+
+// The first family that matches this metric, testing the name and, for a
+// folded metric, each series it stands for, as listed (Prometheus names are
+// case-sensitive).
+function familyOfMetric(artefact, families) {
+  const names = [artefact?.spec?.name, ...(artefact?.series || [])]
+    .filter((n) => typeof n === 'string' && n.length <= DYNAMIC_FAMILY_LIMITS.nameLength);
+  return families.find((family) => names.some((n) => family.re.test(n)));
+}
+
+// An unpaired metric group the other side's family answers for goes to inBoth.
+function claimByFamily(baseKey, group, families, side, bucket) {
+  if (!families.length || baseKey.slice(0, baseKey.indexOf('::')) !== 'metric') return false;
+  const claims = group.map((artefact) => familyOfMetric(artefact, families));
+  if (claims.some((family) => !family)) return false;
+  const suffix = group.length > 1;
+  group.forEach((artefact, i) => {
+    const family = claims[i];
+    family.row.members++;
+    bucket.inBoth.push({
+      key: occurrenceKey(baseKey, i, suffix),
+      a: side === 'b' ? family.artefact : artefact,
+      b: side === 'b' ? artefact : family.artefact,
+      match: 'aligned',
+      matchedBy: 'declared-family',
+      deltas: [],
+    });
+  });
+  return true;
+}
+
+// One pattern on both sides is one declaration, the same on each.
+function pairDeclaredFamilies(aFamilies, bFamilies, bucket) {
+  for (const a of aFamilies) {
+    const b = bFamilies.find((family) => family.pattern === a.pattern);
+    if (!b) continue;
+    a.row.paired = true;
+    b.row.paired = true;
+    bucket.inBoth.push({ key: `metric::family:${a.pattern}`, a: a.artefact, b: b.artefact, match: 'aligned', deltas: [] });
+  }
+}
+
+// A family with no member can still match names that went elsewhere first: the
+// pack lists them too (`packc emit` keeps families beside the names it scrapes),
+// or an earlier family holds them. It did not match nothing.
+function noteOtherCover(families, otherItems) {
+  for (const family of families) {
+    if (family.row.members) continue;
+    const covered = otherItems.filter((x) => classify(x) === 'metric' && familyOfMetric(x, [family])).length;
+    if (covered) family.row.covered = (family.row.covered || 0) + covered;
+  }
+}
+
+// Whether a side's metric scope read everything a family's prefix can name.
+function scopeCoversFamily(entry, pattern) {
+  if (entry?.by !== 'prefix' || entry.exclude?.length) return false;
+  const prefix = metricFamilyPrefix(pattern);
+  return entry.values.some((value) => prefix.startsWith(value));
+}
+
+// `summary.dynamicFamilies`, or null when no side declares one. `unmatched` is
+// a family that matched nothing, not even a name that paired elsewhere, on a side
+// that read what it could name; where a side could not list metrics, or read
+// them within a scope that does not cover the family, the row says it was not
+// checked instead.
+function familySummary(ledger, blind, scoped) {
+  if (!ledger.length) return null;
+  const order = (x, y) => (x.pattern < y.pattern ? -1 : x.pattern > y.pattern ? 1 : x.side < y.side ? -1 : x.side > y.side ? 1 : 0);
+  const families = ledger.map((row) => {
+    if (row.refused || row.members || row.paired || row.covered) return row;
+    const other = row.side === 'a' ? 'b' : 'a';
+    const scope = scoped[other].get('metric');
+    const reason = blind[row.side].get('metric') || blind[other].get('metric')
+      || (scope && !scopeCoversFamily(scope, row.pattern) ? 'the other pack read its metrics only within a scope that does not cover this family, so it was not checked' : null);
+    return reason ? { ...row, notObserved: reason } : row;
+  }).sort(order);
+  const distinct = (rows) => [...new Set(rows.map((row) => row.pattern))];
+  return {
+    declared: distinct(families).length,
+    members: families.reduce((sum, row) => sum + row.members, 0),
+    unmatched: distinct(families.filter((row) => !row.refused && !row.members && !row.paired && !row.covered && !row.notObserved)),
+    refused: families.filter((row) => row.refused).map(({ pattern, side, refused }) => ({ pattern, side, reason: refused })),
+    families,
+  };
 }
 
 // A schema-forced placeholder projected by the adapter from a

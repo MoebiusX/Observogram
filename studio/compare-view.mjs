@@ -17,7 +17,7 @@ import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
 import { liveKindSuffix, liveChipText } from './live-model.mjs';
 import {
-  compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
+  dynamicFamilyCount, familyMemberPatterns, compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
   renderCompareIdentitySwitch, DEFAULT_PAIRING,
 } from './compare-identity.mjs';
 import { cardKey } from './layers-view.mjs';
@@ -1275,7 +1275,9 @@ function diffDigest(diff, packB, lens) {
     // aligned; same-identity-but-divergent pairs are drifted. Matching is
     // an object comparison, not a name check.
     const matched = (bucket.inBoth || []).filter(e => passesLens(e, 'a') && !isScaffoldDiffEntry(e));
-    const aligned = matched.filter(e => e.match !== 'drifted');
+    // A metric only a dynamic family answered for is not counted as agreement:
+    // the engine's ratios leave it out too (summary.dynamicFamilies counts it).
+    const aligned = matched.filter(e => e.match !== 'drifted' && e.matchedBy !== 'declared-family');
     const drifted = matched.filter(e => e.match === 'drifted');
     const rawOnlyInA = (bucket.onlyInA || []).filter(e => passesLens(e, 'a'));
     const rawOnlyInB = (bucket.onlyInB || []).filter(e => passesLens(e, 'b'));
@@ -2433,6 +2435,7 @@ function renderCompareView(view) {
   const sets = buildCompareKeySets(diff);
   sets.roles = ctx.roles;
   sets.pairing = pairing;
+  sets.familyPatterns = familyMemberPatterns(diff);
 
   scaffold.appendChild(renderComparePackHeaders(diff));
   scaffold.appendChild(renderCompareSummary(digest, pairing.matchedBy));
@@ -3544,9 +3547,12 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const noun = side === 'a' ? sets?.roles?.aNoun : sets?.roles?.bNoun;
   // In a name or id view the pill says which key paired it, or why it did not.
   const pairing = sets?.pairing;
-  const pairedBy = inBoth ? pairingTitle(pairing?.engine, artefact, pairing?.mode) : '';
+  const familyPattern = inBoth ? sets?.familyPatterns?.get(artefact.id) : null;
+  const pairedBy = familyPattern
+    ? `In both packs through the dynamic family ${familyPattern}: a pattern matched this name, no pack declares it by name`
+    : inBoth ? pairingTitle(pairing?.engine, artefact, pairing?.mode) : '';
   const notPaired = isOnlySide ? unpairedHint(pairing?.engine, artefact, pairing?.mode) : '';
-  if (inBoth) statusPill = `<span class="diff-chip chip-both" title="${escapeHtml(pairedBy || 'In both packs, matched by behaviour')}">in both</span>`;
+  if (inBoth) statusPill = `<span class="diff-chip chip-both" title="${escapeHtml(pairedBy || (artefact?.spec?.name_pattern ? 'In both packs: live metric names this dynamic family matches' : 'In both packs, matched by behaviour'))}">in both</span>`;
   else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(`${noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`}${notPaired ? ` — ${notPaired}` : ''}`)}">only in ${side.toUpperCase()}</span>`;
   else if (isUnchecked) {
     const otherLetter = side === 'a' ? 'B' : 'A';
@@ -3597,7 +3603,7 @@ function renderCompareHead() {
   head.innerHTML = `
     <span class="section-num">CMP</span>
     <span class="section-name">${escapeHtml(a?.name || '?')} <em>vs</em> ${escapeHtml(b?.name || '?')}</span>
-    <span class="section-count">${state.diff ? `union ${state.diff.summary.union}` : '—'}</span>
+    <span class="section-count">${state.diff ? `union ${state.diff.summary.union}${dynamicFamilyCount(state.diff.summary.dynamicFamilies)}` : '—'}</span>
   `;
   return head;
 }

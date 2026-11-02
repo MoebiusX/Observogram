@@ -237,9 +237,9 @@ const spentMs = (t0, t1) => {
   return Math.min(wall, t1.cpu - t0.cpu + Math.max(t0.slack ?? 0, t1.slack ?? 0));
 };
 // One pass of `re` over ADVERSARIAL_IDS, timed: what it cost (spentMs).
-const timePass = (re, clock) => {
+const timePass = (re, clock, ids) => {
   const t0 = clock();
-  for (const id of ADVERSARIAL_IDS) re.test(id);
+  for (const id of ids) re.test(id);
   return spentMs(t0, clock());
 };
 
@@ -288,10 +288,13 @@ function readTarget(value, where, errors) {
  * `() => ({ wall, cpu, slack })` in milliseconds, `cpu` null where there is
  * none, `slack` (0 if absent) what a CPU reading can fall short of the time
  * spent, read once before each pass and once after it. A caller matching
- * longer or differently shaped values adds its own bounds on top.
+ * longer or differently shaped values adds its own bounds on top. `ids` replaces
+ * the adversarial ids: a pattern that must open with a literal fails on the
+ * first character of the default ones and is timed doing nothing, so its rule
+ * passes ids that start with that literal.
  * @returns {{ re: RegExp } | { reason: string }}
  */
-export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true, clock = readClock } = {}) {
+export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', timed = true, clock = readClock, ids = ADVERSARIAL_IDS } = {}) {
   if (typeof pattern !== 'string' || !pattern) return { reason: `${noun} must be a non-empty string` };
   if (pattern.length > PATTERN_MAX_LENGTH) return { reason: `${noun} longer than ${PATTERN_MAX_LENGTH} characters` };
   if (!pattern.startsWith('^')) return { reason: `${noun} must be anchored (start with ^)` };
@@ -300,9 +303,9 @@ export function compileBoundedPattern(pattern, { flags = '', noun = 'pattern', t
   let re;
   try { re = new RegExp(pattern, flags); } catch (e) { return { reason: `invalid regex: ${e.message}` }; }
   if (timed) {
-    let spent = timePass(re, clock);
+    let spent = timePass(re, clock, ids);
     if (spent <= PATTERN_RETIME_CAP_MS) {
-      for (let k = 1; spent > PATTERN_BUDGET_MS && k <= PATTERN_RETIMES; k++) spent = timePass(new RegExp(`${'(?:'.repeat(k)}${pattern}${')'.repeat(k)}`, flags), clock);
+      for (let k = 1; spent > PATTERN_BUDGET_MS && k <= PATTERN_RETIMES; k++) spent = timePass(new RegExp(`${'(?:'.repeat(k)}${pattern}${')'.repeat(k)}`, flags), clock, ids);
     }
     if (spent > PATTERN_BUDGET_MS) return { reason: `${noun} too slow against a ${ID_MATCH_LENGTH}-character id` };
   }

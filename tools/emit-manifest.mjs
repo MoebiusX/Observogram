@@ -148,11 +148,23 @@ if (!name) fail(2, 'the exporter has no name; pass --name');
 const manifest = manifestFromExposition(text, { exporter: name, version: args.version, source, generatedAt });
 if (!manifest.metrics.length) fail(1, `${source ? shown(source) : showArg(args.from)} holds no metric family (no # TYPE, # HELP or sample line)`);
 
+// A manifest's dynamic families are written by hand: no scrape can name a
+// pattern, so a later run over the same file keeps them as they stand.
+let keptFamilies = 0;
+if (args.out !== '-' && existsSync(resolve(args.out))) {
+  let previous = null;
+  try { previous = JSON.parse(readFileSync(resolve(args.out), 'utf8').replace(/^\uFEFF/, '')); } catch { /* not a manifest: nothing to keep */ }
+  if (Array.isArray(previous?.dynamicFamilies) && previous.dynamicFamilies.length) {
+    manifest.dynamicFamilies = previous.dynamicFamilies;
+    keptFamilies = previous.dynamicFamilies.length;
+  }
+}
+
 const json = `${JSON.stringify(manifest, null, 2)}\n`;
 if (args.out === '-') {
   process.stdout.write(json, () => process.exit(0));
 } else {
   try { writeFileSync(resolve(args.out), json); }
   catch (e) { fail(2, `cannot write --out ${showArg(args.out)}: ${e.code || 'write failed'}`); }
-  process.stdout.write(`wrote ${showArg(args.out)}: ${manifest.metrics.length} metric famil${manifest.metrics.length === 1 ? 'y' : 'ies'} of ${name}\n`, () => process.exit(0));
+  process.stdout.write(`wrote ${showArg(args.out)}: ${manifest.metrics.length} metric famil${manifest.metrics.length === 1 ? 'y' : 'ies'} of ${name}${keptFamilies ? `, ${keptFamilies} dynamic famil${keptFamilies === 1 ? 'y' : 'ies'} kept` : ''}\n`, () => process.exit(0));
 }
