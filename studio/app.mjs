@@ -74,7 +74,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -7805,6 +7805,7 @@ function setupDraftFromMcpPanel() {
   // Any change to the target or its key: a ping never stands for another.
   for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
   $('#live-test-btn').onclick = () => testLiveConnection();
+  $('#live-register-btn').onclick = () => registerAndRetestLive();
   for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
     radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
   }
@@ -7840,6 +7841,7 @@ const liveUi = {
   job: null,         // { id, kind, label, records, since, view, answer }
   timer: null,
   kindChosen: null,  // the person's own choice in this panel
+  registerOffer: null, // originRefusalOffer's answer to the last test, while it stands
 };
 let liveFetchLib = null;
 const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
@@ -7861,7 +7863,44 @@ function clearLivePing() {
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
   setLiveStatus('live-ping-status', '');
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
+}
+
+// The origin rule refused a typed URL this reader may register
+// (originRefusalOffer): the button beside the refusal offers it.
+function paintLiveRegisterOffer(offer) {
+  liveUi.registerOffer = offer;
+  const btn = $('#live-register-btn');
+  if (!btn) return;
+  btn.hidden = !offer;
+  btn.textContent = offer ? offer.label : '';
+}
+
+// Register and test again: the typed URL becomes the org's endpoint (the
+// server judges its origin again and audits it), the picker selects it, and
+// the connection is tested by its id. A refusal is said where the test's is.
+async function registerAndRetestLive() {
+  const offer = liveUi.registerOffer;
+  const btn = $('#live-register-btn');
+  if (!offer || btn?.disabled) return;
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', `registering ${offer.name} as an MCP endpoint…`);
+  let created = null;
+  try {
+    created = await createEndpoint({ name: offer.name, url: offer.url });
+  } catch (e) {
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  paintLiveRegisterOffer(null);
+  if (!created) return;
+  state.mcpEndpoints = [...(Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints : []).filter((ep) => ep.id !== created.id), created];
+  paintMcpTarget('draft', { chosen: String(created.id) });
+  toast(`Registered ${created.name} as an MCP endpoint`);
+  await testLiveConnection();
 }
 
 function liveKind() {
@@ -7912,6 +7951,7 @@ async function testLiveConnection() {
   const { body: target } = mcpTargetOf('draft');
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
   if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
   const btn = $('#live-test-btn');
@@ -7938,6 +7978,7 @@ async function testLiveConnection() {
     setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
     setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    paintLiveRegisterOffer(originRefusalOffer(e, target, state.mcpTargetPolicy?.register ?? null));
   } finally {
     btn.disabled = false;
   }
