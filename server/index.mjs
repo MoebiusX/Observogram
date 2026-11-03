@@ -86,7 +86,7 @@ import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
-import { authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole } from './authz.mjs';
+import { admittedBearer, admittedUser, authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -363,9 +363,24 @@ app.use(mcpSettingsRoutes({ authorize }));
 // decoder is the attack surface the October 2026 Node security release names
 // (the Brotli out-of-bounds write, CVE-2026-111497): the runtime floor carries
 // the fix, this keeps untrusted bytes away from the decoder on any runtime.
-app.use(express.json({ limit: '16mb', inflate: false }));   // /api/crawl can carry a whole repo's worth of YAML
-app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb', inflate: false }));
-app.use(express.urlencoded({ extended: false, limit: '64kb', inflate: false }));   // /auth/login form
+//
+// The large caps are for a caller the gate admitted to /api: the bearer, a
+// session, or the open posture (/api/crawl can carry a whole repo's worth of
+// YAML). Everyone else — the /auth/* forms, a non-API path, an anonymous read
+// in the token posture — is read up to 64 KiB: nothing they send needs more,
+// and parsing 16 MB of JSON can take more heap than the pod is given.
+const ANONYMOUS_BODY_LIMIT = '64kb';
+const TEXT_TYPES = ['application/x-yaml', 'text/yaml', 'text/plain'];
+const admittedToApi = (req) => req.path.startsWith('/api/')
+  && (admittedBearer(req) || !!admittedUser(req) || requestPosture(req).startsWith('open-'));
+const parsers = {
+  json: [express.json({ limit: '16mb', inflate: false }), express.json({ limit: ANONYMOUS_BODY_LIMIT, inflate: false })],
+  text: [express.text({ type: TEXT_TYPES, limit: '4mb', inflate: false }), express.text({ type: TEXT_TYPES, limit: ANONYMOUS_BODY_LIMIT, inflate: false })],
+};
+const forCaller = (req, [admitted, anonymous]) => (admittedToApi(req) ? admitted : anonymous);
+app.use(function jsonParser(req, res, next) { return forCaller(req, parsers.json)(req, res, next); });
+app.use(function textParser(req, res, next) { return forCaller(req, parsers.text)(req, res, next); });
+app.use(express.urlencoded({ extended: false, limit: ANONYMOUS_BODY_LIMIT, inflate: false }));   // /auth/login form
 
 // Identity routes (/auth/*) — inert in local mode; throws fail-closed at
 // boot when OIDC is configured incompletely. See server/auth.mjs.
@@ -403,7 +418,8 @@ app.use(function bodyParserError(err, req, res, next) {
   if (res.headersSent) return next(err);
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
-      const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
+      const limit = !err.limit ? '16MB'
+        : err.limit >= 1024 * 1024 ? Math.round(err.limit / 1024 / 1024) + 'MB' : Math.round(err.limit / 1024) + 'KB';
       return res.status(413).json({
         ok: false,
         error: `Request body too large (cap ${limit}). The crawler should filter to observability artefacts only — drop a large repo and the client will pre-classify; if you're hitting this you may have an in-flight build.`,
@@ -452,10 +468,10 @@ app.get('/api/orgs', authorize('GET /api/orgs'), (req, res) => {
   const principal = req.observogramPrincipal;
   const active = currentOrg();
   let orgs;
-  if (req.observogramBearer) {
+  if (admittedBearer(req)) {
     orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account', effectiveRole: effectiveRoleOf(principal) }));
-  } else if (req.observogramUser) {
-    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({
+  } else if (admittedUser(req)) {
+    orgs = listMembershipsForUser(db, admittedUser(req).id).map((m) => ({
       id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role, effectiveRole: effectiveRoleOf(principal, m.role),
     }));
     if (principal?.owner && !orgs.some((o) => o.id === active)) {

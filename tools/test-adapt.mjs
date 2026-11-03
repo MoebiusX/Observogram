@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
-import { adapt, listEnvironments } from './lib/adapter.mjs';
+import { adapt, listEnvironments, applyEnvironmentOverlay } from './lib/adapter.mjs';
+import { brandEnvFrom } from './lib/brand-env.mjs';
 import { diffPacks } from './lib/diff.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 
@@ -362,6 +363,39 @@ assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'service',
     'a rule whose expression changed reads drifted, on expr', drifted && [drifted.a.title, drifted.deltas]);
   assert(ruleEntries('onlyInB').map(e => e.artefact.title).join() === 'PaymentNodeDown' && ruleEntries('onlyInA').length === 0,
     'a rule only the live side holds reads "live, not declared"', [ruleEntries('onlyInA').length, ruleEntries('onlyInB').map(e => e.artefact.title)]);
+}
+
+// ---------- an override path never walks the prototype chain ----------
+//
+// A pack stored before validation refused such keys still reaches the
+// overlay: it skips the path, writes nothing outside the spec, and applies
+// the pack's other overrides as before. And a value that did land on
+// Object.prototype is never read as configuration.
+{
+  const hostile = clone(canonical);
+  Object.assign(hostile.spec.environments.prod.overrides, {
+    '__proto__.ogvPolluted': 'yes',
+    'constructor.prototype.ogvPolluted': 'yes',
+    'otel.__proto__.ogvPolluted': 'yes',
+  });
+  const { spec } = applyEnvironmentOverlay(hostile.spec, 'prod');
+  assert(({}).ogvPolluted === undefined && !Object.hasOwn(Object.prototype, 'ogvPolluted'),
+    'no override reaches Object.prototype', ({}).ogvPolluted);
+  assert(spec.otel?.sdk?.sampling?.ratio === 0.1 && spec.storage?.metrics?.retention === '13mo',
+    'the pack\'s ordinary overrides still apply', [spec.otel?.sdk?.sampling?.ratio, spec.storage?.metrics?.retention]);
+  assert(adapt(hostile).meta?.environment === 'prod', 'the adapter still adapts the pack');
+  assert(({}).ogvPolluted === undefined, 'nor does adapt() pollute', ({}).ogvPolluted);
+
+  Object.defineProperty(Object.prototype, 'OBSERVOGRAM_OGV_INHERITED', { value: 'off', configurable: true });
+  try {
+    assert(process.env.OBSERVOGRAM_OGV_INHERITED === 'off', 'precondition: process.env reads fall through to Object.prototype');
+    assert(brandEnvFrom(process.env, 'OGV_INHERITED') === '', 'brandEnvFrom reads only the env\'s own variables',
+      brandEnvFrom(process.env, 'OGV_INHERITED'), '');
+    assert(brandEnvFrom({ OBSERVOGRAM_OGV_INHERITED: 'on' }, 'OGV_INHERITED') === 'on', 'an own variable still wins');
+    assert(brandEnvFrom({ TOMOGRAPH_OGV_INHERITED: 'legacy' }, 'OGV_INHERITED') === 'legacy', 'the legacy spelling still counts');
+  } finally {
+    delete Object.prototype.OBSERVOGRAM_OGV_INHERITED;
+  }
 }
 
 report('adapter');
