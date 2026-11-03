@@ -2074,6 +2074,10 @@ const overviewActions = {
 // screen is taken; anywhere else the flows keep their own routing.
 let overviewStart = { slot: null, a: null };
 const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
+// Step 2 under way: Pack A in, the live panel opened for Pack B, Overview on screen.
+const overviewStartWaitsForB = () => state.mode === 'overview' && overviewStart.slot === 'b' && !!overviewStart.a;
+// Pack A's name as the comparison's toast says it, kept past the reset.
+let overviewStartLabelA = null;
 
 // Step 1 keeps Overview on screen with Pack A remembered; step 2 is the
 // comparison (step 3, automatic): Expert's Diagnose on A against B.
@@ -2095,6 +2099,7 @@ async function overviewStartAdopt(id, label) {
     return false;
   }
   overviewStart = { slot: null, a: null };
+  overviewStartLabelA = a.label;
   setUiMode('expert');
   state.view = 'compare';
   enterCompareMode(a.id, defaultEnvFor(a.id), id, defaultEnvFor(id));
@@ -6837,6 +6842,12 @@ async function doCrawlFromGithub() {
       setGhStatus(`error: ${out.error || 'unknown'}${hint}`, 'error');
       return;
     }
+    if (!out.canonical) {
+      // Nothing to draw: the result box reads the pack it does not have.
+      $('#crawl-result').hidden = true;
+      setGhStatus(`done in ${out.tookMs}ms · no observability artefacts found in this repo`, 'warn');
+      return;
+    }
     crawlState.lastResult = out;
     renderCrawlResult(out);
     followReplacedPack(out.registered?.id).catch(() => {});
@@ -8082,6 +8093,15 @@ async function finishLiveJob(answer) {
   // The result is shown here (the panel open), or the toast below says it: the key goes.
   forgetLiveJob();
   paintLiveSteps();
+  // Overview's start waiting for Pack B (step 2 opened this panel): the
+  // job's pack is Pack B, and the comparison (step 3) opens by itself —
+  // never "Open it", which would show the live pack alone and drop Pack A.
+  if (model?.registered?.id && overviewStartWaitsForB()) {
+    $('#draft-mcp-panel').hidden = true;
+    const compared = await overviewStartAdopt(model.registered.id, model.registered.label || model.registered.id);
+    toast(compared ? `Comparing ${overviewStartLabelA || 'Pack A'} against ${model.registered.label || 'the live pack'}` : `Registered: ${model.registered.label}`, 'ok');
+    return;
+  }
   renderLiveResult($('#live-result'), model, {
     onOpen: (id) => openLivePack(id),
     onCompare: (id) => compareWithLivePack(id),
@@ -8115,6 +8135,7 @@ async function showLiveDraftResult(answer) {
 }
 
 async function openLivePack(id) {
+  if (overviewStartWaitsForB()) { $('#draft-mcp-panel').hidden = true; await overviewStartAdopt(id, id); return; }
   $('#draft-mcp-panel').hidden = true;
   await refreshCatalogue();
   state.view = 'layers';
