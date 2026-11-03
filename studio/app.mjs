@@ -1082,7 +1082,7 @@ async function handleFile(file) {
     if (overviewStartTakes(res)) {
       const slot = overviewStart.slot;
       const compared = await overviewStartAdopt(res.registered.id, file.name);
-      toast(compared ? `Comparing against ${file.name}` : `Loaded ${file.name} as Pack ${slot === 'b' ? 'B' : 'A'}`);
+      if (!compared) toast(`Loaded ${file.name} as Pack ${slot === 'b' ? 'B' : 'A'}`);
       return;
     }
     state.pack = res.adapted;
@@ -1236,6 +1236,9 @@ function setupUpload() {
     e.preventDefault();
     dragDepth = 0; overlay.hidden = true;
     document.body.classList.remove('is-dragging');
+    // Overview's start on screen: a file dropped anywhere is the next step's
+    // pack (Pack A, or Pack B once A is in), as its Upload card would make it.
+    if (state.mode === 'overview' && !overviewStart.slot && overviewModel().start) overviewStart = startChoose(overviewStart, overviewStart.a ? 'b' : 'a');
     handleFile(e.dataTransfer.files[0]);
   });
 }
@@ -2084,8 +2087,6 @@ let overviewStart = START_IDLE;
 const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
 // Step 2 under way: Pack A in, the live panel opened for Pack B, Overview on screen.
 const overviewStartWaitsForB = () => state.mode === 'overview' && overviewStart.slot === 'b' && !!overviewStart.a;
-// Pack A's name as the comparison's toast says it, kept past the reset.
-let overviewStartLabelA = null;
 
 // Step 1 keeps Overview on screen with Pack A remembered; step 2 is the
 // comparison (step 3, automatic): Expert's Diagnose on A against B.
@@ -2099,11 +2100,41 @@ async function overviewStartAdopt(id, label) {
     if (refused) toast(said, 'error'); else announce(said);
     return false;
   }
-  overviewStartLabelA = compare.a.label;
-  setUiMode('expert');
-  state.view = 'compare';
-  enterCompareMode(compare.a.id, defaultEnvFor(compare.a.id), compare.b.id, defaultEnvFor(compare.b.id));
+  await overviewStartCheck(compare);
   return true;
+}
+
+// Step 3, in Overview: the pair becomes the service's check (POST
+// /api/journeys/capture, under the name the start owns — `<service>-repo-vs-live`,
+// replaced when the start runs again, never another check's), and the check
+// runs on the service's board (Check now), which then shows the drift: the
+// grade against live, what matches, what to add, update and review. Should
+// the server refuse to save it (an origin a journey may not fetch, a rank
+// that may not save one), the comparison opens in Expert's Diagnose instead
+// and the toast says why.
+async function overviewStartCheck({ a, b }) {
+  const metaA = state.catalog.find((p) => p.id === a.id);
+  const slug = serviceKeyForPack(metaA) || null;
+  const env = defaultEnvFor(a.id);
+  try {
+    if (!slug) throw new Error('Pack A names no service');
+    await api('/api/journeys/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `${slug}-repo-vs-live`, packAId: a.id, packBId: b.id, service: slug, ...(env ? { env } : {}) }),
+    });
+  } catch (e) {
+    toast(`The check could not be saved (${e.message}) — the comparison opens in Diagnose instead.`, 'error');
+    setUiMode('expert');
+    state.view = 'compare';
+    enterCompareMode(a.id, env, b.id, defaultEnvFor(b.id));
+    return;
+  }
+  toast(`Checking ${a.label} against ${b.label}…`, 'ok');
+  const service = (state.services || []).find((s) => s.slug === slug);
+  await enterOverview(service?.id ?? null, env);
+  await refreshOverviewFacts();
+  if (state.mode === 'overview' && overviewFacts.journey) await runOverviewCheck();
 }
 const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
@@ -8323,7 +8354,7 @@ async function finishLiveJob(answer) {
   if (model?.registered?.id && overviewStartWaitsForB()) {
     $('#draft-mcp-panel').hidden = true;
     const compared = await overviewStartAdopt(model.registered.id, model.registered.label || model.registered.id);
-    toast(compared ? `Comparing ${overviewStartLabelA || 'Pack A'} against ${model.registered.label || 'the live pack'}` : `Registered: ${model.registered.label}`, 'ok');
+    if (!compared) toast(`Registered: ${model.registered.label}`, 'ok');
     return;
   }
   renderLiveResult($('#live-result'), model, {

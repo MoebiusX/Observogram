@@ -255,7 +255,7 @@ host.overview.resetStart = () => { start = START_IDLE; repaint(); };
 // When one of those flows registers a pack while the board is on screen:
 const { start: next, compare, said, refused } = startAdopted(start, { id, label });
 start = next;
-if (compare) openYourComparison(compare.a.id, compare.b.id);   // step 3
+if (compare) runYourCheck(compare.a.id, compare.b.id);         // step 3 (the studio: below)
 else repaint();                                                 // Pack A in: step 2 opens
 announce(said);                                                 // `refused`: the same pack offered as Pack B
 
@@ -264,9 +264,15 @@ render(buildOverviewModel({ ...facts, access, start, startable: true }));
 
 Registering Pack A usually creates its service; the model keeps the start
 on screen while `start.a` is set, so the board does not jump to an empty
-service between the steps. The studio's own wiring is `overviewActions` and
-`overviewStartAdopt` in `studio/app.mjs`: its scan, its live job (a finished
-job's pack is Pack B), its file upload. The static bundle (DOWNSTREAM.md
+service between the steps. Step 3 is the host's; the studio keeps it on the
+board: it saves the pair as the service's check (`POST /api/journeys/capture`,
+named `<service>-repo-vs-live`), re-reads the board's facts and runs the check
+(`runServiceCheck`), so the board shows the grade against live and what to
+change; `journeyForService` prefers a check of the service's own pack, so the
+saved one is the one shown. The studio's wiring is `overviewActions`,
+`overviewStartAdopt` and `overviewStartCheck` in `studio/app.mjs`: its scan,
+its live job (a finished job's pack is Pack B), its file upload (a file
+dropped on the page while the start is up fills the next step). The static bundle (DOWNSTREAM.md
 §10) does not draw Overview: its shim answers the services and journeys
 routes with 501.
 

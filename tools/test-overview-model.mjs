@@ -151,6 +151,11 @@ test('journeyForService: found by the pack file although scope.service is null; 
   assert.equal(journeyForService(journeys, { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService([scoped], { slug: 'kx-matcher', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService(journeys, { slug: null, env: null, packId: null }), null, 'nothing to match on matches nothing');
+  // The start saves a check of the service's own pack beside an older one scoped to the service: the board shows the start's.
+  const older = { ...journey, name: 'kx-wallet', packA: '/w/packs/old.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  const startCheck = { ...journey, name: 'kx-wallet-repo-vs-live', packA: '/w/packs/uploaded-kx-wallet-1.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  assert.equal(journeyForService([older, startCheck], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), startCheck, 'the check of the service\'s own pack wins over one merely scoped to it');
+  assert.equal(journeyForService([older], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), older, 'with none of its own pack, the scoped one');
   // A Windows path to the same pack file is the same link.
   assert.equal(journeyForService([{ ...journey, packA: 'C:\\demo\\.observogram-demo\\packs\\uploaded-krystaline-a37d2521.pack.yaml' }], { packId: 'uploaded-krystaline-a37d2521' })?.name, 'krystaline');
   // Among several journeys of the pack: the one whose scope.env is the environment on screen, else the first.

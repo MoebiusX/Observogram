@@ -490,7 +490,7 @@ function startHtml(sources, start, serviceName = null, ov = {}) {
         <div class="ov-start__col" role="group" aria-label="Step 2: Pack B">${colB}
         </div>
         <div class="ov-start__col" role="group" aria-label="Step 3: the comparison">
-          <p class="ov-start__auto og-muted">Opens by itself once both packs are in: the declared side against the live side, in Diagnose.</p>
+          <p class="ov-start__auto og-muted">Runs by itself once both packs are in: what the repository declares, checked against what runs live.</p>
         </div>
       </div>
       <p class="ov-start__foot og-muted">Already have packs? <button type="button" class="ov-start__expert" data-ux-action="ov-expert">Open Expert mode</button></p>

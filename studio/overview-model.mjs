@@ -113,17 +113,17 @@ const normalizeKey = (s) => String(s || '').trim().toLowerCase();
 // its Pack A is the service's own pack file (the listing's `packA` is the
 // file path; a captured journey names the pack by id). The scope string is
 // also the diff's service scope, so a journey of a live aggregate is captured
-// without one — the pack is the surer link. Among several, the one whose
-// scope.env is the environment on screen; else the first.
+// without one — the pack is the surer link. Among several, the ones that
+// check the service's own pack first (a check saved by the start, beside an
+// older one scoped to the service), then the one whose scope.env is the
+// environment on screen; else the first.
 export function journeyForService(journeys, { slug = null, env = null, packId = null } = {}) {
   const list = Array.isArray(journeys) ? journeys.filter(Boolean) : [];
-  const mine = list.filter((j) => {
-    const scoped = slug && normalizeKey(j.scope?.service) === normalizeKey(slug);
-    const byPack = packId && baseName(j.packA) === `${packId}.pack.yaml`;
-    return scoped || byPack;
-  });
+  const byPack = (j) => !!packId && baseName(j.packA) === `${packId}.pack.yaml`;
+  const mine = list.filter((j) => byPack(j) || (slug && normalizeKey(j.scope?.service) === normalizeKey(slug)));
   if (!mine.length) return null;
-  return mine.find((j) => env && j.scope?.env === env) || mine[0];
+  const pool = mine.some(byPack) ? mine.filter(byPack) : mine;
+  return pool.find((j) => env && j.scope?.env === env) || pool[0];
 }
 
 // The listing says where Pack B comes from: "mcp: <url>" for a live draft,
