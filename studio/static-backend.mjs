@@ -306,10 +306,12 @@ const BODY_LIMITS = { json: 16 * MIB, text: 4 * MIB, form: 64 * 1024 };
 const FORM_PARAMETER_LIMIT = 1000;
 const TEXT_TYPES = ['application/x-yaml', 'text/yaml', 'text/plain'];
 const bodyRefusal = (status, error) => ({ refusal: json(status, { ok: false, error }, { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }) });
-// The /api/ 413: `cap <limit in MB, rounded>` — 16MB, 4MB, 0MB for the form's
-// 64 KiB, and 16MB when the error carries no limit (too many parameters).
+// The /api/ 413: `cap <limit, rounded>` — 16MB, 4MB, 64KB for the form (a
+// limit under 1 MiB in KB), and 16MB when the error carries no limit (too many
+// parameters).
+const capText = (limit) => (!limit ? '16MB' : limit >= MIB ? `${Math.round(limit / MIB)}MB` : `${Math.round(limit / 1024)}KB`);
 const tooLarge = (limit) => ({
-  refusal: json(413, { ok: false, error: `Request body too large (cap ${limit ? `${Math.round(limit / MIB)}MB` : '16MB'}). The crawler should filter to observability artefacts only — drop a large repo and the client will pre-classify; if you're hitting this you may have an in-flight build.` }),
+  refusal: json(413, { ok: false, error: `Request body too large (cap ${capText(limit)}). The crawler should filter to observability artefacts only — drop a large repo and the client will pre-classify; if you're hitting this you may have an in-flight build.` }),
 });
 
 // qs's value decoder (utils.decode): `+` is a space, then UTF-8 percent-

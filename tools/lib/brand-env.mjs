@@ -14,11 +14,14 @@ import { resolve } from 'node:path';
 // falling back to env.TOMOGRAPH_SESSION_SECRET. Returns '' when neither is
 // set (matching the `(env[k] || '').trim()` idiom the call sites already
 // used). The env is a parameter so a loader can be tested against a plain
-// object without mutating process.env (tools/mcp-transport.mjs).
+// object without mutating process.env (tools/mcp-transport.mjs). Only the
+// env's own variables count: process.env reads fall through to
+// Object.prototype, and a value found there is not configuration.
 export function brandEnvFrom(env, suffix) {
-  const modern = env?.[`OBSERVOGRAM_${suffix}`];
+  const own = (name) => (env != null && Object.hasOwn(env, name) ? env[name] : undefined);
+  const modern = own(`OBSERVOGRAM_${suffix}`);
   if (modern !== undefined && String(modern).trim() !== '') return String(modern).trim();
-  const legacy = env?.[`TOMOGRAPH_${suffix}`];
+  const legacy = own(`TOMOGRAPH_${suffix}`);
   return legacy === undefined ? '' : String(legacy).trim();
 }
 
