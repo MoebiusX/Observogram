@@ -528,6 +528,11 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   // A drift check started here: Pack A registered (its service now in the table), the start stays until step 2.
   const started = keep(screen({ start: { a: { id: 'kx-scan', label: 'krystaline (scanned draft)' } } }));
   assert.deepEqual([started.kind, started.service, started.start, started.primary], ['empty', null, { a: { label: 'krystaline (scanned draft)' } }, null]);
+  // A service with no pack at all (its pack dropped, the row kept): the start under its own header, not "Open Expert mode".
+  const packless = keep(screen({ services: [{ ...KRYSTALINE, packs: [] }] }));
+  assert.deepEqual([packless.kind, packless.service.slug, packless.grade.label, packless.start, packless.sources, packless.next.button, packless.primary], ['service', 'krystaline', 'No pack yet', { a: null }, { enabled: true, reason: null }, null, null]);
+  assert.equal(keep(screen({ serviceId: 2 })).start, undefined, 'a member-only row stays Expert\'s: no start');
+  assert.equal(keep(screen({})).start, undefined, 'a service with a pack of its own: no start');
   assert.equal(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'static', error: null } })).kind, 'error', 'any status but ok/loading with no rows is unreadable');
 });
 
@@ -538,7 +543,8 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
 // primary are those where nothing can be done from here: Unchanged against a recording (fresh or
 // stale — only a live journey can be checked again), the journeys listing unreadable (Retry is a
 // secondary button), the facts still being read (pending), and the screens without panels (loading /
-// empty / unreadable services, whose buttons are the empty state's secondaries). While a check is running the screen may offer one
+// empty / unreadable services, whose buttons are the empty state's secondaries), and a service with no pack at all, whose way
+// in is the start's cards (scan, upload), not a primary button. While a check is running the screen may offer one
 // primary (the last run's differences) or none (Unchanged): the Check button is busy either way.
 const STATES = {
   'never, no journey': { journeys: [] },
@@ -573,7 +579,7 @@ const STATES = {
   empty: { services: [] },
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -720,6 +726,10 @@ test('renderOverview: empty, error and loading render without throwing and witho
   assert.ok(stepOf(second.innerHTML, 1).includes('Pack A: kx &lt;scan&gt;') && stepOf(second.innerHTML, 1).includes('data-ux-action="ov-start-reset"') && !second.innerHTML.includes('data-ux-action="ov-scan"'), 'step 1 done: Pack A named, escaped, changeable');
   assert.deepEqual(['ov-live', 'ov-upload-b'].map((a) => stepOf(second.innerHTML, 2).includes(`data-ux-action="${a}"`)), [true, true], 'step 2 open: live and upload as Pack B');
   assert.equal(countOf(second.innerHTML, 'og-btn--primary'), 0);
+  const packless = overviewContainer();
+  renderOverview(packless, screen({ services: [{ ...KRYSTALINE, name: 'k8s <x>', packs: [] }] }), { overview: {} });
+  assert.ok(packless.innerHTML.includes('id="ov-service"') && packless.innerHTML.includes('id="ov-start-h">No pack for k8s &lt;x&gt; yet.</h2>'), 'a pack-less service: its header, then the start, named and escaped');
+  assert.ok(stepOf(packless.innerHTML, 1).includes('data-ux-action="ov-scan"') && !packless.innerHTML.includes('ov-grade') && !packless.innerHTML.includes('ov-next'), 'the start in place of the three panels');
   assert.ok(empty.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !empty.innerHTML.includes('ov-grade') && !empty.innerHTML.includes('id="ov-service"'));
   const viewer = overviewContainer();
   renderOverview(viewer, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, access: { canWrite: false, reason: 'viewers cannot load packs' } }), { overview: {} });

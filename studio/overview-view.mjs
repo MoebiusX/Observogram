@@ -432,7 +432,7 @@ function startCardHtml(c, reason) {
             <span class="svc-why">${escapeHtml(reason)}</span>` : ''}
           </button>`;
 }
-function startHtml(sources, start) {
+function startHtml(sources, start, serviceName = null) {
   const denied = sources && sources.enabled === false ? (sources.reason || 'Not available for your role here.') : '';
   const a = start?.a || null;
   const steps = START_STEPS.map((st) => `
@@ -455,8 +455,8 @@ function startHtml(sources, start) {
   return `
     <section class="ov-start" aria-labelledby="ov-start-h">
       <header class="ov-start__head">
-        <h2 class="ov-card__h" id="ov-start-h">${a ? 'Pack A is in — now its live side.' : 'No service to show yet.'}</h2>
-        <p class="ov-start__lede og-muted">${a ? 'Load what live verifies in step 2, and the drift opens by itself.' : 'A service appears here once a pack that names it is registered — start the drift check here.'}</p>
+        <h2 class="ov-card__h" id="ov-start-h">${a ? 'Pack A is in — now its live side.' : (serviceName ? `No pack for ${escapeHtml(serviceName)} yet.` : 'No service to show yet.')}</h2>
+        <p class="ov-start__lede og-muted">${a ? 'Load what live verifies in step 2, and the drift opens by itself.' : (serviceName ? `Nothing to grade until a pack that names ${escapeHtml(serviceName)} is registered — start the drift check here.` : 'A service appears here once a pack that names it is registered — start the drift check here.')}</p>
       </header>
       <ol class="discover-journey" aria-label="The drift check, in three steps">${steps}
       </ol>
@@ -488,6 +488,8 @@ export function renderOverview(container, model, host = appHost) {
     });
   } else if (model.kind === 'loading') {
     body = '<p class="ov-loading og-muted" role="status">Reading the services…</p>';
+  } else if (model.kind === 'service' && model.start) {
+    body = headHtml(model) + startHtml(model.sources, model.start, model.service?.name);
   } else if (boardApplies(model)) {
     try { body = headHtml(model) + boardBodyHtml(model); board = true; }
     catch (e) {
