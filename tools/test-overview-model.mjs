@@ -909,7 +909,12 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<span class="ov-layer__total" title="declared on this layer"><b>80</b><small>declared</small></span>'), 'the count');
   assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
   assert.ok(html.includes('<div class="ov-stat" title="600 things declared in the repository."><dt>Declared</dt><dd>600</dd></div>') && html.includes('<dt>Coverage</dt><dd>35<small>%</small></dd>') && html.includes('<div class="ov-stat" title="7 things could not be placed on a layer."><dt>Unplaced</dt><dd>7</dd></div>'), 'the three stats');
-  assert.ok(html.includes('<details class="ux-disclosure ov-comp__wrap"><summary>In the repository</summary>') && html.includes('<span class="ov-comp__item"><b class="ov-comp__n">321</b> Dashboards/Recording Rules</span>'), 'the composition behind a compact row');
+  // The column opens on the summary: In the repository and its counts, closed; the stack is what it opens to; the stats stay outside.
+  assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'the summary is the default, closed');
+  const sum = html.slice(html.indexOf('<summary class="ov-repo__sum">'), html.indexOf('</summary>', html.indexOf('<summary class="ov-repo__sum">')));
+  assert.ok(sum.includes('<span class="ov-repo__title">In the repository</span>') && sum.includes('<span class="ov-comp__item"><b class="ov-comp__n">321</b> Dashboards/Recording Rules</span>'), 'the counts are the summary itself');
+  assert.ok(!sum.includes('ov-layer') && html.indexOf('</summary>') < html.indexOf('<ol class="ov-stack"') && html.indexOf('<ol class="ov-stack"') < html.indexOf('</details>', html.indexOf('<details class="ov-repo">')), 'the layers are inside, behind the summary');
+  assert.ok(html.indexOf('</details>', html.indexOf('<details class="ov-repo">')) < html.indexOf('<dl class="ov-stats">'), 'the stats stay in view, after it');
   assert.ok(!html.includes('ov-legend') && !html.includes('Cells, left to right'), 'the cells are labelled directly: no legend paragraph');
   // Diagnose: one status strip for the column — what was graded against what, when, which families were not read, the cadence.
   assert.ok(html.includes('<div class="ov-status ov-status--warn" role="status"><span class="ov-status__dot" aria-hidden="true"></span>'));

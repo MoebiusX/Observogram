@@ -634,7 +634,21 @@ html[data-theme="light"] .ov-page {
 .ov-stat dt { font: 500 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
 .ov-stat dd { margin: 0; font: 650 22px/1.1 var(--og-font); letter-spacing: -0.02em; color: var(--og-text); }
 .ov-stat dd small { font: 600 12px/1 var(--og-font); color: var(--og-muted); margin-left: 1px; }
-.ov-comp { margin: 0; font: 400 12.5px/1.5 var(--og-font); }
+/* The summary card: In the repository and its counts; a click opens the layers. */
+.ov-repo { display: grid; gap: 8px; }
+.ov-repo__sum { list-style: none; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel-2); cursor: pointer; }
+.ov-repo__sum::-webkit-details-marker { display: none; }
+.ov-repo__sum:hover { border-color: var(--og-line-strong, var(--og-muted)); }
+.ov-repo__sum:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-repo__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ov-repo__title { font: 600 14px/1.3 var(--og-font); color: var(--og-text); }
+.ov-repo__toggle { font: 500 12px/1.3 var(--og-font); color: var(--og-accent); white-space: nowrap; }
+.ov-repo__toggle::after { content: ' ▾'; }
+.ov-repo[open] .ov-repo__toggle::after { content: ' ▴'; }
+.ov-repo__hide, .ov-repo[open] .ov-repo__show { display: none; }
+.ov-repo[open] .ov-repo__hide { display: inline; }
+.ov-repo__layers > .ov-cells--head { margin-top: 2px; }
+.ov-comp { display: block; margin: 0; font: 400 12.5px/1.5 var(--og-font); }
 .ov-comp__item { white-space: nowrap; }
 .ov-comp__n { font-weight: 650; color: var(--og-text); }
 

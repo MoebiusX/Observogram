@@ -207,17 +207,35 @@ function layerRowHtml(r) {
         </li>`;
 }
 
+// Discover opens on the summary — what the repository declares, by kind —
+// and the summary opens to the stack: the kinds labelled once, then the four
+// layers top down. The three stats stay in view either way. Open or closed
+// is the person's choice and survives a repaint (a check, a fact read).
+let layersOpen = false;
+function repoSummaryHtml(L) {
+  const counts = L.composition.length
+    ? L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')
+    : 'Nothing declared yet.';
+  return `
+      <details class="ov-repo"${layersOpen ? ' open' : ''}>
+        <summary class="ov-repo__sum">
+          <span class="ov-repo__head"><span class="ov-repo__title">In the repository</span><span class="ov-repo__toggle" aria-hidden="true"><span class="ov-repo__show">Show the layers</span><span class="ov-repo__hide">Hide the layers</span></span></span>
+          <span class="ov-comp og-muted">${counts}</span>
+        </summary>
+        <div class="ov-repo__layers">
+          ${kindHeadHtml(L.rows[0].kinds)}
+          <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
+        </div>
+      </details>`;
+}
 function discoverColHtml(L) {
   const body = L
-    ? `
-      ${kindHeadHtml(L.rows[0].kinds)}
-      <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
+    ? `${repoSummaryHtml(L)}
       <dl class="ov-stats">
         <div class="ov-stat" title="${escapeHtml(L.lead)}"><dt>Declared</dt><dd>${L.declared}</dd></div>
         <div class="ov-stat" title="${escapeHtml(L.coverage)}"><dt>Coverage</dt><dd>${L.coveragePct}<small>%</small></dd></div>
         <div class="ov-stat" title="${escapeHtml(L.unplacedNote || 'Everything found its layer.')}"><dt>Unplaced</dt><dd>${L.unplaced}</dd></div>
-      </dl>
-      ${L.composition.length ? disclosureHtml('In the repository', `<p class="ov-comp og-muted">${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>`, { cls: 'ov-comp__wrap' }) : ''}`
+      </dl>`
     : reading('the repository');
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
@@ -520,4 +538,6 @@ export function renderOverview(container, model, host = appHost) {
   });
   const select = container.querySelector('#ov-service');
   if (select) select.addEventListener('change', () => ov.selectService?.(Number(select.value)));
+  const repo = container.querySelector('.ov-repo');
+  if (repo) repo.addEventListener('toggle', () => { layersOpen = repo.open; });
 }
