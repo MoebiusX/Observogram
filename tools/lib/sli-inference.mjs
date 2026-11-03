@@ -27,13 +27,18 @@
 import { symbolSlug } from './slug.mjs';
 import { normalizeSeverity } from './alert-routes.mjs';
 
-// `<service>:<metric>:<op>` — Prometheus recording-rule naming convention,
-// and the spec's `queries.recording_rules[].name` pattern.
+// `<service>:<metric>:<op>` — the Prometheus recording-rule naming convention
+// an SLI is read back from. The spec recommends it (a SHOULD, §5.5).
 const RULE_NAME_RE = /^([a-z][a-z0-9_]*):([a-z][a-z0-9_]*):([a-z0-9_]+)$/;
 
-/** True when a recording rule's name is one the spec can declare (`<service>:<metric>:<op>`). The one reading for the crawler and the live fetcher. */
+// The spec's `queries.recording_rules[].name` pattern, mirrored by hand (a
+// browser-safe module cannot read the schema file); tools/test-crawl-canonical.mjs
+// pins the mirror.
+export const SPEC_RECORDING_RULE_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(:[a-zA-Z0-9_]+)+$/;
+
+/** True when a recording rule's name is one the spec can declare: a metric name with at least one `:` and no empty segment. The one reading for the crawler and the live fetcher. */
 export function isSpecRecordingRuleName(name) {
-  return RULE_NAME_RE.test(typeof name === 'string' ? name : '');
+  return SPEC_RECORDING_RULE_NAME_RE.test(typeof name === 'string' ? name : '');
 }
 
 // The spec's `$defs.Duration` pattern, mirrored by hand (a browser-safe module
@@ -217,7 +222,9 @@ export function alertRuleWindows(rule) {
   return out;
 }
 
-const RECORDED_SERIES_RE = /[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z0-9_]+/g;
+// Every recorded series an expression names, whole: only a whole name is looked
+// up, so a four-segment or mixed-case name never answers for an SLO by a part of it.
+const RECORDED_SERIES_RE = /[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)+/g;
 
 /**
  * The SLO an alert expression guards: the first recorded series it

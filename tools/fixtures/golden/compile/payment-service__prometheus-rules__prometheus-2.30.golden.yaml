@@ -532,6 +532,35 @@ groups:
           on_projected_breach: post_warning
           horizon: 1d
           horizon_declared: 3d
+  - name: payment_service_declared_alerts
+    interval: 30s
+    rules:
+      - alert: PaymentServicePodRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace="payments",container="payment-service"}[15m]) > 3
+        for: 10m
+        labels:
+          severity: SEV3
+          team: payments
+          engine_severity: warning
+          service: payment-service
+          pack: payment-service
+          kind: declared
+        annotations:
+          summary: payment-service restarted more than 3 times in 15m
+          runbook_url: https://runbooks.example.internal/payments/pod-restarts
+      - alert: PaymentDbConnectionPoolSaturated
+        expr: sum(pg_stat_activity_count{datname="payments"}) / sum(pg_settings_max_connections{datname="payments"}) > 0.9
+        for: 5m
+        labels:
+          severity: SEV2
+          team: payments
+          engine_severity: critical
+          service: payment-service
+          pack: payment-service
+          kind: declared
+        annotations:
+          summary: payments database connection pool above 90% for 5m
+          runbook_url: https://runbooks.example.internal/payments/db-pool
   - name: payment_service_assurance
     interval: 30s
     rules:

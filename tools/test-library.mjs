@@ -44,7 +44,7 @@ const GOLDEN_DIR = resolve(ROOT, 'tools/fixtures/library');
 const UPDATE = process.argv.includes('--update');
 const SCHEMA = JSON.parse(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json'), 'utf8'));
 
-const EXPECTED_ENTRIES = ['alertmanager', 'grafana', 'http-service', 'ibm-mq', 'kafka', 'loki', 'otel-collector', 'prometheus', 'queue-consumer', 'tempo'];
+const EXPECTED_ENTRIES = ['alertmanager', 'grafana', 'http-service', 'ibm-mq', 'k8s-workload', 'kafka', 'loki', 'node', 'otel-collector', 'postgresql', 'prometheus', 'queue-consumer', 'rabbitmq', 'redis', 'service-base', 'tempo'];
 const library = loadLibrary();
 const entries = library.entries;
 const byId = Object.fromEntries(entries.map(e => [e.id, e]));
@@ -89,6 +89,96 @@ test('validateLibraryEntry names what is wrong', () => {
   for (const en of entries) for (const s of en.slis) assert.notEqual(s.id, 'errorbudget', `${en.id}.${s.id}`);
   assert.equal(typeof parseLibraryEntry('library: v1\nid: x\n').id, 'string');
   assert.throws(() => parseLibraryEntry(42));
+  // alerts (the symptom alert rules, spec 1.4 alerting.rules): the name, the tier, the severity per tier, the
+  // condition and the metrics it reads, the summary and the why — each named when wrong.
+  const alerts = JSON.parse(JSON.stringify(byId['http-service']));
+  assert.ok(alerts.alerts.length >= 1);
+  const badAlert = (patch) => { const en = JSON.parse(JSON.stringify(alerts)); Object.assign(en.alerts[0], patch); return validateLibraryEntry(en); };
+  assert.ok(badAlert({ name: 'no spaces allowed' }).some(e => /^alerts\[0\]\.name: the rule's exact alert name/.test(e)));
+  assert.ok(badAlert({ minTier: 'tier-9' }).some(e => /^alerts\[0\]\.minTier: expected/.test(e)));
+  assert.ok(badAlert({ severity: 'critical' }).some(e => /^alerts\[0\]\.severity\[tier-3\]: expected SEV1\|SEV2\|SEV3\|SEV4, got "critical"$/.test(e)));
+  // A per-tier map walks towards the stricter tiers (a tier-1 value covers tier-3); a value for tier-3 alone leaves tier-2 and tier-1 without one.
+  assert.deepEqual(badAlert({ severity: { 'tier-1': 'SEV1' }, minTier: 'tier-3' }).filter(e => e.startsWith('alerts[0].severity')), []);
+  assert.ok(badAlert({ severity: { 'tier-3': 'SEV3' }, minTier: 'tier-3' }).some(e => /^alerts\[0\]\.severity\[tier-2\]: required/.test(e)));
+  assert.ok(badAlert({ for: 'soon' }).some(e => /^alerts\[0\]\.for: a duration/.test(e)));
+  assert.ok(badAlert({ expr: '' }).some(e => /^alerts\[0\]\.expr: the condition/.test(e)));
+  assert.ok(badAlert({ metrics: ['made_up_metric'] }).some(e => /^alerts\[0\]\.metrics: 'made_up_metric' does not appear in the condition$/.test(e)));
+  assert.ok(badAlert({ summary: '' }).some(e => /^alerts\[0\]\.summary: required/.test(e)));
+  assert.ok(badAlert({ why: '' }).some(e => /^alerts\[0\]\.why: required/.test(e)));
+  assert.ok(badAlert({ engine: 'nagios' }).some(e => /^alerts\[0\]\.engine: expected prometheus\|/.test(e)));
+  assert.ok(badAlert({ expr: 'up{job="${nope}"} == 0' }).some(e => e.includes('${nope}')));
+  const twice = JSON.parse(JSON.stringify(alerts));
+  twice.alerts.push({ ...twice.alerts[0] });
+  assert.ok(validateLibraryEntry(twice).some(e => /^alerts\[\d+\]\.name: duplicate 'NoTraffic'$/.test(e)));
+});
+
+// ---------------------------------------------------------------------------
+// Symptom alert rules and the service base (docs/SLI_CATALOGUE.md §3; the entry format's `alerts:`).
+// ---------------------------------------------------------------------------
+test('alerts: an entry\'s symptom rules land in alerting.rules at or above their tier, the severity per tier, the params resolved, the name kept — and compile in the rules target', () => {
+  const http = byId['http-service'];
+  const names = (tier) => build(http, tier).canonical.spec.alerting.rules.map(r => r.name);
+  assert.deepEqual(names('tier-3'), ['NoTraffic']);
+  assert.deepEqual(names('tier-2'), ['NoTraffic', 'TrafficSpike', 'TrafficFlood']);
+  assert.deepEqual(names('tier-1'), ['NoTraffic', 'TrafficSpike', 'TrafficFlood', 'ClientErrorSpike']);
+  const { canonical } = build(http, 'tier-2', { params: { job: 'checkout-api' } });
+  const spike = canonical.spec.alerting.rules.find(r => r.name === 'TrafficSpike');
+  assert.equal(spike.severity, 'SEV3');
+  assert.equal(spike.for, '3m');
+  assert.match(spike.expr, /job="checkout-api"/);
+  assert.ok(!spike.expr.includes('${'), 'every placeholder resolved');
+  assert.equal(spike.labels['library.entry'], 'http-service');
+  assert.ok(spike.annotations.summary && spike.annotations.why);
+  assert.deepEqual(validateCanonical(canonical, SCHEMA), []);
+  // The adapter projects them as L4 RULE artefacts; the Prometheus rules target compiles them under one group,
+  // the pack's routing severity as the severity label.
+  const layered = adapt(canonical);
+  assert.deepEqual((layered.layers.L4?.alerting || []).filter(a => String(a.id || '').startsWith('RULE-')).map(a => a.title), ['NoTraffic', 'TrafficSpike', 'TrafficFlood']);
+  const rules = compile(canonical, 'prometheus-rules').content;
+  assert.match(rules, /name: svc_http_service_declared_alerts/);
+  assert.match(rules, /alert: TrafficFlood/);
+  assert.match(rules, /severity: SEV2/);
+  // The severity walks per tier: the base's ScrapeTargetDown is SEV2 at tier-3 and SEV1 at tier-1.
+  const base = byId['service-base'];
+  assert.equal(build(base, 'tier-3').canonical.spec.alerting.rules.find(r => r.name === 'ScrapeTargetDown').severity, 'SEV2');
+  assert.equal(build(base, 'tier-1').canonical.spec.alerting.rules.find(r => r.name === 'ScrapeTargetDown').severity, 'SEV1');
+  // Two entries declaring one alert name is a usage error naming both; routes off drops the rules (a rule without a route pages nobody).
+  const clash = JSON.parse(JSON.stringify(byId.kafka));
+  clash.alerts = [{ name: 'NoTraffic', minTier: 'tier-3', severity: 'SEV3', expr: 'up{job="${broker_job}"} == 0', metrics: ['up'], summary: 'the broker is down', why: 'a clash on purpose' }];
+  assert.deepEqual(validateLibraryEntry(clash), []);
+  assert.throws(() => build([http, clash], 'tier-2'), /alert NoTraffic: declared by both http-service and kafka/);
+  assert.equal(build(http, 'tier-2', { toggles: { routes: false } }).canonical.spec.alerting, undefined);
+  // The library index counts them per tier, so DEFINE can say what an entry adds.
+  const row = libraryIndex(entries).find(r => r.id === 'http-service');
+  assert.deepEqual(row.alertCountByTier, { 'tier-3': 1, 'tier-2': 3, 'tier-1': 4 });
+  assert.equal(row.alerts[0].name, 'NoTraffic');
+  assert.deepEqual(libraryIndex(entries).find(r => r.id === 'kafka').alertCountByTier, { 'tier-3': 0, 'tier-2': 0, 'tier-1': 0 });
+});
+
+test('the service base composes with an archetype: probe liveness beside the request SLIs, the security rules, every tier conformant; packc init adds it to an archetype pack unless --no-base and never to a products-only one', () => {
+  const composed = build([byId['http-service'], byId['service-base']], 'tier-2');
+  assert.deepEqual(validateCanonical(composed.canonical, SCHEMA), []);
+  const ids = composed.canonical.spec.slis.map(s => s.id);
+  assert.ok(ids.includes('http_service_availability') && ids.includes('service_base_probe_availability') && ids.includes('service_base_security_event_pressure'), ids.join(','));
+  const ruleNames = composed.canonical.spec.alerting.rules.map(r => r.name);
+  for (const n of ['NoTraffic', 'ScrapeTargetDown', 'BruteForceAttack', 'CredentialStuffingAttack', 'HighSeveritySecurityEvents']) assert.ok(ruleNames.includes(n), n);
+  assert.deepEqual(failingMust(composed.canonical), []);
+  // The security-event counter is the service's own: left at its placeholder it is a todo on the rules that read it.
+  assert.ok(composed.todos.some(t => t.params.includes('service-base.security_events_metric')), JSON.stringify(composed.todos.map(t => t.params)));
+  const withBase = cli('--entry', 'http-service', '--tier', 'tier-2', '--name', 'checkout');
+  assert.equal(withBase.status, 0, withBase.stderr);
+  assert.match(withBase.stderr, /service-base added — the base every service carries/);
+  const pack = parseYaml(withBase.stdout);
+  assert.equal(pack.metadata.annotations['library.source'], `http-service@${byId['http-service'].version},service-base@${byId['service-base'].version}`);
+  assert.ok(pack.spec.alerting.rules.some(r => r.name === 'ScrapeTargetDown'));
+  const without = cli('--entry', 'http-service', '--tier', 'tier-2', '--name', 'checkout', '--no-base');
+  assert.equal(without.status, 0, without.stderr);
+  assert.equal(parseYaml(without.stdout).metadata.annotations['library.source'], `http-service@${byId['http-service'].version}`);
+  assert.doesNotMatch(without.stderr, /service-base added/);
+  const products = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders-kafka');
+  assert.equal(products.status, 0, products.stderr);
+  assert.doesNotMatch(products.stderr, /service-base added/);
+  assert.equal(parseYaml(products.stdout).metadata.annotations['library.source'], `kafka@${byId.kafka.version}`);
 });
 
 test('libraryIndex lists products first, with SLIs per tier that grow with the tier', () => {

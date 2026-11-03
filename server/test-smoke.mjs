@@ -1859,7 +1859,7 @@ try {
   // GET /api/library — the index the DEFINE step lists.
   const libIndex = await getJson(base, '/api/library');
   assert(libIndex.ok === true && Array.isArray(libIndex.entries), 'GET /api/library returns { ok, entries[] }');
-  assert(libIndex.entries.length === 10, 'GET /api/library lists the ten shipped entries', libIndex.entries.length, 10);
+  assert(libIndex.entries.length === 16, 'GET /api/library lists the sixteen shipped entries', libIndex.entries.length, 16);
   assert(libIndex.entries[0].kind === 'product' && libIndex.entries.at(-1).kind === 'archetype', 'library index lists products first, archetypes last');
   assert(Array.isArray(libIndex.scaffoldParams) && libIndex.scaffoldParams.length === 16, 'library index carries the 16 scaffold params', libIndex.scaffoldParams?.length, 16);
   assert(Array.isArray(libIndex.errors) && libIndex.errors.length === 0, 'library index reports no file errors', libIndex.errors);
@@ -1902,8 +1902,9 @@ try {
   assert(inst.canonical.spec.slis.length === 7, 'instantiate: 7 SLIs (5 kafka + 2 http-service at tier-2)', inst.canonical.spec.slis.length, 7);
   // `adapted`: the adapter's layered projection of the env-overlaid canonical — what Build's stack draws.
   assert(inst.adapted?.meta?.apiVersion === 'observability.platform/v1' && inst.adapted.meta.environment === 'prod' && inst.adapted.meta.criticality === 'tier-2', 'instantiate returns adapted (env-overlaid: prod, tier-2)', JSON.stringify(inst.adapted?.meta && { environment: inst.adapted.meta.environment, criticality: inst.adapted.meta.criticality }));
-  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 3 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 3, L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
-  assert(inst.adapted.layers.L4.alerting.every(a => a.source === 'Scaffold') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, SLIs as Declared');
+  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 6 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 6 (three routes, three symptom rules), L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
+  // The routes carry placeholder channels (Scaffold); the archetype's symptom rules are declared like an SLI.
+  assert(inst.adapted.layers.L4.alerting.filter(a => !String(a.id).startsWith('RULE-')).every(a => a.source === 'Scaffold') && inst.adapted.layers.L4.alerting.filter(a => String(a.id).startsWith('RULE-')).every(a => a.source === 'Declared') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, symptom rules and SLIs as Declared');
   // The toggles: an SLI unticked, dashboards off → exactly the dashboard clauses fail and the schema says why.
   const instOff = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { dashboards: false, slis: ['kafka_broker_availability', 'kafka_produce_latency_p99'] } })).json();
   assert(instOff.ok === true && instOff.canonical.spec.slis.length === 2, 'instantiate honours toggles.slis', instOff.canonical?.spec?.slis?.length, 2);

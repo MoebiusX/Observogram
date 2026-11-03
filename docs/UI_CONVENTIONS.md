@@ -125,6 +125,12 @@ Compare's Pair by switch, its note and its could-not-load sentence, and
 connection, no surface of their own (the cell is a `.compare-cell`), text in
 `--ink` / `--ink-2` / `--ink-3` measured on the card and the page by the AA
 scan, drawn by `studio/compare-identity.mjs` and restyled by no other sheet;
+`.upd-*` the UPDATE journey (`docs/UPDATE_JOURNEY.md`) — the Open panel in the
+Build shell's main column, the definition column's add actions and "Changes
+since v0.1.0", the add editor's three forms in the pop-up editor's own shell
+(`.build-editor.upd-editor`), Verify's review and the home's "Update a pack you
+have" list, all drawn by `studio/update-view.mjs` from `studio/update-model.mjs`
+(pure), in `app.css` under its own marker last;
 `.mss-*` the MCP panel's Server settings modal (rebadge batch 4) — drawn by
 `studio/mcp-settings-view.mjs` into `#mss-host`, appended last to `<body>`
 over its scrim (`.mss-scrim`) in the `.set-editor` pattern, every node by

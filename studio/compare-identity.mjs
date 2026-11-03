@@ -152,6 +152,37 @@ export function pairingTitle(eng, artefact, mode) {
   return `Paired by ${m.matchedBy}: ${eng.identity.pairingOf(artefact, m.id)}`;
 }
 
+/**
+ * The compare head's count of what declared patterns answered for
+ * (`summary.dynamicFamilies`, tools/lib/diff.mjs): those metrics read as
+ * aligned, so how many of them there are stays beside the union. '' when
+ * neither side declares a dynamic family.
+ */
+export function dynamicFamilyCount(families) {
+  if (!families?.declared) return '';
+  const fam = `${families.declared} dynamic ${families.declared === 1 ? 'family' : 'families'}`;
+  const nothing = families.unmatched?.length ? ` (${families.unmatched.length} matched nothing)` : '';
+  const refused = families.refused?.length ? ` · ${families.refused.length} refused` : '';
+  return ` · ${families.members} metric${families.members === 1 ? '' : 's'} under ${fam}${nothing}${refused}`;
+}
+
+/**
+ * The metrics a dynamic family answered for, by artefact id, to the pattern:
+ * their cards say what paired them, never a name or behaviour they did not
+ * share. A folded metric's series are its members too.
+ */
+export function familyMemberPatterns(diff) {
+  const out = new Map();
+  for (const bucket of Object.values(diff?.layers || {})) {
+    for (const e of bucket?.inBoth || []) {
+      if (e.matchedBy !== 'declared-family') continue;
+      const [family, member] = e.a?.spec?.name_pattern ? [e.a, e.b] : [e.b, e.a];
+      for (const id of [member?.id, ...(member?.memberIds || [])]) if (id) out.set(id, family?.spec?.name_pattern);
+    }
+  }
+  return out;
+}
+
 /** Why an only-in card did not pair in a name or id view: 'has no name' / 'has no stable id', else ''. */
 export function unpairedHint(eng, artefact, mode) {
   const m = pairingModeOf(mode);

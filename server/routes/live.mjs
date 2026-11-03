@@ -54,7 +54,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { pingMcp, PING_DEADLINE_MS, fetchMcp, buildSnapshotPack } from '../../tools/fetch-live-pack.mjs';
+import { pingMcp, PING_DEADLINE_MS, fetchMcp, buildSnapshotPack, timedExcludeErrors } from '../../tools/fetch-live-pack.mjs';
 import { capabilityInventory, productAttestedByTool } from '../../tools/lib/contracts/mcp-capabilities.mjs';
 import { isTransportHookError } from '../../tools/lib/mcp-client.mjs';
 import { adapt } from '../../tools/lib/adapter.mjs';
@@ -345,6 +345,9 @@ export function liveRoutes({ authorize, draftFromMcp }) {
       if (hasScope) {
         const normalized = normalizeScope(body.scope);
         if (normalized.errors.length) return bad(normalized.errors.join('; '));
+        // The exclude patterns' timed half: a pattern that crawls is this request's 400, not a failed job.
+        const slow = timedExcludeErrors(normalized.scope.metricExclude);
+        if (slow.length) return bad(slow.join('; '));
         scope = normalized.scope;
       } else {
         const configured = snapshotScopeConfig(db, org);

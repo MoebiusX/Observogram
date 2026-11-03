@@ -89,7 +89,7 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
     || packB?.meta?.name || packB?.metadata?.name || packB?.id || 'Pack B';
   const lensed = (entry, side) => !passesLens || passesLens(entry, side);
 
-  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0, notObserved: 0 };
+  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0, notObserved: 0, declaredAhead: 0 };
   const layers = [];
   const items = [];
   const driftedEntries = [];
@@ -120,6 +120,7 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
       // What one pack holds in a family the other could not observe
       // (diffPacks `notObserved`): unchecked, so neither side's count.
       totals.notObserved += (bucket.notObserved || []).length;
+      totals.declaredAhead += (bucket.declaredAhead || []).filter(e => lensed(e, e.side === 'b' ? 'b' : 'a')).length;
       driftedEntries.push(...drifted);
 
       if (aligned.length || drifted.length || onlyInA.length || onlyInB.length || outOfScope.length) {
@@ -448,6 +449,9 @@ export function scaffoldOosNotes(model) {
   }
   if (model.totals.outOfScope) {
     bits.push(`<p class="drift-oos-note">${model.totals.outOfScope} live artefact${model.totals.outOfScope === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(model.bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.</p>`);
+  }
+  if (model.totals.declaredAhead) {
+    bits.push(`<p class="drift-oos-note">${model.totals.declaredAhead} artefact${model.totals.declaredAhead === 1 ? '' : 's'} declared ahead of the environment compared: ${model.totals.declaredAhead === 1 ? 'its file states' : 'their files state'} ${model.totals.declaredAhead === 1 ? 'it is' : 'they are'} not deployed there yet. Neither missing nor matched, and not counted, so check the statement still holds.</p>`);
   }
   if (model.totals.notObserved) {
     const n = model.totals.notObserved;

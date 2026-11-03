@@ -114,3 +114,17 @@ export async function compilePreview(canonical, target, { fetchFn = jsonFetch, d
 export async function registerBuiltPack(canonical, { fetchFn = jsonFetch, source } = {}) {
   return fetchFn('/api/library/register', { method: 'POST', body: { canonical, ...(source ? { source } : {}) } });
 }
+
+/**
+ * POST /api/library/reopen — the UPDATE journey's Open stage (docs/UPDATE_JOURNEY.md): what kind of pack
+ * `id` is, the inputs Build made it from, the additions it records, whether Build rebuilds it exactly and,
+ * when not, what differs. Resolves to the response either way ({ ok: false, errors } on a refusal).
+ */
+export async function reopenPack(id, { fetchFn = jsonFetch } = {}) {
+  return fetchFn('/api/library/reopen', { method: 'POST', body: { id } });
+}
+
+/** POST /api/library/update — the pack registered as the next version of `base`; { ok: false, errors, newer? } when refused. */
+export async function saveUpdate(base, canonical, { fetchFn = jsonFetch, source } = {}) {
+  return fetchFn('/api/library/update', { method: 'POST', body: { base, canonical, ...(source ? { source } : {}) } });
+}

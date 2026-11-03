@@ -193,6 +193,17 @@ spec:
       - severity: SEV3
         channels:
           - msteams: "#checkout-api-team"
+    rules:
+      - name: NoTraffic
+        expr: sum(rate(http_server_request_duration_seconds_count{job="checkout-api"}[5m])) == 0
+        severity: SEV3
+        for: 10m
+        labels:
+          library.entry: http-service
+        annotations:
+          summary: checkout-api received no requests for ten minutes
+          description: No HTTP request reached checkout-api in ten minutes — the service is unreachable, or nothing calls it.
+          why: Every ratio reads as perfect when there are no requests; the absence rule is the one that says the callers are gone.
     dedup: ref:platform/std-dedup
   baselines:
     mttd_target_p50: 15m

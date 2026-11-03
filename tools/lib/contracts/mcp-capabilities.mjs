@@ -93,11 +93,15 @@ export const CAPABILITIES = Object.freeze({
     // metrics_alerts (Prometheus /api/v1/rules) and grafana_alert_rules
     // (Grafana unified alerting) are the next canonical names;
     // alertmanager_alerts surfaces FIRING alerts (not declarations) but
-    // counts as evidence the alerting stack works.
+    // counts as evidence the alerting stack works. grafana_alert_rules takes
+    // a folder uid (`folder_uid`): a snapshot with a folder scope fills the
+    // slot once per folder and reads only those rules (the answer is the same
+    // provisioning shape, folder by folder); the draft leaves it empty and
+    // the call is argless, as before.
     candidates: [
       { tool: 'vmalert_rules', attests: 'vmalert' },
       { tool: 'metrics_alerts' },
-      { tool: 'grafana_alert_rules', attests: 'grafana' },
+      { tool: 'grafana_alert_rules', runtimeArgs: { folder_uid: 'grafanaRuleFolderUid' }, attests: 'grafana' },
       { tool: 'alertmanager_alerts', attests: 'alertmanager' },
       { tool: 'list_alert_rules' },
       { tool: 'prometheus_alert_rules' },

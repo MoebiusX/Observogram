@@ -219,9 +219,10 @@ export function entryCardHtml(c, folds = {}) {
                 <span class="build-chip-title">${escapeHtml(c.title)}</span>
                 ${evidenceDot(c.evidence.status, c.evidence.verifiedOn)}
               </span>
+              ${c.base ? '<span class="bd-tag is-rec bd-tag--base" title="the generic base every service built from scratch carries — probe liveness and the security-event rules; packc init adds it unless --no-base">Base · every service</span>' : ''}
               ${c.summary ? `<span class="bd-entry-sum">${escapeHtml(c.summary)}</span>` : ''}
               <span class="build-chip-meta">
-                <span class="build-chip-slis" id="bd-entry-${id}-adds">Adds ${plural(n, 'suggested SLI')}</span>
+                <span class="build-chip-slis" id="bd-entry-${id}-adds">Adds ${plural(n, 'suggested SLI')}${c.alertCountAtTier ? ` · ${plural(c.alertCountAtTier, 'alert rule')}` : ''}</span>
                 ${c.placeholderParams ? `<span class="build-chip-ph" title="values the library cannot know — the team fills them later; each left at its default is a todo">${plural(c.placeholderParams, 'value')} to fill</span>` : ''}
               </span>
             </button>
@@ -238,6 +239,7 @@ function technologyPanelHtml(model) {
         <h4 class="build-chip-kind">Archetypes <span>for a service built from scratch</span></h4>
         <div class="bd-entries" role="group" aria-label="Archetypes">${model.archetypes.map(c => entryCardHtml(c, f)).join('')}
         </div>
+        ${model.baseHint ? `<p class="build-note bd-base-hint" role="note">Every service built from scratch carries the <strong>${escapeHtml(model.baseHint.title)}</strong> — probe liveness as an SLO and the security-event rules, at a depth that grows with the tier. <button type="button" class="ux-link-btn" data-add-base="${escapeHtml(model.baseHint.id)}" data-focus-key="entry:${escapeHtml(model.baseHint.id)}">Add it to this pack</button></p>` : ''}
         ${model.libraryErrors.length ? `<div class="build-note build-note-warn">${plural(model.libraryErrors.length, 'library file')} did not load: ${model.libraryErrors.map(e => `<code>${escapeHtml(e.file)}</code>`).join(', ')}</div>` : ''}`);
 }
 

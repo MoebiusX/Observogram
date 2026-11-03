@@ -33,6 +33,7 @@
 <link rel="stylesheet" href="/verdict-ui.css">
 <link rel="stylesheet" href="/proto.css">
 <link rel="stylesheet" href="/ux.css">
+<link rel="stylesheet" href="/overview.css">
 <link rel="stylesheet" href="/ux-discover.css">
 <link rel="stylesheet" href="/ux-diagnose.css">
 <link rel="stylesheet" href="/ux-remediate.css">
@@ -112,6 +113,7 @@
     <button id="crawl-btn" class="ctrl-btn" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
     <input id="crawl-file-input" type="file" multiple webkitdirectory hidden>
     <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="New pack from a live MCP server — test the connection, then a draft scaffold or a snapshot of what is deployed">new from live</button>
+    <button id="update-btn" class="ctrl-btn" type="button" title="Update this pack — open it on Build’s screen, change it, save the next version of it" hidden>update</button>
     <button id="export-btn" class="ctrl-btn" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
     <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Live MCP connection — test it, rebuild production-live">
       <span class="mcp-dot" aria-hidden="true"></span>
@@ -359,6 +361,14 @@
             <span class="mcp-field-key">Dashboard / rule folder uids <em>(comma-separated)</em></span>
             <input id="live-scope-folders" type="text" placeholder="ab12cd" autocomplete="off">
           </label>
+          <label class="mcp-field">
+            <span class="mcp-field-key">Exclude metric names matching <em>(anchored patterns, separated by spaces; dropped after the prefixes)</em></span>
+            <input id="live-scope-exclude" type="text" placeholder="^app_event_\d+_total$ ^go_" autocomplete="off">
+          </label>
+          <label class="mcp-field">
+            <span class="mcp-field-key">Rule groups <em>(comma-separated; alert and recording rules, when every rule names its group)</em></span>
+            <input id="live-scope-groups" type="text" placeholder="payments, checkout:slo" autocomplete="off">
+          </label>
         </div>
         <p class="mcpc-note" id="live-scope-note"></p>
       </div>
@@ -562,7 +572,7 @@
 <footer class="ftr">
   <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.6.0</span></div>
   <div>
-    <a href="https://github.com/MoebiusX/otel-observability-pack/blob/e64e58132a46364afd5432a86e67d470858936cf/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.4</a>
+    <a href="https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.4</a>
     ·
     <a href="https://github.com/MoebiusX/Observogram" target="_blank" rel="noopener">repo</a>
   </div>

@@ -206,7 +206,7 @@ test('coverage: every family once, present / absent / missing — the tier-3 lib
     const row = cov.families.find((x) => x.family === f);
     assert.deepEqual([row.status, row.required, row.clauses, row.count, row.layer], ['absent', false, [], 0, 'L2X'], f);
   }
-  assert.deepEqual(cov.counts, { present: 20, absent: 12, missing: 0 });
+  assert.deepEqual(cov.counts, { present: 21, absent: 11, missing: 0 });   // the archetype's NoTraffic rule makes the alert-rule family present at tier-3
   const sli = cov.families.find((x) => x.family === 'sli');
   assert.deepEqual([sli.status, sli.required, sli.label, sli.layer, sli.group], ['present', true, 'Service level indicator', 'L1', 'sli']);
   assert.ok(sli.clauses.includes('L1.MUST.availability_slo') && !sli.clauses.includes('L1.MUST.latency_slo'), 'named by the clauses that apply at tier-3 only');

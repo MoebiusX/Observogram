@@ -309,7 +309,7 @@ test('C2 the licence block: one text/plain element ending <head> — the preambl
   const out = join(TMP, 'c2', 'index.html');
   const built = cli(['--pack', resolve(ROOT, PAYMENT), '--pack', resolve(ROOT, GOLDEN), '--id', 'golden', '--out', out, '--no-remote-fonts']);
   assert.equal(built.status, 0, built.stderr);
-  assert.match(built.stdout, /^wrote .* — \d+ modules · 16 stylesheets · \d+ bytes · 2 packs\n$/, 'the human line is unchanged');
+  assert.match(built.stdout, /^wrote .* — \d+ modules · 17 stylesheets · \d+ bytes · 2 packs\n$/, 'the human line is unchanged');
   const html = readFileSync(out, 'utf8');
 
   // Where: one element, the last thing in <head>; one pointer comment, right after the doctype, worded for packages.

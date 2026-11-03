@@ -1,0 +1,173 @@
+# Library entry: a Kubernetes workload (the pods a service runs in), observed through
+# kube-state-metrics: kube_pod_container_status_restarts_total, kube_pod_status_ready,
+# kube_pod_status_phase, kube_pod_container_status_last_terminated_reason,
+# kube_deployment_spec_replicas / status_ready_replicas. The KrystalineX rule file's
+# container_health group (docs/SLI_CATALOGUE.md §1.4) is the seed: crash loop, OOM kill, pod not
+# ready, replica mismatch — generic for any workload once the namespace and the pod pattern are
+# parameters (the file hardcodes both).
+library: v1
+id: k8s-workload
+kind: product
+version: 1.0.0
+title: Kubernetes workload
+product: kubernetes
+summary: Replica readiness, pod readiness, restart rate and OOM kills of the pods a service runs in, through kube-state-metrics — the platform dimension every containerised service has.
+description: |
+  The platform-dimension base (docs/SLI_CATALOGUE.md §3 "Platform"): the deployments of the service
+  have the replicas they asked for (readiness ratio), their pods are Ready while Running, containers
+  do not restart in a loop and are not killed for memory. The namespace and the pod-name pattern
+  scope every SLI; compose this entry with the service's own archetype so the pack carries the
+  workload beside the requests.
+tags: [platform, kubernetes]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - kubernetes/kube-state-metrics docs/metrics — kube_deployment_spec_replicas, kube_deployment_status_ready_replicas (by deployment, namespace); kube_pod_status_ready (by pod, namespace, condition), kube_pod_status_phase (by phase); kube_pod_container_status_restarts_total (by pod, container); kube_pod_container_status_last_terminated_reason (by reason)
+    - docs/SLI_CATALOGUE.md §1.4 krystalinex.container_health — ContainerCrashLooping (> 3 restarts / 15m), ContainerOOMKilled, PodNotReady (10m), DeploymentReplicasMismatch (10m)
+  notes: |
+    NOT verified against a live exposition in this repository. kube-state-metrics v2 names are used
+    (kube_pod_container_status_last_terminated_reason exists since v1.9); a cluster still on v1
+    names differ for the deployment series only in casing. The pod pattern defaults to the service's
+    name as a prefix, the convention of Deployments (pod names are <deployment>-<hash>-<id>).
+  gaps:
+    - No resource-saturation SLI (CPU throttling, memory working set vs limit) — those are cAdvisor series the entry does not assume.
+    - StatefulSets and DaemonSets are not read (kube_statefulset_*, kube_daemonset_*); the readiness ratio covers Deployments.
+params:
+  - id: namespace
+    label: Kubernetes namespace
+    default: "${service}"
+    placeholder: true
+    description: The namespace the service's workload runs in.
+  - id: pod_pattern
+    label: Pod names (regex)
+    default: "${service}-.*"
+    description: The pods of the service, as a regex on the pod name (a Deployment's pods are <name>-<hash>-<id>).
+  - id: deployment_pattern
+    label: Deployment names (regex)
+    default: "${service}.*"
+    description: The Deployments of the service, as a regex on the deployment name.
+  - id: ksm_job
+    label: kube-state-metrics scrape job
+    default: kube-state-metrics
+    description: The job label of the kube-state-metrics scrape.
+  - id: ksm_target
+    label: kube-state-metrics target
+    default: kube-state-metrics:8080
+    placeholder: true
+    description: host:port of the kube-state-metrics endpoint.
+  - id: restarts_per_15m
+    label: Restarts in 15 minutes that mean a crash loop
+    default: 3
+    description: Container restarts in fifteen minutes above which a pod is crash-looping.
+telemetry:
+  scrape_jobs:
+    - job_name: "${ksm_job}"
+      scrape_interval: 15s
+      targets: ["${ksm_target}"]
+      minTier: tier-3
+slis:
+  - id: pod_readiness
+    type: ratio
+    minTier: tier-3
+    description: Share of the service's pods whose Ready condition is true (kube_pod_status_ready, condition true, is 1 per Ready pod and 0 otherwise).
+    why: The scheduler's view of availability — a pod that is not Ready takes no traffic; half the pods not Ready is a degraded service before any request fails.
+    unit: ratio
+    metrics: [kube_pod_status_ready]
+    evidence: { status: upstream-docs, source: "kube-state-metrics kube_pod_status_ready{condition=\"true\"} (1 when Ready); the file's PodNotReady" }
+    good: |
+      sum(kube_pod_status_ready{namespace="${namespace}",pod=~"${pod_pattern}",condition="true"} == bool 1)
+    total: |
+      count(kube_pod_status_ready{namespace="${namespace}",pod=~"${pod_pattern}",condition="true"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: restart_rate
+    type: threshold
+    minTier: tier-3
+    description: Container restarts of the most restarting pod over fifteen minutes, against a ceiling of 3.
+    why: A restart loop is a service that is down for a few seconds every minute — the request SLI averages it away.
+    unit: restarts
+    metrics: [kube_pod_container_status_restarts_total]
+    evidence: { status: upstream-docs, source: "kube-state-metrics kube_pod_container_status_restarts_total; the file's ContainerCrashLooping (rate * 15m > 3)" }
+    query: |
+      max(increase(kube_pod_container_status_restarts_total{namespace="${namespace}",pod=~"${pod_pattern}"}[15m])) or vector(0)
+    threshold: 3
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: replica_shortfall
+    type: threshold
+    minTier: tier-2
+    description: Replicas missing on the worst Deployment of the service (spec replicas minus ready replicas), against a ceiling of 0 — any shortfall counts.
+    why: A Deployment short of a replica for long is a rollout that never completes or a node that cannot schedule it; the pod readiness ratio averages it away across the fleet.
+    unit: replicas
+    metrics: [kube_deployment_spec_replicas, kube_deployment_status_ready_replicas]
+    evidence: { status: upstream-docs, source: "kube-state-metrics kube_deployment_spec_replicas − kube_deployment_status_ready_replicas; the file's DeploymentReplicasMismatch" }
+    query: |
+      max(kube_deployment_spec_replicas{namespace="${namespace}",deployment=~"${deployment_pattern}"} - kube_deployment_status_ready_replicas{namespace="${namespace}",deployment=~"${deployment_pattern}"}) or vector(0)
+    threshold: 0.5
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: oom_kills
+    type: threshold
+    minTier: tier-2
+    description: Containers of the service whose last termination was an OOM kill, against a ceiling of 0 (any is too many).
+    why: An OOM kill is a memory limit set wrong or a leak; the restart it causes is already counted — this names the cause.
+    unit: containers
+    metrics: [kube_pod_container_status_last_terminated_reason]
+    evidence: { status: upstream-docs, source: "kube-state-metrics kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"}; the file's ContainerOOMKilled" }
+    query: |
+      sum(kube_pod_container_status_last_terminated_reason{namespace="${namespace}",pod=~"${pod_pattern}",reason="OOMKilled"}) or vector(0)
+    threshold: 0.5
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: slow
+alerts:
+  - name: ContainerCrashLooping
+    minTier: tier-3
+    severity: { tier-1: SEV1, tier-2: SEV1, tier-3: SEV2 }
+    for: 5m
+    metrics: [kube_pod_container_status_restarts_total]
+    expr: |
+      increase(kube_pod_container_status_restarts_total{namespace="${namespace}",pod=~"${pod_pattern}"}[15m]) > ${restarts_per_15m}
+    summary: "{{ $labels.pod }} is crash-looping"
+    description: "Container {{ $labels.container }} of {{ $labels.pod }} restarted {{ $value }} times in fifteen minutes."
+    why: Named per pod and container so the page says which process dies.
+  - name: ContainerOOMKilled
+    minTier: tier-3
+    severity: SEV2
+    metrics: [kube_pod_container_status_last_terminated_reason]
+    expr: |
+      kube_pod_container_status_last_terminated_reason{namespace="${namespace}",pod=~"${pod_pattern}",reason="OOMKilled"} == 1
+    summary: "{{ $labels.container }} in {{ $labels.pod }} was OOM-killed"
+    description: "The container's last termination was an OOM kill — raise its memory limit or find the leak."
+    why: One event is enough to look; it fires on the state, not on a rate.
+  - name: PodNotReady
+    minTier: tier-2
+    severity: SEV2
+    for: 10m
+    metrics: [kube_pod_status_ready, kube_pod_status_phase]
+    expr: |
+      (min_over_time(kube_pod_status_ready{namespace="${namespace}",pod=~"${pod_pattern}",condition="true"}[5m]) == 0)
+      and on (pod, namespace)
+      (kube_pod_status_phase{namespace="${namespace}",pod=~"${pod_pattern}",phase="Running"} == 1)
+    summary: "{{ $labels.pod }} has not been Ready for ten minutes"
+    description: "The pod is Running but its readiness probe has failed for ten minutes — it takes no traffic."
+    why: Running-but-not-Ready is invisible to the request SLI and to the replica count until the deployment times out.
+  - name: DeploymentReplicasMismatch
+    minTier: tier-2
+    severity: SEV3
+    for: 10m
+    metrics: [kube_deployment_spec_replicas, kube_deployment_status_ready_replicas]
+    expr: |
+      kube_deployment_spec_replicas{namespace="${namespace}",deployment=~"${deployment_pattern}"}
+        != kube_deployment_status_ready_replicas{namespace="${namespace}",deployment=~"${deployment_pattern}"}
+    summary: "{{ $labels.deployment }} is short of ready replicas"
+    description: "The Deployment has not had its desired number of ready replicas for ten minutes."
+    why: A rollout that never completes, or a node that cannot schedule the pod — the replica SLO burns slowly; this names the Deployment.

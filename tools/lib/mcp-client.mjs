@@ -252,6 +252,11 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
       'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
+      // An MCP server is a third party: ask for an uncompressed answer, so
+      // fetch's decoder (gzip, deflate, br — the Brotli decoder of the
+      // October 2026 Node security release, CVE-2026-111497) never runs on
+      // its bytes. A server that compresses anyway is answered as before.
+      'Accept-Encoding': 'identity',
     };
     if (mcpAuth) headers['Authorization'] = `Bearer ${mcpAuth}`;
     if (session) headers['Mcp-Session-Id'] = session;

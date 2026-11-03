@@ -15,8 +15,8 @@ the caller may edit — an objective, a window, a bound, an expression — throu
 
 ```
 library/
-  products/<product>.library.yaml      kafka · prometheus · grafana · ibm-mq · alertmanager · loki · tempo · otel-collector
-  archetypes/<archetype>.library.yaml  http-service · queue-consumer
+  products/<product>.library.yaml      kafka · rabbitmq · ibm-mq · postgresql · redis · prometheus · grafana · alertmanager · loki · tempo · otel-collector · k8s-workload · node
+  archetypes/<archetype>.library.yaml  service-base · http-service · queue-consumer
 ```
 
 ## What an entry is
@@ -76,7 +76,23 @@ slis:
 views:       [ { id: per_topic_throughput, bind: ref:platform/per-resource-rollup, params: { metric: ..., by: [topic] }, minTier: tier-2 } ]
 dashboards:  [ { id: kafka-consumer-lag, minTier: tier-3, binds: [slis.consumer_group_lag_seconds, slos.consumer_group_lag_seconds, views.per_consumergroup_lag] } ]
 synthetic:   [ { id: produce-consume-canary, kind: k6, target: "${bootstrap}", interval: 1m, assertions: [...], on_fail_severity: SEV2, minTier: tier-3 } ]
+alerts:                     # symptom alert rules (spec 1.4 alerting.rules) — a condition the engine evaluates, not a burn rate on an SLO
+  - name: NoTraffic         # the rule's exact alert name (letters, digits, _): the key a reconciler joins on; unique across the pack's entries
+    minTier: tier-3         # lands in the pack at or above this tier
+    severity: { tier-1: SEV2, tier-2: SEV3, tier-3: SEV3 }   # the pack's routing severity, one value or per tier (the per-tier walk)
+    for: 10m                # optional; engine: prometheus (default) | mimir | thanos | victoriametrics | loki | grafana | alertmanager
+    metrics: [http_server_request_duration_seconds_count]   # checked against the condition like an SLI's
+    expr: |                 # ${param}s resolved like an SLI's; no built-in (${service}) here — a param whose default is "${service}" instead
+      sum(rate(${duration_metric}_count{job="${job}"}[5m])) == 0
+    summary: "…"            # the alert's annotation (one line); description: optional
+    why: "…"                # why this rule, for the studio
 ```
+
+The rules travel with the routes (`routes` off drops them: a rule without a route
+pages nobody); the engine stamps each with the label `library.entry` so the studio's
+"Changes since Define" credits the entry, and the Prometheus rules target compiles
+them under one group (`<svc>_declared_alerts`) with the pack's severity as the
+`severity` label. Two entries declaring one alert name is a usage error.
 
 `slos.<sli id>` in a board binding means "the SLO of that SLI" (SLO ids are derived:
 `<sli>_<objective>`, e.g. `broker_availability_99_9`). A remediation template names no
@@ -185,6 +201,38 @@ takes no custom SLI in this slice). `--slis a,b` / `--sli <id>` takes any SLI of
 entries, above the tier too. The index rows (`libraryIndex`) carry each SLI's PromQL
 templates, bound with its direction (`good_when`, normalised: `below` where the template
 says nothing) and `semconv_metric` — the defaults the editor shows.
+
+## The service base, and the dimensions
+
+[`docs/SLI_CATALOGUE.md`](../docs/SLI_CATALOGUE.md) catalogues a real rule file (76
+alert rules, 41 recording rules) and sorts it into what every service needs (class A),
+what every dependency of a kind needs (class B) and what one service alone needs
+(class C). The library carries A and B; C is the pack's own additions (the update
+journey's `+ Alert rule` / `+ SLO`).
+
+**`service-base`** (archetype) is class A: probe liveness as an SLO (`up` per scrape
+target — the SLI a request-based availability cannot replace, since a total outage has
+no requests), from tier-2 the security-event pressure SLO, and the security-event rules
+every service with an authentication surface needs — brute force, credential stuffing,
+rate-limit abuse, high-severity events, then second-factor failures, token enumeration
+and the absence of any security event at tier-1. Thresholds are parameters with the
+catalogue's values as defaults; the counter's name and the event taxonomy are
+parameters too (`security_events_metric` is a placeholder until the service names its
+own). **Every service built from scratch carries it**: `packc init` adds it to an
+archetype pack unless `--no-base` and says so on stderr; the studio's DEFINE lists it
+first among the archetypes and, once another archetype is picked without it, says so
+with one click to add it. A products-only pack (a broker, a database) is not a service
+with an authentication surface and gets neither.
+
+The rest of the base is composed from the dimensions' entries: the request SLIs and the
+traffic rules from the service's archetype (`http-service`: `NoTraffic`, `TrafficSpike`,
+`TrafficFlood`, `ClientErrorSpike`; `queue-consumer`: `NoConsumption`), the workload from
+`k8s-workload` (readiness, restarts, OOM kills, replica shortfall, the four symptom
+rules), the node from `node` (filesystem, memory and CPU saturation, the disk and memory
+exhaustion forecasts), the telemetry pipeline from `otel-collector` and `loki`, and the
+dependency kinds from `rabbitmq`, `postgresql`, `redis` (and `kafka`, `ibm-mq`). What is
+still missing is named in the catalogue's §5: trace-derived RED (span metrics the base
+cannot assume) and log-derived SLIs (LogQL).
 
 ## The quality bar
 

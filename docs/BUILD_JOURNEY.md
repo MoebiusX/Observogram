@@ -986,11 +986,24 @@ the metric; the CLI).
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
   deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
   is behind the shipped entry version gets the diff as a remediation).
-- **Updating a pack that exists.** Build cannot open a pack once it is registered:
-  the draft holds inputs only, and a second SLO on an SLI, a burn alert with its
-  own windows and a fourth route are outside what the generator writes. The
-  journey for it — *Build or update a pack* — is proposed in
-  [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md).
+- **The service base.** Built (2026-10-28; `library/README.md` "The service base,
+  and the dimensions", `docs/SLI_CATALOGUE.md`): entries declare symptom alert
+  rules (`alerts:`), and the archetype `service-base` carries what every service
+  needs whatever it runs on. It is an entry, not scaffold-level SLIs, because its
+  values are a service's (the security-event counter's name, the thresholds) and
+  the scaffold has no parameters of its own beyond the platform's; an entry puts
+  them on DEFINE's params like any other, and a products-only pack (a broker, a
+  database) can leave it out. The default is the CLI's (`--no-base` to leave it
+  out) and DEFINE's hint, not a pre-ticked chip: a new draft still starts empty, so
+  the tests and the studio's first screen read as before.
+- **Updating a pack that exists.** Built (2026-10-28, slices 1 and 2 of
+  [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md)): `update` on a pack made in Build
+  reopens it on this screen — the draft is read back from the pack's own
+  `library.*` annotations — and Verify saves the next version of the same pack;
+  a second SLO on an SLI with its burn-rate alert, a route and a plain alert
+  rule are *additions* recorded in the pack and re-applied after every
+  regenerate. What the generator writes beyond its inputs (a generated route's
+  channels, an alert's windows, the boards) is still changed by file — slice 3.
 
 ## Open questions
 

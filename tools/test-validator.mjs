@@ -74,6 +74,20 @@ test('the vendored example validates and states both directions: a ceiling decla
   assert.equal(by.api_latency_p99.good_when, undefined, 'the other thresholds say nothing: absent means below');
 });
 
+test('an environment override whose path names the prototype chain is refused, naming the key; ordinary dotted paths still validate', () => {
+  for (const key of ['__proto__.OBSERVOGRAM_AUTH', 'constructor.prototype.x', 'otel.__proto__.x', 'prototype']) {
+    const pack = example();
+    pack.spec.environments.prod.overrides[key] = 'off';
+    const errors = errorsOf(pack);
+    assert.equal(errors.length, 1, `${key}: ${errors.join(' | ')}`);
+    assert.match(errors[0], /^\$\.spec\.environments\.prod\.overrides: key /);
+    assert.ok(errors[0].includes(JSON.stringify(key)), errors[0]);
+  }
+  const pack = example();
+  pack.spec.environments.staging.overrides['otel.sdk.proto_buffers'] = true;
+  assert.deepEqual(errorsOf(pack), [], 'a segment that merely contains the word is a path like any other');
+});
+
 test('good_when is accepted on threshold and distribution SLIs, both values, and absent', () => {
   const pack = example();
   const lat = pack.spec.slis.find(s => s.id === 'api_latency_p99');
@@ -149,7 +163,8 @@ test('every 1.3-shaped pack of the repo validates unchanged against the 1.4 sche
     const text = readFileSync(resolve(ROOT, rel), 'utf8');
     const pack = rel.endsWith('.json') ? JSON.parse(text) : parseYaml(text);
     assert.deepEqual(errorsOf(pack), [], rel);
-    assert.ok(!('rules' in (pack.spec.alerting || {})), `${rel} is 1.3-shaped: alerting carries no rules`);
+    // The library's goldens are 1.4-shaped since the archetypes declare symptom alert rules (library/README.md `alerts:`); every other pack here is 1.3-shaped.
+    if (!rel.startsWith('tools/fixtures/library/')) assert.ok(!('rules' in (pack.spec.alerting || {})), `${rel} is 1.3-shaped: alerting carries no rules`);
     assert.ok((pack.spec.slis || []).every(s => !('good_when' in s)), `${rel} is 1.2-shaped too: no SLI carries good_when`);
     // The meaning is unchanged too: with an explicit `below` on every threshold / distribution SLI the pack still validates.
     const stated = clone(pack);

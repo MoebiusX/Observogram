@@ -130,7 +130,7 @@ test('the instantiate fixture is stable: a fresh in-process instantiation of the
   assert.equal(FIXTURE.adapted.meta.criticality, 'tier-2');
   assert.equal(FIXTURE.adapted.layers.L1.length, 14, '7 SLIs + 7 SLOs');
   assert.deepEqual(FIXTURE.adapted.layers.L2X, []);
-  assert.equal(FIXTURE.adapted.layers.L4.alerting.length, 3);
+  assert.equal(FIXTURE.adapted.layers.L4.alerting.length, 6, 'three routes and the HTTP archetype’s three symptom rules at tier-2');
   // The shape VERIFY reads.
   assert.equal(FIXTURE.summary.tier, 'tier-2');
   assert.deepEqual(FIXTURE.summary.must, { passed: 15, total: 15 });
@@ -343,8 +343,8 @@ test('buildDefineModel: tiers with their MUST / SHOULD counts and what each adds
   assert.equal(m.tiers[1].adds.length, 7, 'tier-2 adds 6 MUST + 1 SHOULD');
   assert.equal(m.tiers[2].adds.length, 14, 'tier-1 adds 10 MUST + 4 SHOULD');
   assert.ok(m.tiers[1].adds.some(c => c.id === 'L1.MUST.latency_slo'));
-  assert.equal(m.products.length, 8);
-  assert.equal(m.archetypes.length, 2);
+  assert.equal(m.products.length, 13);
+  assert.equal(m.archetypes.length, 3);
   assert.deepEqual(m.selectedEntries.map(e => e.id), ['kafka', 'http-service'], 'selection order, not index order');
   const kafka = m.products.find(p => p.id === 'kafka');
   assert.equal(kafka.selected, true);
@@ -930,10 +930,10 @@ test('COMPILE leads with a result: one sentence, three states apart, the action 
   assert.deepEqual(two.queue.map(i => [i.kind, i.impact]), [['burn-rules', 'SLI-04 · kafka_produce_latency_p99'], ['burn-rules', 'SLI-06 · http_service_availability'], ['placeholders', '21 artefacts with template values · 21 todos']]);
   // What was produced: per layer, by type with its purpose; the counts add up to the stack's.
   assert.deepEqual(c.produced.find(l => l.id === 'L1').types.map(t => [t.type, t.count]), [['SLIs', 7], ['SLOs', 7]]);
-  assert.deepEqual(c.produced.find(l => l.id === 'L4').types.map(t => [t.type, t.count]), [['Burn-rate alerts', 7], ['Alert routes', 3], ['Remediations', 2]]);
+  assert.deepEqual(c.produced.find(l => l.id === 'L4').types.map(t => [t.type, t.count]), [['Burn-rate alerts', 7], ['Alert routes', 3], ['Alert rules', 3], ['Remediations', 2]]);
   assert.equal(c.produced.reduce((n, l) => n + l.artefacts, 0), c.stack.counts.artefacts);
   // Changes since Define: each selection's artefacts, the rest the tier's scaffold — every artefact attributed once.
-  assert.deepEqual(c.origins.groups.map(g => [g.id, g.count]), [['kafka', 34], ['http-service', 11], ['scaffold', 37]]);
+  assert.deepEqual(c.origins.groups.map(g => [g.id, g.count]), [['kafka', 34], ['http-service', 14], ['scaffold', 37]]);
   assert.equal(c.origins.groups.reduce((n, g) => n + g.count, 0), c.stack.counts.artefacts);
   assert.deepEqual(c.origins.groups.find(g => g.id === 'http-service').slis, ['http_service_availability', 'http_service_latency_p99']);
   assert.deepEqual(compile({ params: { oncall_channel: '#x' }, toggles: { ...defaultBuildState().toggles, dashboards: false } }).origins.edits.map(e => e.kind), ['params', 'off']);
@@ -1050,7 +1050,7 @@ test('build-api loaders: the paths and bodies the six routes take, with an injec
     throw new Error(`unexpected ${path}`);
   };
   const lib = await loadLibraryApi({ fetchFn, force: true });
-  assert.equal(lib.entries.length, 10);
+  assert.equal(lib.entries.length, 16);
   assert.equal(lib.scaffoldParams.length, 16);
   const clauses = await loadRequirements('tier-2', { fetchFn });
   assert.equal(clauses.length, 16);
@@ -1288,8 +1288,8 @@ test('todo pinning: each todo lands on the slab of its path family — and on th
 test('L4 carries its subgroups; the maturity is the clause counts with pass-on-placeholder its own segment', () => {
   const s = stackOf();
   const l4 = s.slabs.find(x => x.id === 'L4');
-  assert.deepEqual(l4.subgroups.map(sg => [sg.key, sg.label, sg.artefacts.length]), [['policy', 'Policy', 7], ['alerting', 'Alerting', 3], ['healing', 'Self-healing', 2]]);
-  assert.equal(l4.artefacts.length, 12, 'the slab\'s artefacts are the subgroups\' in order');
+  assert.deepEqual(l4.subgroups.map(sg => [sg.key, sg.label, sg.artefacts.length]), [['policy', 'Policy', 7], ['alerting', 'Alerting', 6], ['healing', 'Self-healing', 2]]);
+  assert.equal(l4.artefacts.length, 15, 'the slab\'s artefacts are the subgroups\' in order');
   assert.deepEqual(l4.artefacts.map(a => a.id), flatL4(FIXTURE.adapted.layers.L4).map(a => a.id));
   assert.equal(l4.counts.scaffold, 5);
   // tier-1 silhouette: the four L4 clauses fall into their subgroups.
@@ -1352,7 +1352,7 @@ test('a section switched off dims the slab it feeds (L4 per subgroup); the open 
   const c = buildCompileModel({ build: draft({ stackOpen: { L5: true } }), library: LIBRARY, clauses: T2 });
   assert.equal(c.stack.mode, 'compile');
   assert.equal(c.stack.slabs.find(x => x.id === 'L5').expanded, true);
-  assert.equal(c.stack.counts.artefacts, 82);
+  assert.equal(c.stack.counts.artefacts, 85);
   assert.equal(buildCompileModel({ build: draft(), library: LIBRARY }).stack.counts.clauses.total, 0, 'without the tier\'s clauses the edges are neutral and no ghost is drawn');
 });
 
@@ -1365,7 +1365,7 @@ test('the artefacts on the stack are the adapter\'s for the same canonical — w
   }
   assert.deepEqual(idsOf(s.slabs.find(x => x.id === 'L4').artefacts), idsOf(flatL4(adapted.layers.L4)));
   for (const sg of L4_SUBGROUPS) assert.deepEqual(idsOf(s.slabs.find(x => x.id === 'L4').subgroups.find(g => g.key === sg.key).artefacts), idsOf(adapted.layers.L4[sg.key]), sg.key);
-  assert.equal(s.counts.artefacts, 14 + 15 + 0 + 34 + 12 + 6 + 1);
+  assert.equal(s.counts.artefacts, 14 + 15 + 0 + 34 + 15 + 6 + 1);
   // Nothing is added, renamed or dropped: every field of the adapter's artefact survives on the slab.
   const bak = s.slabs.find(x => x.id === 'L2').artefacts.find(a => a.id === 'BAK-01');
   for (const k of Object.keys(adapted.layers.L2[1])) assert.deepEqual(bak[k], adapted.layers.L2[1][k], k);
@@ -1790,8 +1790,8 @@ test('buildDefinitionModel: the fields, the tier segments with their counts, the
   assert.equal(m.tierIndex, 1, 'the thumb sits on the middle segment');
   assert.deepEqual(m.tiers.map(t => [t.id, t.index, t.must, t.should, t.selected, t.loaded]), [['tier-3', 0, 9, 0, false, true], ['tier-2', 1, 15, 1, true, true], ['tier-1', 2, 25, 5, false, true]]);
   assert.equal(m.tierBlurb, 'A latency SLO, logs and traces backends, a chaos experiment in staging, a remediation.');
-  assert.equal(m.products.length, 8);
-  assert.equal(m.archetypes.length, 2);
+  assert.equal(m.products.length, 13);
+  assert.equal(m.archetypes.length, 3);
   const kafka = m.products.find(c => c.id === 'kafka');
   assert.deepEqual([kafka.selected, kafka.evidence, kafka.sliCountAtTier, kafka.placeholderParams, kafka.gaps], [true, { status: 'recorded-live', verifiedOn: '2026-09-22' }, 5, 5, 2]);
   // The word for a status is the evidence atom's vocabulary, spelled once there (not a second table on the model).
@@ -1928,7 +1928,7 @@ test('rolodexItems: the selected entries’ SLIs with the objective they start w
   assert.deepEqual(explicit.filter(i => i.selected).map(i => i.key), ['kafka_broker_availability']);
   // The filter: every product's SLIs follow, not selected, keyed for the composition they would join.
   const all = rolodexItems({ build: draft(), library: LIBRARY, all: true });
-  assert.equal(all.length, 56, 'every SLI of the ten entries');
+  assert.equal(all.length, 81, 'every SLI of the sixteen entries');
   const mq = all.find(i => i.entry === 'ibm-mq' && i.id === 'qmgr_process_up');
   assert.deepEqual([mq.entrySelected, mq.selected, mq.key, mq.reachable], [false, false, 'ibm_mq_qmgr_process_up', true]);
   assert.ok(all.findIndex(i => i.entry === 'ibm-mq') > all.findIndex(i => i.entry === 'http-service'), 'the selected entries come first');
@@ -2206,15 +2206,15 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual([l1.mode, l1.readOnly, l1.state, l1.stateText], ['edit', false, 'pass', '3 of 3 clauses pass']);
   assert.deepEqual(l1.clauses.map(c => [c.id, c.state]), [['L1.MUST.availability_slo', 'pass'], ['L1.MUST.latency_slo', 'pass'], ['L1.MUST.sli_covered_by_slo', 'pass']]);
   assert.equal(l1.rolodex.items.length, 10);
-  assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 10, aboveTier: 0, customised: 0, custom: 0, library: 10, chosen: 2 }, 'aboveTier counts the SLIs in the pack from a higher tier — informational, none by default');
+  assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 10, aboveTier: 0, customised: 0, custom: 0, library: 16, chosen: 2 }, 'aboveTier counts the SLIs in the pack from a higher tier — informational, none by default');
   assert.deepEqual(l1.rolodex.allKeys, FIXTURE.provenance.toggles.slis);
   assert.equal(l1.rolodex.filterAll, false);
   assert.ok(l1.rolodex.create && l1.rolodex.editLabel === 'Edit', 'the + Custom SLI card and Edit while composing');
-  assert.equal(sheet('L1', {}, draft({ rolodexAll: true })).rolodex.items.length, 56);
+  assert.equal(sheet('L1', {}, draft({ rolodexAll: true })).rolodex.items.length, 81);
   assert.ok(l1.rolodex.items.every(i => !('face' in i) && !('open' in i)), 'no face, no open set: the editor is a dialog of its own (tools/test-build-editor.mjs)');
   // The copies on the sheet: the counts; Verify's View; no create card off the composing mode.
   const withCopies = sheet('L1', {}, copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }));
-  assert.deepEqual(withCopies.rolodex.counts, { total: 11, selected: 9, selectable: 10, aboveTier: 1, customised: 2, custom: 1, library: 10, chosen: 2 });
+  assert.deepEqual(withCopies.rolodex.counts, { total: 11, selected: 9, selectable: 10, aboveTier: 1, customised: 2, custom: 1, library: 16, chosen: 2 });
   const verifyCopies = buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' });
   assert.deepEqual([verifyCopies.rolodex.create, verifyCopies.rolodex.editLabel], [false, 'View']);
   assert.equal(buildSheetModel({ layerId: 'L1', build: draft({ step: 'define' }), library: LIBRARY, requirements: T2, mode: sheetModeFor('define') }).rolodex.create, true, 'the create card on DEFINE too: the sheet is live there');
@@ -2358,7 +2358,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(!l1.includes('data-compose'), 'no compose action on COMPILE');
   // Every product: a foreign card is dashed, its state line (the checkbox's description) says ticking it adds the product.
   const all = html('L1', 'edit', draft({ rolodexAll: true }));
-  assert.equal((all.match(/class="build-rolo-card/g) || []).length, 57);
+  assert.equal((all.match(/class="build-rolo-card/g) || []).length, 82);
   assert.ok(all.includes('data-rolo-include data-sli="ibm_mq_qmgr_process_up" data-entry="ibm-mq" data-sli-id="qmgr_process_up" data-selected="0" data-entry-selected="0" data-focus-key="sli:ibm-mq:qmgr_process_up" aria-describedby="build-rolo-state-ibm_mq_qmgr_process_up"><span class="build-rolo-include-text">Include Queue manager process up</span>'));
   assert.ok(all.includes('<span class="build-rolo-state" id="build-rolo-state-ibm_mq_qmgr_process_up">adds IBM MQ</span>'));
   assert.ok(all.includes('class="build-rolo-card is-foreign"') && all.includes('not selected yet'));

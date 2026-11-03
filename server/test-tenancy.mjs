@@ -426,6 +426,9 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'POST /api/crawl-github': ['/api/crawl-github', {}, () => {}],
     'POST /api/draft-from-mcp': ['/api/draft-from-mcp', {}, () => {}],
     'POST /api/library/register': ['/api/library/register', {}, () => {}],
+    // The UPDATE journey reads and writes the caller's org's packs: the other org's pack id is unknown to both routes.
+    'POST /api/library/reopen': ['/api/library/reopen', { id: p }, is404('POST /api/library/reopen')],
+    'POST /api/library/update': ['/api/library/update', { base: p, canonical: { spec: {} } }, is404('POST /api/library/update')],
     // The live pack is the org's own: the other org's is never read, and a
     // refresh (here refused before any fetch) could only write the caller's.
     'GET /api/live-status': ['/api/live-status', undefined, (r) => assert(r.status === 200 && r.json.present === false, `${who}: GET /api/live-status does not read the other org's live pack`, r.json)],

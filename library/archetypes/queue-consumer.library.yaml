@@ -140,6 +140,17 @@ views:
     bind: ref:platform/per-resource-rollup
     params: { metric: "messaging_client_consumed_messages_total{job=\"${job}\"}", by: [messaging_destination_name] }
     minTier: tier-2
+alerts:
+  - name: NoConsumption
+    minTier: tier-3
+    severity: SEV3
+    for: 10m
+    metrics: [messaging_client_consumed_messages_total]
+    expr: |
+      sum(rate(messaging_client_consumed_messages_total{job="${job}",messaging_system="${messaging_system}",messaging_destination_name=~"${destination}"}[5m])) == 0
+    summary: "${job} consumed nothing for ten minutes"
+    description: "No message consumed from ${destination} on ${messaging_system} in ten minutes — the consumer is stalled, disconnected, or the producers stopped."
+    why: Every ratio and percentile reads as perfect when nothing is consumed; the absence rule is the only one that says the consumer stopped (docs/SLI_CATALOGUE.md §3, traffic absence).
 synthetic:
   - id: consume-canary
     kind: k6

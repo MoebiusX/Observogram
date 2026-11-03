@@ -840,6 +840,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
   assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
   assert.deepEqual([rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1' }).tone, rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone], ['ok', '1 of 4 required rules met.', 'fail']);
+  // The fixture's run is dated; pin the clock or the freshness note appends itself once the run is a day old.
   const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
@@ -1053,4 +1054,40 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
+
+// ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------
+//
+// A downstream copies these files verbatim; an import creeping in from the
+// app shell or the state breaks their build, not ours — so CI holds the line
+// here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
+
+const VENDORABLE_OVERVIEW = {
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './constants.mjs'],
+  'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
+  'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],
+  'studio/ux-kit-pure.mjs': ['./util.mjs'],
+  'studio/services-model.mjs': [],
+  'studio/services-api.mjs': ['./api.mjs'],
+};
+
+test('the Overview board\'s import closure is exactly the one docs/VENDORING.md lists, and studio/overview.css reads design tokens and its own --ov-* properties only', () => {
+  for (const [file, allowed] of Object.entries(VENDORABLE_OVERVIEW)) {
+    const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+    const imports = [...src.matchAll(/^import\s[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    assert.deepEqual(imports, allowed, `${file} imports`);
+    assert.ok(!/\b(document|window|localStorage|sessionStorage)\b\s*[.[]/.test(src.replace(/\/\/.*$/gm, '').replace(/typeof (window|document)/g, '')) || !['studio/overview-model.mjs', 'studio/ux-kit-pure.mjs', 'studio/services-model.mjs'].includes(file), `${file} (the model, the pure kit) touches no DOM`);
+  }
+  const css = readFileSync(new URL('../studio/overview.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const refs = [...new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]))];
+  const foreign = refs.filter((r) => !r.startsWith('--og-') && !r.startsWith('--ov-'));
+  assert.deepEqual(foreign, [], 'overview.css reads a property that is neither a design token nor its own');
+  const own = new Set([...css.matchAll(/(--ov-[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+  for (const r of refs.filter((x) => x.startsWith('--ov-'))) assert.ok(own.has(r), `${r} is read but never set`);
+  const tokens = readFileSync(new URL('../studio/design-tokens.css', import.meta.url), 'utf8');
+  for (const r of refs.filter((x) => x.startsWith('--og-'))) assert.ok(tokens.includes(`${r}:`), `${r} is not a design token`);
+  // Every selector is scoped to the zone (an `html[data-theme] .ov-page` theme override included).
+  const selectors = (css.match(/[^{};]+(?=\s*\{)/g) || []).map((s) => s.trim()).filter((s) => s && !s.startsWith('@'));
+  const unscoped = selectors.filter((s) => !s.split(',').every((part) => part.includes('.ov-')));
+  assert.deepEqual(unscoped, [], 'overview.css styles nothing outside its zone');
 });

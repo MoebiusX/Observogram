@@ -21,9 +21,10 @@
 // for the engineer to fill in.
 // ============================================================
 
+import { LIFECYCLE_ANNOTATION, readLifecycleBlock, sameDeployment } from './lifecycle.mjs';
 import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from './mini-yaml.mjs';
 import {
-  inferSlisFromRecordingRules, ruleNameToSliId,
+  inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
   operationalAlertRules, isGrafanaManagedRule, alertRuleExpr,
   isSpecRecordingRuleName, canonicalRuleDuration, SPEC_DURATION_RE,
@@ -34,7 +35,7 @@ import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import {
-  isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
+  DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
 
@@ -584,6 +585,7 @@ export function crawlFiles(filesInput, opts = {}) {
   const metricDefinitions = [];
   const scrapeJobs = [];
   const exporters = new Map();   // exporter name → the files that say what it exposes
+  const metricFamilies = [];     // the dynamic families those manifests declare
   // A collector config with no pipelines names its metrics exporter only by
   // guess; the guesses are settled after every file is walked against the
   // metrics pipelines the walk found (a config split across --config files
@@ -642,7 +644,7 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
         case 'otel-collector':   walkOtelCollector(f, pipelines, scrapeJobs, evidence, summary, collectorState); break;
-        case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence); break;
+        case 'metrics-manifest': walkMetricsManifest(f, metricDefinitions, metricFamilies, exporters, summary, evidence); break;
         case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
@@ -773,7 +775,7 @@ export function crawlFiles(filesInput, opts = {}) {
 
   if (summary.omitted.recordingRules.length) {
     const names = summary.omitted.recordingRules.map(r => r.name);
-    summary.warnings.push(`${names.length} recording rule(s) are not named <service>:<metric>:<op> and cannot be declared in spec.queries.recording_rules: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. Recorded in crawler.omitted.recording_rules; their expressions still feed the metric inventory.`);
+    summary.warnings.push(`${names.length} recording rule(s) are not metric names with a colon and cannot be declared in spec.queries.recording_rules: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. Recorded in crawler.omitted.recording_rules; their expressions still feed the metric inventory.`);
   }
   if (summary.omitted.ruleIntervals.length) {
     summary.warnings.push(`${summary.omitted.ruleIntervals.length} rule-group interval(s) are not a spec Duration and are left out: ${summary.omitted.ruleIntervals.slice(0, 8).map(o => `${o.group}=${o.value} (${o.source})`).join(', ')}.`);
@@ -959,7 +961,19 @@ export function crawlFiles(filesInput, opts = {}) {
   curateMetricDefinitions(metricDefinitions, summary);
   const metricAnnotations = buildMetricDefinitionAnnotations(metricDefinitions);
   const scrapeAnnotations = buildScrapeJobAnnotations(scrapeJobs);
-  const exporterAnnotations = buildExporterAnnotations(exporters);
+  const exporterAnnotations = {
+    ...buildExporterAnnotations(exporters),
+    ...buildMetricFamilyAnnotations(metricFamilies),
+    ...buildLifecycleAnnotations(classified, {
+      recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary,
+      linkedSlo: (expr) => recordedSloForExpr(expr, (id) => sloMap.has(id)),
+      // The ids an alert derives when the repo records no SLI (the loop above).
+      derivedIds: haveRecordedSlis ? null : (slo) => {
+        const sloId = symbolId(slo, `${repoNs}_slo`);
+        return { sloId, sliId: symbolId(sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId, `${repoNs}_sli`) };
+      },
+    }),
+  };
 
   // ----- canonical assembly -----
   const canonical = {
@@ -995,8 +1009,8 @@ export function crawlFiles(filesInput, opts = {}) {
         ...(normalized.environment ? { 'crawler.environmentNormalizedFrom': normalized.environment.from } : {}),
         ...(criticalityIgnored ? { 'crawler.criticalityIgnored': String(opts.criticality) } : {}),
         ...(bindingIgnored ? { 'crawler.bindingIgnored': String(opts.binding) } : {}),
-        // Recording rules the spec cannot declare (name outside
-        // <service>:<metric>:<op>) — evidence, never silently dropped.
+        // Recording rules the spec cannot declare (not a metric name with
+        // a `:`) — evidence, never silently dropped.
         ...(summary.omitted.recordingRules.length ? {
           'crawler.omittedRecordingRuleCount': String(summary.omitted.recordingRules.length),
           'crawler.omitted.recording_rules': annotationJson(summary.omitted.recordingRules),
@@ -1812,6 +1826,118 @@ function buildScrapeJobAnnotations(scrapeJobs) {
   };
 }
 
+// crawler.discovered.metric_families: the names an exporter mints at runtime,
+// as its manifest declares them. No metric definition can hold one (a name is
+// a name, addMetricDefinition refuses the rest), so they have their own
+// annotation, and the adapter projects them as METRIC-FAM-NN.
+function buildMetricFamilyAnnotations(families) {
+  if (!families.length) return {};
+  const sorted = [...families].sort((x, y) => (x.pattern < y.pattern ? -1 : x.pattern > y.pattern ? 1 : 0));
+  return {
+    'crawler.discovered.metric_families': annotationJson(sorted),
+    'crawler.discovered.metric_families_count': String(sorted.length),
+  };
+}
+
+// observogram.lifecycle: what each rules file's lifecycle block covers
+// (tools/lib/lifecycle.mjs). A symbol is covered only when every file that speaks
+// for it states the same. Whatever reads a series speaks for it too, down the chain:
+// an alert or a dashboard in another file keeps the SLO behind it, its rules and
+// their metrics visible. So a statement can only ever hide what its own file, or
+// files that say the same, declare.
+function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, derivedIds }) {
+  const blocks = new Map();
+  for (const f of classified) {
+    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template') continue;
+    const read = readLifecycleBlock(f.content);
+    if (!read) continue;
+    if (read.problem) summary.warnings.push(`${f.relPath}: the lifecycle block is not read: ${read.problem}.`);
+    else blocks.set(f.relPath, read.statement);
+  }
+  if (!blocks.size) return {};
+  const owners = new Map();
+  const own = (symbol, file) => {
+    if (!owners.has(symbol)) owners.set(symbol, new Set());
+    owners.get(symbol).add(file);
+  };
+  const fileOf = (origin) => String(origin ?? '').split('#')[0];
+  const rulesByName = new Map(recordingRules.map((rule) => [rule.name, rule]));
+  // A rule the spec cannot declare is still a reader of what its expression names.
+  const omittedRuleExprs = new Map(metricDefinitions
+    .filter((metric) => metric.originKind === 'recording-rule-output' && !rulesByName.has(metric.name))
+    .map((metric) => [metric.name, metric.query]));
+  const ownExpr = (expr, file, seen = new Set()) => {
+    for (const raw of extractPrometheusMetricNames(expr)) {
+      const name = normalizePrometheusMetricName(raw);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      own(`metrics.${name}`, file);
+      if (rulesByName.has(name)) ownRule(rulesByName.get(name), file, seen);
+      else if (omittedRuleExprs.has(name)) ownExpr(omittedRuleExprs.get(name), file, seen);
+    }
+  };
+  const ownRule = (rule, file, seen) => {
+    own(`queries.recording_rules.${rule.name}`, file);
+    const sliId = ruleNameToSliId(rule.name);
+    if (sliId) {
+      own(`slis.${sliId}`, file);
+      own(`slos.${ruleNameToSloId(rule.name)}`, file);
+    }
+    ownExpr(rule.expr, file, seen);
+  };
+  recordingRules.forEach((rule, i) => {
+    ownRule(rule, fileOf(evidence[`QRY-${i + 1}-${slug(rule.name).slice(0, 16)}`]), new Set());
+  });
+  for (const { rule, relPath } of alertRules) {
+    const file = fileOf(relPath);
+    const { alertName, expr, slo } = burnCandidateFromAlertRule(rule);
+    const linked = linkedSlo(expr);
+    if (linked) {
+      own(`policy.burn_rate_alerts.${linked}`, file);
+      own(`slos.${linked}`, file);
+      own(`slis.${linked.replace(/_99$/, '')}`, file);
+    } else if (derivedIds) {
+      const { sloId, sliId } = derivedIds(slo);
+      own(`policy.burn_rate_alerts.${sloId}`, file);
+      own(`slos.${sloId}`, file);
+      own(`slis.${sliId}`, file);
+    } else {
+      own(`alerting.rules.${String(alertName).trim()}`, file);
+    }
+    ownExpr(expr, file);
+  }
+  // Every other reader of a series: a dashboard, the code, a rule the spec omits.
+  for (const metric of metricDefinitions) {
+    const file = fileOf(metric.origin);
+    own(`metrics.${metric.name}`, file);
+    if (rulesByName.has(metric.name)) ownRule(rulesByName.get(metric.name), file, new Set([metric.name]));
+    else if (omittedRuleExprs.has(metric.name)) ownExpr(omittedRuleExprs.get(metric.name), file, new Set([metric.name]));
+  }
+  // A burn alert no rule wrote (synthesized for an SLO) goes with its SLO.
+  for (const { slo } of burnRateAlerts) {
+    const symbol = `policy.burn_rate_alerts.${slo}`;
+    if (!owners.has(symbol)) for (const file of owners.get(`slos.${slo}`) || []) own(symbol, file);
+  }
+  // A manifest's dynamic family declares the names it matches.
+  for (const family of metricFamilies) {
+    const { re } = compileMetricFamilyPattern(family.pattern, { timed: false });
+    if (!re) continue;
+    for (const { name } of metricDefinitions) if (re.test(name)) own(`metrics.${name}`, family.file);
+  }
+  const statements = [...blocks.keys()].sort().map((source) => ({
+    source,
+    ...blocks.get(source),
+    symbols: [...owners]
+      .filter(([, files]) => files.has(source) && [...files].every((file) => blocks.has(file) && sameDeployment(blocks.get(file), blocks.get(source))))
+      .map(([symbol]) => symbol).sort(),
+  }));
+  for (const { source, symbols } of statements) {
+    if (!symbols.length) summary.warnings.push(`${source}: the lifecycle block covers nothing: every rule of this file is also read or declared elsewhere.`);
+  }
+  summary.discovered.lifecycleStatements = statements.length;
+  return { [LIFECYCLE_ANNOTATION]: annotationJson(statements) };
+}
+
 // crawler.discovered.exporters: each prebuilt exporter the crawl learned
 // metrics from, and the files that said what it exposes (a manifest, a saved
 // exposition, its own config).
@@ -2153,8 +2279,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       origin,
       usedBy: `recording_rule:${name}`,
     });
-    // The spec declares `<service>:<metric>:<op>` names only (the reading the
-    // live fetcher already applies); any other name is recorded as omitted.
+    // The spec declares metric names with a `:` only (the reading the live
+    // fetcher already applies); any other name is recorded as omitted.
     if (!isSpecRecordingRuleName(name)) {
       summary.omitted.recordingRules.push({ name, source: origin });
       return;
@@ -2556,7 +2682,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
 // ---------- prebuilt exporters ----------
 
 // A metrics manifest: each entry is a declared metric of the exporter.
-function walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence) {
+function walkMetricsManifest(f, metricDefinitions, metricFamilies, exporters, summary, evidence) {
   const read = readMetricsManifest(f.content);
   if (!read.ok) {
     summary.warnings.push(`${f.relPath} is not a metrics manifest (${read.error}); it is not read.`);
@@ -2578,10 +2704,27 @@ function walkMetricsManifest(f, metricDefinitions, exporters, summary, evidence)
   if (read.skipped) {
     summary.warnings.push(`${f.relPath}: ${read.skipped} metric entr${read.skipped === 1 ? 'y is' : 'ies are'} not read (each needs a metric name not listed before and an exposition type: ${['counter', 'gauge', 'histogram', 'summary', 'untyped'].join(', ')}, …).`);
   }
+  let familiesRead = 0;
+  for (const family of m.dynamicFamilies) {
+    const other = metricFamilies.find(x => x.pattern === family.pattern);
+    if (other) {
+      summary.warnings.push(`${f.relPath}: a dynamic family repeats a pattern ${other.file} declares; the first is kept.`);
+    } else if (metricFamilies.length >= DYNAMIC_FAMILY_LIMITS.families) {
+      summary.warnings.push(`${f.relPath}: a dynamic family is not read: the crawl holds ${DYNAMIC_FAMILY_LIMITS.families} already.`);
+    } else {
+      metricFamilies.push({ ...family, exporter: m.exporter, file: f.relPath });
+      familiesRead++;
+      summary.discovered.dynamicFamilies = (summary.discovered.dynamicFamilies || 0) + 1;
+    }
+  }
+  for (const { index, reason } of read.refusedFamilies) {
+    summary.warnings.push(`${f.relPath}: ${index === null ? '`dynamicFamilies` is' : `dynamic family ${index + 1} is`} not read: ${reason}.`);
+  }
   recordExporter(exporters, m.exporter, {
     origin_kind: 'exporter-manifest',
     file: f.relPath,
     metrics: m.metrics.length,
+    ...(familiesRead ? { dynamic_families: familiesRead } : {}),
     ...(m.version ? { version: m.version } : {}),
     ...(m.source ? { source: m.source } : {}),
     ...(m.generatedAt ? { generated_at: m.generatedAt } : {}),

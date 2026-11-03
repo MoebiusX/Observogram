@@ -21,7 +21,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { termHtml, disclosureHtml, emptyStateHtml, wireUxActions } from './ux-kit.mjs';
+import { termHtml, disclosureHtml, emptyStateHtml, wireUxActions } from './ux-kit-pure.mjs';
 
 const toneClass = (prefix, tone) => (tone && tone !== 'neutral' ? ` ${prefix}--${tone}` : '');
 
@@ -445,29 +445,29 @@ const START_CARDS = {
 function startCardHtml(c, reason) {
   const off = !!reason;
   return `
-          <button type="button" class="discover-load-card ov-start__card${off ? ' is-unavailable' : ''}" data-ux-action="${off ? 'ov-explain' : c.action}"${off ? ` aria-disabled="true" data-reason="${escapeHtml(reason)}"` : ''}>
-            <span class="discover-load-glyph" aria-hidden="true">${c.glyph}</span>
-            <span class="discover-load-label">${escapeHtml(c.label)}</span>
-            <span class="discover-load-sub">${escapeHtml(c.sub)}</span>${off ? `
-            <span class="svc-why">${escapeHtml(reason)}</span>` : ''}
+          <button type="button" class="ov-start__card${off ? ' ov-start__card--off' : ''}" data-ux-action="${off ? 'ov-explain' : c.action}"${off ? ` aria-disabled="true" data-reason="${escapeHtml(reason)}"` : ''}>
+            <span class="ov-start__glyph" aria-hidden="true">${c.glyph}</span>
+            <span class="ov-start__label">${escapeHtml(c.label)}</span>
+            <span class="ov-start__sub">${escapeHtml(c.sub)}</span>${off ? `
+            <span class="ov-start__why">${escapeHtml(reason)}</span>` : ''}
           </button>`;
 }
 function startHtml(sources, start, serviceName = null) {
   const denied = sources && sources.enabled === false ? (sources.reason || 'Not available for your role here.') : '';
   const a = start?.a || null;
   const steps = START_STEPS.map((st) => `
-        <li class="discover-journey-step${st.n === 1 && a ? ' is-done' : ''}">
-          <span class="discover-journey-num">${st.n === 1 && a ? '✓' : st.n}</span>
-          <span class="discover-journey-body">
-            <span class="discover-journey-label">${escapeHtml(st.label)}</span>
-            <span class="discover-journey-sub">${st.sub}</span>
+        <li class="ov-step${st.n === 1 && a ? ' ov-step--done' : ''}">
+          <span class="ov-step__num">${st.n === 1 && a ? '✓' : st.n}</span>
+          <span class="ov-step__body">
+            <span class="ov-step__label">${escapeHtml(st.label)}</span>
+            <span class="ov-step__sub">${st.sub}</span>
           </span>
         </li>`).join('');
   const colA = a
     ? `
           <div class="ov-start__done og-panel" role="status">
-            <span class="discover-load-label">Pack A: ${escapeHtml(a.label)}</span>
-            <span class="discover-load-sub">loaded — now its live side, in step 2</span>
+            <span class="ov-start__label">Pack A: ${escapeHtml(a.label)}</span>
+            <span class="ov-start__sub">loaded — now its live side, in step 2</span>
             <button type="button" class="ov-start__expert" data-ux-action="ov-start-reset">Change Pack A</button>
           </div>`
     : START_CARDS.a.map((c) => startCardHtml(c, denied)).join('');
@@ -478,7 +478,7 @@ function startHtml(sources, start, serviceName = null) {
         <h2 class="ov-card__h" id="ov-start-h">${a ? 'Pack A is in — now its live side.' : (serviceName ? `No pack for ${escapeHtml(serviceName)} yet.` : 'No service to show yet.')}</h2>
         <p class="ov-start__lede og-muted">${a ? 'Load what live verifies in step 2, and the drift opens by itself.' : (serviceName ? `Nothing to grade until a pack that names ${escapeHtml(serviceName)} is registered — start the drift check here.` : 'A service appears here once a pack that names it is registered — start the drift check here.')}</p>
       </header>
-      <ol class="discover-journey" aria-label="The drift check, in three steps">${steps}
+      <ol class="ov-steps" aria-label="The drift check, in three steps">${steps}
       </ol>
       <div class="ov-start__cols">
         <div class="ov-start__col" role="group" aria-label="Step 1: Pack A">${colA}

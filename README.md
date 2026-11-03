@@ -312,22 +312,28 @@ pack data, no external call; a pack without remediations shows nothing.
 
 ## Quickstart
 
-Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
-keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
-(services and environments follow), which is unflagged from 22.13; 22.16 is
-the floor because it fixes a `StatementSync` use-after-free and the `run()`
-statement reset that a store hits. CI runs the suites on Ubuntu and on
-Windows, each on 22.16.0 and on the latest 22. See
-[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+Requires **Node 22.23.4 or later** (`engines` in `package.json`). 22.23.4 is
+the October 2026 security release: it fixes the Brotli decoder out-of-bounds
+write (CVE-2026-111497), which a compressed request body or a compressed
+answer from an MCP server would reach through `node:zlib`, and three TLS and
+DNS hostname-validation bypasses; the server also refuses compressed request
+bodies (415) and asks MCP servers and GitHub for uncompressed answers, so the
+decoder sees no untrusted bytes on any runtime. The floor before it was 22.16:
+the studio keeps users and orgs in an embedded store on Node's built-in
+`node:sqlite` (services and environments follow), unflagged from 22.13, and
+22.16 fixed a `StatementSync` use-after-free and the `run()` statement reset
+that a store hits. CI runs the suites on Ubuntu and on Windows, each on
+22.23.4 and on the latest 22. The Docker image pins `node:22.23.4-alpine`.
+See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 ### Platforms
 
 Linux and Windows are tested in CI: `npm test` runs on Ubuntu and on
 `windows-latest` (GitHub-hosted, an elevated runner, Defender as the image
-ships it), each on Node 22.16.0 (the floor) and the latest 22, on every PR
+ships it), each on Node 22.23.4 (the floor) and the latest 22, on every PR
 into develop or main and every push to them; the latest-22 Ubuntu run is under
 c8. The browser suites (Playwright) run on neither: they skip, as on any
-checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.16, PowerShell
+checkout without `OBSERVOGRAM_PLAYWRIGHT`. Windows (Node ≥ 22.23.4, PowerShell
 or cmd) runs the CLI, the server, the studio and the static bundle, and
 `npm test` is green there except the explicit skips — every one printed by
 `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a
@@ -1361,8 +1367,9 @@ The crawler reads source files such as:
 - A prebuilt exporter's metrics: its `metrics-manifest.json`, a saved
   `/metrics` (`.prom`, `.metrics`), or its config read against an exporter
   catalogue (`--exporter-catalogue <file.json>` adds or replaces entries).
-  `packc emit --exporter <url>` writes the manifest from a live endpoint
-  ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
+  `packc emit --exporter <url>` writes the manifest from a live endpoint, and
+  its `dynamicFamilies` declare by pattern the names an exporter mints at
+  runtime ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
@@ -1534,9 +1541,11 @@ whole; the draft and the refresh never read it):
 | Variable | Meaning |
 |---|---|
 | `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
-| `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules |
+| `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules; an alert-rule tool that takes a folder uid (Grafana's) is asked once per folder, so on a Grafana-only estate the other folders never travel; beside an engine that names no folder, or when a folder gets no answer, it is read whole as before and the gate log says so |
 | `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
-| `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
+| `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` | white-space-separated patterns (a pattern cannot contain a space; `\s` works), each anchored (`^app_event_\d+_total$ ^go_`), for metric names a snapshot drops after the prefixes kept them — a backend's names no declaration will ever match; counted in the gate log, and a repository metric they match is *not checked*, never *declared, not live*; a pattern that crawls is refused with the rest |
+| `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` | comma-separated rule-group names (`payments, checkout:slo`; Grafana's `ruleGroup`, a Prometheus or vmalert `groups[].name`) a snapshot keeps for alert and recording rules, applied only when every rule the engines list names its group (said in the gate log otherwise); a repository rule of another group is *not checked*, never *declared, not live* |
+| `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID`, `…_METRIC_EXCLUDE`, `…_RULE_GROUPS` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
 | `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |
 
 A variable that does not parse is a 400 naming it when a snapshot starts, and
@@ -2147,7 +2156,16 @@ values only the team can fill (pager service, chaos target, endpoints) reported 
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
 Compile · Verify, see "Main Journey" above) through `/api/library/*`; the
 contract is [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) and the entries and
-their evidence bar are in [`library/README.md`](library/README.md).
+their evidence bar are in [`library/README.md`](library/README.md). A pack made
+in Build is not final: **`update`** (the header, beside `export`; or the home's
+*Update a pack you have*) reopens it on the same screen from its own
+annotations, lists the changes since the saved version, shows the saved pack
+beside the pack with the changes and saves the **next version of the same
+pack** — the earlier version kept under it in the picker. A second SLO on an
+SLI, a route and a plain alert rule are *additions* the pack records and the
+engine re-applies after every regenerate
+([`docs/UPDATE_JOURNEY.md`](docs/UPDATE_JOURNEY.md); `POST /api/library/reopen`,
+`POST /api/library/update`, `tools/lib/pack-update.mjs`).
 
 ```bash
 $ node tools/cli.mjs init --list
@@ -3078,8 +3096,8 @@ unsupported charset or content encoding. The body is not logged.
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); a `notify` names one of the org's notify hooks (`GET /api/journeys/notify-hooks`); an audit row: `journey.capture` |
 | `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpEndpointId`, or a typed `mcpUrl`: the admin role); an audit row: `live.refresh`. The live MCP API's posture, as the draft's |
 | `POST` | `/api/mcp/ping` | Test an MCP connection without building a pack (rebadge batch 3): `{ mcpEndpointId }` (the endpoint's read token rides as a draft's would; `mcpAuth` overrides it) or a typed `mcpUrl` (the admin role). `initialize`, the whole `tools/list` and one cheap read, within 10 s; answers `{ ok, verdict, origin, mcpEndpoint, reachable, auth: { outcome, sent }, tools: { count, capabilities, unmatched, complete }, read, timings, sentence, checked, notChecked }` — `verdict` one of `connected`, `auth-refused`, `unreachable`, `timeout`, `not-mcp`; 200 whenever the ping ran, 400 / 403 for the target, 502 a transport hook fault. Writes no live file and no pack; an audit row `live.ping` only for a typed URL |
-| `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
-| `POST` | `/api/mcp/jobs` | Start a live job: `{ kind: snapshot \| draft, mcpEndpointId \| mcpUrl, mcpAuth?, scope?, packName?, label? }` — the target as for a draft (a typed `mcpUrl` is the admin role's); `scope` (`metricPrefixes`, `folderUids`, `datasourceUid`) is a snapshot's and replaces the configured one. Answers **202** `{ ok, job, poll }` with `Location` at once; the job registers the pack when it ends (`live: 'snapshot'` or `'scaffold'` in `GET /api/packs`). One running job per org, four in the server (409, naming who started it); a label held by a pack of the other live kind is a 409; in memory — a restart loses running and finished jobs. Audit rows: the pack's when it registers, and `live.fetch` at every end |
+| `GET` | `/api/mcp/jobs` | The live jobs' context in this org (rebadge batch 3): `{ ok, scope: { defaults: { metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups }, from: org \| deployment \| null, errors }, running, lastTook: { snapshot, draft } }` — the snapshot scope the server is configured with (`OBSERVOGRAM_SNAPSHOT_*`, or the org's `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_*`), your own running job here (`null` otherwise), how long the org's last finished snapshot and draft took (ms) |
+| `POST` | `/api/mcp/jobs` | Start a live job: `{ kind: snapshot \| draft, mcpEndpointId \| mcpUrl, mcpAuth?, scope?, packName?, label? }` — the target as for a draft (a typed `mcpUrl` is the admin role's); `scope` (`metricPrefixes`, `folderUids`, `datasourceUid`, `metricExclude`, `ruleGroups`) is a snapshot's and replaces the configured one. Answers **202** `{ ok, job, poll }` with `Location` at once; the job registers the pack when it ends (`live: 'snapshot'` or `'scaffold'` in `GET /api/packs`). One running job per org, four in the server (409, naming who started it); a label held by a pack of the other live kind is a 409; in memory — a restart loses running and finished jobs. Audit rows: the pack's when it registers, and `live.fetch` at every end |
 | `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
 | `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
