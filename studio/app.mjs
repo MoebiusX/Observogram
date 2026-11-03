@@ -74,7 +74,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -1079,6 +1079,12 @@ async function handleFile(file) {
       toast(`${file.name}: ${res.errors.length} validation error(s)`, 'error');
       return;
     }
+    if (overviewStartTakes(res)) {
+      const slot = overviewStart.slot;
+      const compared = await overviewStartAdopt(res.registered.id, file.name);
+      toast(compared ? `Comparing against ${file.name}` : `Loaded ${file.name} as Pack ${slot === 'b' ? 'B' : 'A'}`);
+      return;
+    }
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
@@ -1928,7 +1934,7 @@ function overviewModel() {
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
-    now: Date.now(), productName: state.brand?.chrome?.name || '',
+    now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart,
   });
 }
 
@@ -2059,7 +2065,53 @@ const overviewActions = {
   openNeuron: openOverviewNeuron,
   expert: enterExpert,
   retry: async () => { await refreshServices(); await refreshOverviewFacts(); },
+  // No service yet: the drift check starts from here, through Expert's own
+  // entry points (the header is hidden in Overview, as on the home: upload
+  // goes straight to the file picker). Each names the slot its pack fills.
+  scan: () => { overviewStart.slot = 'a'; $('#crawl-btn')?.click(); },
+  live: () => { overviewStart.slot = 'b'; if ($('#draft-mcp-panel')?.hidden) $('#draft-mcp-btn')?.click(); },
+  upload: (slot) => { overviewStart.slot = slot === 'b' ? 'b' : 'a'; $('#file-input')?.click(); },
+  resetStart: () => { overviewStart = { slot: null, a: null }; renderMainView(); },
+  explain: explainUnavailable,
 };
+
+// The drift check started from Overview's empty state: `slot` is the pack the
+// next scan, live draft or upload fills ('a' | 'b'), `a` is Pack A once step 1
+// loaded it ({ id, label }). Only an adopt that lands while Overview is on
+// screen is taken; anywhere else the flows keep their own routing.
+let overviewStart = { slot: null, a: null };
+const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
+// Step 2 under way: Pack A in, the live panel opened for Pack B, Overview on screen.
+const overviewStartWaitsForB = () => state.mode === 'overview' && overviewStart.slot === 'b' && !!overviewStart.a;
+// Pack A's name as the comparison's toast says it, kept past the reset.
+let overviewStartLabelA = null;
+
+// Step 1 keeps Overview on screen with Pack A remembered; step 2 is the
+// comparison (step 3, automatic): Expert's Diagnose on A against B.
+// → true when the comparison opened.
+async function overviewStartAdopt(id, label) {
+  const slot = overviewStart.slot;
+  overviewStart.slot = null;
+  await refreshCatalogue();
+  const a = overviewStart.a;
+  if (slot === 'a' || !a) {
+    overviewStart.a = { id, label };
+    renderMainView();
+    announce(`Pack A loaded: ${label}. Step 2: its live side.`);
+    return false;
+  }
+  if (a.id === id) {
+    renderMainView();
+    toast('That pack is Pack A already: step 2 needs its live side.', 'error');
+    return false;
+  }
+  overviewStart = { slot: null, a: null };
+  overviewStartLabelA = a.label;
+  setUiMode('expert');
+  state.view = 'compare';
+  enterCompareMode(a.id, defaultEnvFor(a.id), id, defaultEnvFor(id));
+  return true;
+}
 const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
 // ============================================================
@@ -7019,6 +7071,12 @@ async function doCrawlFromGithub() {
       setGhStatus(`error: ${out.error || 'unknown'}${hint}`, 'error');
       return;
     }
+    if (!out.canonical) {
+      // Nothing to draw: the result box reads the pack it does not have.
+      $('#crawl-result').hidden = true;
+      setGhStatus(`done in ${out.tookMs}ms · no observability artefacts found in this repo`, 'warn');
+      return;
+    }
     crawlState.lastResult = out;
     renderCrawlResult(out);
     followReplacedPack(out.registered?.id).catch(() => {});
@@ -7114,6 +7172,7 @@ function renderCrawlResult(out) {
 //
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
+  if (overviewStartTakes(res)) return overviewStartAdopt(res.registered.id, sourceLabel);
   // An entry the scan or draft route registered arrives as its id alone
   // (registeredOrValidated): enterAnalyzeMode / enterCompareMode load it.
   if (res.adapted) {
@@ -7986,6 +8045,7 @@ function setupDraftFromMcpPanel() {
   // Any change to the target or its key: a ping never stands for another.
   for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
   $('#live-test-btn').onclick = () => testLiveConnection();
+  $('#live-register-btn').onclick = () => registerAndRetestLive();
   for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
     radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
   }
@@ -8021,6 +8081,7 @@ const liveUi = {
   job: null,         // { id, kind, label, records, since, view, answer }
   timer: null,
   kindChosen: null,  // the person's own choice in this panel
+  registerOffer: null, // originRefusalOffer's answer to the last test, while it stands
 };
 let liveFetchLib = null;
 const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
@@ -8042,7 +8103,44 @@ function clearLivePing() {
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
   setLiveStatus('live-ping-status', '');
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
+}
+
+// The origin rule refused a typed URL this reader may register
+// (originRefusalOffer): the button beside the refusal offers it.
+function paintLiveRegisterOffer(offer) {
+  liveUi.registerOffer = offer;
+  const btn = $('#live-register-btn');
+  if (!btn) return;
+  btn.hidden = !offer;
+  btn.textContent = offer ? offer.label : '';
+}
+
+// Register and test again: the typed URL becomes the org's endpoint (the
+// server judges its origin again and audits it), the picker selects it, and
+// the connection is tested by its id. A refusal is said where the test's is.
+async function registerAndRetestLive() {
+  const offer = liveUi.registerOffer;
+  const btn = $('#live-register-btn');
+  if (!offer || btn?.disabled) return;
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', `registering ${offer.name} as an MCP endpoint…`);
+  let created = null;
+  try {
+    created = await createEndpoint({ name: offer.name, url: offer.url });
+  } catch (e) {
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  paintLiveRegisterOffer(null);
+  if (!created) return;
+  state.mcpEndpoints = [...(Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints : []).filter((ep) => ep.id !== created.id), created];
+  paintMcpTarget('draft', { chosen: String(created.id) });
+  toast(`Registered ${created.name} as an MCP endpoint`);
+  await testLiveConnection();
 }
 
 function liveKind() {
@@ -8093,6 +8191,7 @@ async function testLiveConnection() {
   const { body: target } = mcpTargetOf('draft');
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
   if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
   const btn = $('#live-test-btn');
@@ -8121,6 +8220,7 @@ async function testLiveConnection() {
     setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
     setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    paintLiveRegisterOffer(originRefusalOffer(e, target, state.mcpTargetPolicy?.register ?? null));
   } finally {
     btn.disabled = false;
   }
@@ -8224,6 +8324,15 @@ async function finishLiveJob(answer) {
   // The result is shown here (the panel open), or the toast below says it: the key goes.
   forgetLiveJob();
   paintLiveSteps();
+  // Overview's start waiting for Pack B (step 2 opened this panel): the
+  // job's pack is Pack B, and the comparison (step 3) opens by itself —
+  // never "Open it", which would show the live pack alone and drop Pack A.
+  if (model?.registered?.id && overviewStartWaitsForB()) {
+    $('#draft-mcp-panel').hidden = true;
+    const compared = await overviewStartAdopt(model.registered.id, model.registered.label || model.registered.id);
+    toast(compared ? `Comparing ${overviewStartLabelA || 'Pack A'} against ${model.registered.label || 'the live pack'}` : `Registered: ${model.registered.label}`, 'ok');
+    return;
+  }
   renderLiveResult($('#live-result'), model, {
     onOpen: (id) => openLivePack(id),
     onCompare: (id) => compareWithLivePack(id),
@@ -8257,6 +8366,7 @@ async function showLiveDraftResult(answer) {
 }
 
 async function openLivePack(id) {
+  if (overviewStartWaitsForB()) { $('#draft-mcp-panel').hidden = true; await overviewStartAdopt(id, id); return; }
   $('#draft-mcp-panel').hidden = true;
   await refreshCatalogue();
   state.view = 'layers';

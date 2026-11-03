@@ -196,6 +196,7 @@ buildOverviewModel({
   journeys, journeysError, run,                 // GET /api/journeys and the service's newest run record
   running, startError, pending,                 // a check in flight, a refused start, facts still being read
   layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
+  access, start,                                // the reader's rank ({ canWrite, reason }); the drift check under way ({ a: { id, label } } once Pack A is in)
   now, productName,
 });
 ```
@@ -218,14 +219,22 @@ host.overview = {
   checkNow(),                                   // Check again → runServiceCheck, then re-read the facts
   openDiscover(), openDiagnose(), openRemediate(), openNeuron(),   // the column links and "See the differences"
   expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
+  scan(), live(), upload(slot), resetStart(),   // the start's ways in: a repo scan (Pack A), a live draft (Pack B), an upload into 'a' or 'b'; Change Pack A
+  explain(reason),                              // a start card the reader's rank cannot use, activated
 };
 ```
 
 A hook a host does not supply is a no-op (the view calls them optionally).
-Exactly one `.og-btn--primary` is drawn in every state; the simple layout is
-drawn instead of the board when `model.layout` is `'simple'`, when the
-service has no pack of its own, or when the board throws (the error is
-logged and the screen never goes blank). The static bundle (DOWNSTREAM.md
+At most one `.og-btn--primary` is drawn in any state, and as many as the
+model's `primary` says; the simple layout is drawn instead of the board when
+`model.layout` is `'simple'`, when the service's only pack is a live
+aggregate's, or when the board throws (the error is logged and the screen
+never goes blank). With no service, or a service with no pack at all, the
+model carries `start` and the view draws the drift check's three steps —
+Pack A from a scan or an upload, Pack B from a live draft or an upload — in
+place of the panels; the host routes the pack each way in produces (the
+studio keeps Pack A while Overview is on screen, and opens the comparison
+once Pack B is in). The static bundle (DOWNSTREAM.md
 §10) does not draw Overview: its shim answers the services and journeys
 routes with 501.
 

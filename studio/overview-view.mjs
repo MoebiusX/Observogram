@@ -4,7 +4,8 @@
 // studio/overview-model.mjs buildOverviewModel(...) — pure, already worded —
 // and the actions ride on host.overview: selectService(id), selectEnv(name),
 // checkNow(), openDiscover(), openDiagnose(), openRemediate(), openNeuron(),
-// expert(), retry(). A headless host ({ overview: {} }) never throws. The
+// expert(), retry(), and with no service yet scan(), live(), upload(slot),
+// resetStart(), explain(reason). A headless host ({ overview: {} }) never throws. The
 // pieces are the design kit's (.og-*); the zone is .ov-* (studio/ux.css).
 // Exactly one primary button per state.
 //
@@ -206,17 +207,37 @@ function layerRowHtml(r) {
         </li>`;
 }
 
+// Discover opens on the summary — what the repository declares, by kind —
+// and the summary opens to the stack: the kinds labelled once, then the four
+// layers top down. The three stats stay in view either way. Open or closed
+// is the person's choice and survives a repaint (a check, a fact read).
+let layersOpen = false;
+function repoSummaryHtml(L) {
+  // One row per kind, its name and its count — a list to read down, not a
+  // sentence to parse. Spans: a summary holds phrasing content only.
+  const counts = L.composition.length
+    ? `<span class="ov-comp">${L.composition.map((c) => `<span class="ov-comp__row"><span class="ov-comp__name">${escapeHtml(c.name)}</span><b class="ov-comp__n">${c.count}</b></span>`).join('')}</span>`
+    : '<span class="ov-comp ov-comp--none og-muted">Nothing declared yet.</span>';
+  return `
+      <details class="ov-repo"${layersOpen ? ' open' : ''}>
+        <summary class="ov-repo__sum">
+          <span class="ov-repo__head"><span class="ov-repo__title">In the repository</span><span class="ov-repo__toggle" aria-hidden="true"><span class="ov-repo__show">Show the layers</span><span class="ov-repo__hide">Hide the layers</span></span></span>
+          ${counts}
+        </summary>
+        <div class="ov-repo__layers">
+          ${kindHeadHtml(L.rows[0].kinds)}
+          <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
+        </div>
+      </details>`;
+}
 function discoverColHtml(L) {
   const body = L
-    ? `
-      ${kindHeadHtml(L.rows[0].kinds)}
-      <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
+    ? `${repoSummaryHtml(L)}
       <dl class="ov-stats">
         <div class="ov-stat" title="${escapeHtml(L.lead)}"><dt>Declared</dt><dd>${L.declared}</dd></div>
         <div class="ov-stat" title="${escapeHtml(L.coverage)}"><dt>Coverage</dt><dd>${L.coveragePct}<small>%</small></dd></div>
         <div class="ov-stat" title="${escapeHtml(L.unplacedNote || 'Everything found its layer.')}"><dt>Unplaced</dt><dd>${L.unplaced}</dd></div>
-      </dl>
-      ${L.composition.length ? disclosureHtml('In the repository', `<p class="ov-comp og-muted">${L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')}</p>`, { cls: 'ov-comp__wrap' }) : ''}`
+      </dl>`
     : reading('the repository');
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
@@ -398,17 +419,86 @@ export function boardApplies(model) {
   return model?.kind === 'service' && model.layout === 'board' && !['none', 'error'].includes(model.grade?.basis);
 }
 
+// No service yet: the drift check starts here, not in Expert. The three steps
+// are Discover's own words; each step offers its own ways in — Pack A (what
+// the repository declares) from a scan or an upload, Pack B (what live
+// verifies) from the MCP server or an upload — through Expert's own flows
+// (the host proxies them). Step 2 waits for Pack A; with both in, step 3 is
+// the comparison, opened by the host. A rank that cannot load a pack sees
+// the cards drawn unavailable with the reason, and each activation explains
+// (the honesty rule: drawn, never removed).
+const START_STEPS = [
+  { n: 1, label: 'Scan a repo', sub: 'what the service <em>declares</em> — Pack A' },
+  { n: 2, label: 'Generate from live', sub: 'what the platform <em>verifies</em> — Pack B' },
+  { n: 3, label: 'Diagnose drift', sub: 'where declared and live disagree — automatic' },
+];
+const START_CARDS = {
+  a: [
+    { action: 'ov-scan', glyph: '↻', label: 'Scan a repository', sub: 'walk Prom / OTel / Grafana / Alertmanager configs — local folder or a GitHub URL' },
+    { action: 'ov-upload-a', glyph: '▤', label: 'Upload a pack', sub: 'an existing canonical v1.4 YAML or JSON manifest, as Pack A' },
+  ],
+  b: [
+    { action: 'ov-live', glyph: '⟳', label: 'Generate live from MCP', sub: 'interrogate a live OpenTelemetry MCP server for backends, baselines and anomalies' },
+    { action: 'ov-upload-b', glyph: '▤', label: 'Upload a pack', sub: 'a live snapshot or another v1.4 manifest, as Pack B' },
+  ],
+};
+function startCardHtml(c, reason) {
+  const off = !!reason;
+  return `
+          <button type="button" class="ov-start__card${off ? ' ov-start__card--off' : ''}" data-ux-action="${off ? 'ov-explain' : c.action}"${off ? ` aria-disabled="true" data-reason="${escapeHtml(reason)}"` : ''}>
+            <span class="ov-start__glyph" aria-hidden="true">${c.glyph}</span>
+            <span class="ov-start__label">${escapeHtml(c.label)}</span>
+            <span class="ov-start__sub">${escapeHtml(c.sub)}</span>${off ? `
+            <span class="ov-start__why">${escapeHtml(reason)}</span>` : ''}
+          </button>`;
+}
+function startHtml(sources, start, serviceName = null) {
+  const denied = sources && sources.enabled === false ? (sources.reason || 'Not available for your role here.') : '';
+  const a = start?.a || null;
+  const steps = START_STEPS.map((st) => `
+        <li class="ov-step${st.n === 1 && a ? ' ov-step--done' : ''}">
+          <span class="ov-step__num">${st.n === 1 && a ? '✓' : st.n}</span>
+          <span class="ov-step__body">
+            <span class="ov-step__label">${escapeHtml(st.label)}</span>
+            <span class="ov-step__sub">${st.sub}</span>
+          </span>
+        </li>`).join('');
+  const colA = a
+    ? `
+          <div class="ov-start__done og-panel" role="status">
+            <span class="ov-start__label">Pack A: ${escapeHtml(a.label)}</span>
+            <span class="ov-start__sub">loaded — now its live side, in step 2</span>
+            <button type="button" class="ov-start__expert" data-ux-action="ov-start-reset">Change Pack A</button>
+          </div>`
+    : START_CARDS.a.map((c) => startCardHtml(c, denied)).join('');
+  const colB = START_CARDS.b.map((c) => startCardHtml(c, denied || (a ? '' : 'Load Pack A first, in step 1.'))).join('');
+  return `
+    <section class="ov-start" aria-labelledby="ov-start-h">
+      <header class="ov-start__head">
+        <h2 class="ov-card__h" id="ov-start-h">${a ? 'Pack A is in — now its live side.' : (serviceName ? `No pack for ${escapeHtml(serviceName)} yet.` : 'No service to show yet.')}</h2>
+        <p class="ov-start__lede og-muted">${a ? 'Load what live verifies in step 2, and the drift opens by itself.' : (serviceName ? `Nothing to grade until a pack that names ${escapeHtml(serviceName)} is registered — start the drift check here.` : 'A service appears here once a pack that names it is registered — start the drift check here.')}</p>
+      </header>
+      <ol class="ov-steps" aria-label="The drift check, in three steps">${steps}
+      </ol>
+      <div class="ov-start__cols">
+        <div class="ov-start__col" role="group" aria-label="Step 1: Pack A">${colA}
+        </div>
+        <div class="ov-start__col" role="group" aria-label="Step 2: Pack B">${colB}
+        </div>
+        <div class="ov-start__col" role="group" aria-label="Step 3: the comparison">
+          <p class="ov-start__auto og-muted">Opens by itself once both packs are in: the declared side against the live side, in Diagnose.</p>
+        </div>
+      </div>
+      <p class="ov-start__foot og-muted">Already have packs? <button type="button" class="ov-start__expert" data-ux-action="ov-expert">Open Expert mode</button></p>
+    </section>`;
+}
+
 export function renderOverview(container, model, host = appHost) {
   const ov = host?.overview || {};
   let body;
   let board = false;
   if (model.kind === 'empty') {
-    body = emptyStateHtml({
-      title: 'No service to show yet.',
-      checked: 'the services table of this organisation',
-      body: 'A service appears here once a pack that names it is registered.',
-      actions: [{ action: 'ov-expert', label: 'Open Expert mode' }],
-    });
+    body = startHtml(model.sources, model.start);
   } else if (model.kind === 'error') {
     body = emptyStateHtml({
       title: 'The services could not be read.',
@@ -418,6 +508,8 @@ export function renderOverview(container, model, host = appHost) {
     });
   } else if (model.kind === 'loading') {
     body = '<p class="ov-loading og-muted" role="status">Reading the services…</p>';
+  } else if (model.kind === 'service' && model.start) {
+    body = headHtml(model) + startHtml(model.sources, model.start, model.service?.name);
   } else if (boardApplies(model)) {
     try { body = headHtml(model) + boardBodyHtml(model); board = true; }
     catch (e) {
@@ -439,7 +531,15 @@ export function renderOverview(container, model, host = appHost) {
     'ov-next-neuron': () => ov.openNeuron?.(),
     'ov-expert': () => ov.expert?.(),
     'ov-retry': () => ov.retry?.(),
+    'ov-scan': () => ov.scan?.(),
+    'ov-upload-a': () => ov.upload?.('a'),
+    'ov-live': () => ov.live?.(),
+    'ov-upload-b': () => ov.upload?.('b'),
+    'ov-start-reset': () => ov.resetStart?.(),
+    'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });
   const select = container.querySelector('#ov-service');
   if (select) select.addEventListener('change', () => ov.selectService?.(Number(select.value)));
+  const repo = container.querySelector('.ov-repo');
+  if (repo) repo.addEventListener('toggle', () => { layersOpen = repo.open; });
 }

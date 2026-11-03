@@ -59,6 +59,36 @@
 .ov-why { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; font: 400 15px/1.5 var(--og-font); color: var(--og-text-2); }
 .ov-loading { margin: 0; }
 
+/* No service yet, or a service with no pack: the drift check's three steps,
+   and under each the ways in (studio/overview-view.mjs startHtml). */
+.ov-start { display: grid; gap: 12px; }
+.ov-start__head { display: grid; gap: 4px; }
+.ov-start__lede { margin: 0; font: 400 14px/1.5 var(--og-font); }
+.ov-steps { list-style: none; margin: 0; padding: 14px 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); background: var(--og-panel); }
+.ov-step { display: flex; align-items: flex-start; gap: 10px; }
+.ov-step__num { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--og-line); border-radius: 999px; background: var(--og-panel-2); font: 600 12.5px/1 var(--og-font); color: var(--og-text); }
+.ov-step--done .ov-step__num { color: var(--og-accent); border-color: var(--og-accent-line); }
+.ov-step__body { display: grid; gap: 2px; }
+.ov-step__label { font: 600 14px/1.3 var(--og-font); color: var(--og-text); }
+.ov-step__sub { font: 400 13px/1.4 var(--og-font); color: var(--og-muted); }
+.ov-start__cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.ov-start__col { display: grid; gap: 12px; }
+.ov-start__card { display: grid; gap: 6px; justify-items: start; padding: 16px; border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); background: var(--og-panel); color: var(--og-text); font: inherit; text-align: left; cursor: pointer; transition: border-color 150ms ease, background 150ms ease; }
+.ov-start__card:hover { border-color: var(--og-line-strong); background: var(--og-panel-2); }
+.ov-start__card:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-start__card--off { cursor: not-allowed; opacity: .7; }
+.ov-start__card--off:hover { border-color: var(--og-line); background: var(--og-panel); }
+.ov-start__glyph { font: 600 18px/1 var(--og-font); color: var(--og-muted); }
+.ov-start__label { font: 600 14px/1.3 var(--og-font); color: var(--og-text); }
+.ov-start__sub { font: 400 13px/1.45 var(--og-font); color: var(--og-muted); }
+.ov-start__why { margin-top: 4px; font: 400 12.5px/1.4 var(--og-font); color: var(--og-text-2); }
+.ov-start__done { display: grid; gap: 6px; justify-items: start; padding: 16px; border-color: var(--og-accent-line); }
+.ov-start__auto { margin: 0; padding: 16px; border: 1px dashed var(--og-line-strong); border-radius: var(--og-radius-panel); font: 400 13px/1.5 var(--og-font); }
+.ov-start__foot { margin: 4px 0 0; font: 400 13px/1.5 var(--og-font); }
+.ov-start__expert { padding: 0; border: 0; background: none; font: inherit; color: var(--og-accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.ov-start__expert:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+@media (max-width: 720px) { .ov-steps, .ov-start__cols { grid-template-columns: 1fr; } }
+
 @media (max-width: 720px) {
   .ov-page { padding: 24px 16px 60px; }
   .ov-grade__row { gap: 18px; }
@@ -166,9 +196,26 @@ html[data-theme="light"] .ov-page {
 .ov-stat dt { font: 500 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
 .ov-stat dd { margin: 0; font: 650 22px/1.1 var(--og-font); letter-spacing: -0.02em; color: var(--og-text); }
 .ov-stat dd small { font: 600 12px/1 var(--og-font); color: var(--og-muted); margin-left: 1px; }
-.ov-comp { margin: 0; font: 400 12.5px/1.5 var(--og-font); }
-.ov-comp__item { white-space: nowrap; }
-.ov-comp__n { font-weight: 650; color: var(--og-text); }
+/* The summary card: In the repository, one row per kind; a click opens the layers. */
+.ov-repo { display: grid; gap: 8px; }
+.ov-repo__sum { list-style: none; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel-2); cursor: pointer; }
+.ov-repo__sum::-webkit-details-marker { display: none; }
+.ov-repo__sum:hover { border-color: var(--og-line-strong); }
+.ov-repo__sum:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-repo__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ov-repo__title { font: 600 14px/1.3 var(--og-font); color: var(--og-text); }
+.ov-repo__toggle { font: 500 12px/1.3 var(--og-font); color: var(--og-accent); white-space: nowrap; }
+.ov-repo__toggle::after { content: ' \25BE'; }
+.ov-repo[open] .ov-repo__toggle::after { content: ' \25B4'; }
+.ov-repo__hide, .ov-repo[open] .ov-repo__show { display: none; }
+.ov-repo[open] .ov-repo__hide { display: inline; }
+.ov-repo__layers > .ov-cells--head { margin-top: 2px; }
+.ov-comp { display: grid; margin: 2px 0 0; font: 400 13px/1.4 var(--og-font); }
+.ov-comp__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: 12px; padding: 4px 0; border-top: 1px solid var(--og-line); }
+.ov-comp__row:first-child { border-top: 0; padding-top: 0; }
+.ov-comp__row:last-child { padding-bottom: 0; }
+.ov-comp__name { color: var(--og-text-2); }
+.ov-comp__n { font-weight: 650; color: var(--og-text); font-variant-numeric: tabular-nums; text-align: right; }
 
 /* Diagnose: the status strip, then the two groups. */
 .ov-status { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel); font: 500 12.5px/1.3 var(--og-font); color: var(--og-text-2); }

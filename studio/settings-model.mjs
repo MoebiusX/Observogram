@@ -1447,6 +1447,26 @@ export function mcpRegisterCheck(url, register = null) {
   return { origin, name, error: `${origin} cannot be registered on a server without sign-in — only a loopback MCP or an origin listed in OBSERVOGRAM_MCP_ORIGINS; the server's operator lists it there` };
 }
 
+// A typed URL the origin rule refused (403 `denied: 'origin'` — with no list,
+// a typed URL reaches only an origin the org's endpoints use), offered to a
+// reader who may register it: the live panel registers the URL as the org's
+// endpoint and tests again by its id, so an admin's first run never ends on
+// "register it in Settings" for the URL already typed. Registering is the
+// vetting the rule asks for, and the server judges the origin again. Only a
+// URL sent without a key (with one, the refusal is the credential's, which
+// a registration does not lift), and only where mcpRegisterCheck says the
+// server would take it. `error` is the thrown refusal ({ status, denied }),
+// `target` the request's (mcpTargetBody), `register` the policy's.
+// → null | { name, url, origin, label }
+export function originRefusalOffer(error, target, register = null) {
+  if (error?.status !== 403 || error?.denied !== 'origin') return null;
+  const url = typeof target?.mcpUrl === 'string' ? target.mcpUrl.trim() : '';
+  if (!url || target.mcpAuth || target.mcpEndpointId !== undefined) return null;
+  const check = mcpRegisterCheck(url, register);
+  if (check.error) return null;
+  return { name: check.name, url, origin: check.origin, label: `Register ${check.name} and test again` };
+}
+
 // The request's target: an endpoint → { mcpEndpointId, mcpAuth? }; a typed
 // URL → { mcpUrl, mcpAuth? } — never both (the server refuses both); null
 // when nothing is chosen and nothing typed.

@@ -18,7 +18,7 @@ import {
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
   parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
-  mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck,
+  mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
   buildUserCreateBody, userCreateStatus,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
@@ -1347,6 +1347,30 @@ test('mcpRegisterCheck (D4): Register and connect is sent only for an origin the
   assert.equal(mcpRegisterCheck('https://demo.example/mcp', { allowed: false, why: 'registering an MCP endpoint needs the admin role' }).error, 'registering an MCP endpoint needs the admin role');
   assert.equal(mcpRegisterCheck('not a url', local).error, 'type the MCP URL (http:// or https://)');
   assert.equal(mcpRegisterCheck('https://demo.example/', local).name, 'demo.example', 'the name is the host');
+});
+
+test('originRefusalOffer: a typed URL the origin rule refused is offered for registration only to a reader the server would let register it, and only when no key rides', () => {
+  const refused = Object.assign(new Error("403: https://www.krystaline.io is not an origin this org's MCP endpoints use"), { status: 403, denied: 'origin' });
+  const admin = { allowed: true, why: null, listed: false, origins: [], listedOnly: false };
+  const typed = { mcpUrl: ' https://www.krystaline.io/mcp/public ' };
+  assert.deepEqual(originRefusalOffer(refused, typed, admin), {
+    name: 'www.krystaline.io', url: 'https://www.krystaline.io/mcp/public', origin: 'https://www.krystaline.io',
+    label: 'Register www.krystaline.io and test again',
+  });
+  // Not this refusal: another denial, another status, a failure with no denial.
+  assert.equal(originRefusalOffer(Object.assign(new Error('403: role'), { status: 403, denied: 'role' }), typed, admin), null);
+  assert.equal(originRefusalOffer(Object.assign(new Error('400'), { status: 400, denied: 'origin' }), typed, admin), null);
+  assert.equal(originRefusalOffer(new Error('fetch failed'), typed, admin), null);
+  // Not this target: a registered endpoint, a key riding (the credential's refusal, which registering does not lift), nothing typed.
+  assert.equal(originRefusalOffer(refused, { mcpEndpointId: 3 }, admin), null);
+  assert.equal(originRefusalOffer(refused, { ...typed, mcpAuth: 'k' }, admin), null);
+  assert.equal(originRefusalOffer(refused, null, admin), null);
+  // Not this reader: no right to register, no policy read, or a list that leaves the origin out (the server would refuse it too).
+  assert.equal(originRefusalOffer(refused, typed, { allowed: false, why: 'registering an MCP endpoint needs the admin role' }), null);
+  assert.equal(originRefusalOffer(refused, typed, null), null);
+  assert.equal(originRefusalOffer(refused, typed, { ...admin, listed: true, origins: ['https://other.example'], listedOnly: true }), null);
+  assert.equal(originRefusalOffer(refused, typed, { ...admin, listedOnly: true }), null, 'without sign-in only a loopback MCP or a listed origin registers');
+  assert.equal(originRefusalOffer(refused, { mcpUrl: 'http://127.0.0.1:3001/mcp' }, { ...admin, listedOnly: true }).name, '127.0.0.1:3001', 'a loopback MCP registers there');
 });
 
 test('loadMcpEndpoints({ withPolicy }): { endpoints, policy } — the policy as the server sent it, null when none; without it the array as before', async () => {
