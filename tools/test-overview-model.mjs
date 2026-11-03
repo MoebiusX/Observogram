@@ -521,9 +521,13 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   const blank = { options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName: '', primary: null, layout: 'board', board: null };
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: down' }, catalog: packs })), { kind: 'error', error: '503: down', ...blank });
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: null } })), { kind: 'error', error: 'the services table could not be read', ...blank });
-  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank });
+  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank, sources: { enabled: true, reason: null }, start: { a: null } });
+  assert.deepEqual(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, access: { canWrite: false, reason: 'viewers cannot load packs' } }).sources, { enabled: false, reason: 'viewers cannot load packs' }, 'empty: a rank that cannot load a pack is told why');
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'loading', error: null } })), { kind: 'loading', error: null, ...blank });
   assert.equal(keep(buildOverviewModel({})).kind, 'empty', 'no status at all reads as empty, never as an error');
+  // A drift check started here: Pack A registered (its service now in the table), the start stays until step 2.
+  const started = keep(screen({ start: { a: { id: 'kx-scan', label: 'krystaline (scanned draft)' } } }));
+  assert.deepEqual([started.kind, started.service, started.start, started.primary], ['empty', null, { a: { label: 'krystaline (scanned draft)' } }, null]);
   assert.equal(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'static', error: null } })).kind, 'error', 'any status but ok/loading with no rows is unreadable');
 });
 
@@ -705,8 +709,22 @@ test('renderOverview: a hostile service name is escaped; running is aria-busy; t
 test('renderOverview: empty, error and loading render without throwing and without the panels; the markup\'s primary count agrees with the model in every state', () => {
   const empty = overviewContainer();
   assert.doesNotThrow(() => renderOverview(empty, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null } }), { overview: {} }));
-  assert.ok(empty.innerHTML.includes('<p class="ux-empty-title">No service to show yet.</p>') && empty.innerHTML.includes('A service appears here once a pack that names it is registered.'));
+  assert.ok(empty.innerHTML.includes('id="ov-start-h">No service to show yet.</h2>') && empty.innerHTML.includes('A service appears here once a pack that names it is registered'));
+  assert.ok(empty.innerHTML.includes('Scan a repo') && empty.innerHTML.includes('Generate from live') && empty.innerHTML.includes('Diagnose drift'), 'empty: the three steps');
+  // Step 1 offers the scan and an upload as Pack A; step 2 (live, or an upload as Pack B) waits for Pack A.
+  const stepOf = (html, n) => html.slice(html.indexOf(`aria-label="Step ${n}:`), n < 3 ? html.indexOf(`aria-label="Step ${n + 1}:`) : undefined);
+  assert.deepEqual(['ov-scan', 'ov-upload-a', 'ov-live', 'ov-upload-b'].map((a) => stepOf(empty.innerHTML, 1).includes(`data-ux-action="${a}"`)), [true, true, false, false], 'step 1: scan and upload');
+  assert.equal(countOf(stepOf(empty.innerHTML, 2), 'data-ux-action="ov-explain" aria-disabled="true" data-reason="Load Pack A first, in step 1."'), 2, 'step 2: live and upload, drawn waiting for Pack A');
+  const second = overviewContainer();
+  renderOverview(second, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, start: { a: { id: 'kx', label: 'kx <scan>' } } }), { overview: {} });
+  assert.ok(stepOf(second.innerHTML, 1).includes('Pack A: kx &lt;scan&gt;') && stepOf(second.innerHTML, 1).includes('data-ux-action="ov-start-reset"') && !second.innerHTML.includes('data-ux-action="ov-scan"'), 'step 1 done: Pack A named, escaped, changeable');
+  assert.deepEqual(['ov-live', 'ov-upload-b'].map((a) => stepOf(second.innerHTML, 2).includes(`data-ux-action="${a}"`)), [true, true], 'step 2 open: live and upload as Pack B');
+  assert.equal(countOf(second.innerHTML, 'og-btn--primary'), 0);
   assert.ok(empty.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !empty.innerHTML.includes('ov-grade') && !empty.innerHTML.includes('id="ov-service"'));
+  const viewer = overviewContainer();
+  renderOverview(viewer, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, access: { canWrite: false, reason: 'viewers cannot load packs' } }), { overview: {} });
+  assert.equal(countOf(viewer.innerHTML, 'data-ux-action="ov-explain" aria-disabled="true" data-reason="viewers cannot load packs"'), 4, 'empty, a viewer: the four cards drawn unavailable, each explains');
+  assert.ok(!viewer.innerHTML.includes('data-ux-action="ov-scan"'));
   const error = overviewContainer();
   assert.doesNotThrow(() => renderOverview(error, buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: <down>' } }), { overview: {} }));
   assert.ok(error.innerHTML.includes('<div class="ux-empty ux-tone-warn" role="note">') && error.innerHTML.includes('<p class="ux-empty-title">The services could not be read.</p>'));
@@ -812,19 +830,19 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
   assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
   assert.deepEqual([rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1' }).tone, rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone], ['ok', '1 of 4 required rules met.', 'fail']);
-  const f = keep(fidelityModel({ run, journey, pack: krystalinePack }));
+  const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
   assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
-  assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack })).note, '', 'every family answered: no note');
-  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack })).chains, null, 'no declared chains: no promises line');
+  assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
+  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
   const never = keep(fidelityModel({}));
   assert.deepEqual([never.known, never.alignmentPct, never.tiles, never.chains, never.note], [false, null, [], null, 'Never checked against live.']);
   assert.equal(keep(fidelityModel({ run, journey, pack: { ...krystalinePack, id: 'other', name: 'v2' } })).known, false);
-  assert.equal(keep(fidelityModel({ run: lostRun, journey, pack: krystalinePack })).note, 'The live side did not answer the last check, so nothing is known about it right now.');
-  assert.equal(keep(fidelityModel({ run: partialRun, journey, pack: krystalinePack })).note, 'The live side showed less than the check before, so the counts cannot be compared yet.');
-  assert.deepEqual([fidelityModel({ run, journey: fileJourney, pack: krystalinePack }).against, fidelityModel({ run: { ...run, packB: { source: '/rec.json' } }, pack: krystalinePack }).against], ['recording', 'recording']);
+  assert.equal(keep(fidelityModel({ run: lostRun, journey, pack: krystalinePack, now: NOW })).note, 'The live side did not answer the last check, so nothing is known about it right now.');
+  assert.equal(keep(fidelityModel({ run: partialRun, journey, pack: krystalinePack, now: NOW })).note, 'The live side showed less than the check before, so the counts cannot be compared yet.');
+  assert.deepEqual([fidelityModel({ run, journey: fileJourney, pack: krystalinePack, now: NOW }).against, fidelityModel({ run: { ...run, packB: { source: '/rec.json' } }, pack: krystalinePack, now: NOW }).against], ['recording', 'recording']);
   const c = keep(changesModel({ fidelity: f }));
   assert.deepEqual(c.items.map((i) => [i.key, i.value, i.label, i.note, i.tone]), [
     ['add', 38, 'to add', 'declared in the repository, not running live', 'fail'], ['update', 5, 'to update', 'running live, but not as declared', 'warn'], ['review', 30, 'to review', 'running live, not in the repository', 'info'],

@@ -1073,6 +1073,12 @@ async function handleFile(file) {
       toast(`${file.name}: ${res.errors.length} validation error(s)`, 'error');
       return;
     }
+    if (overviewStartTakes(res)) {
+      const slot = overviewStart.slot;
+      const compared = await overviewStartAdopt(res.registered.id, file.name);
+      toast(compared ? `Comparing against ${file.name}` : `Loaded ${file.name} as Pack ${slot === 'b' ? 'B' : 'A'}`);
+      return;
+    }
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
@@ -1921,7 +1927,7 @@ function overviewModel() {
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
-    now: Date.now(), productName: state.brand?.chrome?.name || '',
+    now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart,
   });
 }
 
@@ -2052,7 +2058,48 @@ const overviewActions = {
   openNeuron: openOverviewNeuron,
   expert: enterExpert,
   retry: async () => { await refreshServices(); await refreshOverviewFacts(); },
+  // No service yet: the drift check starts from here, through Expert's own
+  // entry points (the header is hidden in Overview, as on the home: upload
+  // goes straight to the file picker). Each names the slot its pack fills.
+  scan: () => { overviewStart.slot = 'a'; $('#crawl-btn')?.click(); },
+  live: () => { overviewStart.slot = 'b'; if ($('#draft-mcp-panel')?.hidden) $('#draft-mcp-btn')?.click(); },
+  upload: (slot) => { overviewStart.slot = slot === 'b' ? 'b' : 'a'; $('#file-input')?.click(); },
+  resetStart: () => { overviewStart = { slot: null, a: null }; renderMainView(); },
+  explain: explainUnavailable,
 };
+
+// The drift check started from Overview's empty state: `slot` is the pack the
+// next scan, live draft or upload fills ('a' | 'b'), `a` is Pack A once step 1
+// loaded it ({ id, label }). Only an adopt that lands while Overview is on
+// screen is taken; anywhere else the flows keep their own routing.
+let overviewStart = { slot: null, a: null };
+const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
+
+// Step 1 keeps Overview on screen with Pack A remembered; step 2 is the
+// comparison (step 3, automatic): Expert's Diagnose on A against B.
+// → true when the comparison opened.
+async function overviewStartAdopt(id, label) {
+  const slot = overviewStart.slot;
+  overviewStart.slot = null;
+  await refreshCatalogue();
+  const a = overviewStart.a;
+  if (slot === 'a' || !a) {
+    overviewStart.a = { id, label };
+    renderMainView();
+    announce(`Pack A loaded: ${label}. Step 2: its live side.`);
+    return false;
+  }
+  if (a.id === id) {
+    renderMainView();
+    toast('That pack is Pack A already: step 2 needs its live side.', 'error');
+    return false;
+  }
+  overviewStart = { slot: null, a: null };
+  setUiMode('expert');
+  state.view = 'compare';
+  enterCompareMode(a.id, defaultEnvFor(a.id), id, defaultEnvFor(id));
+  return true;
+}
 const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
 // ============================================================
@@ -6885,6 +6932,7 @@ function renderCrawlResult(out) {
 //
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
+  if (overviewStartTakes(res)) return overviewStartAdopt(res.registered.id, sourceLabel);
   // An entry the scan or draft route registered arrives as its id alone
   // (registeredOrValidated): enterAnalyzeMode / enterCompareMode load it.
   if (res.adapted) {

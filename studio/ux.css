@@ -511,6 +511,21 @@ body[data-mode="overview"] #layer-view { padding: 0; background: var(--og-bg); }
 .ov-next__why { margin-top: 12px; }
 .ov-why { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 4px; font: 400 15px/1.5 var(--og-font); color: var(--og-text-2); }
 .ov-loading { margin: 0; }
+/* No service yet: the drift check's three steps and its three ways in (Discover's own pieces). */
+.ov-start { display: grid; gap: 12px; }
+.ov-start__head { display: grid; gap: 4px; }
+.ov-start__lede { margin: 0; font: 400 14px/1.5 var(--og-font); }
+.ov-start__cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.ov-start__col { display: grid; gap: 12px; }
+.ov-start__card.is-unavailable { cursor: not-allowed; opacity: 0.7; }
+.ov-start__card.is-unavailable:hover { transform: none; }
+.ov-start__done { display: grid; gap: 6px; justify-items: start; padding: 18px 16px; border-color: var(--og-accent-line); }
+.ov-start__auto { margin: 0; padding: 18px 16px; border: 1px dashed var(--og-line-strong, var(--line)); border-radius: 10px; font: 400 13px/1.5 var(--og-font); }
+.discover-journey-step.is-done .discover-journey-num { color: var(--og-accent); border-color: var(--og-accent-line); }
+@media (max-width: 720px) { .ov-start__cols { grid-template-columns: 1fr; } }
+.ov-start__foot { margin: 4px 0 0; font: 400 13px/1.5 var(--og-font); }
+.ov-start__expert { padding: 0; border: 0; background: none; font: inherit; color: var(--og-accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.ov-start__expert:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
 
 @media (max-width: 720px) {
   .ov-page { padding: 24px 16px 60px; }

@@ -708,13 +708,13 @@ export function changesModel({ fidelity = null } = {}) {
 
 // buildOverviewModel({ services, servicesStatus, catalog, serviceId, env, isLiveAggregatePack,
 //   diagnostic, diagnosticError, decision, journeys, journeysError, run, running, startError,
-//   now, productName, pending, layout, cells, layered, conformance, conformanceError })
+//   now, productName, pending, layout, cells, layered, conformance, conformanceError, access, start })
 export function buildOverviewModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], serviceId = null, env = null, isLiveAggregatePack = () => false,
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
-    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null,
+    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null, access = null, start = null,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -725,9 +725,21 @@ export function buildOverviewModel(input = {}) {
   const own = ordered.filter((s) => packForService(s, catalog, { isLiveAggregatePack }).how === 'primary');
   const listed = own.length ? ordered.filter((s) => own.includes(s) || (picked.service && s.id === picked.service.id)) : ordered;
   const options = listed.map((s) => ({ id: s.id, name: s.name, selected: picked.service ? s.id === picked.service.id : false }));
-  if (!picked.service) {
+  // A drift check started here (step 1 loaded Pack A) stays on screen until
+  // step 2 opens the comparison — though registering Pack A has just put its
+  // service in the table.
+  if (!picked.service || start?.a) {
     const unreadable = servicesStatus && servicesStatus.kind !== 'ok' && servicesStatus.kind !== 'loading' ? (servicesStatus.error || 'the services table could not be read') : null;
-    return { kind: unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'), error: unreadable, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
+    const kind = start?.a ? 'empty' : (unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'));
+    const blank = { kind, error: kind === 'error' ? unreadable : null, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
+    // Empty: the drift check starts here. Scan, live and upload are operator
+    // routes — a rank without them gets the server's reason to draw. `start`
+    // is the check under way: Pack A once step 1 loaded it.
+    return kind === 'empty' ? {
+      ...blank,
+      sources: { enabled: access?.canWrite !== false, reason: access?.canWrite === false ? (access.reason || null) : null },
+      start: { a: start?.a ? { label: String(start.a.label || start.a.id || 'Pack A') } : null },
+    } : blank;
   }
   const journey = journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null });
   const grade = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now });
