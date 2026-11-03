@@ -704,6 +704,38 @@ export function changesModel({ fidelity = null } = {}) {
   return { known: true, items, total, sentence: total ? '' : 'Nothing to change: live matches what the repository declares.' };
 }
 
+// ---------- the drift check started here ----------
+//
+// The start (no service, or a service with no pack) is the drift check in
+// three steps: step 1 lands Pack A, step 2 Pack B, step 3 is the comparison.
+// The host keeps the state — it passes it to buildOverviewModel as `start` —
+// and owns the flows (its scan, its live draft, its upload); these two say
+// what each event does to the state, so every host routes the packs alike.
+// A state is { slot, a }: `slot` the pack the next flow fills ('a' | 'b' |
+// null), `a` Pack A once in ({ id, label }).
+export const START_IDLE = Object.freeze({ slot: null, a: null });
+
+// A start card opened one of the host's flows for `slot` ('a' | 'b').
+export function startChoose(start, slot) {
+  return { slot: slot === 'b' ? 'b' : 'a', a: start?.a ?? null };
+}
+
+// One of those flows registered `pack` ({ id, label }) while the board was
+// on screen. → { start, compare, said, refused }: step 1 keeps Pack A
+// (compare null; the board shows step 2 next); step 2 answers the pair the
+// host opens its comparison on (compare { a, b }) and the state is idle
+// again; the same pack offered as Pack B is refused and Pack A kept. `said`
+// is the sentence to announce. A pack with no id changes nothing.
+export function startAdopted(start, pack) {
+  const id = pack?.id ?? null;
+  const label = String(pack?.label || pack?.id || '');
+  const a = start?.a ?? null;
+  if (!id) return { start: start ?? START_IDLE, compare: null, said: '', refused: false };
+  if (start?.slot !== 'b' || !a) return { start: { slot: null, a: { id, label } }, compare: null, said: `Pack A loaded: ${label}. Step 2: its live side.`, refused: false };
+  if (a.id === id) return { start: { slot: null, a }, compare: null, said: 'That pack is Pack A already: step 2 needs its live side.', refused: true };
+  return { start: START_IDLE, compare: { a, b: { id, label } }, said: `Comparing ${a.label} against ${label}.`, refused: false };
+}
+
 // ---------- the whole screen ----------
 
 // Scan, live and upload are operator routes — a rank without them gets the
@@ -712,13 +744,13 @@ const sourcesOf = (access) => ({ enabled: access?.canWrite !== false, reason: ac
 
 // buildOverviewModel({ services, servicesStatus, catalog, serviceId, env, isLiveAggregatePack,
 //   diagnostic, diagnosticError, decision, journeys, journeysError, run, running, startError,
-//   now, productName, pending, layout, cells, layered, conformance, conformanceError, access, start })
+//   now, productName, pending, layout, cells, layered, conformance, conformanceError, access, start, startable })
 export function buildOverviewModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], serviceId = null, env = null, isLiveAggregatePack = () => false,
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
-    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null, access = null, start = null,
+    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -732,13 +764,18 @@ export function buildOverviewModel(input = {}) {
   // A drift check started here (step 1 loaded Pack A) stays on screen until
   // step 2 opens the comparison — though registering Pack A has just put its
   // service in the table.
-  if (!picked.service || start?.a) {
+  // `startable`: the host runs the start (it supplies the start's hooks and
+  // routes packs with startAdopted). Without it the board is what it was —
+  // the empty state and "Open Expert mode" — so a host that copies these
+  // files and has not wired the start never draws cards that do nothing.
+  const started = startable && !!start?.a;
+  if (!picked.service || started) {
     const unreadable = servicesStatus && servicesStatus.kind !== 'ok' && servicesStatus.kind !== 'loading' ? (servicesStatus.error || 'the services table could not be read') : null;
-    const kind = start?.a ? 'empty' : (unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'));
+    const kind = started ? 'empty' : (unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'));
     const blank = { kind, error: kind === 'error' ? unreadable : null, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
     // Empty: the drift check starts here. `start` is the check under way:
     // Pack A once step 1 loaded it.
-    return kind === 'empty' ? {
+    return kind === 'empty' && startable ? {
       ...blank,
       sources: sourcesOf(access),
       start: { a: start?.a ? { label: String(start.a.label || start.a.id || 'Pack A') } : null },
@@ -751,7 +788,7 @@ export function buildOverviewModel(input = {}) {
   // starts here, as with no service, under the service's own header — the
   // start's cards are the way in, not "Open Expert mode". (A member-only row,
   // whose one pack is a live aggregate's, stays Expert's to show.)
-  const startHere = picked.how === 'none';
+  const startHere = startable && picked.how === 'none';
   const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now });
   // One primary button on the screen: the next step's when it has one, else
   // the still-true panel's Check button; none over the start.

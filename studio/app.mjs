@@ -113,7 +113,7 @@ import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
-import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS } from './overview-model.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted } from './overview-model.mjs';
 import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
 
@@ -1934,7 +1934,7 @@ function overviewModel() {
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
-    now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart,
+    now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
   });
 }
 
@@ -2068,18 +2068,19 @@ const overviewActions = {
   // No service yet: the drift check starts from here, through Expert's own
   // entry points (the header is hidden in Overview, as on the home: upload
   // goes straight to the file picker). Each names the slot its pack fills.
-  scan: () => { overviewStart.slot = 'a'; $('#crawl-btn')?.click(); },
-  live: () => { overviewStart.slot = 'b'; if ($('#draft-mcp-panel')?.hidden) $('#draft-mcp-btn')?.click(); },
-  upload: (slot) => { overviewStart.slot = slot === 'b' ? 'b' : 'a'; $('#file-input')?.click(); },
-  resetStart: () => { overviewStart = { slot: null, a: null }; renderMainView(); },
+  scan: () => { overviewStart = startChoose(overviewStart, 'a'); $('#crawl-btn')?.click(); },
+  live: () => { overviewStart = startChoose(overviewStart, 'b'); if ($('#draft-mcp-panel')?.hidden) $('#draft-mcp-btn')?.click(); },
+  upload: (slot) => { overviewStart = startChoose(overviewStart, slot); $('#file-input')?.click(); },
+  resetStart: () => { overviewStart = START_IDLE; renderMainView(); },
   explain: explainUnavailable,
 };
 
-// The drift check started from Overview's empty state: `slot` is the pack the
-// next scan, live draft or upload fills ('a' | 'b'), `a` is Pack A once step 1
-// loaded it ({ id, label }). Only an adopt that lands while Overview is on
+// The drift check started from Overview's start (overview-model.mjs
+// START_IDLE / startChoose / startAdopted — the logic every host shares):
+// `slot` is the pack the next scan, live draft or upload fills, `a` Pack A
+// once step 1 loaded it. Only an adopt that lands while Overview is on
 // screen is taken; anywhere else the flows keep their own routing.
-let overviewStart = { slot: null, a: null };
+let overviewStart = START_IDLE;
 const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
 // Step 2 under way: Pack A in, the live panel opened for Pack B, Overview on screen.
 const overviewStartWaitsForB = () => state.mode === 'overview' && overviewStart.slot === 'b' && !!overviewStart.a;
@@ -2090,26 +2091,18 @@ let overviewStartLabelA = null;
 // comparison (step 3, automatic): Expert's Diagnose on A against B.
 // → true when the comparison opened.
 async function overviewStartAdopt(id, label) {
-  const slot = overviewStart.slot;
-  overviewStart.slot = null;
   await refreshCatalogue();
-  const a = overviewStart.a;
-  if (slot === 'a' || !a) {
-    overviewStart.a = { id, label };
+  const { start, compare, said, refused } = startAdopted(overviewStart, { id, label });
+  overviewStart = start;
+  if (!compare) {
     renderMainView();
-    announce(`Pack A loaded: ${label}. Step 2: its live side.`);
+    if (refused) toast(said, 'error'); else announce(said);
     return false;
   }
-  if (a.id === id) {
-    renderMainView();
-    toast('That pack is Pack A already: step 2 needs its live side.', 'error');
-    return false;
-  }
-  overviewStart = { slot: null, a: null };
-  overviewStartLabelA = a.label;
+  overviewStartLabelA = compare.a.label;
   setUiMode('expert');
   state.view = 'compare';
-  enterCompareMode(a.id, defaultEnvFor(a.id), id, defaultEnvFor(id));
+  enterCompareMode(compare.a.id, defaultEnvFor(compare.a.id), compare.b.id, defaultEnvFor(compare.b.id));
   return true;
 }
 const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
