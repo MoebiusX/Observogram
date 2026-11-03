@@ -7,6 +7,24 @@
       "runtimeArgs": ["server/index.mjs"],
       "port": 8000,
       "autoPort": true
+    },
+    {
+      "name": "studio-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/demo-studio.mjs"],
+      "port": 8010
+    },
+    {
+      "name": "studio-demo-board",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/demo-studio.mjs", "--port", "8020", "--workspace", ".observogram-demo-board"],
+      "port": 8020
+    },
+    {
+      "name": "studio-demo-update",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/demo-studio.mjs", "--port", "8030", "--workspace", ".observogram-demo-update"],
+      "port": 8030
     }
   ]
 }

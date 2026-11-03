@@ -447,3 +447,30 @@ body.chrome-observa #layer-view > .ux-rm-view {
   body.chrome-observa #layer-view > .trace-view,
   body.chrome-observa #layer-view > .ux-rm-view { padding: 16px 16px 64px; }
 }
+
+/* ============================================================
+   OVERVIEW — the simplified front door (.ov-*; studio/overview-view.mjs).
+   One service, three answers. Pieces are the design kit's (.og-*); every
+   value is a token. In this mode the context bar, the tab cards and the
+   Advanced menu are hidden; the brand keeps its tagline as on home. No
+   rule here is fixed or sticky; no rule names .observa-hdr, .observa-actions
+   or hdr-user (server/test-authz.mjs).
+   ============================================================ */
+body.chrome-observa[data-mode="overview"] .hdr { display: none !important; }
+body.chrome-observa[data-mode="overview"] .observa-tabs { display: none; }
+body.chrome-observa[data-mode="overview"] .observa-adv-wrap { display: none; }
+body.chrome-observa[data-mode="overview"] .observa-brand-text .observa-tagline { display: inline; }
+body.chrome-observa[data-mode="overview"] .observa-tagline-step,
+body.chrome-observa[data-mode="overview"] .observa-tagline-dot { display: none; }
+body.chrome-observa[data-mode="overview"] .observa-tagline-home { display: inline; }
+body.chrome-observa[data-mode="overview"] { --ux-context-h: 0px; }
+body[data-mode="overview"] .meta, body[data-mode="overview"] .tabs { display: none; }
+body[data-mode="overview"] #layer-view { padding: 0; background: var(--og-bg); }
+
+/* The Overview | Expert switch in the chrome, drawn in every mode. */
+.observa-ui-mode { display: inline-flex; gap: 0; margin-right: 10px; border: 1px solid var(--og-line-strong, var(--obs-line)); border-radius: var(--og-radius-control, 6px); overflow: hidden; }
+.observa-ui-mode .og-btn { border: 0; border-radius: 0; min-height: 30px; padding: 5px 11px; font: 550 12.5px/1.2 var(--og-font); background: transparent; color: var(--og-muted, var(--obs-ink-3)); cursor: pointer; }
+.observa-ui-mode .og-btn + .og-btn { border-left: 1px solid var(--og-line-strong, var(--obs-line)); }
+.observa-ui-mode .og-btn[aria-pressed="true"] { background: var(--og-accent-solid, var(--obs-emerald)); color: var(--og-on-accent, #172312); }
+.observa-ui-mode .og-btn:focus-visible { outline: 2px solid var(--og-accent); outline-offset: -2px; }
+/* The .ov-* zone itself is studio/overview.css (vendorable: docs/VENDORING.md, "The Overview board"). */

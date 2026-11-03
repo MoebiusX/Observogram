@@ -1,0 +1,35 @@
+{
+  "journeys": [
+    {
+      "name": "krystaline",
+      "loadError": null,
+      "packA": "C:/demo/.observogram-demo/packs/uploaded-krystaline-a37d2521.pack.yaml",
+      "packB": "mcp: https://www.krystaline.io/mcp/public",
+      "gate": {
+        "minAlignmentPct": 85
+      },
+      "scope": {
+        "env": null,
+        "service": null,
+        "scopeMode": null
+      },
+      "schedule": null,
+      "stackBudget": null,
+      "notify": null,
+      "lastRun": {
+        "startedAt": "2026-10-27T18:51:24.917Z",
+        "outcome": "gate-failed",
+        "alignmentPct": 78,
+        "gradeScore": 69,
+        "breaches": 1,
+        "transition": {
+          "any": false,
+          "changed": 0,
+          "worse": 0
+        },
+        "topCause": null,
+        "vantageChanged": true
+      }
+    }
+  ]
+}

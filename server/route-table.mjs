@@ -179,6 +179,11 @@ export const ROUTES = Object.freeze({
   'POST /api/library/instantiate': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/compile': { class: 'operator' }, // computes; writes nothing
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
+  // The UPDATE journey (docs/UPDATE_JOURNEY.md): reopen computes the Open
+  // stage's answer and writes nothing; update registers the next version of a
+  // pack exactly as register does (the base is kept, never replaced).
+  'POST /api/library/reopen': { class: 'operator' }, // computes; writes nothing
+  'POST /api/library/update': { class: 'operator', audit: PACK_REGISTER },
   // The services and environments API (server/routes/services.mjs): a
   // service's deletion cascades its environments, pack links and waivers,
   // which write no row of their own (the service.delete detail counts them).

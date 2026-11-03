@@ -49,6 +49,28 @@ eq(
   '__name__ exact matcher yields metric dependency',
 );
 
+// A colon at either end of an identifier is a fragment left by a stripped
+// dashboard variable or a subquery resolution, never a metric. Both parsers
+// must answer alike, or the Lezer union re-admits what core drops.
+const COLON_EDGE_CASES = [
+  ['sum(rate(http_requests_total[5m]))', ['http_requests_total'], 'plain name'],
+  ['sum(rate($prefix:app_requests_total[5m]))', ['prefix:app_requests_total'], '`$` tokenises as punctuation (a recovery node in Lezer); the rest is one well-formed colon name (known gap, pinned)'],
+  ['sum(rate(${prefix}:app_requests_total[5m]))', [], 'a braced variable leaves a leading-colon fragment: no metric'],
+  ['app:slo:burn_rate_1h > 14', ['app:slo:burn_rate_1h'], 'interior colons are a recording-rule name'],
+  ['max(app_queue_depth:)', [], 'a variable at the end of a name leaves a trailing-colon fragment: no metric'],
+  ['sum(rate(x_total[5m:1m]))', ['x_total'], 'a subquery resolution is not a metric'],
+  ['{__name__="a:b"}', ['a:b'], 'a __name__ matcher with an interior colon is a recording-rule name'],
+  ['{__name__=":k"}', [], 'a __name__ matcher with a leading colon yields nothing'],
+  ['{__name__="k:"}', [], 'a __name__ matcher with a trailing colon yields nothing'],
+];
+for (const [expr, expected, label] of COLON_EDGE_CASES) {
+  eq(extractCore(expr), expected, `core: ${label}`);
+  eq(extractLezer(expr), expected, `lezer: ${label}`);
+}
+// Only the colon rule is shared: the grammar proves `requests` is a selector,
+// and the wrapper keeps reporting what core's heuristic cannot see.
+eq(extractLezer('rate(requests[5m])'), ['requests'], 'lezer: a single-word metric the grammar yields is kept');
+
 const coreParsed = parseCore('sum(rate(http_requests_total{status="200"}[5m]))');
 assert(coreParsed.selectors[0]?.labels?.some(l => l.label === 'status' && l.value === '200'),
        'core parser preserves selector label evidence');

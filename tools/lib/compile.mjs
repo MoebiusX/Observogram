@@ -54,6 +54,10 @@ import {
   sliErrorRatioRule, forecastExpr, forecastHorizon, forecastSeverity, forFor, MIN_BAD_SAMPLES,
 } from './burn-rules.mjs';
 import { genericBoards, checkBindings, unifiedIdOf } from './dashboards/generic.mjs';
+import {
+  compileBlackboxModules, compileBlackboxScrapeConfig, planBlackboxChecks,
+  blackboxFileName, blackboxScrapeFileName, BLACKBOX_KIND,
+} from './blackbox.mjs';
 
 // ============================================================
 // Helpers — ref resolution, slug normalisation, expression building
@@ -108,6 +112,12 @@ function profileForTarget(canonical, family, opts = {}) {
       // The collector version is declared on the otel block when present.
       const v = canonical?.spec?.otel?.collector?.version || canonical?.spec?.pipelines?.collector_version;
       return resolveProfile('otel-collector', v);
+    }
+    case 'blackbox-exporter': {
+      // The exporter's version is declared on a telemetry backend when the
+      // pack names one; otherwise the default band.
+      const b = (canonical?.spec?.telemetry?.backends || []).find((x) => /blackbox/i.test(x.product || ''));
+      return resolveProfile('blackbox-exporter', b?.version?.declared);
     }
     default:
       return resolveProfile(family, opts.version);
@@ -304,6 +314,19 @@ export function compilePrometheusRules(canonical, opts = {}) {
   }
   if (forecastRules.length) {
     groups.push({ name: `${svc}_forecast`, interval: '5m', rules: forecastRules });
+  }
+
+  // ----- declared alert rules (spec 1.4 alerting.rules) -----
+  // The operational (non-SLO) rules the pack declares — a repository's own,
+  // or the library entries' symptom rules — for the PromQL rulers: every rule
+  // whose engine is prometheus-compatible (or unset), name kept exactly (the
+  // key a reconciler joins on), the pack's routing severity as the `severity`
+  // label so the compiled routes apply, the engine's own severity label kept
+  // under `engine_severity` when it differs. A Loki, Grafana-managed or
+  // Alertmanager rule is not a PromQL rule and is left to its own compiler.
+  const declaredAlerts = buildDeclaredAlertRules(canonical, ctx);
+  if (declaredAlerts.length) {
+    groups.push({ name: `${svc}_declared_alerts`, interval: '30s', rules: declaredAlerts });
   }
 
   // ----- assurance (step 5) -----
@@ -587,6 +610,39 @@ export function compileSloPrometheusRules(canonical, sloId, opts = {}) {
   return banner(`Prometheus rules — SLO ${slo.id}`, canonical) + emitYaml({ groups });
 }
 
+/** The engines whose `expr` is PromQL a Prometheus-compatible ruler evaluates (spec 1.4 AlertEngine); absent means prometheus. */
+const PROMQL_ALERT_ENGINES = new Set(['prometheus', 'mimir', 'thanos', 'victoriametrics']);
+
+/**
+ * The pack's declared alert rules (spec 1.4 alerting.rules) in the Prometheus rule shape, for the rulers
+ * that evaluate PromQL. Exported for the per-artefact compile and the tests; `ctx` is policyContext's
+ * (its `service` labels the rules like the burn alerts).
+ */
+export function buildDeclaredAlertRules(canonical, ctx = { service: serviceSlug(canonical) }) {
+  const out = [];
+  for (const r of canonical?.spec?.alerting?.rules || []) {
+    if (!r || typeof r.name !== 'string' || typeof r.expr !== 'string') continue;
+    if (r.engine && !PROMQL_ALERT_ENGINES.has(r.engine)) continue;
+    const own = r.labels || {};
+    const labels = { ...own };
+    if (r.severity) {
+      if (own.severity && own.severity !== r.severity) labels.engine_severity = own.severity;
+      labels.severity = r.severity;
+    }
+    labels.service = labels.service || ctx.service;
+    labels.pack = labels.pack || ctx.service;
+    labels.kind = labels.kind || 'declared';
+    out.push({
+      alert: r.name,
+      expr: resolveRefs(r.expr, canonical),
+      ...(r.for ? { for: r.for } : {}),
+      labels,
+      ...(r.annotations && Object.keys(r.annotations).length ? { annotations: { ...r.annotations } } : {}),
+    });
+  }
+  return out;
+}
+
 export function compileDeclaredPrometheusRule(canonical, indexOrName) {
   const decl = canonical?.spec?.queries?.recording_rules || [];
   const rule = typeof indexOrName === 'number' ? decl[indexOrName] : decl.find(r => r.name === indexOrName);
@@ -824,6 +880,11 @@ export function compileGrafanaManagedRules(canonical, opts = {}) {
   }
   if (forecastRules.length) groups.push(grafanaGroupOf(`${svc}_forecast`, forecastRules, '5m'));
 
+  // Declared alert rules (spec 1.4 alerting.rules): the same rules as the Prometheus flavour, uids keyed
+  // <svc>_<alert> (a declared name carries no svc prefix and the folder is shared across packs).
+  const declaredAlerts = buildDeclaredAlertRules(canonical, ctx).map(r => buildGrafanaAlertRule(r, { uidKey: `${svc}_${r.alert}` }));
+  if (declaredAlerts.length) groups.push(grafanaGroupOf(`${svc}_declared_alerts`, declaredAlerts, '30s'));
+
   // Assurance (step 5): the same rules as the Prometheus flavour, uids keyed
   // by <svc>_<alert> (unique across packs in the shared folder), the
   // Watchdog with for: 0s.
@@ -1039,6 +1100,36 @@ export function compileCatalog(canonical) {
     });
   }
 
+  // ---- Synthetic probes (blackbox exporter) — the producer side ----
+  // The group exists when the pack declares synthetic checks at all, so a
+  // pack whose checks run on another engine still sees, in the banner, why
+  // nothing was compiled for the blackbox exporter.
+  {
+    const checks = canonical?.spec?.validation?.synthetic_checks || [];
+    if (checks.length) {
+      const plan = planBlackboxChecks(canonical, { onWarning: () => {} });
+      const items = [
+        { id: 'all', kind: 'blackbox-modules', label: 'Exporter modules · blackbox.yml',
+          subtitle: `${plan.modules.length} module(s)${plan.skipped.length ? ` · ${plan.skipped.length} check(s) not compiled` : ''}` },
+        { id: 'scrape-config', kind: 'blackbox-scrape', label: 'Scrape jobs · prometheus.yml snippet',
+          subtitle: `${plan.modules.length} job(s) · module=<id>&target=<address> → /probe` },
+      ];
+      for (const m of plan.modules) {
+        items.push({ id: `check:${m.id}`, kind: 'blackbox-module', label: `check · ${m.id}`,
+          subtitle: `${m.prober} · ${m.address} · every ${m.check.interval}`, checkId: m.id });
+      }
+      groups.push({
+        id: 'synthetics',
+        label: 'Synthetic probes',
+        blurb: `Blackbox exporter modules for the pack's synthetic checks of kind ${BLACKBOX_KIND}, and the scrape jobs that drive them — the producer side: this is what makes probe_success exist.`,
+        flavors: [{ id: 'blackbox', label: 'Blackbox exporter', platform: 'Prometheus blackbox exporter',
+                    description: 'blackbox.yml modules keyed by check id, plus the Prometheus scrape jobs (one per check) with the exporter\'s relabelling. Not deployable from the studio: the exporter and its scrape config are env-specific files.',
+                    contentType: 'application/x-yaml', extension: 'yaml', deployable: false }],
+        items,
+      });
+    }
+  }
+
   return { groups };
 }
 
@@ -1114,6 +1205,18 @@ export function compileArtifact(canonical, { group, flavor, artifact, dashboardI
   }
   if (group === 'alertmanager') {
     return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.alertmanager.yaml`, content: compileAlertmanager(canonical) };
+  }
+  if (group === 'synthetics') {
+    const profile = profileForTarget(canonical, 'blackbox-exporter', opts);
+    const o = { ...opts, profile, knobs: profile.knobs };
+    if (artifact === 'scrape-config') {
+      return { contentType: 'application/x-yaml', filename: blackboxScrapeFileName(canonical), content: compileBlackboxScrapeConfig(canonical, o) };
+    }
+    if (artifact && artifact.startsWith('check:')) {
+      const checkId = artifact.slice(6);
+      return { contentType: 'application/x-yaml', filename: blackboxFileName(canonical, { checkId }), content: compileBlackboxModules(canonical, { ...o, checkId }) };
+    }
+    return { contentType: 'application/x-yaml', filename: blackboxFileName(canonical), content: compileBlackboxModules(canonical, o) };
   }
   throw new Error(`unknown compile group: ${group}`);
 }
@@ -1572,6 +1675,15 @@ export const TARGETS = {
     family: 'grafana-dashboard',
     suggestedFile: (canonical, opts) => `${serviceSlug(canonical)}.${slug(defaultDashboardId(canonical, opts))}.json`,
     compile: (canonical, opts) => compileGrafanaDashboard(canonical, defaultDashboardId(canonical, opts), opts),
+  },
+  'blackbox-exporter': {
+    label: 'Blackbox exporter',
+    description: `Blackbox exporter modules (blackbox.yml) — one per synthetic check of kind ${BLACKBOX_KIND}, named by the check id; the producer side of the pack's probes. The matching Prometheus scrape jobs are the synthetics/scrape-config artifact.`,
+    contentType: 'application/x-yaml',
+    extension: 'yaml',
+    family: 'blackbox-exporter',
+    suggestedFile: (canonical) => blackboxFileName(canonical),
+    compile: (canonical, opts) => compileBlackboxModules(canonical, { ...opts, knobs: opts.profile?.knobs }),
   },
 };
 

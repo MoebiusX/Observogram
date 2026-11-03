@@ -38,6 +38,7 @@ prose contracts that follow.
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
+| [`tools/lib/pack-update.mjs`](../tools/lib/pack-update.mjs) | imports `library.mjs` and `service-keys.mjs`; no Node APIs | the UPDATE journey's engine (`docs/UPDATE_JOURNEY.md`) — `recoverBuildInputs` (a pack → Build's inputs, from its `library.*` annotations), the additions (`readAdditions`, `checkAddition`, `applyAdditions`, `additionLabel`, `defaultBurnWindows`; recorded under `library.additions`), the comparison in one normal form (`normalize`, `artefactIndex`, `comparePacks`, `fieldDiff`, `artefactLabel`, `parseArtefactKey`), `rebuildPack` (the Open stage's answer), `foreignAsAdditions`, `packOrigin`, and the versions (`nextVersion`, `previousOf`, `stampUpdate`, `versionChains`; the lineage under `library.update.previous`) |
 | [`tools/lib/pack-conformance.mjs`](../tools/lib/pack-conformance.mjs) | imports `waivers.mjs` (which imports `conformance.mjs`); no Node APIs | the placeholder report — `packConformance` (a live snapshot's report says `liveKind: 'snapshot'`), `scaffoldMarkers`, `parseSymbol` / `resolveSymbol`, `SYMBOL_FAMILIES`, `PLACEHOLDER_FIELDS`; `SCAFFOLD_PREFIXES` is a pinned copy of the adapter's three marker prefixes |
 | [`tools/lib/waivers.mjs`](../tools/lib/waivers.mjs) | imports `conformance.mjs` | waivers (GAP batch 2) — `normalizeWaiver`, `waiverState` / `expiresInDays` / `waiverView`, `matchesFinding`, `applyWaiversToFindings` (the findings seam), `applyWaiversToConformance` (the overlay: the same report object without an open waiver), `readWaiverFile` (the sidecar) |
 | [`tools/lib/remediation-flow.mjs`](../tools/lib/remediation-flow.mjs) | imports `artefact-model.mjs` (`classify`, `identityKeyOf`) | the diagnose → remediate flow (GAP batch 2) — `buildRemediationFlowModel({ pack, diff, liveAnnotations, otherSide })`: a remediation's trigger resolved to its alert artefacts (`observogram.remediates.*` annotation, rule name, compiled burn-rule name, SLO — `resolveTrigger`, `remediationTargets`, `burnRuleNames`, `slugKey` / `triggerSlug`), the alerts' states from the comparison (`alertStatesFromDiff`), the next steps; pure, no clock, never throws |
@@ -130,7 +131,11 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
-
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `decideUiMode`, `decideOverviewLayout`); see *The Overview board* below |
+| [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
+| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
+| [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
+| [`studio/overview.css`](../studio/overview.css) | `design-tokens.css` + `design-kit.css` (CI-asserted: reads `--og-*` and its own `--ov-*` only) | the board's zone (`.ov-*`), with the three kit pieces the view emits styled from the tokens, scoped to `.ov-page` — load after `design-kit.css` |
 ## The design system
 
 The studio's look is three files a downstream app copies verbatim, so its
@@ -169,6 +174,65 @@ only for markup it already has; new markup uses the `.og-*` classes.
 file contains nothing but tokens, both themes define every colour, the JSON
 equals the CSS, the kit and the bridge read tokens only, the adapter decides
 no colour of its own, and no stylesheet reads a token that does not exist.
+
+## The Overview board
+
+The studio's front door — one service, the machine drawn as three columns
+under *Discover · Diagnose · Remediate* — is vendorable as a unit: the model,
+the renderer, the loaders, the state-free kit pieces it emits and its
+stylesheet, on top of the design system above. `tools/test-overview-model.mjs`
+holds the set in CI: the import closure of each file is exactly the one the
+table lists, the model and the pure kit touch no DOM, and `overview.css`
+reads design tokens and its own `--ov-*` properties only.
+
+**The model takes its inputs explicitly** and returns words and numbers, never
+markup:
+
+```js
+buildOverviewModel({
+  services, servicesStatus, catalog,            // GET /api/services rows and their status; the pack catalogue
+  serviceId, env, isLiveAggregatePack,          // the row and environment on screen; your rule for aggregate packs
+  diagnostic, diagnosticError, decision,        // computeOverviewDiagnostic(layered) and its causes (or the read error)
+  journeys, journeysError, run,                 // GET /api/journeys and the service's newest run record
+  running, startError, pending,                 // a check in flight, a refused start, facts still being read
+  layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
+  now, productName,
+});
+```
+
+The shapes are the ones the fixtures under `tools/fixtures/overview/` carry
+(`services.json`, `packs.json`, `journeys.json`, a real run, a half-blind
+run, the posture cells as counts, a conformance body). Percentages stay
+numbers in the model (`alignmentPct`, `coveragePct`); the renderer puts the
+sign on them. The vocabulary rule the test walks — no layer code, artefact
+id or engine state word in any string — is part of the contract.
+
+**The renderer** is `renderOverview(container, model, host)`: `container` is
+any element (the test uses a 20-line shim with `innerHTML` and one click
+listener), and the actions ride on `host.overview`, an object a host fills
+with its own implementations:
+
+```js
+host.overview = {
+  selectService(id), selectEnv(name),           // the picker and the environment switch
+  checkNow(),                                   // Check again → runServiceCheck, then re-read the facts
+  openDiscover(), openDiagnose(), openRemediate(), openNeuron(),   // the column links and "See the differences"
+  expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
+};
+```
+
+A hook a host does not supply is a no-op (the view calls them optionally).
+Exactly one `.og-btn--primary` is drawn in every state; the simple layout is
+drawn instead of the board when `model.layout` is `'simple'`, when the
+service has no pack of its own, or when the board throws (the error is
+logged and the screen never goes blank). The static bundle (DOWNSTREAM.md
+§10) does not draw Overview: its shim answers the services and journeys
+routes with 501.
+
+**Staying current:** the headless suite is the smoke test — copy
+`tools/test-overview-model.mjs` and `tools/fixtures/overview/` beside the
+files and run it with `node --test`; it pins every state's exact words and
+markup, so an upstream change shows as a failing assertion at copy time.
 
 ## What the host supplies
 
@@ -231,7 +295,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
   empty array and the counts it always had. A metric family's entry adds
   `series` and `memberIds` to the artefact it embeds; a consumer that lists
   a pack's own artefacts beside the diff uses `memberIds` to give every
-  series its family's status (the studio's Compare does).
+  series its family's status (the studio's Compare does). `declaredAhead`
+  (per layer, and `summary.declaredAhead`) came after it, and those keys exist
+  only when a pack carries a lifecycle statement (docs/DIFF.md).
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.
@@ -242,6 +308,10 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
   headers (echoing `X-Observogram-Org`).
 
 ## Staying current
+
+A tree that vendors the whole repository follows [`DOWNSTREAM.md`](DOWNSTREAM.md) §4
+instead; if it still carries the eleven-patch hand-off, start with
+[*Bumping past the eleven-patch hand-off*](#bumping-past-the-eleven-patch-hand-off).
 
 1. Record the Observogram commit you vendored from (e.g. in a
    `packages/upstream/UPSTREAM_SHA` file).
@@ -259,7 +329,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs \
      studio/design-tokens.css studio/design-tokens.json \
      studio/design-kit.css studio/design-bridge.css studio/discover-board.mjs \
-     studio/taxonomy.mjs studio/verdict-html.mjs studio/glossary.mjs
+     studio/taxonomy.mjs studio/verdict-html.mjs studio/glossary.mjs \
+     studio/overview-model.mjs studio/overview-view.mjs studio/overview-api.mjs \
+     studio/overview.css studio/ux-kit-pure.mjs studio/services-model.mjs studio/services-api.mjs
    ```
 
    `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is
@@ -282,3 +354,141 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    recorded sha. Because the modules take their inputs explicitly, upstream
    changes surface as signature diffs at copy time — not as silent behaviour
    drift at runtime.
+
+## Bumping past the eleven-patch hand-off
+
+For the agent that keeps a whole-tree snapshot at `fe03de6` with the eleven theme
+patches of the hand-off applied. Every patch is now decided (2026-11-02). This section
+says what to do with each one. [`DOWNSTREAM.md`](DOWNSTREAM.md) §4 and §6 are the
+general workflow.
+
+**Target.** `develop` at `f3f9266` or later. `main` does not have this work until the
+next promotion, so record a commit, not a tag. Node 22.23.4 or later.
+
+**Do not replay the series.** The patches are cumulative, most of them landed in a
+different shape, and 09 to 11 no longer apply. Start from a clean copy of the target
+tree and put back only the rows below that say *keep*.
+
+| Patch | Upstream | What you do |
+| --- | --- | --- |
+| 01 RRNAME-PATTERN | Spec 1.4's 2026-11-01 revision, synced in #192: any Prometheus name with at least one `:` and no empty segment | Drop it. This is stricter than your patch: `foo:` and `foo::bar` do not validate, so rename any you have |
+| 02 METRICISH | #184: colon-edged tokens are not metrics, in both parsers | Drop it |
+| 03 UNMARKED | Not taken; it changes no behaviour | Yours to keep or drop. If you keep it, mark it (*Check the result*) |
+| 04 METRIC-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
+| 05 PROMRULE-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
+| 06 SEQUENTIAL-CALLS | Not taken: the transport hook already serialises every MCP request | Drop it and use your `serial-transport-hook` (*Sequential calls*) |
+| 07 EVENT-JUNK-FILTER | #187: `metricExclude`, a scope field | Drop it and set the variable (*Scope variables*) |
+| 08 SCOPED-RULE-GROUPS | #189: `ruleGroups`, a scope field, and the folder scope pushed down to the alert-rule tool | Drop it and set the variables. Recording rules by folder title were not built (*Scope variables*) |
+| 09 EXPORTER-MANIFEST | #185 (service scope) and #190 (`dynamicFamilies`) | Drop it and move your file (*Exporter manifests*) |
+| 10 DYNAMIC-FAMILY | #190 and #191 | Drop it |
+| 11 LIFECYCLE-DECLARED-AHEAD | #193 | Drop it, then move your blocks and update what reads the diff (*Lifecycle blocks*) |
+
+### Sequential calls
+
+The hook's `fetchImpl` sees every MCP request, and `OBSERVOGRAM_TRANSPORT_HOOK` loads
+one module, so add the queue to the module that already prepares your gateway requests.
+Two things differ from your patch. The timeout (`MCP_TIMEOUT_MS`, 30 seconds by default,
+at most 300 seconds) starts when a request enters the queue, not when it reaches the
+wire, so raise it to cover the wait. The transport is one per process, so the queue
+serialises across every live job the server runs (up to four), not per fetch.
+
+### Scope variables
+
+```bash
+OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE='^demo_event_(?:\d+|blank)_total$'
+OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS=folder-a
+OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
+```
+
+- `METRIC_EXCLUDE` takes white-space-separated patterns, each anchored and bounded. It
+  runs after `METRIC_PREFIXES`.
+- `RULE_GROUPS` is a comma list, compared exactly, so a name may hold spaces.
+- These values describe one team, service and environment. Keep them in the deployment's
+  variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code (§15.2).
+- The two variables your patch read inside `fetchMcp` do not exist upstream.
+- After the first snapshot, read the gate log. It says whether the folder scope was pushed
+  down or the rules were read whole.
+- **Not built:** no tool in the capability registry takes a rule group or a folder title,
+  so the rule-group and recording-rule tools your patch called were not added. Read
+  `observogram.live.gaps`. If recording rules are missing, send the tool's recorded answer
+  (`npm run record-fixtures -- --write`) so it can get a registry row. A hunk that calls an
+  unregistered tool fails `tools/test-contract-guard.mjs`.
+
+### Exporter manifests
+
+Detection is by file name, so a YAML file with your keys is never read. Use
+`metrics-manifest.json` (§18.1): `static_metrics` becomes `metrics`, or comes from
+`packc emit --exporter`, and `dynamic_families` becomes `dynamicFamilies`.
+
+- A pattern must be anchored and open with a literal prefix of at least three characters
+  that a platform does not own (`^node_` is refused, `^node_hwmon_` is not). An entry
+  that breaks a rule is a crawl warning and is not read.
+- Names are tested as listed. Your patch lowercased the live name first, so check any
+  pattern that relied on that.
+- Members count in `jaccard` and `alignment`, and `summary.dynamicFamilies.members` says
+  how many pairs rest on a pattern.
+- Key on `spec.origin_kind: exporter-family`, not on the `METRIC-FAM-` id prefix.
+
+### Lifecycle blocks
+
+- **Move the block to the top of the file.** Only comments, `---` and Helm directives may
+  sit above it. Lower down it is a warning and parks nothing.
+- **Use only `deployed`, `planned` or `not-deployed` as states.** Any other word is a
+  warning and parks nothing. `maturity` is optional.
+- **Expect some rules to stay visible.** A symbol parks only when every file that speaks
+  for it carries the same deployment, readers included. If an alert or a dashboard in a
+  file with no block reads a rule, that rule still reads *declared, not live*.
+- **A `PrometheusRule` custom resource is not walked.** A block in one does nothing, and a
+  rule in one does not keep a series visible.
+- **Update what reads the diff.** The pack carries one `observogram.lifecycle` annotation,
+  not `.sources` and `.symbols`. `summary.lifecycleEnvironment` is now
+  `summary.lifecycleEnvironments`, an array. Every new key exists only when a pack carries
+  a statement, so read them as optional.
+- **Name the environment.** `diffPacks` now takes `opts.environment`. Without it the
+  statement must hold for both packs' environments, and a live pack is always bound to
+  `prod`, so a staging comparison should pass `environment`.
+
+### What will read differently
+
+Compare a pack before and after the bump, and expect these to move:
+
+- An exporter's name no longer widens a service's scope, and a live dashboard now reaches
+  the scope through its panel expressions (#185, #186).
+- Parked artefacts leave the union, so `alignment` rises by what is parked. A statement
+  does not expire. Set `gate.maxDeclaredAhead` on any journey whose gate you rely on.
+- A repository metric your exclude patterns match, or a rule of another group, reads as
+  *not checked* rather than as drift.
+
+### Check the result
+
+```bash
+node vendor/observogram-app/tools/gen-vendor-manifest.mjs --verify vendor/observogram-app
+node vendor/observogram-app/tools/gen-vendor-manifest.mjs --smoke vendor/observogram-app
+```
+
+Mark every changed line of a kept patch `// LOCAL DEVIATION (<org> <TAG>): <why>`. The only listed module
+that should report drift is `tools/lib/adapter.mjs`, as a local patch. The hint that only
+line endings differ is a checkout setting, not a patch. `npm run sync-spec:check` should
+be clean, since the schema is no longer patched.
+
+Run upstream's `npm test` on the patched tree. With 04 and 05 applied to `f3f9266`, exactly
+four tests fail: `tools/test-adapt.mjs`, `tools/test-crawl-alerting-rules.mjs`,
+`tools/test-golden-diff.mjs` (15 goldens and the check that repeats one of them) and the
+manifest's in-sync check. Any other failure is real. Your `repro/demo.mjs` scenarios for 07,
+08, 09 and 11 drive your patches' shapes, so move them to the shapes above before reading
+their tables. Then run your own suite.
+
+### Sending more upstream
+
+- Cut each patch from a named `develop` commit, one theme per patch, with its note and
+  fixture.
+- A value that belongs to one team, service or environment is configuration: a variable or
+  `plugins/`, never `tools/lib`.
+- The diff goldens hash the whole diff, so a new key must be absent unless its data is present.
+- Run your redaction over patches, notes and fixtures before they leave.
+
+Upstream would still use three things from you: the alert-rule tool's recorded per-folder
+answer, the recording-rule tool's recorded answer, and whether your rules live in
+`PrometheusRule` custom resources, which would make walking them the next piece of work.
+If 04 and 05 are still worth carrying after this bump, say so: the likely shape is a pack
+annotation.

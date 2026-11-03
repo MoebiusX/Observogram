@@ -491,6 +491,145 @@ assert(allLiveDiff.summary.outOfScope === 0,
        'all-live mode counts every unmatched live artefact as live-not-declared',
        allLiveDiff.summary.outOfScope, 0);
 
+// ---------- an exporter's name is not the service's ----------
+// A metric read from an exporter manifest carries the exporter as its service
+// (`event-exporter`). Its name counts for the scope; its service string must
+// not, or every live artefact whose text says "event" is pulled into scope.
+{
+  const repo = clone(scopedRepoPack);
+  const names = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_names']);
+  const origins = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_origins']);
+  names.push('event_published_total');
+  origins.event_published_total = { file: 'exporter/metrics-manifest.json', service: 'event-exporter', type: 'counter', origin_kind: 'exporter-manifest' };
+  repo.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify(names);
+  repo.metadata.annotations['crawler.discovered.metric_names_count'] = String(names.length);
+  repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+  // A declared scrape job, so the scrape-job kind is one the repo speaks of (else every live job is parked unseen).
+  repo.metadata.annotations['crawler.discovered.scrape_jobs'] = JSON.stringify(['checkout-api']);
+  repo.metadata.annotations['crawler.discovered.scrape_jobs_count'] = '1';
+  const live = clone(scopedLivePack);
+  const liveNames = [...JSON.parse(live.metadata.annotations['mcp.discovered.metric_names']), 'event_published_total'];
+  live.metadata.annotations['mcp.discovered.metric_names'] = JSON.stringify(liveNames);
+  live.metadata.annotations['mcp.discovered.metric_names_count'] = String(liveNames.length);
+  live.spec.dashboards = [...live.spec.dashboards, { id: 'event-pipeline', provider: { kind: 'grafana' }, panel_bindings: [{ panel: 'Event lag', binds_to: 'slis.event_lag' }] }];
+  live.metadata.annotations['mcp.discovered.scrape_jobs'] = JSON.stringify(['event-exporter', 'other-exporter']);
+
+  // The two exporter origins whose service is always an emitter behave alike.
+  for (const originKind of ['exporter-manifest', 'exporter-config']) {
+    origins.event_published_total.origin_kind = originKind;
+    repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+    const d = diffPacks(adapt(repo), adapt(live));
+    assert(!d.scope.serviceTokens.includes('event') && !d.scope.serviceTokens.includes('eventexporter'),
+           `a ${originKind} metric does not lend the exporter's name to the service scope`, d.scope.serviceTokens);
+    assert(JSON.stringify(d.scope.exporterTokens) === JSON.stringify(['event', 'eventexporter']),
+           `the exporter's name is kept apart as exporterTokens (${originKind})`, d.scope.exporterTokens);
+    assert(d.layers.L2.inBoth.some(x => x.key.includes('event_published_total')),
+           `the ${originKind} metric itself still pairs by name`);
+    assert(d.layers.L3.outOfScope.some(x => x.key.includes('event-pipeline')),
+           `a live dashboard that only shares the exporter's name stays out of scope (${originKind})`);
+    assert(d.layers.L2.onlyInB.some(x => x.key.includes('event-exporter')),
+           `the live job that scrapes the exporter is in scope (${originKind})`, d.layers.L2.onlyInB.map(x => x.key));
+    assert(d.layers.L2.outOfScope.some(x => x.key.includes('other-exporter')),
+           `a live job named for another exporter is not (${originKind})`);
+  }
+
+  // The same metric declared in source code, or read from a saved exposition
+  // (named by its file, as often the service's own `checkout-api.prom` as a
+  // third party's): that service string still widens the scope.
+  for (const [originKind, file] of [['source-code', 'src/events.ts'], ['exporter-snapshot', 'docs/event-exporter.prom']]) {
+    origins.event_published_total = { ...origins.event_published_total, file, origin_kind: originKind };
+    repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+    const d2 = diffPacks(adapt(repo), adapt(live));
+    assert(d2.scope.serviceTokens.includes('event') && !('exporterTokens' in d2.scope),
+           `a ${originKind} metric's service still lends its tokens, and no exporterTokens key appears`, d2.scope);
+    assert(d2.layers.L3.onlyInB.some(x => x.key.includes('event-pipeline')),
+           `and the dashboard that shares them is then in scope (${originKind})`);
+  }
+  assert(!('exporterTokens' in scopedDiff.scope),
+         'a pack without an exporter origin reports no exporterTokens key (goldens unchanged)');
+}
+
+// ---------- a dashboard reaches the scope through the metrics its panels query ----------
+// A live dashboard's scope text used to be its id, folder and refs, so a
+// dashboard in a foreign folder that charts a metric this pack declares was
+// parked out of scope unless a name token happened to match. Its title, its
+// panels' titles and its panel expressions now count, in both shapes the
+// packs carry: the live one (`params.title`, panel summaries, the raw Grafana
+// JSON's `panels[].targets[].expr`, rows nested) and the crawled one
+// (`params.panels[].{title,expr}`).
+{
+  // The repo declares, besides its own `checkout_requests_total`, a specific
+  // series with no service word in it and two platform series.
+  const repo = clone(scopedRepoPack);
+  const names = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_names']);
+  const origins = JSON.parse(repo.metadata.annotations['crawler.discovered.metric_origins']);
+  for (const name of ['basket_depth_ratio', 'node_cpu_seconds_total', 'up']) {
+    names.push(name);
+    origins[name] = { file: 'src/metrics.ts', service: 'checkout-api', type: 'gauge' };
+  }
+  repo.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify(names);
+  repo.metadata.annotations['crawler.discovered.metric_names_count'] = String(names.length);
+  repo.metadata.annotations['crawler.discovered.metric_origins'] = JSON.stringify(origins);
+
+  const liveDash = (id, folder, title, panels, raw) => ({
+    id, provider: { kind: 'grafana', version: '12.0', schemaVersion: 41 }, folder, source: `grafana:///d/${id}`,
+    params: { uid: id, title, panelCount: panels.length, returnedPanels: panels.length, panels, ...(raw ? { raw } : {}) },
+    panel_bindings: panels.map((p, i) => ({ panel: p.title, binds_to: `ref:grafana/${id}/panels/panel-${i + 1}` })),
+  });
+  const summaries = (n) => Array.from({ length: n }, (_, i) => ({ id: i + 1, title: `Series ${i + 1}`, type: 'timeseries' }));
+  const live = clone(scopedLivePack);
+  live.spec.dashboards = [
+    ...live.spec.dashboards,
+    // A foreign folder, generic names; the only link to the pack is a target expression on the specific metric, inside a row.
+    liveDash('mq-ops', 'Platform MQ', 'Queue depth', [{ id: 1, title: 'Depth', type: 'timeseries' }], {
+      panels: [{ id: 10, type: 'row', title: 'Traffic', panels: [{ id: 1, title: 'Depth', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio) by (queue)' }] }] }],
+    }),
+    // An expression on a series that merely contains the declared name: not this pack's.
+    liveDash('mq-ops-2', 'Platform MQ', 'Buckets', [{ id: 1, title: 'Buckets', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'Buckets', type: 'timeseries', targets: [{ refId: 'A', expr: 'sum(rate(basket_depth_ratio_bucket[5m]))' }] }],
+    }),
+    // Summaries only (no JSON returned), nothing in the names: out of scope as before.
+    liveDash('mq-ops-3', 'Platform MQ', 'Latency', [{ id: 1, title: 'Latency', type: 'timeseries' }], null),
+    // A platform board charting the platform series the repo also declares: not carried in by `node_*` or `up`.
+    liveDash('node-health', 'Platform', 'Node health', [{ id: 1, title: 'CPU', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'CPU', type: 'timeseries', targets: [{ refId: 'A', expr: 'rate(node_cpu_seconds_total[5m])' }, { refId: 'B', expr: 'count(up == 1)' }] }],
+    }),
+    // The service's name in the board's title, nothing else: the token path, as for an id or a folder.
+    liveDash('funnel-7', 'Product', 'Checkout funnel', [{ id: 1, title: 'Steps', type: 'timeseries' }], null),
+    // A big board: 400 summaries, and the one target that names the specific metric at the end of the JSON.
+    liveDash('mq-big', 'Platform MQ', 'Everything MQ', summaries(400), {
+      panels: [...summaries(399).map((p) => ({ ...p, targets: [{ refId: 'A', expr: 'sum(rate(mq_other_total[5m]))' }] })), { id: 400, title: 'Series 400', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }],
+    }),
+    // The crawled shape: params.panels carry the expression themselves.
+    { id: 'mq-crawled', provider: { kind: 'grafana' }, folder: 'Platform MQ', params: { title: 'MQ crawled', panels: [{ panel: 'depth', title: 'Depth', expr: 'max(basket_depth_ratio)' }] } },
+    // A service token inside an expression is not a match: expressions are read for whole metric names only.
+    liveDash('steps-9', 'Product', 'Steps', [{ id: 1, title: 'Steps', type: 'timeseries' }], {
+      panels: [{ id: 1, title: 'Steps', type: 'timeseries', targets: [{ refId: 'A', expr: 'sum(rate(precheckout_steps_total[5m]))' }] }],
+    }),
+    // The bounds: the 512th raw panel is read, the 513th is not; the 16th target is read, the 17th is not.
+    liveDash('bound-in', 'Platform MQ', 'Bound in', [], { panels: [...summaries(511), { id: 512, title: 'Last', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('bound-out', 'Platform MQ', 'Bound out', [], { panels: [...summaries(512), { id: 513, title: 'Last', type: 'timeseries', targets: [{ refId: 'A', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('targets-in', 'Platform MQ', 'Targets in', [], { panels: [{ id: 1, title: 'Many', type: 'timeseries', targets: [...Array.from({ length: 15 }, (_, i) => ({ refId: `T${i}`, expr: 'up' })), { refId: 'Z', expr: 'max(basket_depth_ratio)' }] }] }),
+    liveDash('targets-out', 'Platform MQ', 'Targets out', [], { panels: [{ id: 1, title: 'Many', type: 'timeseries', targets: [...Array.from({ length: 16 }, (_, i) => ({ refId: `T${i}`, expr: 'up' })), { refId: 'Z', expr: 'max(basket_depth_ratio)' }] }] }),
+  ];
+  const d = diffPacks(adapt(repo), adapt(live));
+  const onlyInB = d.layers.L3.onlyInB.map(x => x.key);
+  const outOfScope = d.layers.L3.outOfScope.map(x => x.key);
+  const has = (list, id) => list.some(k => k.includes(`"id":"${id}"`));
+  assert(has(onlyInB, 'mq-ops'), 'a live dashboard whose raw panel target queries a declared metric is in scope', onlyInB);
+  assert(has(outOfScope, 'mq-ops-2'), 'an expression on a series that merely contains the declared name does not carry a dashboard in', outOfScope);
+  assert(has(outOfScope, 'mq-ops-3'), 'a dashboard with summaries only and foreign names stays out of scope', outOfScope);
+  assert(has(outOfScope, 'node-health'), 'a platform board on the generic series the repo declares (node_*, up) stays out of scope', outOfScope);
+  assert(has(onlyInB, 'funnel-7'), 'the service\'s name in the board title carries it in, as an id or folder would', onlyInB);
+  assert(has(onlyInB, 'mq-big'), 'a board with hundreds of summaries still has its last raw target read', onlyInB);
+  assert(has(onlyInB, 'mq-crawled'), 'a crawled dashboard whose params.panels expression names a declared metric is in scope', onlyInB);
+  assert(has(outOfScope, 'steps-9'), 'a service token inside an expression does not carry a dashboard in: expressions are read for whole metric names only', outOfScope);
+  assert(has(onlyInB, 'bound-in') && has(outOfScope, 'bound-out'), 'the 512th raw panel is read and the 513th is not', [onlyInB, outOfScope]);
+  assert(has(onlyInB, 'targets-in') && has(outOfScope, 'targets-out'), 'the 16th target is read and the 17th is not', [onlyInB, outOfScope]);
+  assert(d.layers.L2.outOfScope.some(x => x.key.includes('alertmanager_alerts_total')) && d.layers.L2.inBoth.some(x => x.key.includes('node_cpu_seconds_total')),
+         'the metric rule is untouched: an undeclared platform metric is still out of scope, a declared one still pairs');
+}
+
 // ---------- `ref:` prefix is authoring syntax, not behaviour ----------
 // A burn alert declared as `slo: ref:x` and one discovered as `slo: x` bind
 // to the same SLO. Identity already stripped the prefix (they paired); the
@@ -800,6 +939,197 @@ process.stdout.write('\n--- scaffold placeholders never pair ---\n');
   const blind = byKey(diffPacks(repo(), snapshot({ ...SCOPE, 'observogram.unobserved.dashboard': 'this MCP offers no dashboards tool' })));
   assert(blind['DASH-crawled'] === 'notObserved:a:this MCP offers no dashboards tool' && blind['DASH-payments-main'] === 'notObserved:a:this MCP offers no dashboards tool',
     'an unobserved family keeps the unobserved reason, inside the scope or not', blind);
+}
+
+// ---------- dynamic metric families ----------
+// An exporter that mints one counter per queue cannot list its names; its
+// manifest declares a pattern (METRIC-FAM-NN), and a live name the pattern
+// matches reads as declared. Everything here must leave a pack without a
+// family byte for byte as it was.
+{
+  const declare = (pack, patterns, extra = {}) => {
+    const out = clone(pack);
+    out.metadata.annotations = {
+      ...out.metadata.annotations,
+      'crawler.discovered.metric_families': JSON.stringify(patterns.map(pattern => ({ pattern, exporter: 'acme-exporter', file: 'exporter/metrics-manifest.json', type: 'counter' }))),
+      ...extra,
+    };
+    return out;
+  };
+  const listing = (names, extra = {}) => {
+    const out = clone(scopedLivePack);
+    const all = [...JSON.parse(out.metadata.annotations['mcp.discovered.metric_names']), ...names];
+    out.metadata.annotations = {
+      ...out.metadata.annotations,
+      'mcp.discovered.metric_names': JSON.stringify(all),
+      'mcp.discovered.metric_names_count': String(all.length),
+      ...extra,
+    };
+    return out;
+  };
+  const claimed = (d, side = 'b') => d.layers.L2.inBoth.filter(x => x.matchedBy === 'declared-family').map(x => (side === 'b' ? x.b : x.a).title || (side === 'b' ? x.b : x.a).spec.name);
+  const keys = (list) => list.map(x => x.key);
+  const FAMILY = '^acme_queue_[a-z0-9_]+_total$';
+
+  const artefact = adapt(declare(scopedRepoPack, [FAMILY])).layers.L2.find(x => x.id === 'METRIC-FAM-01');
+  assert(artefact && artefact.spec.name_pattern === FAMILY && artefact.spec.origin_kind === 'exporter-family' && artefact.spec.origin_service === 'acme-exporter'
+    && artefact.spec.origin_file === 'exporter/metrics-manifest.json' && artefact.source === 'Declared',
+    'a declared family is a METRIC-FAM artefact naming its pattern, exporter and file', artefact);
+  for (const raw of ['{nope', '{"pattern":"^acme_"}', '[{"type":"counter"},7]']) {
+    const none = clone(scopedRepoPack);
+    none.metadata.annotations['crawler.discovered.metric_families'] = raw;
+    assert(!adapt(none).layers.L2.some(x => x.id?.startsWith('METRIC-FAM-')), 'an annotation that holds no family projects none', raw);
+  }
+
+  // Live names the pattern matches are inBoth, aligned, under the family.
+  const members = ['acme_queue_orders_total', 'acme_queue_refunds_total'];
+  const d = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing([...members, 'acme_other_total'])));
+  const entry = d.layers.L2.inBoth.find(x => x.b.spec?.name === members[0]);
+  assert(entry && entry.a.id === 'METRIC-FAM-01' && entry.match === 'aligned' && entry.matchedBy === 'declared-family' && entry.deltas.length === 0,
+    'a live member pairs with the family: aligned, matchedBy declared-family, no deltas', entry);
+  assert(JSON.stringify(claimed(d).sort()) === JSON.stringify(members), 'every live name the pattern matches is claimed, and only those', claimed(d));
+  assert(!keys(d.layers.L2.onlyInB).some(k => k.includes('acme_queue')) && !keys(d.layers.L2.onlyInA).some(k => k.includes('acme_queue')),
+    'a claimed member is not live-not-declared, and the family is never declared-not-live', [d.layers.L2.onlyInA, d.layers.L2.onlyInB]);
+  assert(keys(d.layers.L2.onlyInB).some(k => k.includes('acme_other_total')) && d.scope.metricPrefixes.includes('acme'),
+    "the pattern's prefix is in scope: the exporter's other metric is live, not declared, not parked", [keys(d.layers.L2.onlyInB), d.scope.metricPrefixes]);
+  const sum = d.summary.dynamicFamilies;
+  assert(sum.declared === 1 && sum.members === 2 && sum.unmatched.length === 0 && sum.refused.length === 0
+    && sum.families.length === 1 && sum.families[0].pattern === FAMILY && sum.families[0].members === 2 && sum.families[0].side === 'a' && sum.families[0].exporter === 'acme-exporter',
+    'summary.dynamicFamilies accounts for each family', sum);
+  // A member is a pair like any other: it counts in the ratios.
+  const without = diffPacks(adapt(scopedRepoPack), adapt(listing([])));
+  const noMember = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing(['acme_other_total'])));
+  assert(d.summary.aligned === noMember.summary.aligned + 2 && d.summary.aligned === without.summary.aligned + 2
+    && d.summary.alignment === Math.round((d.summary.aligned / d.summary.union) * 100) / 100
+    && d.summary.jaccard === Math.round((d.summary.inBoth / d.summary.union) * 100) / 100,
+    'members count in aligned and in the ratios', [d.summary, noMember.summary]);
+  const missing = clone(scopedRepoPack);
+  missing.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify([...JSON.parse(missing.metadata.annotations['crawler.discovered.metric_names']), 'acme_gone_a', 'acme_gone_b', 'acme_gone_c', 'acme_gone_d', 'acme_gone_e']);
+  const many = Array.from({ length: 200 }, (_, i) => `acme_queue_q${i}_total`);
+  const swamp = diffPacks(adapt(declare(missing, [FAMILY])), adapt(listing(many)));
+  const small = diffPacks(adapt(declare(missing, [FAMILY])), adapt(listing([])));
+  assert(swamp.summary.aligned === small.summary.aligned + 200 && swamp.summary.alignment > small.summary.alignment && swamp.summary.jaccard > small.summary.jaccard,
+    '200 members raise the ratios', [swamp.summary, small.summary]);
+  assert(swamp.summary.onlyInA === small.summary.onlyInA && keys(swamp.layers.L2.onlyInA).filter(k => k.includes('acme_gone_')).length === 5 && swamp.summary.dynamicFamilies.members === 200,
+    'five declared metrics that are gone stay named, and the summary says how much rests on a pattern', swamp.summary);
+  assert(d.summary.inBoth === d.layers.L1.inBoth.length + d.layers.L2.inBoth.length + d.layers.L2X.inBoth.length + d.layers.L3.inBoth.length + d.layers.L4.inBoth.length + d.layers.L5.inBoth.length + d.layers.GOV.inBoth.length,
+    'the members count as inBoth', d.summary);
+  assert(!d.scope.serviceTokens.includes('acme') && !d.scope.serviceTokens.includes('acmeexporter') && JSON.stringify(d.scope.exporterTokens) === JSON.stringify(['acme', 'acmeexporter']),
+    "a family does not lend its exporter's name to the service scope", d.scope);
+  assert(d.scope.declaredMetricCount === diffPacks(adapt(scopedRepoPack), adapt(listing([]))).scope.declaredMetricCount,
+    'a pattern is not counted as a declared metric', d.scope);
+
+  // A pack with no family keeps its bytes: no key, nothing moved.
+  const plain = diffPacks(adapt(scopedRepoPack), adapt(listing(members)));
+  assert(!('dynamicFamilies' in plain.summary) && !JSON.stringify(plain).includes('declared-family'),
+    'no family: the summary gains no key', plain.summary);
+  assert(keys(plain.layers.L2.onlyInB).length + keys(plain.layers.L2.outOfScope).length >= 2, 'no family: the same names are not claimed', plain.layers.L2);
+
+  // A literal pair wins over a family.
+  const literal = clone(scopedRepoPack);
+  literal.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify([...JSON.parse(literal.metadata.annotations['crawler.discovered.metric_names']), members[0]]);
+  const lit = diffPacks(adapt(declare(literal, [FAMILY])), adapt(listing(members)));
+  const byName = lit.layers.L2.inBoth.filter(x => x.b.spec?.name === members[0]);
+  assert(byName.length === 1 && byName[0].a.id.startsWith('METRIC-SRC-') && !byName[0].matchedBy && lit.summary.dynamicFamilies.members === 1,
+    'a name the pack declares literally pairs with the literal, not the family', byName);
+
+  // A folded family is tested by its series; names are as listed.
+  const series = ['acme_queue_wait_seconds_bucket', 'acme_queue_wait_seconds_count', 'acme_queue_wait_seconds_sum'];
+  const folded = diffPacks(adapt(declare(scopedRepoPack, ['^acme_queue_wait_seconds_bucket$'])), adapt(listing(series)));
+  const fam = folded.layers.L2.inBoth.filter(x => x.matchedBy === 'declared-family');
+  assert(fam.length === 1 && fam[0].b.series.length === 3 && folded.summary.dynamicFamilies.members === 1,
+    'a histogram the store lists as three series is one member, matched through any of them', fam);
+  const cased = diffPacks(adapt(declare(scopedRepoPack, ['^acme_queue_'])), adapt(listing(['ACME_QUEUE_ORDERS_TOTAL'])));
+  assert(cased.summary.dynamicFamilies.members === 0, 'a metric name is case-sensitive: a pattern matches it as listed', cased.summary.dynamicFamilies);
+  const long = `acme_queue_${'x'.repeat(260)}`;
+  const longD = diffPacks(adapt(declare(scopedRepoPack, ['^acme_queue_'])), adapt(listing([long])));
+  assert(longD.summary.dynamicFamilies.members === 0, 'a name longer than a pattern was timed against is not tested', longD.summary.dynamicFamilies);
+
+  // The first family that matches holds the member.
+  const two = diffPacks(adapt(declare(scopedRepoPack, ['^acme_queue_', '^acme_queue_orders_'])), adapt(listing(['acme_queue_orders_total'])));
+  const rows = two.summary.dynamicFamilies.families;
+  assert(rows.find(r => r.pattern === '^acme_queue_').members === 1 && rows.find(r => r.pattern === '^acme_queue_orders_').members === 0
+    && rows.find(r => r.pattern === '^acme_queue_orders_').covered === 1 && two.summary.dynamicFamilies.unmatched.length === 0,
+    'the first family that matches wins; the other did match a name, so it is not "matched nothing"', two.summary.dynamicFamilies);
+
+  // A family that matched nothing: unmatched where the other side read whole, not checked where it did not.
+  const empty = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing([])));
+  assert(JSON.stringify(empty.summary.dynamicFamilies.unmatched) === JSON.stringify([FAMILY]) && !JSON.stringify(empty.layers.L2.onlyInA).includes('METRIC-FAM'),
+    'no member: named in unmatched, never declared-not-live', empty.summary.dynamicFamilies);
+  const blindD = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing([], { 'observogram.unobserved.metric': 'this MCP offers no metric names tool' })));
+  assert(blindD.summary.dynamicFamilies.unmatched.length === 0 && blindD.summary.dynamicFamilies.families[0].notObserved === 'this MCP offers no metric names tool',
+    'the other side could not list metrics: not checked, with its reason, not unmatched', blindD.summary.dynamicFamilies);
+  const within = (scope) => diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing([], { 'observogram.scope.metric': JSON.stringify(scope) }))).summary.dynamicFamilies;
+  const outside = within({ by: 'prefix', values: ['payments_'] });
+  assert(outside.unmatched.length === 0 && /does not cover this family/.test(outside.families[0].notObserved),
+    'the other side read metrics within a scope that misses the family: not checked, not unmatched', outside);
+  const covering = within({ by: 'prefix', values: ['acme_'] });
+  assert(JSON.stringify(covering.unmatched) === JSON.stringify([FAMILY]) && !covering.families[0].notObserved,
+    'a scope that covers the family read everything it can name: nothing minted is unmatched', covering);
+  const excluding = within({ by: 'prefix', values: ['acme_'], exclude: ['^acme_queue_'] });
+  assert(excluding.unmatched.length === 0 && excluding.families[0].notObserved, 'a scope that also excludes by pattern may have dropped its names: not checked', excluding);
+
+  // A family that matched only metrics the pack also lists by name did match.
+  const listed = clone(scopedRepoPack);
+  listed.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify([...JSON.parse(listed.metadata.annotations['crawler.discovered.metric_names']), ...members]);
+  const emitted = diffPacks(adapt(declare(listed, [FAMILY])), adapt(listing(members))).summary.dynamicFamilies;
+  assert(emitted.members === 0 && emitted.unmatched.length === 0 && emitted.families[0].covered === 2,
+    'beside the names `packc emit` scraped, a family is not "matched nothing"', emitted);
+
+  // A side that says it cannot observe metrics claims nothing through a family.
+  const blindOwner = diffPacks(adapt(listing(['acme_queue_lost_total'])), adapt(declare(scopedRepoPack, [FAMILY], { 'observogram.unobserved.metric': 'no metric tool' })), { scopeMode: 'all' });
+  assert(blindOwner.summary.dynamicFamilies.members === 0 && blindOwner.layers.L2.notObserved.some(x => x.key.includes('acme_queue_lost_total')) && blindOwner.summary.dynamicFamilies.families[0].notObserved === 'no metric tool',
+    'a family on a side blind to metrics: the name stays not observed', blindOwner.summary.dynamicFamilies);
+
+  // Past the limit is a refusal too, never a silent drop.
+  const seventy = Array.from({ length: 70 }, (_, i) => `^acme_f${String(i).padStart(2, '0')}_`);
+  const capped = diffPacks(adapt(declare(scopedRepoPack, seventy)), adapt(listing(['acme_f69_x']))).summary.dynamicFamilies;
+  assert(capped.declared === 70 && capped.refused.length === 6 && capped.refused.every(r => /over the limit of 64/.test(r.reason)) && capped.members === 0,
+    'families past the limit are listed as refused', capped.refused);
+
+  // One pattern is one row, repeated in an annotation or across layers.
+  const repeated = diffPacks(adapt(declare(scopedRepoPack, [FAMILY, FAMILY])), adapt(declare(scopedRepoPack, [FAMILY, FAMILY])));
+  assert(repeated.layers.L2.inBoth.filter(x => x.key === `metric::family:${FAMILY}`).length === 1 && repeated.summary.dynamicFamilies.families.length === 2 && repeated.summary.dynamicFamilies.unmatched.length === 0,
+    'a repeated pattern pairs once and is one row per side', repeated.summary.dynamicFamilies);
+  const layered = adapt(declare(scopedRepoPack, [FAMILY]));
+  layered.layers.L2X = [...(layered.layers.L2X || []), { ...layered.layers.L2.find(x => x.id === 'METRIC-FAM-01'), id: 'METRIC-FAM-02' }];
+  const acrossLayers = diffPacks(layered, adapt(listing(members))).summary.dynamicFamilies;
+  assert(acrossLayers.families.length === 1 && acrossLayers.members === 2 && acrossLayers.unmatched.length === 0, 'a pattern in two layers is one row, its members counted once', acrossLayers);
+
+  // A pattern in an annotation is anyone's text: the manifest's rule again, and a refusal claims nothing.
+  for (const [pattern, why] of [['^node_', /belongs to a platform/], ['^(?=acme_).*', /lookaround/], ['^.*$', /literal metric-name prefix/], ['^acme_queue|.*', /alternative outside a group/], ['^ac', /literal metric-name prefix/], ['acme_', /anchored/], ['^acme_(a+)+$', /nested quantifier/], ['^acme_(', /invalid regex/]]) {
+    const bad = diffPacks(adapt(declare(scopedRepoPack, [pattern])), adapt(listing(members)));
+    const refused = bad.summary.dynamicFamilies.refused;
+    assert(refused.length === 1 && why.test(refused[0].reason) && claimed(bad).length === 0 && bad.summary.dynamicFamilies.members === 0 && bad.summary.dynamicFamilies.unmatched.length === 0,
+      `the pattern ${pattern} is refused, says why, and claims nothing`, bad.summary.dynamicFamilies);
+    assert(!JSON.stringify(bad.layers.L2.onlyInA).includes('METRIC-FAM') && !JSON.stringify(bad.layers.L2.inBoth).includes('METRIC-FAM'), 'a refused family is in no bucket', pattern);
+  }
+
+  // Either side may declare it: the snapshot on A, the repository on B.
+  const swapped = diffPacks(adapt(listing(members)), adapt(declare(scopedRepoPack, [FAMILY])), { scopeMode: 'all' });
+  const swap = swapped.layers.L2.inBoth.filter(x => x.matchedBy === 'declared-family');
+  assert(swap.length === 2 && swap.every(x => x.b.id === 'METRIC-FAM-01' && x.a.spec.name.startsWith('acme_queue_')) && !keys(swapped.layers.L2.onlyInA).some(k => k.includes('acme_queue'))
+    && swapped.summary.dynamicFamilies.families[0].side === 'b',
+    'a family on side B claims the unmatched metrics of side A', swap);
+
+  // One pattern on both sides is one declaration.
+  const twice = adapt(declare(scopedRepoPack, [FAMILY]));
+  const self = diffPacks(twice, adapt(declare(scopedRepoPack, [FAMILY])));
+  const selfRows = self.summary.dynamicFamilies;
+  assert(self.summary.onlyInA === 0 && self.summary.onlyInB === 0 && self.summary.drifted === 0 && self.summary.alignment === 1
+    && self.layers.L2.inBoth.some(x => x.key === `metric::family:${FAMILY}` && x.match === 'aligned') && selfRows.declared === 1 && selfRows.unmatched.length === 0 && self.collisions.length === 0,
+    'a self-diff with a family is fully aligned, the family paired with itself', self.summary);
+
+  // Declaring a family speaks for the metric kind even with no literal metric.
+  const bare = clone(scopedRepoPack);
+  for (const k of ['crawler.discovered.metric_names', 'crawler.discovered.metric_names_count', 'crawler.discovered.metric_origins']) delete bare.metadata.annotations[k];
+  const kindMode = diffPacks(adapt(declare(bare, [FAMILY])), adapt(listing([...members, 'unrelated_total'])), { scopeMode: 'family' });
+  assert(keys(kindMode.layers.L2.onlyInB).some(k => k.includes('unrelated_total')) && kindMode.summary.dynamicFamilies.members === 2,
+    'with only a family declared, the rest of the live metrics are in scope', kindMode.layers.L2.onlyInB);
+
+  // The other pairing keys reach the claim too.
+  const byNameMode = diffPacks(adapt(declare(scopedRepoPack, [FAMILY])), adapt(listing(members)), { identity: 'name' });
+  assert(byNameMode.summary.dynamicFamilies.members === 2 && byNameMode.identity.mode === 'name', 'a family claims under the name identity too', byNameMode.summary.dynamicFamilies);
 }
 
 report('diff');

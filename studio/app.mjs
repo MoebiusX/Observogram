@@ -43,7 +43,7 @@ import { openDrawer, closeDrawer } from './drawer.mjs';
 import { renderDiscoverDashboard, renderLayersView, renderCard, cardKey } from './layers-view.mjs';
 import { renderAtlasView } from './atlas-view.mjs';
 import { renderNeuronView } from './neuron-view.mjs';
-import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode } from './compare-view.mjs';
+import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode, buildAssessmentDecision } from './compare-view.mjs';
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
@@ -104,10 +104,18 @@ import { renderBuildCompile } from './build-compile-view.mjs';
 import { renderBuildVerify } from './build-verify-view.mjs';
 import { renderBuildDefinition } from './build-definition-view.mjs';
 import { renderBuildSheet } from './build-sheet-view.mjs';
+// The UPDATE journey (docs/UPDATE_JOURNEY.md): Build's second door — `update` opens an existing pack on Build's
+// screen and saves the next version of it. Models, renderers and the two loaders.
+import { draftFromReopen, openDecision, changesSince, handoffSentence, addDraft, toAddition, defaultBurnWindows, updatablePacks, pickerRows } from './update-model.mjs';
+import { renderUpdateOpen, definitionExtrasHtml, wireDefinitionExtras, renderAddEditor, homeUpdateListHtml } from './update-view.mjs';
+import { reopenPack, saveUpdate } from './build-api.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS } from './overview-model.mjs';
+import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -481,16 +489,17 @@ function renderPackSelect() {
   sel.innerHTML = '';
   ensureServiceFromPack();
   const options = state.catalog.filter(p => packMatchesService(p, state.selectedService, { side: 'a' }));
-  for (const p of options) {
+  // One row per pack at its current version, its earlier versions under it (docs/UPDATE_JOURNEY.md "What Save does").
+  for (const p of pickerRows(options)) {
     const opt = document.createElement('option');
     opt.value = p.id;
     // Uploaded packs lead with a folder glyph so the user can tell
     // them apart from file-backed catalog entries at a glance. Tier
     // is omitted from the option text — it already renders as a
     // separate badge on the picker chrome.
-    opt.textContent = p.ok
-      ? packSelectLabel(p, { prefixUploaded: true })
-      : `${p.label} (error)`;
+    opt.textContent = !p.ok ? `${p.label} (error)`
+      : p.earlier ? `   ↳ v${p.version || '?'} · earlier version`
+        : packSelectLabel(p, { prefixUploaded: true });
     if (!p.ok) opt.disabled = true;
     sel.appendChild(opt);
   }
@@ -884,6 +893,9 @@ export function renderMainView() {
     return;
   }
   // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
+  // Overview (the simplified front door): one service, three answers, read
+  // from the engines; Expert — every screen below — is one switch away.
+  if (state.mode === 'overview') { renderOverviewHost(view); return; }
   if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
@@ -1395,7 +1407,7 @@ function routeTo(id) {
     openServiceIn(id, { serviceId: state.serviceId, env: state.serviceEnv });
     return;
   }
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings') state.mode = 'single';
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview') state.mode = 'single';
   state.view = id;
   state.activeCardKey = null;
   state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
@@ -1478,6 +1490,10 @@ function installObservaChrome(chrome) {
       <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
       <div class="observa-actions" aria-label="Advanced tools and account">
+        <div class="observa-ui-mode og-seg" role="group" aria-label="Studio mode">
+          <button type="button" class="og-btn" data-ui-mode="overview" aria-pressed="false" title="One grade, one time, one next step">Overview</button>
+          <button type="button" class="og-btn" data-ui-mode="expert" aria-pressed="true" title="Every artefact, check and operation">Expert</button>
+        </div>
         <div class="observa-adv-wrap">
           <button type="button" class="observa-action observa-adv-toggle"
                   aria-haspopup="true" aria-expanded="false" aria-controls="observa-adv-menu"
@@ -1498,6 +1514,10 @@ function installObservaChrome(chrome) {
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
               <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="overview">
+              <span class="observa-adv-item-label">Overview</span>
+              <span class="observa-adv-item-sub">the simplified view: one service, its grade, whether it still holds live, the next step</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
               <span class="observa-adv-item-label">Live MCP connection</span>
@@ -1582,6 +1602,7 @@ function installObservaChrome(chrome) {
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
       if (action === 'settings') { enterSettings(null); return; }
+      if (action === 'overview') { setUiMode('overview'); enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1636,7 +1657,7 @@ function paintObservaActiveTab() {
   // The landing/reset hero is NOT a tab — it's the pre-workspace start
   // screen. Clearing the active marker there is what keeps Discover from
   // "being" the landing hero: you only light a tab once you're working.
-  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings';
+  const onLanding = state.mode === 'home' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview';
   for (const btn of document.querySelectorAll('.observa-tab')) {
     // A workflow tab is active only when we're NOT in an advanced view
     // and NOT on the landing screen.
@@ -1722,11 +1743,16 @@ async function boot() {
   // once the catalogue answered — so a user in no org never reaches them.
   // Both viewer routes; a bundle's 501 leaves the derived tiles, silently.
   await Promise.all([refreshAccess(), refreshServices()]);
+  // Which face of the studio this browser opens: the ?mode= query, else the
+  // remembered preference, else Overview when there is a service to show.
+  decideUiModeAtBoot();
+  setupUiModeSwitch();
 
   setupUpload();
   setupTheme();
   setupResetButton();
   setupExportButton();
+  setupUpdateButton();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
   // reference packs available even before the user visits the home
   // examples disclosure. AWAITED so the persistence rehydrate below can
@@ -1775,10 +1801,266 @@ async function boot() {
   // Try to rehydrate from the previous session before falling back to
   // home. Persistence stays suspended until rehydrate finishes so the
   // boot-time mutations don't fire `schedule()` writes.
-  const restored = await rehydrateFromPersistence();
+  // In Overview the snapshot's Expert fields are left as they are for the
+  // next Expert session; only the service Overview showed is read back.
+  const saved = state.uiMode === 'overview' ? persistence.read() : null;
+  const restored = state.uiMode === 'overview'
+    ? await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true })
+    : await rehydrateFromPersistence();
   persistence.resume();
   if (!restored) goHome();
 }
+
+// ============================================================
+// OVERVIEW — the simplified front door: one service, three answers (how
+// well it is observed · is that still true right now · what to do next).
+// studio/overview-model.mjs words it from the engines, overview-view.mjs
+// draws it, overview-api.mjs reads it; this controller holds the facts and
+// the actions. uiMode ('overview' | 'expert') is the browser's preference
+// (localStorage studioUiMode.v1), decided on the first run from the
+// services table; Expert is today's studio, untouched.
+// ============================================================
+
+const emptyOverviewFacts = () => ({ layered: null, layeredError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null, running: false, startError: null, loaded: false });
+let overviewFacts = emptyOverviewFacts();
+// Bumped by every entry and refresh: a read that settles after the user
+// moved to another service never repaints the wrong one.
+let overviewGeneration = 0;
+// The layout on screen: the board, or the three sentences (?layout=simple).
+let overviewLayout = 'board';
+
+function readUiModePreference() {
+  try { return localStorage.getItem(UI_MODE_KEY); } catch (_) { return null; }
+}
+
+function setUiMode(mode) {
+  if (!UI_MODES.includes(mode)) return;
+  state.uiMode = mode;
+  try { localStorage.setItem(UI_MODE_KEY, mode); } catch (_) { /* private mode: the preference lives for the page */ }
+  paintUiModeSwitch();
+}
+
+// The ?mode= query wins and is remembered; else the preference; else
+// Overview when the services table has rows — the empty studio boots as
+// before, on the home. The layout the same way: ?layout=board|simple wins
+// and is remembered; the board is the default, the simple layout (the three
+// sentences alone) the fallback a hand can reach for.
+function decideUiModeAtBoot() {
+  let query = null, layoutQuery = null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    query = params.get('mode');
+    layoutQuery = params.get('layout');
+  } catch (_) { query = null; layoutQuery = null; }
+  state.uiMode = decideUiMode({ saved: readUiModePreference(), query, hasServices: (state.services?.length || 0) > 0 });
+  if (UI_MODES.includes(query)) { try { localStorage.setItem(UI_MODE_KEY, query); } catch (_) { /* as above */ } }
+  let savedLayout = null;
+  try { savedLayout = localStorage.getItem(OVERVIEW_LAYOUT_KEY); } catch (_) { savedLayout = null; }
+  overviewLayout = decideOverviewLayout({ saved: savedLayout, query: layoutQuery });
+  if (OVERVIEW_LAYOUTS.includes(layoutQuery)) { try { localStorage.setItem(OVERVIEW_LAYOUT_KEY, layoutQuery); } catch (_) { /* as above */ } }
+  paintUiModeSwitch();
+}
+
+// The Overview | Expert switch in the chrome: pressed follows the mode on
+// screen, so Expert reads pressed on every screen but Overview.
+function paintUiModeSwitch() {
+  const seg = document.querySelector('.observa-ui-mode');
+  if (!seg) return;
+  const onOverview = state.mode === 'overview';
+  seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
+    b.setAttribute('aria-pressed', ((b.dataset.uiMode === 'overview') === onOverview) ? 'true' : 'false');
+  });
+}
+
+function setupUiModeSwitch() {
+  // The board reads the screen's height once per paint (the seven criteria
+  // open or behind Why this grade): a window dragged to the other monitor
+  // is repainted when the query flips.
+  try {
+    window.matchMedia?.(COMPACT_SCREEN_QUERY)?.addEventListener?.('change', () => { if (state.mode === 'overview') renderMainView(); });
+  } catch (_) { /* no matchMedia: the first reading stands */ }
+  const seg = document.querySelector('.observa-ui-mode');
+  if (!seg) return;
+  seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
+    b.addEventListener('click', () => {
+      if (b.dataset.uiMode === 'overview') {
+        setUiMode('overview');
+        enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+      } else if (state.mode === 'overview') {
+        enterExpert();
+      } else {
+        setUiMode('expert');
+      }
+    });
+  });
+  paintUiModeSwitch();
+}
+
+// The model from the facts on hand: the pack-alone grade is the engine's
+// (computeOverviewDiagnostic), its causes buildAssessmentDecision's; both are
+// computed here, in the DOM world, and handed to the pure model.
+// The posture, the grade and its causes are derived from the layered pack
+// once per pack object: a repaint while a check runs, or after a start
+// error, reuses them (the matrix walks every artefact of the pack).
+let overviewDerived = { layered: null, posture: null, diagnostic: null, diagnosticError: null, decision: null };
+function deriveOverview(f) {
+  if (overviewDerived.layered === f.layered && overviewDerived.layeredError === f.layeredError) return overviewDerived;
+  const d = { layered: f.layered, layeredError: f.layeredError, posture: null, diagnostic: null, diagnosticError: f.layeredError, decision: null };
+  if (f.layered && !d.diagnosticError) {
+    try {
+      d.posture = computeOverviewPosture(f.layered);
+      d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture);
+    } catch (e) { d.diagnosticError = e.message || String(e); }
+  }
+  if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic }); } catch (_) { d.decision = null; } }
+  overviewDerived = d;
+  return d;
+}
+
+function overviewModel() {
+  const f = overviewFacts;
+  const { posture, diagnostic, diagnosticError, decision } = deriveOverview(f);
+  return buildOverviewModel({
+    services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog,
+    serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack,
+    pending: !f.loaded,
+    diagnostic, diagnosticError, decision,
+    journeys: f.journeys, journeysError: f.journeysError, run: f.run,
+    running: f.running, startError: f.startError,
+    layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
+    now: Date.now(), productName: state.brand?.chrome?.name || '',
+  });
+}
+
+function renderOverviewHost(view) {
+  renderOverview(view, overviewModel(), overviewHost);
+}
+
+async function refreshOverviewFacts() {
+  const gen = ++overviewGeneration;
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!picked.service) {
+    overviewFacts = { ...emptyOverviewFacts(), loaded: true };
+    if (state.mode === 'overview') renderMainView();
+    return;
+  }
+  const facts = await loadOverviewFacts({
+    pack: picked.pack, env: picked.env,
+    journeyFor: (journeys) => journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null }),
+  });
+  if (gen !== overviewGeneration) return;
+  overviewFacts = { ...facts, running: false, startError: null, loaded: true };
+  if (state.mode === 'overview') renderMainView();
+}
+
+// Enter Overview on a service (the remembered one, else the first with a
+// pack of its own). With `rehydrate`, nothing to show answers false and the
+// caller falls back to the home.
+async function enterOverview(serviceId = null, env = null, { rehydrate = false } = {}) {
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: serviceId ?? state.overviewServiceId, env: env ?? state.overviewEnv, isLiveAggregatePack });
+  if (!picked.service && rehydrate) return false;
+  navGeneration++;
+  state.mode = 'overview';
+  state.pack = null;
+  emptyVerdicts();
+  state.packB = null;
+  state.diff = null;
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  state.compileCatalog = null;
+  state.compileContent = null;
+  state.overviewServiceId = picked.service?.id ?? null;
+  state.overviewEnv = picked.env ?? null;
+  state.selectedService = picked.service?.slug ?? null;
+  closeSettingsEditor({ focus: false });
+  overviewFacts = emptyOverviewFacts();
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  refreshOverviewFacts().catch((e) => { console.error('[overview]', e); });
+  persistence.schedule();
+  return !!picked.service;
+}
+
+// Expert is today's studio: the service page of the service Overview showed,
+// with Discover · Diagnose · Remediate · Build, exactly as it is.
+function enterExpert() {
+  setUiMode('expert');
+  const id = state.overviewServiceId;
+  if (Number.isInteger(id) && findServiceRecord(id)) { enterServicePage(id, state.overviewEnv); return; }
+  goHome();
+}
+
+// The board's columns open Expert's own views, bound to this service and
+// environment: Discover (the layer inventory), Diagnose ("See what to fix",
+// the compliance report), Remediate (compile and deploy the delta).
+function openOverviewView(view) {
+  const id = state.overviewServiceId;
+  const env = state.overviewEnv;
+  setUiMode('expert');
+  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn(view, { serviceId: id, env }); return; }
+  goHome();
+}
+const openOverviewDiscover = () => openOverviewView('layers');
+const openOverviewDiagnose = () => openOverviewView('compare');
+const openOverviewRemediate = () => openOverviewView('compile');
+
+// "See the differences": Expert's Neuron on this service's journey — the
+// run whose numbers Overview showed, one click away.
+function openOverviewNeuron() {
+  const name = overviewFacts.journey?.name || null;
+  setUiMode('expert');
+  if (name) state.neuronJourney = name;
+  routeTo('neuron');
+}
+
+// "Check now": run the journey (the server drafts the live side again and
+// compares), then read the new last run. A 502 means the live side did not
+// answer and the server kept a vantage-lost record — the re-read shows it; a
+// refusal to start keeps the previous sentence and names the reason.
+async function runOverviewCheck() {
+  const journey = overviewFacts.journey;
+  if (!journey || overviewFacts.running) return;
+  const gen = overviewGeneration;
+  overviewFacts = { ...overviewFacts, running: true, startError: null };
+  renderMainView();
+  announce(`Checking ${state.selectedService || 'the service'} against live…`);
+  let refused = null;
+  try { await runServiceCheck(journey.name); }
+  catch (e) { if (e?.status !== 502) refused = e?.message || String(e); }
+  if (gen !== overviewGeneration || state.mode !== 'overview') return;
+  if (refused) {
+    overviewFacts = { ...overviewFacts, running: false, startError: refused };
+    renderMainView();
+    announce('The check could not start.');
+    return;
+  }
+  overviewFacts = { ...overviewFacts, running: false };
+  await refreshOverviewFacts();
+  announce('Check finished.');
+  // The repaint replaced the button the user pressed: keyboard focus goes
+  // back to it (or to the next step's button when there is no Check now).
+  if (state.mode === 'overview') {
+    const back = document.querySelector('#layer-view .ov-check') || document.querySelector('#layer-view .ov-next__btn');
+    back?.focus?.({ preventScroll: true });
+  }
+}
+
+const overviewActions = {
+  selectService: (id) => { enterOverview(Number.isInteger(id) ? id : null, null); },
+  selectEnv: (name) => { enterOverview(state.overviewServiceId, typeof name === 'string' ? name : null); },
+  checkNow: runOverviewCheck,
+  openDiscover: openOverviewDiscover,
+  openDiagnose: openOverviewDiagnose,
+  openRemediate: openOverviewRemediate,
+  openNeuron: openOverviewNeuron,
+  expert: enterExpert,
+  retry: async () => { await refreshServices(); await refreshOverviewFacts(); },
+};
+const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
 // ============================================================
 // Home / Analyze / Compare mode transitions
@@ -1860,13 +2142,17 @@ function homeChoiceHtml({ checkOpen }) {
           <span class="home-choice-path">Discover / Diagnose / Remediate</span>
           <span class="home-choice-cta">Inspect a service</span>
         </button>
-        <button type="button" class="home-choice-card is-build" id="home-choice-build">
+        <div class="home-choice-card is-build has-two" role="group" aria-labelledby="home-build-title">
           <span class="home-choice-key" aria-hidden="true">⬡</span>
-          <span class="home-choice-title">Build a new pack</span>
-          <span class="home-choice-sub">Define a service and generate a pack you can review.</span>
+          <span class="home-choice-title" id="home-build-title">Build or update a pack</span>
+          <span class="home-choice-sub">Define a service and generate a pack you can review — or open one you have and save its next version.</span>
           <span class="home-choice-path">Define / Compile / Verify</span>
-          <span class="home-choice-cta">Create a pack</span>
-        </button>
+          <span class="home-choice-two">
+            <button type="button" class="home-choice-cta is-btn" id="home-choice-build">Start a new pack</button>
+            <button type="button" class="home-choice-cta is-btn is-quiet" id="home-choice-update" aria-expanded="false" aria-controls="home-update-list">Update a pack you have</button>
+          </span>
+          <div class="upd-home" id="home-update-list" hidden></div>
+        </div>
       </div>
     </div>`;
 }
@@ -3667,6 +3953,22 @@ function wireHomeChoice(view, model) {
   const buildBtn = view.querySelector('#home-choice-build');
   if (!model.build.enabled) markUnavailable(buildBtn, model.build.reason);
   buildBtn?.addEventListener('click', () => (model.build.enabled ? enterBuildMode('define') : explainUnavailable(model.build.reason)));
+  // The second door (docs/UPDATE_JOURNEY.md "Where it starts"): this workspace's packs made in Build,
+  // `name · version · made in Build`; a pick opens it on Compile. Updating writes a pack: the same gate as Build.
+  const updateBtn = view.querySelector('#home-choice-update');
+  const list = view.querySelector('#home-update-list');
+  if (!model.build.enabled) markUnavailable(updateBtn, model.build.reason);
+  updateBtn?.addEventListener('click', () => {
+    if (!model.build.enabled) { explainUnavailable(model.build.reason); return; }
+    const open = updateBtn.getAttribute('aria-expanded') !== 'true';
+    updateBtn.setAttribute('aria-expanded', String(open));
+    if (!list) return;
+    list.hidden = !open;
+    if (!open) return;
+    list.innerHTML = homeUpdateListHtml(updatablePacks(state.catalog));
+    for (const b of list.querySelectorAll('[data-upd-open]')) b.addEventListener('click', () => enterUpdateMode(b.dataset.updOpen, { from: 'home' }));
+    list.querySelector('[data-upd-open]')?.focus({ preventScroll: true });
+  });
 }
 
 // The signed-in service gate and the local hero are one screen now: the
@@ -3732,7 +4034,7 @@ function updateObservaServiceChip() {
   if (!chip) return;
   const derived = serviceCatalogue().find(s => s.key === state.selectedService);
   const m = serviceChipModel({ services: state.services, selected: state.selectedService, derivedLabel: derived?.label ?? null });
-  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || m.kind === 'none') { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview' || m.kind === 'none') { chip.hidden = true; return; }
   const wantTag = m.kind === 'record' ? 'BUTTON' : 'SPAN';
   if (chip.tagName !== wantTag) {
     const next = document.createElement(wantTag.toLowerCase());
@@ -3826,8 +4128,9 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
   // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
-  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings';
+  const isHome = state.mode === 'home' || state.mode === 'build' || state.mode === 'service' || state.mode === 'settings' || state.mode === 'overview';
   updateObservaServiceChip();
+  paintUiModeSwitch();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
   // must never be hidden by view. Only the legacy (non-chrome) layout
@@ -3861,6 +4164,16 @@ function applyModeChrome() {
   // pack's manifest + compiled artefacts).
   const exportBtn = $('#export-btn');
   if (exportBtn) exportBtn.hidden = isHome || !focusedPackId();
+  // `update` is an operation on a pack, so it sits with the other operations, beside export (docs/UPDATE_JOURNEY.md
+  // "Where it starts"): shown when a pack is open. A viewer sees it disabled, with the reason, on the click.
+  const updateBtn = $('#update-btn');
+  if (updateBtn) {
+    updateBtn.hidden = isHome || !focusedPackId();
+    const writable = state.access?.canWrite !== false;
+    updateBtn.setAttribute('aria-disabled', writable ? 'false' : 'true');
+    updateBtn.classList.toggle('is-unavailable', !writable);
+    updateBtn.title = writable ? 'Update this pack — open it on Build’s screen, change it, save the next version of it' : `Updating a pack ${state.access?.reason || 'needs the operator role here'}`;
+  }
   // The header's cards follow the mode too: leaving the BUILD journey through
   // its exit bar (goHome, or enterAnalyzeMode when a pack was open) once left
   // the three build cards up, the last step highlighted and the tagline
@@ -3922,6 +4235,18 @@ function setupResetButton() {
 // Export button — download the focused pack as one ZIP: its canonical
 // pack.yaml plus every compiled artefact. The server builds the bundle
 // (GET /api/packs/:id/export.zip); here we just trigger the download.
+// `update` on the open pack (Pack A): the UPDATE journey's door from any workspace screen.
+function setupUpdateButton() {
+  const btn = $('#update-btn');
+  if (!btn) return;
+  btn.onclick = () => {
+    const id = focusedPackId();
+    if (!id) { toast('Load a pack first', 'error'); return; }
+    if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+    enterUpdateMode(id, { from: 'pack' });
+  };
+}
+
 function setupExportButton() {
   const btn = $('#export-btn');
   if (!btn) return;
@@ -3952,7 +4277,8 @@ function setupHomeAffordance() {
     legacy.onclick = () => goHome();
   }
   const brand = document.querySelector('.observa-brand');
-  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); goHome(); });
+  // The brand is "start over": Overview's front door in Overview, home in Expert.
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverview(); return; } goHome(); });
 }
 
 // ============================================================
@@ -3993,9 +4319,70 @@ export function enterBuildMode(step) {
 }
 let buildTargets = null;
 
+// ============================================================
+// The UPDATE journey (docs/UPDATE_JOURNEY.md) — Build's second door. `update`
+// reopens a pack: the server reads it as stored, recovers Build's inputs and
+// the recorded additions, regenerates and compares (POST /api/library/reopen);
+// the pure model decides what the user sees (update-model.mjs openDecision):
+// the pack reopens exactly → Compile, with one line; otherwise one panel.
+// ============================================================
+
+// The Open stage on screen: null, { pending, id } while the server answers, or { decision, reopen, from }.
+let updateOpen = null;
+
+export async function enterUpdateMode(packId, { from = 'pack' } = {}) {
+  if (!packId) return;
+  if (state.access?.canWrite === false) { explainUnavailable(state.access.reason); return; }
+  navGeneration++;
+  const gen = navGeneration;
+  state.mode = 'build';
+  state.activeCardKey = null;
+  updateOpen = { pending: true, id: packId, from };
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  let reopen;
+  try { reopen = await reopenPack(packId); }
+  catch (e) { reopen = { ok: false, errors: [e.message] }; }
+  if (navGeneration !== gen) return;   // the user went elsewhere meanwhile
+  const decision = openDecision({ reopen, draft: state.build, access: state.access || { canWrite: true } });
+  if (decision.kind === 'open') { openFromReopen(reopen, { from, notice: decision.notice }); return; }
+  updateOpen = { decision, reopen, from };
+  renderMainView();
+  announce(decision.sentence);
+}
+
+// Build opened on the pack: the draft is the pack's own definition (its inputs, its additions — the ones it
+// records plus the hand-added artefacts read in), seeded, on Compile. The pack reopened is what Save updates.
+function openFromReopen(reopen, { from = 'pack', notice = '' } = {}) {
+  const additions = [...(reopen.additions || []), ...(reopen.adoptable?.additions || [])];
+  const fields = draftFromReopen(reopen, { additions, from });
+  state.build = { ...defaultBuildState(), ...fields, updateBase: reopen, updateNotice: notice || null };
+  updateOpen = null;
+  // The library must be loaded for the draft to instantiate; enterBuildMode handles both.
+  enterBuildMode('compile');
+  if (notice) { toast(notice); announce(notice); }
+  persistence.schedule();
+}
+
+// The Open panel's one action.
+function updateOpenAction(id) {
+  const o = updateOpen;
+  if (!o?.decision) return;
+  if (id === 'continue') { updateOpen = null; enterBuildMode(state.build.step); return; }
+  if (id === 'discard' || id === 'open-with-build-values') { openFromReopen(o.reopen, { from: o.from, notice: `Opened ${o.reopen.name || 'the pack'} v${o.reopen.version || '?'}${id === 'open-with-build-values' ? ' with Build’s values — each appears on Verify as a change' : ''}.` }); return; }
+  if (id === 'open-head' && o.reopen?.head?.id) { enterUpdateMode(o.reopen.head.id, { from: o.from }); return; }
+  // 'leave' (and anything else): back where the user came from, the pack untouched.
+  updateOpen = null;
+  if (state.selectedPackId && o.from !== 'home') { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  goHome();
+}
+
 // Leave the journey without a hand-off: back to the pack that was open, or home.
 function exitBuildMode() {
   if (state.mode !== 'build') return;
+  updateOpen = null;
   state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
   // Opened from a service page (no pack was open): back to that page. A row
@@ -4110,6 +4497,12 @@ function syncBuildEditor() {
   const b = state.build;
   const library = buildLibraryCache();
   if (state.mode !== 'build' || !b?.editor || !library) { if (el && el.innerHTML) el.innerHTML = ''; return; }
+  // The add editor (+ SLO · + Route · + Alert rule): its own form in the editor's shell, the draft on b.editor.
+  if (b.editor.add) {
+    renderAddEditor(buildEditorHost(), { draft: b.editor.draft, build: b, result: b.result, serverError: b.editor.error || null }, buildHost, { focus: buildEditorFocus === 'first' ? null : buildEditorFocus });
+    buildEditorFocus = null;
+    return;
+  }
   const model = buildEditorModel({ build: b, library, mode: editorModeFor(b.step) });
   // The SLI it was over is gone (its entry deselected, a custom one removed): the editor closes.
   if (!model) { b.editor = null; if (el) el.innerHTML = ''; return; }
@@ -4184,6 +4577,9 @@ function applyInstantiateOk(b, res) {
     summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
     // The adapter's layered projection — what the stack draws and what Discover will show.
     adapted: res.adapted || null,
+    // The UPDATE journey: the additions as applied (and refused), and the saved pack beside this one (review).
+    additions: res.additions || null,
+    review: res.review || null,
   };
   b.error = null;
   b.preview = null;
@@ -4462,6 +4858,88 @@ const buildActions = {
     buildFocusNext = `.build-slab[data-layer="${CSS.escape(layer)}"] .build-slab-edge`;
     rerenderBuild();
   },
+  // ---- the UPDATE journey (docs/UPDATE_JOURNEY.md) ----
+  // The Open panel's action (update-view.mjs renderUpdateOpen).
+  openAction: updateOpenAction,
+  // + SLO · + Route · + Alert rule: the add editor over a fresh draft, prefilled from the pack.
+  openAdd(kind, { opener = null } = {}) {
+    const b = state.build;
+    if (!['slo', 'route', 'alert_rule'].includes(kind)) return;
+    b.editor = { add: kind, draft: addDraft(kind, { build: b, result: b.result }), error: null };
+    buildEditorOpener = opener ? focusKeySelector(opener) : null;
+    buildEditorOpenerKey = opener || null;
+    buildEditorFocus = 'first';
+    rerenderBuild();
+  },
+  // The form as typed: redrawn in place (no regenerate until Add).
+  updateAddDraft(draft, { focus = null } = {}) {
+    const b = state.build;
+    if (!b.editor?.add) return;
+    b.editor = { ...b.editor, draft, error: null };
+    buildEditorFocus = focus;
+    syncBuildEditor();
+  },
+  defaultWindowsFor(sliType) { return defaultBurnWindows(sliType, state.build.tier); },
+  // Add: the addition goes on the draft; the pack regenerates with it (the engine applies it after the generate
+  // and names a refusal as a warning of kind `addition`, which the Compile queue shows).
+  commitAdd() {
+    const b = state.build;
+    if (!b.editor?.add) return;
+    const addition = toAddition(b.editor.draft, { build: b, result: b.result });
+    if (!addition) { syncBuildEditor(); return; }
+    b.additions = [...(b.additions || []), addition];
+    b.editor = null;
+    returnFocusToOpener();
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  // "Changes since v0.1.0": undo one row — the patch that restores what the row changed.
+  undoChange(row) {
+    if (!row?.restore) return;
+    Object.assign(state.build, row.restore);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+    announce(`Undone: ${row.text}`);
+  },
+  enterUpdate(id) { enterUpdateMode(id, { from: 'pack' }); },
+  // Save as the next version of the pack opened (POST /api/library/update): the base is kept under it, Pack A
+  // moves to the new version, and the message is built only from what the answer says.
+  async saveUpdate() {
+    const b = state.build;
+    if (!b.result || !b.update?.id) return;
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await saveUpdate(b.update.id, canonical); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (!res?.ok) {
+      b.saveError = { errors: res?.errors || [res?.error || 'unknown error'], newer: res?.newer || null };
+      rerenderBuild();
+      toast(`Not saved: ${b.saveError.errors.join('; ')}`, 'error');
+      return;
+    }
+    const id = res.registered.id;
+    const changes = changesSince(b).count;
+    b.saveError = null;
+    b.registeredId = id;
+    try { await refreshCatalogue(); } catch (e) { toast(`Saved, but the catalog did not refresh: ${e.message}`, 'error'); }
+    state.pack = res.adapted;
+    state.conformance = withPlaceholderPasses(res);
+    state.symbolTable = buildSymbolTable(res.adapted);
+    await loadVerdicts(id);
+    state.uploadedSource = res.registered.source;
+    state.mode = 'single';
+    state.view = 'layers';
+    state.layerFilter = 'all';
+    const env = canonical.metadata?.annotations?.['library.environment'] || defaultEnvFor(id);
+    // Pack A moves to the new version; Pack B is never touched.
+    enterAnalyzeMode(id, env);
+    paintObservaActiveTab();
+    const message = handoffSentence({ name: canonical.metadata?.name || b.update.name, version: res.registered.version, previousVersion: res.registered.previousVersion, changes });
+    toast(message);
+    announce(message);
+  },
   setStep: goToBuildStep,
   exit: exitBuildMode,
   // VERIFY: one compile target previewed from the generated canonical —
@@ -4620,6 +5098,16 @@ function renderBuildView(view) {
   shell.append(exitBar, def, main);
   view.appendChild(shell);
 
+  // The UPDATE journey's Open stage: while the server reads the pack, and when it cannot be reopened without a
+  // word — one panel in the main column, no definition column (there is no definition yet).
+  if (updateOpen) {
+    shell.classList.add('is-opening');
+    def.hidden = true;
+    if (updateOpen.pending) main.innerHTML = '<div class="placeholder">Opening the pack — reading it as stored, rebuilding it from its definition…</div>';
+    else renderUpdateOpen(main, updateOpen.decision, buildHost);
+    return;
+  }
+
   const library = buildLibraryCache();
   if (!library) {
     main.innerHTML = '<div class="placeholder">Loading the library…</div>';
@@ -4634,6 +5122,16 @@ function renderBuildView(view) {
   const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
   const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
   renderBuildDefinition(def, definition, host);
+  // Past DEFINE the column gains the add actions (+ SLI · + SLO · + Route · + Alert rule) and, on an update,
+  // "Changes since v0.1.0" with undo (docs/UPDATE_JOURNEY.md "Compile"); read-only on Verify.
+  if (b.step !== 'define') {
+    const changes = changesSince(b);
+    const extras = document.createElement('div');
+    extras.className = 'upd-def-extras';
+    extras.innerHTML = definitionExtrasHtml({ build: b, changes, readOnly: b.step === 'verify' });
+    (def.querySelector('.build-def-inner') || def).appendChild(extras);
+    wireDefinitionExtras(extras, { changes }, host);
+  }
   // The status line goes to the one persistent live region (#build-status, outside this
   // re-rendered tree) and only when it changed: the summary block itself is rebuilt on every
   // re-render, so a live region on it announced nothing, or the whole block after each keystroke.
@@ -4656,6 +5154,14 @@ function renderBuildView(view) {
       const m = buildCompileModel({ build: b, library, clauses });
       stack = m.stack;
       renderBuildCompile(stepEl, m, host);
+      // The Open stage's one line, on the pack just opened for update, until the first change.
+      if (b.updateNotice && !changesSince(b).count) {
+        const note = document.createElement('p');
+        note.className = 'build-note upd-notice';
+        note.setAttribute('role', 'note');
+        note.textContent = b.updateNotice;
+        stepEl.querySelector('.build-step-head')?.insertAdjacentElement('afterend', note);
+      }
       break;
     }
     case 'define':
@@ -7604,6 +8110,8 @@ async function testLiveConnection() {
     const form = scopeFormModel(liveUi.jobs?.scope);
     $('#live-scope-prefixes').value = form.prefixes;
     $('#live-scope-folders').value = form.folders;
+    $('#live-scope-exclude').value = form.exclude;
+    $('#live-scope-groups').value = form.groups;
     $('#live-scope-note').textContent = form.errors.length ? `The configured scope does not parse: ${form.errors.join('; ')}` : form.note;
     const kind = liveUi.kindChosen ?? preselectedKind(liveUi.jobs?.scope?.from);
     document.querySelector(`input[name="live-kind"][value="${kind}"]`).checked = true;
@@ -7628,7 +8136,7 @@ async function startLiveFromPanel() {
     kind, ...target,
     ...(name ? { packName: name } : {}),
     ...(label ? { label } : {}),
-    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value }) } : {}),
+    ...(kind === 'snapshot' ? { scope: scopeFromForm({ prefixes: $('#live-scope-prefixes').value, folders: $('#live-scope-folders').value, exclude: $('#live-scope-exclude').value, groups: $('#live-scope-groups').value }) } : {}),
   };
   const btn = $('#draft-mcp-go-btn');
   btn.disabled = true;

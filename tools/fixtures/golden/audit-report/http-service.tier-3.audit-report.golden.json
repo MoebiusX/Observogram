@@ -14,9 +14,9 @@
       "prod"
     ],
     "criticality": "tier-3",
-    "artefacts": 26,
+    "artefacts": 27,
     "sources": {
-      "Declared": 12,
+      "Declared": 13,
       "Verified": 0,
       "Scaffold": 14
     }
@@ -700,9 +700,9 @@
   },
   "assessments": {
     "available": false,
-    "artefacts": 26,
+    "artefacts": 27,
     "counts": {
-      "unreviewed": 26,
+      "unreviewed": 27,
       "trusted": 0,
       "suspect": 0,
       "failed": 0
@@ -1080,13 +1080,13 @@
         "label": "Alert rule",
         "layer": "L4",
         "group": "rule",
-        "count": 0,
-        "declared": 0,
+        "count": 1,
+        "declared": 1,
         "verified": 0,
         "scaffold": 0,
         "required": false,
         "clauses": [],
-        "status": "absent"
+        "status": "present"
       },
       {
         "family": "remediation",
@@ -1157,15 +1157,15 @@
       }
     ],
     "counts": {
-      "present": 20,
-      "absent": 12,
+      "present": 21,
+      "absent": 11,
       "missing": 0
     }
   },
   "goesBlind": {
     "available": true,
     "top": 10,
-    "nodes": 28,
+    "nodes": 29,
     "edges": 15,
     "sloBlindingNodes": 5,
     "risks": [

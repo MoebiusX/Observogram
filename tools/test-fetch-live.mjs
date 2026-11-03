@@ -1040,10 +1040,15 @@ assert(probedEmpty.metadata.annotations['mcp.verified.queries.recording_rules'] 
          'mcp.probesSucceeded is unaffected', oAnn['mcp.probesSucceeded']);
   assert(oAnn['mcp.probesAttempted'] === 'recording_rules,dashboards,scrape_configs,metric_names',
          'mcp.probesAttempted still lists every family (unsupported included) — existing key unchanged', oAnn['mcp.probesAttempted']);
-  assert(typeof oAnn['mcp.probeErrors.dashboards'] === 'string' && oAnn['mcp.probeErrors.dashboards'].startsWith('HTTP 503 Service Unavailable: '),
-         'mcp.probeErrors.<family> carries the LAST erroring candidate of the family', oAnn['mcp.probeErrors.dashboards']);
-  assert(oAnn['mcp.probeErrors.dashboards'].length === 200,
-         'probe errors are trimmed to 200 chars', oAnn['mcp.probeErrors.dashboards'].length, 200);
+  // Every failed candidate, first first, each named and trimmed: the first
+  // entry is the cause the cascade gave up on; the last fallback's message
+  // alone misled a whole night once (a schema complaint that read like a
+  // contract change, while the first candidate had simply stopped answering).
+  const dashErr = oAnn['mcp.probeErrors.dashboards'];
+  assert(typeof dashErr === 'string' && dashErr.startsWith('grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503 Service Unavailable: '),
+         'mcp.probeErrors.<family> names every failed candidate of the family in the order tried, the first first', dashErr);
+  assert(dashErr.length === 'grafana_dashboards_search: HTTP 502 Bad Gateway · '.length + 200,
+         'each candidate\'s entry is trimmed to 200 chars (name included)', dashErr.length, 'grafana_dashboards_search: HTTP 502 Bad Gateway · '.length + 200);
   assert(oAnn['mcp.probeErrors.recording_rules'] === undefined,
          'a family whose later candidate answered carries no error, even though its first candidate errored (it is in probesSucceeded)');
   assert(oAnn['mcp.probeErrors.scrape_configs'] === undefined && oAnn['mcp.probeErrors.metric_names'] === undefined,
@@ -1451,8 +1456,8 @@ assert(l2xLayered.layers.L2X.every(x => x.source === 'Verified'),
     probeFailures: { alertmanager_status: 'the Alertmanager status carries no configuration' },
   }).metadata.annotations;
   assert(typeof noConfig['mcp.scaffold.alerting.routes[0]'] === 'string'
-         && noConfig['observogram.unobserved.alert_route'] === 'the alerting routes probe got no answer: the Alertmanager status carries no configuration',
-         'no configuration → the placeholder route stays scaffold and routes are named unobserved, with the reason',
+         && noConfig['observogram.unobserved.alert_route'] === 'the alerting routes probe got no answer: alertmanager_status: the Alertmanager status carries no configuration',
+         'no configuration → the placeholder route stays scaffold and routes are named unobserved, with the reason and the tool that gave it',
          noConfig['observogram.unobserved.alert_route']);
 }
 
@@ -2224,6 +2229,53 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
   } finally {
     await fake.close();
   }
+}
+
+// ---------- case 4b: the probe error names the cause, not the last fallback ----------
+//
+// 2026-10-28: the stack behind the public MCP restarted and the first
+// candidate of metric_names (metrics_label_values) stopped answering for
+// ten hours. The cascade fell through to metrics_metadata, whose schema
+// complaint was the one message kept — it read like a contract change on
+// the live side. The record now keeps every failed candidate, in order.
+
+{
+  const pack = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-2' }] },
+    topology: { dependencies: [] },
+    anomaliesActive: {},
+    baselinesData: { baselines: [] },
+    probeResults: {
+      metric_names: { tool: null, attempted: ['metrics_label_values', 'list_metrics', 'metrics_metadata'], adapted: null, outcome: 'failed' },
+      alerting_routes: { tool: null, attempted: ['alertmanager_status'], adapted: null, outcome: 'failed' },
+    },
+    probeFailures: {
+      metrics_label_values: 'HTTP 502 Bad Gateway',
+      // list_metrics was not exposed: no entry (an expected miss, not a failure).
+      metrics_metadata: 'metrics_metadata: MCP error -32602: Input validation error: expected string at path ["metric"]',
+      alertmanager_status: 'the Alertmanager status carries no configuration',
+    },
+    errors: {},
+  });
+  const ann = pack.metadata.annotations;
+  assert(ann['mcp.probeErrors.metric_names'] === 'metrics_label_values: HTTP 502 Bad Gateway · metrics_metadata: MCP error -32602: Input validation error: expected string at path ["metric"]',
+         'the first candidate\'s failure comes first; a candidate without a message (not exposed) leaves no gap; a message that already names its tool is not prefixed twice',
+         ann['mcp.probeErrors.metric_names']);
+  assert(ann['mcp.probeErrors.alerting_routes'] === 'alertmanager_status: the Alertmanager status carries no configuration',
+         'a single failed candidate is named too — the reader never has to guess which tool said it', ann['mcp.probeErrors.alerting_routes']);
+  assert(ann['mcp.probesFailed'] === 'metric_names,alerting_routes', 'the failed families are unchanged', ann['mcp.probesFailed']);
+
+  // A tool the cascade tried twice for one family (two argument shapes) is named once.
+  const twice = buildCanonicalPack({
+    refreshedAt, mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [] }, topology: { dependencies: [] },
+    probeResults: { dashboards: { tool: null, attempted: ['grafana_dashboards_search', 'grafana_dashboards_search', 'grafana_search'], adapted: null, outcome: 'failed' } },
+    probeFailures: { grafana_dashboards_search: 'HTTP 502 Bad Gateway', grafana_search: 'HTTP 404 Not Found' },
+  }).metadata.annotations;
+  assert(twice['mcp.probeErrors.dashboards'] === 'grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 404 Not Found',
+         'a candidate attempted twice is named once', twice['mcp.probeErrors.dashboards']);
 }
 
 // ---------- summary ----------

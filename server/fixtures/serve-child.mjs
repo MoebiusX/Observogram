@@ -41,7 +41,7 @@ export const STRIP = [
   'NOTIFY_ORIGINS',
   // The configured snapshot scope (server/live-jobs.mjs snapshotScopeConfig), read per request; the per-org
   // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* go with every inherited OBSERVOGRAM_ORG_* below.
-  'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID',
+  'SNAPSHOT_METRIC_PREFIXES', 'SNAPSHOT_FOLDER_UIDS', 'SNAPSHOT_DATASOURCE_UID', 'SNAPSHOT_METRIC_EXCLUDE', 'SNAPSHOT_RULE_GROUPS',
   // The MCP server-settings policy (server/mcp-settings-policy.mjs), read once at start, and the opt-in
   // pass-through's switch, read per request.
   'MCP_SETTINGS_POLICY', 'MCP_ADMIN_PROXY',
@@ -77,10 +77,11 @@ export function dropInheritedOrgVars(env = process.env) {
 // The import is inside the try: initAuth() runs at import and refuses a
 // malformed identity contract there (the reverse-proxy mode's ACK, OIDC
 // beside it), so that refusal prints REFUSED too — its message raw, no
-// nothingMoved (nothing ran that could write).
-export const BOOT_CODE = `
+// nothingMoved (nothing ran that could write). bootCode(url) imports the
+// server module at that URL; BOOT_CODE, the one beside this fixture.
+const bootCode = (indexUrl) => `
 try {
-  const { start } = await import(${JSON.stringify(INDEX_URL)});
+  const { start } = await import(${JSON.stringify(indexUrl)});
   const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1', legacyLivePack: process.env.BOOT_LEGACY_LIVE_PACK || undefined });
   process.stdout.write('LISTENING ' + srv.address().port + '\\n');
   if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }
@@ -89,6 +90,7 @@ try {
   process.exit(3);
 }
 `;
+export const BOOT_CODE = bootCode(INDEX_URL);
 
 export function parseBoot(stdout) {
   const listening = /^LISTENING (\d+)$/m.exec(stdout);
@@ -98,14 +100,49 @@ export function parseBoot(stdout) {
   return { listening: false, message: null };
 }
 
-// One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
-export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) }), encoding: 'utf8', timeout: 60_000,
-  });
-  const out = { ...parseBoot(r.stdout), stdout: r.stdout, stderr: r.stderr, status: r.status };
-  if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${r.status}): ${r.stderr}`);
+const bootEnv = (ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) =>
+  childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) });
+
+function bootOutcome({ stdout, stderr, status }) {
+  const out = { ...parseBoot(stdout), stdout, stderr, status };
+  if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${status}): ${stderr}`);
   return out;
+}
+
+// One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
+export function boot(ws, opts) {
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], { env: bootEnv(ws, opts), encoding: 'utf8', timeout: 60_000 });
+  return bootOutcome(r);
+}
+
+// boot() for a suite that keeps a server in this process (or a keep-alive
+// connection to one) across the boot: the same child and result, but this
+// process's event loop runs while the child boots. spawnSync stops the loop
+// for the whole boot, a second or more each on a loaded Windows runner. A
+// pooled socket idle past the server's keepAliveTimeout (Node's 5 s) then
+// takes the suite's next request before either side's keep-alive timer has
+// run. When the loop resumes in its check or poll phase, the server's timer
+// fires next and closes its end with the request unread, and the client reads
+// ECONNRESET ("fetch failed"; a POST is not retried). With the loop running,
+// fetch closes an idle socket at its own keep-alive (the server's timeout less
+// 2 s) and the next request opens a new one.
+export function bootAsync(ws, opts) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], { env: bootEnv(ws, opts), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (c) => { stdout += c; });
+    proc.stderr.on('data', (c) => { stderr += c; });
+    const t = setTimeout(() => proc.kill('SIGTERM'), 60_000);
+    proc.on('error', (e) => { clearTimeout(t); reject(e); });
+    // 'close': the output read to its end.
+    proc.on('close', (status) => {
+      clearTimeout(t);
+      try { resolve(bootOutcome({ stdout, stderr, status })); } catch (e) { reject(e); }
+    });
+  });
 }
 
 // A server that keeps running: { base, stop(), logs() }. logs() is
@@ -113,9 +150,11 @@ export function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0
 // stops — the server has no access log, so a suite proving a value never
 // reached the server's output scans this. `verbose: true` boots without
 // BOOT_SILENT, so the start lines are in it too. `execArgv`: node flags
-// before the script (the permission model's, say).
-export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [] } = {}) {
-  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', BOOT_CODE], {
+// before the script (the permission model's, say). `index`: the server
+// module to boot, by path, when not the one beside this fixture (the repo
+// reached through a link, say).
+export async function serve(ws, { host = '127.0.0.1', env = {}, verbose = false, execArgv = [], index = null } = {}) {
+  const proc = spawn(process.execPath, [...execArgv, '--input-type=module', '-e', index ? bootCode(pathToFileURL(index).href) : BOOT_CODE], {
     env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: verbose ? '0' : '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

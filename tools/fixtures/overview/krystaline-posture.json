@@ -1,0 +1,40 @@
+{
+  "note": "computePostureMatrix(repo pack, null).cells as counts of distinct declared artefacts per cell (a telemetry backend is listed twice on the application layer by the matrix; the board counts it once), and layerItemsFor counts per pack layer — the demo seed on 2026-10-28 (examples/krystaline-repo-carlos.pack.yaml). The layered pack itself is 1.1 MB, so the counts stand in for it.",
+  "cells": {
+    "app:sli": 17,
+    "platform:sli": 1,
+    "app:slo": 15,
+    "infra:slo": 2,
+    "platform:slo": 1,
+    "infra:metric": 4,
+    "app:trace": 1,
+    "app:metric": 37,
+    "app:log": 2,
+    "unknown:metric": 2,
+    "platform:metric": 1,
+    "app:dashboard": 4,
+    "infra:dashboard": 1,
+    "platform:dashboard": 1,
+    "app:alert": 4,
+    "unknown:alert": 4,
+    "unknown:synthetic": 1
+  },
+  "platformWide": {
+    "instrumentation": true,
+    "baselines": true
+  },
+  "layerCounts": {
+    "L1": 36,
+    "L2": 225,
+    "L2X": 1,
+    "L3": 321,
+    "L4": 15,
+    "L5": 2,
+    "GOV": 0
+  },
+  "L4": {
+    "policy": 8,
+    "alerting": 7,
+    "healing": 0
+  }
+}

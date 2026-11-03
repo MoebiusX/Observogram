@@ -116,9 +116,11 @@ stage whose tools are missing is skipped with its gap and the fetch goes on);
 the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
 query are not read, while the recording-rule grep still runs over the whole
 metric-name list (it feeds the SLI and SLO inference); the scope narrows
-metric names (prefixes, then a 20 000-name cap), dashboards (folder uids,
-before the detail reads) and alert rules (folder uids, when every rule names
-its folder); every advertised alert-rule engine is read and the rules unioned
+metric names (prefixes, then exclude patterns, then a 20 000-name cap),
+dashboards (folder uids, before the detail reads), alert rules (folder
+uids, when every rule names its folder; an engine whose tool takes a folder
+uid is asked once per folder) and alert and recording rules by rule group
+(when every rule the engines list names its group); every advertised alert-rule engine is read and the rules unioned
 by name, Grafana-managed rules read from the provisioning shape (`title`,
 `data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
@@ -130,8 +132,8 @@ byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
 202 with an id, `GET /api/mcp/jobs/:jobId?since=<seq>` is the gate log —
 in memory, so a restart loses them (docs/DOWNSTREAM.md §15.2 has the shapes
 and the stage table). The configured scope is
-`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS` and `_DATASOURCE_UID`
-(deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
+`OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID`,
+`_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
 is named in the gate log as not applied, since no advertised tool takes one.
 
 ## Server settings (admin configuration)
@@ -679,7 +681,7 @@ metadata:
     mcp.probesEmpty: ""                              # a probe answered with an empty list
     mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
     mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
-    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a FAILED family only (trimmed to 200 chars)
+    mcp.probeErrors.dashboards: "grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503"   # every failed candidate of a FAILED family, first first, each trimmed to 200 chars
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
@@ -734,7 +736,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | last erroring candidate's message, written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`) |
+| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |

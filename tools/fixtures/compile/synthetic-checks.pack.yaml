@@ -1,0 +1,176 @@
+# =============================================================================
+# ObservabilityPack: synthetic-checks — blackbox exporter compile fixture.
+# -----------------------------------------------------------------------------
+# Exercises every path of tools/lib/blackbox.mjs: the four probers (http from
+# a URL, tcp from host:port, grpc and icmp from their schemes), each assertion
+# the exporter can enforce (status codes, body regexes, TLS required) and each
+# it cannot (latency, certificate horizon, unknown keys — named as rules or
+# review items), a timeout capped by a short interval, a check declared for
+# another engine, a template target, and otel_instrumentation the exporter
+# cannot honour. The golden suite compiles it for the blackbox target only
+# (PACKS[].targets in tools/test-golden-compile.mjs).
+# =============================================================================
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: synthetic-checks
+  version: 0.1.0
+  binding: otel-elastic-prometheus-grafana
+  owners:
+    - team-platform
+  bindings:
+    service: synthetic-checks
+    environments: [prod]
+    criticality: tier-3
+  labels:
+    purpose: blackbox-fixture
+
+spec:
+
+  otel:
+    semconv: "1.27.0"
+    resource_attributes:
+      required:
+        - service.name
+    sdk:
+      languages: [go]
+      sampling:
+        policy: parentbased_traceidratio
+        ratio: 0.1
+      propagators: [tracecontext]
+
+  slis:
+    - id: availability
+      type: ratio
+      description: Non-5xx responses over all responses.
+      good:  sum(rate(http_requests_total{job="synthetic-checks",status_code!~"5.."}[5m]))
+      total: sum(rate(http_requests_total{job="synthetic-checks"}[5m]))
+
+  slos:
+    - id: availability_99
+      sli: availability
+      objective: 0.99
+      window: 30d
+      error_budget_policy: ref:platform/default-budget
+
+  pipelines:
+    receivers:
+      - name: otlp
+    processors:
+      - name: batch
+    exporters:
+      metrics: { kind: prometheusremotewrite }
+      logs:    { kind: elasticsearch }
+      traces:  { kind: otlp }
+
+  policy:
+    burn_rate_alerts:
+      - slo: availability_99
+        windows:
+          - { short: 5m,  long: 1h, factor: 14, severity: SEV1 }
+          - { short: 30m, long: 6h, factor: 6,  severity: SEV2 }
+
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - { email: 'oncall@example.com' }
+      - severity: SEV2
+        channels:
+          - { email: 'team@example.com' }
+
+  baselines:
+    mttd_target_p50: 15m
+    mttr_target_p50: 1d
+    review_cadence: monthly
+
+  validation:
+    synthetic_checks:
+
+      # http: every assertion the http prober can enforce, plus one it cannot
+      # (latency → a rule) and an OTel wish the exporter cannot grant.
+      - id: api-canary
+        kind: blackbox-exporter
+        target: https://api.example.com/health
+        interval: 1m
+        otel_instrumentation: true
+        assertions:
+          - { status_code: 200 }
+          - { body_contains: '"status":"ok"' }
+          - { latency_lt: 500ms }
+        on_fail_severity: SEV2
+
+      # https with a certificate horizon: TLS becomes required in the module,
+      # the horizon is a rule on probe_ssl_earliest_cert_expiry.
+      - id: tls-horizon
+        kind: blackbox-exporter
+        target: https://api.example.com/
+        interval: 10m
+        assertions:
+          - { tls_expiry_gt: 14d }
+        on_fail_severity: SEV3
+
+      # plain http with a query string, several status codes, a body that must
+      # not appear (escaped) and a body regex (kept as written).
+      - id: login-body
+        kind: blackbox-exporter
+        target: http://api.example.com/login?next=/home&lang=en
+        interval: 30s
+        assertions:
+          - { status_codes: [200, 204] }
+          - { body_not_contains: 'maintenance (planned)' }
+          - { body_matches: 'build [0-9]+' }
+        on_fail_severity: SEV3
+
+      # tcp from host:port; a latency assertion on it is a rule, a body one is
+      # not applicable.
+      - id: db-port
+        kind: blackbox-exporter
+        target: db.example.internal:5432
+        interval: 1m
+        assertions:
+          - { latency_lt: 100ms }
+          - { body_contains: 'ready' }
+        on_fail_severity: SEV2
+
+      # grpc: needs blackbox exporter 0.20+ (the profile knob).
+      - id: grpc-health
+        kind: blackbox-exporter
+        target: grpc://grpc.example.internal:9090
+        interval: 1m
+        on_fail_severity: SEV3
+
+      # icmp with an interval shorter than the default probe timeout.
+      - id: gateway-ping
+        kind: blackbox-exporter
+        target: icmp://gw.example.internal
+        interval: 5s
+        on_fail_severity: SEV3
+
+      # assertions the module cannot express: a status class and a header.
+      - id: odd-assertion
+        kind: blackbox-exporter
+        target: https://api.example.com/odd
+        interval: 1m
+        assertions:
+          - { status_code: 2xx }
+          - { header_present: X-Request-Id }
+        on_fail_severity: SEV3
+
+      # a library placeholder nobody filled in: not a probe-able target.
+      - id: template-target
+        kind: blackbox-exporter
+        target: "${probe_target}"
+        interval: 1m
+        on_fail_severity: SEV3
+
+      # another engine of record: listed, never compiled.
+      - id: journey-elastic
+        kind: elastic-synthetics
+        target: https://api.example.com/journey
+        interval: 1m
+        assertions:
+          - { status_code: 200 }
+        on_fail_severity: SEV2

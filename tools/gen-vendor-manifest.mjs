@@ -15,7 +15,9 @@
 //   node tools/gen-vendor-manifest.mjs                  print the manifest
 //   node tools/gen-vendor-manifest.mjs --write          rewrite VENDOR-MANIFEST.json
 //   node tools/gen-vendor-manifest.mjs --check          exit 1 when the committed file is stale
-//   node tools/gen-vendor-manifest.mjs --verify <dir>   hash a vendored copy against its manifest
+//   node tools/gen-vendor-manifest.mjs --verify <dir> [--patch-marker <text>]
+//                                                       hash a vendored copy against its manifest; a drifting file
+//                                                       carrying the marker words (default: LOCAL DEVIATION) is named a local patch
 //   node tools/gen-vendor-manifest.mjs --smoke <dir>    import each vendored module, compare exports
 //
 // This file imports nothing from tools/lib on purpose: a downstream copies it
@@ -418,8 +420,18 @@ function readVendoredManifest(dir) {
   return doc;
 }
 
+// The words a downstream writes beside a line it changed in a vendored copy
+// (`// LOCAL DEVIATION (<org> <TAG>): …`): --verify names such a file a local
+// patch rather than unexplained drift. A downstream whose markers use other
+// words passes them (`--patch-marker <text>`, or `{ marker }` here): the
+// phrase is matched as plain text, case-sensitively, and never written back
+// into this repository.
+export const LOCAL_PATCH_WORD = 'LOCAL DEVIATION';
+const markerPattern = (marker) => new RegExp(String(marker).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
 /** [{ path, status: 'ok' | 'drift' | 'missing', hint? }] — each listed module and data file under <dir> against its sha256. */
-export function verifyVendoredTree(dir) {
+export function verifyVendoredTree(dir, { marker = LOCAL_PATCH_WORD } = {}) {
+  const LOCAL_PATCH_MARKER = markerPattern(marker);
   const doc = readVendoredManifest(dir);
   const out = [];
   for (const [p, entry] of [...Object.entries(doc.modules || {}), ...Object.entries(doc.data || {})]) {
@@ -428,7 +440,12 @@ export function verifyVendoredTree(dir) {
     const buf = fs.readFileSync(file);
     if (sha256(buf) === entry.sha256) { out.push({ path: p, status: 'ok' }); continue; }
     const row = { path: p, status: 'drift' };
-    if (sha256(Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'))) === entry.sha256) row.hint = 'line endings differ (CRLF) — copy the bytes verbatim';
+    const text = buf.toString('utf8');
+    if (sha256(Buffer.from(text.replace(/\r\n/g, '\n'))) === entry.sha256) row.hint = 'line endings differ (CRLF) — copy the bytes verbatim';
+    // A downstream that patches a copy in place marks the lines it changed
+    // (docs/DOWNSTREAM.md §4): the drift is then its own, named, and the
+    // reader can tell it from a copy that went wrong.
+    else if (LOCAL_PATCH_MARKER.test(text)) row.hint = `local patch (marked ${marker}) — re-apply it at the next bump, or send it upstream`;
     out.push(row);
   }
   return out;
@@ -472,7 +489,10 @@ async function main(argv) {
     return path.resolve(dir);
   };
   if (argv.includes('--verify')) {
-    const rows = verifyVendoredTree(flagDir('--verify'));
+    const m = argv.indexOf('--patch-marker');
+    const marker = m >= 0 ? argv[m + 1] : undefined;
+    if (m >= 0 && (!marker || marker.startsWith('--'))) { process.stderr.write('--patch-marker needs the words your markers use\n'); process.exit(2); }
+    const rows = verifyVendoredTree(flagDir('--verify'), marker ? { marker } : {});
     for (const r of rows) process.stdout.write(`${r.status.padEnd(7)} ${r.path}${r.hint ? ` (${r.hint})` : ''}\n`);
     const bad = rows.filter(r => r.status !== 'ok').length;
     process.stdout.write(bad ? `${bad} of ${rows.length} file(s) differ from the manifest\n` : `${rows.length} file(s) match the manifest\n`);

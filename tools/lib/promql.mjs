@@ -303,9 +303,22 @@ function prevToken(tokens, index) {
   return tokens[index - 1] || null;
 }
 
+// An identifier with a colon at either end is a fragment, not a metric name:
+// what a dashboard variable leaves behind once it is stripped from a name
+// (`${prefix}:app_requests_total` → `:app_requests_total`,
+// `app_queue_depth:${suffix}` → `app_queue_depth:`), or the resolution of a
+// subquery range (`[5m:30s]` → `:30s`). Prometheus' grammar admits both ends;
+// a real recording-rule name carries its colons between segments. Exported so
+// the Lezer wrapper (promql-lezer.mjs) refuses the same fragments: its grammar
+// yields them as identifiers, and its answer is unioned with this parser's.
+export function colonEdged(name) {
+  return typeof name === 'string' && (name.startsWith(':') || name.endsWith(':'));
+}
+
 function metricish(name) {
   if (typeof name !== 'string') return false;
   if (!/^[A-Za-z_:][A-Za-z0-9_:]*$/.test(name)) return false;
+  if (colonEdged(name)) return false;
   const low = name.toLowerCase();
   if (PROMQL_KEYWORDS.has(low)) return false;
   if (/^__/.test(name) && name !== '__name__') return false;

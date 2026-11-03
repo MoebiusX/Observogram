@@ -1071,9 +1071,9 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   assert.ok(w, 'a windows job');
   assert.match(w, /^ {4}runs-on: windows-latest$/m);
   assert.match(w, /^ {6}fail-fast: false$/m);
-  assert.match(w, /^ {8}node: \['22\.16\.0', '22'\]$/m, 'the floor and the latest 22, as on Linux');
+  assert.match(w, /^ {8}node: \['22\.23\.4', '22'\]$/m, 'the floor and the latest 22, as on Linux');
   assert.match(w, /^ {4}defaults:\n {6}run:\n {8}shell: bash$/m, 'every run step under bash -eo pipefail');
-  assert.match(jobs['node-floor'], /node-version: '22\.16\.0'/);
+  assert.match(jobs['node-floor'], /node-version: '22\.23\.4'/);
   assert.match(jobs.validate, /node-version: '22'/);
   const report = stepNamed(w, /The documented report command captures TAP/);
   assert.equal(report.length, 1, 'the report-command step');
@@ -1159,7 +1159,7 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
   assert.ok(c.includes('uses: actions/download-artifact@v8') && c.includes('pattern: run-shape-*'));
   const cmp = stepNamed(c, /tap-summary\.mjs --compare/);
   assert.equal(cmp.length, 1);
-  assert.deepEqual(keysOf(cmp[0]), keys('run: >-', '  node tools/tap-summary.mjs --compare', ...['node-floor', 'windows-22.16.0', 'windows-22'].map((n) => `  "$RUNNER_TEMP/shapes/run-shape-${n}/run-shape.json"`)));
+  assert.deepEqual(keysOf(cmp[0]), keys('run: >-', '  node tools/tap-summary.mjs --compare', ...['node-floor', 'windows-22.23.4', 'windows-22'].map((n) => `  "$RUNNER_TEMP/shapes/run-shape-${n}/run-shape.json"`)));
 
   // Every piped run is under pipefail; no suites step names the reporter (Node 22 prints TAP into a pipe).
   for (const [name, job] of Object.entries(jobs)) {

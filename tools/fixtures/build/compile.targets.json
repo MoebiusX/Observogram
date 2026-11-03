@@ -31,6 +31,14 @@
       "contentType": "application/json",
       "extension": "json",
       "family": "grafana-dashboard"
+    },
+    {
+      "id": "blackbox-exporter",
+      "label": "Blackbox exporter",
+      "description": "Blackbox exporter modules (blackbox.yml) — one per synthetic check of kind blackbox-exporter, named by the check id; the producer side of the pack's probes. The matching Prometheus scrape jobs are the synthetics/scrape-config artifact.",
+      "contentType": "application/x-yaml",
+      "extension": "yaml",
+      "family": "blackbox-exporter"
     }
   ]
 }

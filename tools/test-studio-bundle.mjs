@@ -350,11 +350,11 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // The stylesheets, in index.html's order, then the notice's.
   const hrefs = [...read('studio/index.html').matchAll(/<link rel="stylesheet" href="\/([\w.-]+\.css)">/g)].map((m) => m[1]);
   const styles = [...html.matchAll(/<style data-src="([\w.-]+\.css)">/g)].map((m) => m[1]);
-  assert.equal(hrefs.length, 15);
+  assert.equal(hrefs.length, 16);
   assert.deepEqual(styles, [...hrefs, 'static-backend.css']);
   assert.deepEqual(built.stylesheets, styles);
   assert.equal(styles[0], 'design-tokens.css');
-  assert.equal(styles[14], 'reskin.css');
+  assert.equal(styles[15], 'reskin.css');
   for (const name of styles) assert.ok(html.includes(read(`studio/${name}`)), `${name} is inlined verbatim`);
   // Nothing points at the server.
   assert.ok(!/(?:href|src)="\//.test(html), 'no href="/ or src="/ left');
@@ -410,7 +410,7 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   const out = join(TMP, 'cli', 'studio.html');
   const w = cli(['--pack', resolve(ROOT, PAYMENT), '--label', 'Payment service (canonical example)', '--pack', resolve(ROOT, GOLDEN), '--id', 'golden', '--out', out, '--no-remote-fonts']);
   assert.equal(w.status, 0, w.stderr);
-  assert.match(w.stdout, /^wrote .*studio\.html — \d+ modules · 16 stylesheets · \d+ bytes · 2 packs\n$/);
+  assert.match(w.stdout, /^wrote .*studio\.html — \d+ modules · 17 stylesheets · \d+ bytes · 2 packs\n$/);
   const html = readFileSync(out, 'utf8');
   const config = configOf(html);
   assert.deepEqual(config.packs.map((p) => [p.id, p.label]), [['payment-service', 'Payment service (canonical example)'], ['golden', 'golden']]);
@@ -426,7 +426,7 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   assert.equal(j.check, true);
   assert.equal(j.out, null);
   assert.deepEqual(j.packs, [{ id: 'payment-service', label: 'payment-service', source: 'file' }]);
-  assert.equal(j.stylesheets.length, 16);
+  assert.equal(j.stylesheets.length, 17);
   assert.equal(j.taxonomy, null, 'nothing baked: taxonomy null, the key present');
   assert.equal(j.brand, null, 'nothing baked: brand null, the key present');
   assert.equal(j.mcpSettingsPolicy, null, 'nothing baked: mcpSettingsPolicy null, the key present');
@@ -444,7 +444,7 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
   mkdirSync(checkDir);
   const c = cli(['--check', '--pack', resolve(ROOT, PAYMENT)], checkDir);
   assert.equal(c.status, 0, c.stderr);
-  assert.match(c.stdout, /^ok \(not written\): \d+ modules · 16 stylesheets · \d+ bytes · 1 pack\n$/);
+  assert.match(c.stdout, /^ok \(not written\): \d+ modules · 17 stylesheets · \d+ bytes · 1 pack\n$/);
   assert.deepEqual(readdirSync(checkDir), [], '--check wrote nothing');
   // The default --out is dist/studio/index.html under the cwd.
   const defDir = join(TMP, 'default-out');
@@ -656,7 +656,7 @@ test('T4b inert by default: a build with nothing baked is the same tree\'s build
   const out = join(TMP, 'inert-cli', 'index.html');
   const r = cli(['--pack', resolve(ROOT, PAYMENT), '--out', out]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /^wrote .* — \d+ modules · 16 stylesheets · \d+ bytes · 1 pack\n$/, 'the human line is today\'s');
+  assert.match(r.stdout, /^wrote .* — \d+ modules · 17 stylesheets · \d+ bytes · 1 pack\n$/, 'the human line is today\'s');
   assert.equal(normalizeBuiltAt(readFileSync(out, 'utf8')), normalizeBuiltAt(a.html), 'the CLI adds nothing');
   // (4) The shim with no taxonomy baked: the server's unconfigured answer, the default product.
   const backend = createStaticBackend({ version: '1', schema, packs: [] });
@@ -1234,7 +1234,12 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   t.after(async () => { await child.stop(); rmSync(ws, { recursive: true, force: true }); bindTaxonomy(artefactClassify, null); });
   const fixture = JSON.parse(readFileSync(TAX, 'utf8'));
   const typedCanonical = JSON.parse(readFileSync(TYPED_CANONICAL, 'utf8'));
-  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typedCanonical) }).then((r) => r.json());
+  // Every request to the child goes out on a connection of its own (as
+  // serverFetch does in tools/test-bundle-compare.mjs): the two builds below
+  // run through spawnSync and stop this event loop, seconds on a loaded
+  // runner, and a socket pooled across them would carry the next request
+  // after the child closed it at its 5 s keep-alive ("fetch failed").
+  const registered = await fetch(`${child.base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' }, body: JSON.stringify(typedCanonical) }).then((r) => r.json());
   assert.equal(registered.ok, true, JSON.stringify(registered.errors));
   const id = registered.registered.id;
 
@@ -1248,7 +1253,7 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   assert.ok(!w.stdout.includes('promrule') && !w.stderr.includes('promrule'), 'the report prints no taxonomy contents');
   const human = cli(['--check', '--taxonomy', TAX, '--pack', TYPED_CANONICAL]);
   assert.equal(human.status, 0, human.stderr);
-  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 16 stylesheets · \d+ bytes · 1 pack · taxonomy: 7 types, 1 id rule\n$/);
+  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 17 stylesheets · \d+ bytes · 1 pack · taxonomy: 7 types, 1 id rule\n$/);
   const html = readFileSync(out, 'utf8');
   const config = configOf(html);
   assert.deepEqual(Object.keys(config), ['version', 'builtAt', 'schema', 'packs', 'taxonomy'], 'the taxonomy key after packs');
@@ -1259,7 +1264,7 @@ test('T8 baked taxonomy: a --taxonomy bundle answers /api/taxonomy as a server s
   // Parity: the server's body and header, the layered bodies with their `type` keys.
   const backend = createStaticBackend(config);
   assert.equal(backend.taxonomyConfigured, true);
-  const server = async (path) => { const r = await fetch(`${child.base}${path}`, { headers: { Accept: 'application/json' } }); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
+  const server = async (path) => { const r = await fetch(`${child.base}${path}`, { headers: { Accept: 'application/json', Connection: 'close' } }); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
   const shim = async (path) => { const r = await backend.handle(path); assert.ok(r, `${path} answered`); return { status: r.status, type: r.headers.get('content-type'), cc: r.headers.get('cache-control'), body: await bodyOf(r) }; };
   const same = async (path) => { const [a, b] = await Promise.all([server(path), shim(path)]); assert.equal(b.status, a.status, path); assert.equal(b.type, a.type, path); assert.deepEqual(b.body, a.body, `${path}: body`); return { a, b }; };
   const tax = await same('/api/taxonomy');
@@ -1485,7 +1490,7 @@ test('T8b baked brand: a --brand bundle carries the branded server\'s shell frag
   assert.equal(j.taxonomy, null);
   assert.ok(!w.stdout.includes('b3261e') && !w.stderr.includes('b3261e'), 'the report prints no brand contents');
   const human = cli(['--check', '--brand', ACME_STATIC, '--pack', resolve(ROOT, PAYMENT)]);
-  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 16 stylesheets · \d+ bytes · 1 pack · brand: Acme Watch\n$/);
+  assert.match(human.stdout, /^ok \(not written\): \d+ modules · 17 stylesheets · \d+ bytes · 1 pack · brand: Acme Watch\n$/);
   const html = readFileSync(out, 'utf8');
   // The fragments brandShellHtml writes: the bundle's equal the branded server's, each exactly once.
   const bundleFragments = brandFragmentsOf(html, { branded: true });

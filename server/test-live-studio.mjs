@@ -294,7 +294,7 @@ test('BROWSER: the live panel — test, choose Draft or Snapshot, the gate log, 
   await page.fill('#live-label', 'acme snapshot');
   await page.click('#draft-mcp-go-btn');
   await waitResult();
-  assert.deepEqual(starts.at(-1), { kind: 'snapshot', mcpEndpointId: gwId, label: 'acme snapshot', scope: { metricPrefixes: [], folderUids: [] } });
+  assert.deepEqual(starts.at(-1), { kind: 'snapshot', mcpEndpointId: gwId, label: 'acme snapshot', scope: { metricPrefixes: [], folderUids: [], metricExclude: [], ruleGroups: [] } });
   const rows = await page.evaluate(() => [...document.querySelectorAll('#live-gatelog .mcpc-stage')].map((li) => [li.dataset.stage, li.dataset.state, li.querySelector('.mcpc-stage-word')?.textContent]));
   assert.deepEqual(rows.map((r) => r[0]), stagesFor('snapshot').map((s) => s.id), 'every snapshot stage, in order');
   assert.deepEqual(rows.find((r) => r[0] === 'register'), ['register', 'done', 'done']);

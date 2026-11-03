@@ -101,7 +101,18 @@ regenerates anything.
 
 A local patch is drift by definition. Keep patches as a separate overlay
 applied after the copy, so `--verify` on the pristine copy stays clean and
-the overlay is the list of what to re-apply at the next bump.
+the overlay is the list of what to re-apply at the next bump. Where a patch
+has to live inside the copy, mark every changed line
+`// LOCAL DEVIATION (<org> <TAG>): <why>`: `--verify` then reports the file as
+`drift (local patch (marked LOCAL DEVIATION) — re-apply it at the next bump,
+or send it upstream)` instead of bare drift, so a reviewer can tell a known
+patch from a copy that went wrong; markers that use other words are named
+with `--patch-marker <text>` (plain text, case-sensitive, never recorded
+here). A tree that vendors the whole repository
+rather than the listed modules bumps by three-way merge, not by re-copying:
+keep it as a git subtree (`git subtree pull`) or carry the patches as a
+`git format-patch` series applied with `git am -3`, and send upstream the
+patches that are engine concerns — a merged patch stops being drift.
 
 ## 5. Run module smoke tests
 
@@ -139,6 +150,7 @@ coverage copy the upstream unit test of a module and run it with
 | `validator.mjs` | `tools/test-validator.mjs` |
 | `contracts/mcp-capabilities.mjs`, `contracts/response-shapes.mjs` | `tools/test-contract-guard.mjs`, `tools/test-contract-shapes.mjs` |
 | `zip.mjs` | `tools/test-zip.mjs` |
+| the Overview board — `studio/overview-model.mjs`, `overview-view.mjs`, `overview-api.mjs`, `ux-kit-pure.mjs`, `overview.css` (VENDORING.md, *The Overview board*) | `tools/test-overview-model.mjs` with `tools/fixtures/overview/` — headless, over a DOM shim; it pins every state's words and markup and the files' import closure |
 
 The golden suites read `tools/fixtures/` — copy that directory with them.
 
@@ -175,9 +187,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
 
 - Server routes, studio views and the store: the manifest is the library
   contract, not an API contract.
-- The zero-import studio modules `VENDORING.md` lists (`diagnostic-grade`,
-  `artifact-model`, `constants`, `verify-deploy`, `metric-readers`): still the
-  prose table, still CI-asserted zero-import; folding them into the manifest
+- The studio modules `VENDORING.md` lists (`diagnostic-grade`,
+  `artifact-model`, `constants`, `verify-deploy`, `metric-readers`, and the
+  Overview board's five files): still the prose table, still CI-asserted; folding them into the manifest
   (which would also let `retrofeed.mjs` enter the set) is a follow-up.
 - The npm packages a static bundle carries beyond the `npm` fields' roots
   (`@lezer/lr`, `@lezer/highlight` and `@lezer/common`, which
@@ -262,6 +274,11 @@ entry names) against a running server:
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
 | `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked — a v2 file's `glossary` included, so the glossary marks draw as on a server), `/api/mcp-settings` (`proxy: false`; the policy `--mcp-settings-policy` baked or `null`, and `mcpOrigins` when `--mcp-origins` baked a list), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/api/packs/:id/verdicts` (the empty document — a bundled pack is never registered, so this is the server's own answer); `/api/packs/:id/placeholders` (the placeholder report, the zero-store engine in the browser); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture); `GET /api/diff` (Compare: the diff and its traceability graph, computed in the browser over two packs the bundle carries — the PromQL parser and the packages it imports inlined from the lockfile); `POST /api/packs/:id/retrofeed` (retrofeed, the one non-GET answered: computed in the browser over two packs the bundle carries, written nowhere, with the server's body parsing and refusals — a `Content-Encoding`, a JSON body in a UTF charset other than UTF-8 and a text body's charset are not ported); `GET /api/packs/:id/audit-report` (the service audit report, JSON or HTML with the bundle's brand over its own design kit, its goes-blind section computed in the browser; a bundle has no store, so `assessments` and `waivers` are `available: false`, "not recorded by this build"; the generator is `<product> static bundle`, `pack.source` `bundle` or `url`; the Conformance view's download anchors are answered by the shim's click handler as a Blob download) | every other `/api` or `/auth` path and every non-GET but retrofeed: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, Testing an MCP connection (`/api/mcp/ping`), Building a pack from a live MCP server (`/api/mcp/jobs`), uploads (`/api/validate`, `/api/uploads`), Deploy, Journeys, Build (`/api/library*`), Verdicts (`PUT` / `DELETE …/verdicts/:artefact`), Waivers (`/api/waivers`, `/api/services/:id/waivers` — a bundled pack has no service record), Services (`/api/services`, `/api/services/:id` — the records behind the home's cards and the service page; a bundle has no services table, so the home lists the services its packs name), Organisations (`/api/orgs` — the active org's name and effective role), Settings (`/api/org`, `/api/org/members`, `/api/environments/:id`, `/api/mcp-endpoints`, `/api/audit` — a bundle has no org, so Settings shows this sentence), Passing MCP server settings through the studio server (`/api/mcp-settings/describe`, `/submit` — the opt-in pass-through; the bundle's Server settings modal sends from the browser), sign-in (`/auth/*`) |
+
+The bundle opens on the Expert home, never on Overview: the studio's front
+door reads the services table and the journeys, and both answer 501 here. A
+host that wants the board vendors it (VENDORING.md, *The Overview board*) and
+feeds its model from its own records.
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -682,8 +699,8 @@ upconvert is for the archive, and a re-crawl supersedes an upconverted pack.
    reaches the stored pack). A name that does not start with a letter is
    prefixed (`1password` → `svc-1password`), never truncated at the front.
 4. What the spec cannot hold is omitted and recorded as evidence, never
-   invented and never silently dropped: recording rules not named
-   `<service>:<metric>:<op>` in `crawler.omitted.recording_rules` (name +
+   invented and never silently dropped: recording rules that are not
+   metric names with a `:` in `crawler.omitted.recording_rules` (name +
    `<file>#<group>/<name>`; their expressions still feed the metric
    inventory), a dashboard `schemaVersion` below 30 in
    `params.schema_version`, a rule-group interval that is not a Duration in
@@ -1200,20 +1217,41 @@ or in a gapped family — is *not checked*, never *declared, not live*
 annotation: a hand-uploaded pack can make them.
 
 **The scope.** `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`,
-`OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS`, `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` for
-the deployment and `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's
-overriding the deployment's field by field; a request's `scope` replaces the
-configured one whole. Inert when unset; the draft and the refresh never read
-them. Metric prefixes filter the name list (then a 20 000-name cap, named);
-folder uids filter dashboards before the detail reads and alert rules when
-every rule names its folder; a datasource uid is named in the gate log as not
-applied, because no advertised tool takes one.
+`OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS`, `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID`,
+`OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE`, `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` for the deployment and
+`OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
+deployment's field by field; a request's `scope` replaces the configured one
+whole. Inert when unset; the draft and the refresh never read them. Metric
+prefixes filter the name list, then the exclude patterns drop names from what
+the prefixes kept (anchored, bounded regexes, white-space-separated in the
+variable — a backend's names that no declaration will ever match, an
+exporter's malformed mints; the count is in the gate log, the patterns ride in
+`observogram.scope.metric` as `exclude`, and the diff parks a repository
+metric they match as *not checked*), then a 20 000-name cap, named; folder
+uids filter dashboards before the detail reads and alert rules when every
+rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,
+through its registry row's `runtimeArgs` slot — is asked once per folder and the
+gate log says the scope was pushed down; it is read whole instead, and said,
+when a folder gets no answer, when the tool ignores the argument, or when
+another engine names no folder, so the pack never holds half an engine; folders
+that hold no rule still record the scope); rule
+groups filter alert and recording rules when every rule the engines list names
+its group (Grafana's `ruleGroup`, a `groups[].name`), compared exactly, and the
+gate log says when a listing names none; the groups ride in
+`observogram.scope.<rule family>` (`{ by: "group", values }`, or `groups` on
+the folder entry) and the diff parks a repository rule of another group — the
+group its `source` names — as *not checked*; a datasource uid is named in the
+gate log as not applied, because no advertised tool takes one. The exclusion is a scope
+field, not a setting: the regex that names one product's junk belongs in the
+deployment's or the org's variable, never in the engine.
 
 **Adding a capability with a scope argument.** Record the tool's real answer
 first (`npm run record-fixtures -- --write`, against the product at a pinned
 version), then add the candidate to `tools/lib/contracts/mcp-capabilities.mjs`
 with a `runtimeArgs` slot (`{ argName: slotName }`) the fetcher fills from the
 scope — the data layer never reads the environment — and its response shape
+(the first such slot is `grafana_alert_rules`'s `folder_uid`, whose per-folder
+answer is the recorded provisioning shape, folder by folder)
 to `contracts/response-shapes.mjs`; `tools/test-contract-shapes.mjs` and the
 contract guard then pin both. No tool name is typed anywhere else.
 
@@ -1828,3 +1866,183 @@ no `refusedEnvNames` and binds every name the journey declares, as before.
 - *`journey-records-principal`* — journey records readable only by the
   member whose run wrote them (today every member of the org reads them, as
   dashboards).
+
+## 18. Metrics from prebuilt exporters (follow-up exporter-metrics)
+
+A service whose metrics come from a prebuilt exporter — IBM's
+mq-metric-samples, a node_exporter, a vendor sidecar — has no client-library
+call or PromQL that names them: the exporter's repository is a Dockerfile and
+a config file, and the collector that scrapes it lives in another chart. The
+crawler (`tools/lib/crawler.mjs`) reads the exporter's metrics from three
+places, strongest first, through `tools/lib/exporter-metrics.mjs` (listed,
+pure):
+
+| Source | Files | `origin_kind` | Confidence |
+|---|---|---|---|
+| a metrics manifest | `metrics-manifest.json`, `*.metrics-manifest.json` | `exporter-manifest` | `declared` |
+| a saved exposition | `*.prom`, `*.metrics` (never under a test, fixture or mock folder; an OpenMetrics counter or info named as stored, `_total` / `_info`) | `exporter-snapshot` | `declared` |
+| the exporter's config, read against the catalogue | any YAML whose top-level keys match a catalogue entry | `exporter-config` | `inferred` (a candidate) |
+
+A metric named in several files reads as the strongest: manifest, snapshot,
+source code, source fragment, recording-rule output, PromQL reference, and
+an exporter config last. Every exporter the crawl learned from is listed in
+`crawler.discovered.exporters` (`{ <exporter>: { sources: [{ origin_kind,
+file, metrics, … }] } }`) and counted in `crawler.discovered.exporters_count`.
+A manifest and a snapshot are read in every environment; an exporter config
+is scoped like any other config, and a crawl whose environment scope leaves
+out a file with scrape jobs or exporter evidence says which in a warning.
+
+### 18.1 The manifest
+
+```json
+{
+  "exporter": "ibm-mq",
+  "version": "5.6.0",
+  "source": "http://mq-exporter:9157/metrics",
+  "generatedAt": "2026-10-01T00:00:00.000Z",
+  "metrics": [
+    { "name": "ibmmq_queue_depth", "type": "gauge", "help": "Current depth of the queue", "labels": ["qmgr", "queue"] }
+  ]
+}
+```
+
+`exporter` and `metrics` are required; each entry needs a metric name and an
+exposition type (`counter`, `gauge`, `histogram`, `summary`, `untyped`,
+`unknown`, `gaugehistogram`, `info`, `stateset`). An entry that has neither,
+or repeats a name, is not read and the crawl says how many; a file that is not
+a manifest is named in a warning. `source` is recorded without userinfo,
+query or fragment: tabs and line breaks, everything before the last `@`, and
+everything from the first `?` or `#` are dropped (`safeSourceUrl`, textual —
+a password may hold `/` or `@`). A value with a `?` or `#` before its last
+`@` is not recorded at all.
+Label values are never part of a manifest.
+
+An exporter that mints metric names at runtime (one counter per queue, per
+event) cannot list them. Its manifest declares them as patterns, in an optional
+array written by hand:
+
+```json
+{
+  "exporter": "demo-exporter",
+  "metrics": [{ "name": "demo_up", "type": "gauge" }],
+  "dynamicFamilies": [
+    { "pattern": "^demo_queue_[a-z0-9_]+_total$", "type": "counter", "help": "One counter per queue", "labels": ["qmgr"] }
+  ]
+}
+```
+
+`pattern` is required; `type`, `help` and `labels` are optional. A name a family
+matches reads as declared, so a pattern must say whose names it claims: it opens
+with a literal metric-name prefix of at least three characters, more than a
+platform's own (`^node_`, `^kube_`, `^go_` are refused, `^node_hwmon_` is not),
+and has no alternative outside a group. It runs on every unpaired name of a live
+estate, so its shape is bounded too: anchored, 200 characters, no quantified
+group, lookaround or backreference, at most three unbounded quantifiers and six
+choice points (`|`, `?`), and it must finish within the budget on 256-character
+names that open with its prefix. At most 64 families are read. An entry that
+breaks a rule is not read and the crawl's warning names its position and the
+rule, never its text. Families reach the pack as
+`crawler.discovered.metric_families` (`[{ pattern, type, help, labels, exporter,
+file }]`, sorted, with `_count`); the first file that declares a pattern keeps
+it. The adapter projects each as `METRIC-FAM-NN`, and the diff tests the other
+side's unpaired metric names against it (docs/DIFF.md, *Dynamic metric
+families*). `packc emit` over an existing manifest keeps its `dynamicFamilies`
+as they stand and says how many.
+
+A rules file authored ahead of an environment says so in a comment block that
+opens the file, `# observogram-lifecycle:` with `maturity` and a nested `deployment` of
+`<env>: deployed | planned | not-deployed`, and its rules read as declared ahead
+instead of declared, not live (docs/DIFF.md, *Declared ahead of an environment*).
+The crawler carries it as the `observogram.lifecycle` annotation, which a
+hand-written pack states directly.
+
+`packc emit --exporter <url>` (`tools/emit-manifest.mjs`) writes one from a
+live endpoint — run it in the exporter's build pipeline against the image it
+just built:
+
+```bash
+packc emit --exporter http://mq-exporter:9157/metrics --name ibm-mq --version 5.6.0 --out mq-exporter/metrics-manifest.json
+packc emit --from saved.prom --name ibm-mq --out -     # a saved exposition, to stdout
+```
+
+It scrapes once and records each family's name, type, help and label names.
+A redirect is refused, not followed: the refusal names its target with the
+query as the keys of its `key=value` parts only (`?token=…`) — pass that URL
+with the values the exporter expects. A URL with credentials is refused (save the exposition with your own
+client and pass it with `--from`). A status other than 200 or a response
+with no metric family exits 1.
+
+### 18.2 The catalogue
+
+An exporter config names no metric; the catalogue says which families a
+config switches on. The built-in catalogue (`tools/lib/exporter-catalogue.mjs`,
+data only, `EXPORTER_CATALOGUE`) carries a small IBM MQ entry. A downstream
+carries a larger one as a JSON file of the same shape, never as an engine
+diff:
+
+```json
+{
+  "exporters": [
+    {
+      "id": "ibm-mq",
+      "match": { "keys": ["global", "connection", "objects", "prometheus"] },
+      "namespace": { "path": "prometheus.namespace", "default": "ibmmq" },
+      "gates": {
+        "objectStatus": { "path": "global.useObjectStatus", "default": true },
+        "publications": { "path": "global.usePublications", "default": true }
+      },
+      "scopes": { "queues": { "path": "objects.queues" } },
+      "families": [
+        { "name": "queue_depth", "type": "gauge", "help": "Messages on the queue", "labels": ["qmgr", "queue"], "gate": "publications", "scope": "queues" }
+      ]
+    }
+  ]
+}
+```
+
+- `match.keys` — the top-level keys a config must all carry. The first entry
+  that matches reads the file.
+- `namespace` — the metric-name prefix: the value at `path` in the config,
+  else `default`; a family's name is `<namespace>_<name>`.
+- `gates` — boolean switches (`true`/`false`, `yes`/`no`, `on`/`off`), the
+  `default` when the config is silent; a family with `gate` is emitted only
+  when it is on.
+- `scopes` — object selections; a family with `scope` is emitted only when
+  the value at `path` selects something (a non-empty list, string or
+  mapping).
+
+Pass it with `packc x-ray <repo> --exporter-catalogue <file.json>` or
+`crawlFiles(files, { exporterCatalogue })`. Its entries replace a built-in
+entry with the same `id` and add the rest. An entry that is not well-formed
+is dropped with a crawl warning naming what it lacks. A config-inferred
+family stays a candidate (`confidence: inferred`): the config says the
+exporter is switched on, not that the name is exact. Publish the real list
+with `packc emit` and the manifest outranks it.
+
+### 18.3 The collector's scrape jobs
+
+An OTel collector's prometheus receivers (`prometheus`,
+`prometheus/<name>`) are read for their `config.scrape_configs`, with or
+without a `service:` block (a Helm chart's `files/` copy has none), in a
+config file, a Helm ConfigMap, or a chart's `values*.yaml` (at its top level,
+under `config:`, or under a subchart's `<key>.config:` unless the subchart
+is disabled — its `enabled` toggles merged across the in-scope values files,
+an overlay winning).
+
+- Each job is in `crawler.discovered.scrape_jobs`. Its entry in
+  `crawler.discovered.scrape_job_origins` adds `via: otel-collector`, the
+  `receiver`, the `target_count` of its static targets, and the `exporters`
+  its samples leave by: the exporters of the metrics pipelines that list the
+  receiver, in the same file or, when none there does, another (a config
+  split across `--config` files), or, when none does, the metrics exporter a
+  pipeline-less config names. A job that cannot be read is warned about and
+  skipped; the rest of the config is read.
+  Each exporter is given as `{ name, kind, topic | endpoint }`: a kafka
+  exporter's metrics topic, any other's endpoint reduced by `safeSourceUrl`
+  (no userinfo, query or fragment).
+- That exporter's kind is `spec.pipelines.exporters.metrics`, in place of the
+  `prometheusremotewrite` scaffold. A config with no pipelines only proposes
+  one: it applies after every file is walked, and only when nothing else set
+  the metrics exporter — no pipeline in any file declares one, and no metrics
+  backend image implies one. When it names several, the first is taken and
+  the crawl warns.

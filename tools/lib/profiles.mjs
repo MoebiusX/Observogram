@@ -165,6 +165,19 @@ const PRODUCTS = {
         speaks: { 'alertmanager-config': '0.20' } },
     ],
   },
+
+  // ----- Blackbox exporter (the producer side of the synthetic checks) -----
+  'blackbox-exporter': {
+    family: 'blackbox-exporter',
+    tractability: 'partial',
+    upstream: { repo: 'prometheus/blackbox_exporter', latestKnown: '0.27' },
+    bands: [
+      { id: 'bb-0.20+', range: '>=0.20', label: 'Blackbox exporter 0.20+', default: true,
+        speaks: { 'blackbox-exporter-config': '0.20' } },
+      { id: 'bb-pre-0.20', range: '<0.20', label: 'Blackbox exporter <0.20',
+        speaks: { 'blackbox-exporter-config': '0.19' } },
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------

@@ -337,6 +337,7 @@ export function alertStatesFromDiff(diff) {
     for (const e of listOf(bucket.onlyInA)) put(e.artefact, e.key, 'missing', e);
     for (const e of listOf(bucket.scaffold)) if (e.side === 'a') put(e.artefact, e.key, 'placeholder', e);
     for (const e of listOf(bucket.notObserved)) if (e.side === 'a') put(e.artefact, e.key, 'unverified', e);
+    for (const e of listOf(bucket.declaredAhead)) if (e.side === 'a') put(e.artefact, e.key, 'unverified', e);
   }
   return states;
 }

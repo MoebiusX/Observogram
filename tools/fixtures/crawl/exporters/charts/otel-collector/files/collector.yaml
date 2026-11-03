@@ -1,0 +1,21 @@
+receivers:
+  prometheus/mq:
+    config:
+      global:
+        scrape_interval: 30s
+      scrape_configs:
+        - job_name: qmgrs
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["mq-exp-qm1:9157", "mq-exp-qm2:9157", "mq-exp-qm3:9157"]
+              labels:
+                env: prod
+processors:
+  batch: {}
+exporters:
+  debug: {}
+  kafka:
+    brokers: ["kafka-0.kafka:9092", "kafka-1.kafka:9092"]
+    metrics:
+      topic: mq-metrics
+    encoding: otlp_proto

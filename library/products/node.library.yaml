@@ -1,0 +1,146 @@
+# Library entry: the nodes a service runs on, observed through node_exporter (port 9100):
+# node_filesystem_avail_bytes / size_bytes, node_memory_MemAvailable_bytes / MemTotal_bytes,
+# node_cpu_seconds_total. The KrystalineX rule file's predictive group (docs/SLI_CATALOGUE.md §1.3)
+# is the seed for the two capacity forecasts: disk full within seven days, memory exhausted within
+# four hours — predict_linear rules, which the library expresses as symptom alert rules since a
+# forecast on a resource is not a forecast on an error budget.
+library: v1
+id: node
+kind: product
+version: 1.0.0
+title: Node (node_exporter)
+product: node
+summary: Node liveness, filesystem, memory and CPU saturation of the hosts a service runs on, with the disk and memory exhaustion forecasts, through node_exporter.
+description: |
+  The platform dimension below the workload (docs/SLI_CATALOGUE.md §3): the nodes answer their
+  scrape (availability), the root filesystem, the memory and the CPU stay under their ceilings
+  (saturation, the three rungs that matter), and two forecasts say when the disk and the memory run
+  out at the current trend — the rules the file carries under "predictive". The job and the
+  mountpoint are parameters; compose the entry beside the service's archetype.
+tags: [platform, node]
+evidence:
+  status: upstream-docs
+  verifiedOn: null
+  sources:
+    - prometheus/node_exporter README — node_filesystem_avail_bytes and node_filesystem_size_bytes (by mountpoint, fstype), node_memory_MemAvailable_bytes and node_memory_MemTotal_bytes, node_cpu_seconds_total (by cpu, mode)
+    - docs/SLI_CATALOGUE.md §1.3 — DiskExhaustionForecast (predict_linear(node_filesystem_avail_bytes[6h], 7d) < 0), MemoryExhaustionForecast (predict_linear(node_memory_MemAvailable_bytes[6h], 4h) < 0)
+    - Prometheus documentation, "predict_linear()" — the linear extrapolation over a range vector
+  notes: |
+    NOT verified against a live exposition in this repository. The filesystem series are read for one
+    mountpoint (the mountpoint parameter, "/" by default) and exclude tmpfs; a node with several data
+    volumes needs the pattern widened. MemAvailable is the kernel's estimate of memory available to a
+    new workload, the right numerator for saturation (MemFree is not).
+  gaps:
+    - No network or disk-I/O saturation SLI — node_network_* and node_disk_* exist but the ceilings are hardware-specific.
+    - A node pool shared by many services reads the same values for each; the entry has no per-service scope.
+params:
+  - id: job
+    label: node_exporter scrape job
+    default: node-exporter
+    description: The job label of the node_exporter scrape.
+  - id: target
+    label: node_exporter target
+    default: node-exporter:9100
+    placeholder: true
+    description: host:port of a node_exporter endpoint (a DaemonSet is discovered by DNS in practice; the pack's static target is the placeholder).
+  - id: mountpoint
+    label: Filesystem mountpoint
+    default: "/"
+    description: The mountpoint the filesystem SLI and the disk forecast read.
+  - id: disk_horizon_days
+    label: Disk forecast horizon (days)
+    default: 7
+    description: Days ahead the disk-exhaustion forecast looks at the current trend.
+  - id: memory_horizon_hours
+    label: Memory forecast horizon (hours)
+    default: 4
+    description: Hours ahead the memory-exhaustion forecast looks at the current trend.
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+      minTier: tier-3
+slis:
+  - id: node_availability
+    type: ratio
+    minTier: tier-3
+    description: Share of the nodes' scrape targets that answered the last scrape (up for the node_exporter job).
+    why: A node whose exporter stops answering is a node that is down or partitioned; the workload SLIs see the pods move a minute later.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: upstream-docs, source: "Prometheus up{job} for the node_exporter targets" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: filesystem_saturation
+    type: threshold
+    minTier: tier-3
+    description: Used share of the mountpoint's filesystem on the fullest node, against a ceiling of 0.85.
+    why: A full disk stops the process that writes to it — logs, the database, the queue — without any request erroring first.
+    unit: ratio
+    metrics: [node_filesystem_avail_bytes, node_filesystem_size_bytes]
+    evidence: { status: upstream-docs, source: "node_exporter node_filesystem_avail_bytes / node_filesystem_size_bytes (by mountpoint)" }
+    query: |
+      max(1 - node_filesystem_avail_bytes{job="${job}",mountpoint="${mountpoint}",fstype!="tmpfs"} / node_filesystem_size_bytes{job="${job}",mountpoint="${mountpoint}",fstype!="tmpfs"}) or vector(0)
+    threshold: 0.85
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: memory_saturation
+    type: threshold
+    minTier: tier-2
+    description: Used share of memory on the fullest node (1 − MemAvailable / MemTotal), against a ceiling of 0.9.
+    why: Past the ceiling the kernel reclaims and then kills; the workload's OOM kills are this, one level down.
+    unit: ratio
+    metrics: [node_memory_MemAvailable_bytes, node_memory_MemTotal_bytes]
+    evidence: { status: upstream-docs, source: "node_exporter node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes" }
+    query: |
+      max(1 - node_memory_MemAvailable_bytes{job="${job}"} / node_memory_MemTotal_bytes{job="${job}"}) or vector(0)
+    threshold: 0.9
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+  - id: cpu_saturation
+    type: threshold
+    minTier: tier-2
+    description: Busy share of CPU time on the busiest node over five minutes (1 − idle), against a ceiling of 0.9.
+    why: A saturated node queues every process on it; latency rises everywhere at once and no single service explains it.
+    unit: ratio
+    metrics: [node_cpu_seconds_total]
+    evidence: { status: upstream-docs, source: "node_exporter node_cpu_seconds_total{mode=\"idle\"}" }
+    query: |
+      max by (instance) (1 - avg by (instance) (rate(node_cpu_seconds_total{job="${job}",mode="idle"}[5m]))) or vector(0)
+    threshold: 0.9
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.99 }
+      window: 30d
+    burn: saturation
+alerts:
+  - name: DiskExhaustionForecast
+    minTier: tier-2
+    severity: SEV3
+    for: 30m
+    metrics: [node_filesystem_avail_bytes]
+    expr: |
+      predict_linear(node_filesystem_avail_bytes{job="${job}",mountpoint="${mountpoint}",fstype!="tmpfs"}[6h], ${disk_horizon_days} * 24 * 3600) < 0
+    summary: "Disk on {{ $labels.instance }} predicted to fill within ${disk_horizon_days} days"
+    description: "At the trend of the last six hours, the ${mountpoint} filesystem on {{ $labels.instance }} runs out of space within ${disk_horizon_days} days."
+    why: The saturation SLO says the disk is full; this says when it will be, while there is time to act in office hours.
+  - name: MemoryExhaustionForecast
+    minTier: tier-1
+    severity: SEV2
+    for: 15m
+    metrics: [node_memory_MemAvailable_bytes]
+    expr: |
+      predict_linear(node_memory_MemAvailable_bytes{job="${job}"}[6h], ${memory_horizon_hours} * 3600) < 0
+    summary: "Memory on {{ $labels.instance }} predicted to run out within ${memory_horizon_hours} hours"
+    description: "At the trend of the last six hours, {{ $labels.instance }} has no memory available within ${memory_horizon_hours} hours — a leak, or a workload that grew."
+    why: Memory exhaustion ends in OOM kills across every pod on the node; the forecast gives the hours the saturation SLO cannot.

@@ -10,6 +10,7 @@
 //   packc validate <file...>          → tools/validate-pack.mjs
 //   packc adapt    <file> [env]       → tools/adapt-spec-pack.mjs
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
+//   packc emit     --exporter <url>   → tools/emit-manifest.mjs (a prebuilt exporter's metrics-manifest.json)
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
 //   packc audit-report <file> …       → tools/audit-report.mjs (a pack's service audit report, JSON or HTML)
@@ -114,6 +115,7 @@ Usage:
   packc audit-report <file> [--env <name>] [--format json|html|both] [--out <path>] [--brand <file.json>] [--taxonomy <file.json>] [--top <n>] [--generated-at <iso> | --no-timestamp] [--verdicts <file.json>] [--waivers <file.json>] [--schema <file>]  A pack's service audit report: conformance, placeholders, verdicts, waivers, coverage, goes-blind risks, response path
   packc adapt    <file> [env]     Adapt a pack into the layered projection
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
+  packc emit     --exporter <url> [--name <exporter>] [--version <v>] [--out <file>|-]  Scrape an exporter's /metrics once and write its metrics-manifest.json (--from <file.prom> reads a saved one)
   packc compile  <file> [target]  Compile a pack into a backend artefact
   packc init     --list           List the library entries (products and archetypes) a pack can be built from
   packc init     --show <entry>   An entry's params, SLIs per tier, per-tier objectives and evidence
@@ -281,6 +283,9 @@ switch (command) {
   case 'xray':
   case 'crawl':
     delegate('tools/crawl-repo.mjs', rest);
+    break;
+  case 'emit':
+    delegate('tools/emit-manifest.mjs', rest);
     break;
   case 'compile':
     await runCompile(rest);

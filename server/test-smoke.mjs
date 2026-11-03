@@ -22,7 +22,7 @@ import { startFakeMcp, registerMcpEndpoint, endpointIdFor } from './fixtures/fak
 // mode's contract is asserted there), so the server imports below are
 // dynamic: a static one is hoisted above this line and would read the shell.
 // server/test-hermetic-suites.mjs guards the shape.
-const { STRIP, boot, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
+const { STRIP, bootAsync, dropInheritedOrgVars } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -298,10 +298,10 @@ try {
 
   // /api/compile/targets
   const compTargets = await getJson(base, '/api/compile/targets');
-  assert(Array.isArray(compTargets.targets) && compTargets.targets.length === 4,
-         '/api/compile/targets returns 4 target descriptors');
+  assert(Array.isArray(compTargets.targets) && compTargets.targets.length === 5,
+         '/api/compile/targets returns 5 target descriptors');
   const targetIds = compTargets.targets.map(t => t.id);
-  for (const need of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+  for (const need of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard', 'blackbox-exporter']) {
     assert(targetIds.includes(need), `compile target catalog includes ${need}`);
   }
 
@@ -1545,6 +1545,9 @@ try {
     // one planted in the checkout's examples/, which tools/test-validator.mjs,
     // tools/test-packs.mjs and tools/test-backend-validate.mjs enumerate
     // while this suite runs (an invalid pack there turns them red).
+    // bootAsync, not boot: this process serves `base`, and a boot through
+    // spawnSync stops its event loop with fetch's keep-alive socket to it
+    // pooled (server/fixtures/serve-child.mjs says what that costs).
     {
       const installLegacy = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
       const installBefore = existsSync(installLegacy) ? readFileSync(installLegacy, 'utf8') : null;
@@ -1557,16 +1560,16 @@ try {
       try {
         mkdirSync(bootWs, { recursive: true });
         const LINE = '[studio] the studio no longer reads examples/production-live.pack.yaml: each org\'s live pack is <org root>/live/production-live.pack.yaml, written by the MCP panel\'s refresh (npm run detect-drift and the dry run still read the old file; OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live writes the new one)';
-        const none = boot(bootWs, { silent: false, env: bootEnv });
+        const none = await bootAsync(bootWs, { silent: false, env: bootEnv });
         assert(none.listening && !none.stdout.includes('no longer reads'), 'boot: no old live pack → no boot line', none.stdout);
         mkdirSync(dirname(legacyLive), { recursive: true });
         writeFileSync(legacyLive, PACK);
-        const first = boot(bootWs, { silent: false, env: bootEnv });
+        const first = await bootAsync(bootWs, { silent: false, env: bootEnv });
         assert(first.listening && first.stdout.includes(LINE), 'boot: the old live pack exists, the default org has none → the boot line', first.stdout);
         assert(installUntouched(), 'boot line: the check plants nothing in the checkout\'s examples/ (suites enumerating examples/*.pack.yaml run alongside)');
         mkdirSync(join(bootWs, 'live'), { recursive: true });
         writeFileSync(join(bootWs, 'live', 'production-live.pack.yaml'), PACK);
-        const second = boot(bootWs, { silent: false, env: bootEnv });
+        const second = await bootAsync(bootWs, { silent: false, env: bootEnv });
         assert(second.listening && !second.stdout.includes('no longer reads'), 'boot: after the default org\'s first refresh → no boot line', second.stdout);
       } finally {
         rmSync(scratch, { recursive: true, force: true });
@@ -1856,7 +1859,7 @@ try {
   // GET /api/library — the index the DEFINE step lists.
   const libIndex = await getJson(base, '/api/library');
   assert(libIndex.ok === true && Array.isArray(libIndex.entries), 'GET /api/library returns { ok, entries[] }');
-  assert(libIndex.entries.length === 10, 'GET /api/library lists the ten shipped entries', libIndex.entries.length, 10);
+  assert(libIndex.entries.length === 16, 'GET /api/library lists the sixteen shipped entries', libIndex.entries.length, 16);
   assert(libIndex.entries[0].kind === 'product' && libIndex.entries.at(-1).kind === 'archetype', 'library index lists products first, archetypes last');
   assert(Array.isArray(libIndex.scaffoldParams) && libIndex.scaffoldParams.length === 16, 'library index carries the 16 scaffold params', libIndex.scaffoldParams?.length, 16);
   assert(Array.isArray(libIndex.errors) && libIndex.errors.length === 0, 'library index reports no file errors', libIndex.errors);
@@ -1899,8 +1902,9 @@ try {
   assert(inst.canonical.spec.slis.length === 7, 'instantiate: 7 SLIs (5 kafka + 2 http-service at tier-2)', inst.canonical.spec.slis.length, 7);
   // `adapted`: the adapter's layered projection of the env-overlaid canonical — what Build's stack draws.
   assert(inst.adapted?.meta?.apiVersion === 'observability.platform/v1' && inst.adapted.meta.environment === 'prod' && inst.adapted.meta.criticality === 'tier-2', 'instantiate returns adapted (env-overlaid: prod, tier-2)', JSON.stringify(inst.adapted?.meta && { environment: inst.adapted.meta.environment, criticality: inst.adapted.meta.criticality }));
-  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 3 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 3, L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
-  assert(inst.adapted.layers.L4.alerting.every(a => a.source === 'Scaffold') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, SLIs as Declared');
+  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 6 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 6 (three routes, three symptom rules), L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
+  // The routes carry placeholder channels (Scaffold); the archetype's symptom rules are declared like an SLI.
+  assert(inst.adapted.layers.L4.alerting.filter(a => !String(a.id).startsWith('RULE-')).every(a => a.source === 'Scaffold') && inst.adapted.layers.L4.alerting.filter(a => String(a.id).startsWith('RULE-')).every(a => a.source === 'Declared') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, symptom rules and SLIs as Declared');
   // The toggles: an SLI unticked, dashboards off → exactly the dashboard clauses fail and the schema says why.
   const instOff = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { dashboards: false, slis: ['kafka_broker_availability', 'kafka_produce_latency_p99'] } })).json();
   assert(instOff.ok === true && instOff.canonical.spec.slis.length === 2, 'instantiate honours toggles.slis', instOff.canonical?.spec?.slis?.length, 2);
@@ -1989,7 +1993,7 @@ try {
 
   // POST /api/library/compile — every target from the generated canonical, nothing registered.
   const packsBefore = (await getJson(base, '/api/packs')).packs.length;
-  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard', 'blackbox-exporter']) {
     const c = await (await postLib('/api/library/compile', { canonical: inst.canonical, target })).json();
     assert(c.ok === true && c.target === target && typeof c.label === 'string' && typeof c.contentType === 'string', `POST /api/library/compile ${target} → ok, label, contentType`);
     assert(typeof c.artifact?.filename === 'string' && typeof c.artifact.content === 'string' && c.artifact.content.length > 100 && Array.isArray(c.artifact.warnings), `compile ${target} returns artifact { filename, content, warnings }`);
@@ -1997,7 +2001,7 @@ try {
   assert((await getJson(base, '/api/packs')).packs.length === packsBefore, 'compile previews register nothing');
   const compileBad = await postLib('/api/library/compile', { canonical: inst.canonical, target: 'nope' });
   const compileBadBody = await compileBad.json();
-  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
+  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard, blackbox-exporter/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
   const compileNoCanonical = await postLib('/api/library/compile', { target: 'alertmanager' });
   assert(compileNoCanonical.status === 400, 'compile without a canonical → 400', compileNoCanonical.status, 400);
 

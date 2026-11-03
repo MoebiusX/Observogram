@@ -201,11 +201,19 @@ and the diff reads those keys beside `observogram.unobserved.<kind>`. An
 unmatched artefact on the other side, in a scoped family, goes to
 `notObserved` with one of two reasons, each stating only what is known:
 **outside** the scope — `outside the snapshot's metric scope (prefixes
-payments_, checkout_)`, `outside the snapshot's dashboard folders (Payments)`
+payments_, checkout_)`, with `; excluded ^app_event_\d+_total$` appended when
+the snapshot also dropped names by pattern (`outside the snapshot's metric
+scope (excluded ^go_)` when it set patterns and no prefix), `outside the
+snapshot's dashboard folders (Payments)`, `outside the snapshot's alert rule
+groups (payments, checkout:slo)` (the group a crawled rule's `source` names,
+`<file>#<group>/<name>`), `outside the snapshot's alert rule scope (folders
+Payments; rule groups payments)` when both were applied
 — or **cannot tell**, when the artefact does not say what the scope needs (a
 crawled dashboard names no folder uid): `the snapshot read only the folders
 Payments; Pack A does not say which folder this dashboard is in, so it was
-not checked`. One artefact of a key inside the scope keeps the group compared
+not checked`, `the snapshot read only the rule groups payments; Pack A does not
+say which group this recording rule is in, so it was not checked` (a canonical
+recording rule names no group). One artefact of a key inside the scope keeps the group compared
 as usual; an unobserved family keeps its own reason. Without the annotation
 the answer is byte-identical.
 
@@ -234,6 +242,140 @@ sides know (`metricFamilyResolver`):
 A family's entry carries `series` (the names it stands for on that side) and
 `memberIds` (the ids of the artefacts it replaces). A metric alone in its
 family is passed through untouched.
+
+## Dynamic metric families
+
+An exporter that mints metric names at runtime declares them as a pattern in
+its manifest (docs/DOWNSTREAM.md §18.1), which a pack carries as a
+`METRIC-FAM-NN` artefact (`spec.origin_kind: exporter-family`,
+`spec.name_pattern`). Without it, every name such an exporter mints reads
+`live, not declared`, and no list could ever keep up.
+
+- A family is **lifted out of its side before the fold**. It never pairs by
+  name; it answers for what is left.
+- A metric on the other side with **no pair of its own** whose name, or any
+  series it stands for, the pattern matches goes to `inBoth`: `match: aligned`,
+  `matchedBy: declared-family`, no deltas, the family as that side's artefact.
+  Names are tested as listed (Prometheus names are case-sensitive), and one
+  longer than the 256 characters a pattern is timed against is not tested.
+- A **literal pair wins**: a name the pack also declares pairs with the literal.
+  Among families the first in the pack's order holds the member.
+- Either side may declare one, and the **same pattern on both sides pairs with
+  itself** (`metric::family:<pattern>`), so a self-diff stays fully aligned. A
+  side that says it cannot observe metrics claims nothing through a family.
+- A family with **no member is never `onlyInA`**: a queue with no traffic mints
+  nothing. It is named in `summary.dynamicFamilies.unmatched`, unless it did
+  match names that went elsewhere first (its row's `covered`: they paired by name,
+  or an earlier family holds them), or a side could
+  not list metrics, or the other side read them within a scope that does not
+  cover the family's prefix (its row's `notObserved`, with the reason).
+- The pattern is compiled again here under the manifest's rule, because a pack's
+  annotation is anyone's text. A **refused pattern claims nothing**, sits in no
+  bucket, and is listed in `summary.dynamicFamilies.refused` with the reason, as
+  is a family past the limit of 64.
+- Declaring a family speaks for the metric family of artefacts (`aKinds`) and its
+  exporter's name goes to `scope.exporterTokens`. The first segment of its literal
+  prefix joins `scope.metricPrefixes` unless a platform owns it, so the other live
+  metrics of `acme_` read `live, not declared` while those of `rabbitmq_` stay out
+  of scope in service mode. A pattern is not counted in `scope.declaredMetricCount`.
+
+`summary.dynamicFamilies` is present **only when a side declares a family**, so
+a pack without one keeps its bytes:
+
+```json
+{
+  "declared": 1,
+  "members": 2,
+  "unmatched": [],
+  "refused": [],
+  "families": [{ "pattern": "^demo_queue_", "side": "a", "exporter": "demo-exporter", "file": "metrics-manifest.json", "members": 2 }]
+}
+```
+
+Members count like any other pair: in `inBoth`, `aligned` and `union`, and so in
+**`jaccard` and `alignment`**. A gate on `alignment` reads them too, so a family
+with many members can lift the score while declared metrics are gone. Those stay
+named in `onlyInA`, and `summary.dynamicFamilies.members` says how many pairs rest
+on a pattern. The studio's compare digest counts members as aligned, its head says
+how many there are, and a member's card names the pattern that answered for it.
+
+## Declared ahead of an environment
+
+A team writes a rules file before its service reaches prod. Compared with prod,
+every rule in it would read *declared, not live*, which looks like drift and is
+not. A comment block that opens the file says so:
+
+```yaml
+# observogram-lifecycle:
+#   maturity: authored
+#   deployment:
+#     prod: planned
+#     staging: deployed
+groups:
+  - name: orders-slo
+    rules: []
+```
+
+A state is `deployed`, `planned` or `not-deployed`. `prod` and `production`, `stg`
+and `stage` and `staging`, `dev` and `development` are one environment, as are `prd`
+and `prod`; any other spelling is its own. The crawler reads one block per rules
+file, including a Helm template (`tools/lib/lifecycle.mjs`). The block must open the
+file, with only comments, `---` and Helm directives above it, because further down
+the same lines may be a rule's description quoting one. A block it cannot read is a
+warning that names the file and the rule, never its text, and parks nothing.
+It writes one annotation, which is also how a hand-written pack states this:
+
+```json
+"observogram.lifecycle": "[{ \"source\": \"rules/orders.rules.yml\", \"maturity\": \"authored\", \"deployment\": { \"prod\": \"planned\" }, \"symbols\": [\"slis.orders_availability\", \"slos.orders_availability_99\", \"queries.recording_rules.orders:availability:good\", \"alerting.rules.OrdersStuck\", \"policy.burn_rate_alerts.orders_availability_99\", \"metrics.orders_total\"] }]"
+```
+
+The adapter stamps the statement on those artefacts as `lifecycle`. An artefact
+with no counterpart on the other side goes to `layers.<L>.declaredAhead`
+(`{ key, side, artefact, reason }`) when its state for the compared environment is
+explicitly not `deployed`:
+
+- The compared environment is `diffPacks(a, b, { environment })`. Without it, it is
+  each pack's own, and the statement must hold for both, so a repo read for staging
+  against a pack bound to prod parks nothing deployed in either. The live fetcher
+  binds its packs to `prod`, so comparing a staging repo with one parks only what is
+  stated as not deployed in both. `summary.lifecycleEnvironments` names what was
+  compared, and with none (`[]`) nothing is parked.
+- Every artefact of a group must say so, and a folded metric family only keeps the
+  statement when every series carries it from the same file.
+- **A statement can only hide what its own file, or files that say the same,
+  declare.** The crawler covers a symbol only when every file that speaks for it
+  carries a block with the same deployment, so rules and alerts split across two
+  files park together. A metric the code or a manifest's family also names, an SLI
+  with a rule in a file with no block or another state, or anything an alert, a
+  dashboard or a rule in such a file reads, down the chain, keeps reading as usual.
+- An artefact `notObserved` stays there, because nothing was checked at all. One that
+  pairs is compared as usual, and its statement is no delta.
+- On side B, service scope comes first: what is outside the service stays
+  `outOfScope`.
+- Parked artefacts leave the union, like `notObserved`, so `alignment` and `jaccard`
+  **rise** by what is parked: a pack with everything parked reads 100%. So
+  `summary.declaredAhead` counts them, a journey records the count beside its
+  alignment, and `gate.maxDeclaredAhead` can refuse it (opt-in; omitted, it does not
+  gate).
+- Requirement chains do not read the statement, so the grade's chain integrity
+  still counts a parked rule as broken, and says how many are declared ahead.
+
+`layers.<L>.declaredAhead`, `summary.declaredAhead` and
+`summary.lifecycleEnvironments` exist only when a pack carries the annotation, so a
+pack without one keeps its bytes. The studio shows the count wherever it shows
+*not checked*.
+
+**What this cannot catch.**
+
+- A statement nobody updates keeps a rule parked after it should have gone live, and
+  a rule that really is missing then reads as declared ahead. A statement does not
+  expire. The count is there so that it stays visible.
+- A live pack does not record which stack it read: the fetcher binds it to `prod`.
+  With no environment named on either side, a default repo crawl compared with a
+  staging stack is compared for `prod`.
+- With several environments in a pack and none picked, the adapter reads the first.
+- Only what the crawl reads can speak for a series. A `PrometheusRule` custom resource
+  (`spec.groups`) is not walked, so a rule in one does not keep a series visible.
 
 ## Addresses a source does not state
 
@@ -327,6 +469,10 @@ diffPacks(aLayered, bLayered, { scopeMode, service, identity }); // scopeMode se
   route as channel drift, never as missing-in-live;
 - surplus duplicate controls are reported as drift rather than dropped;
 - empty arrays normalise like absent fields;
+- dynamic metric families (members, literal pairs first, series of a folded
+  metric, case, name length, first match, unmatched and not checked, refused
+  patterns, either side, a self-diff, the kind and the scope, no key without
+  one);
 - metric families (each folding rule, and the lone `_count` that is not
   folded), `notObserved` in both directions and outside the union, and an
   address one side withholds.

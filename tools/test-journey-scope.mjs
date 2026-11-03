@@ -11,8 +11,9 @@
 // the volume behind it, so on Windows a path outside the workspace is
 // nobody's part only on a local drive — and, while the workspace is itself
 // named through a share, only if none of its directories is the workspace's
-// own by file id (the volume's statSync): a share this host serves is stored
-// on a local drive, and its path there is one more name for the workspace.
+// own by file id (read through a handle on the volume, as every libuv reports
+// it): a share this host serves is stored on a local drive, and its path there
+// is one more name for the workspace.
 // On Linux and macOS the comparison is
 // unchanged: the A-24 cases in tools/test-journey.mjs and
 // server/test-tenancy.mjs hold it. The last test runs the default host on a
@@ -41,9 +42,11 @@ const VOLUME = ntfsVolume([
   shares: { '\\\\localhost\\C$': 'C:\\', '\\\\127.0.0.1\\C$': 'C:\\', '\\\\myhost.corp.example\\C$': 'C:\\', '\\\\myhost\\ws': 'C:\\ws' },
   mapped: { 'Z:': '\\\\localhost\\C$\\ws' },
 });
-const WINDOWS = { windows: true, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync };
+// A volume's realpath and the handles a file id is read through.
+const onVolume = ({ realpathSync, openSync, fstatSync, closeSync }) => ({ path: win32, realpathSync, openSync, fstatSync, closeSync });
+const WINDOWS = { windows: true, ...onVolume(VOLUME) };
 // The comparison this replaces on Windows: the spelling JS realpathSync keeps.
-const BY_SPELLING = { windows: false, path: win32, realpathSync: VOLUME.realpathSync, statSync: VOLUME.statSync };
+const BY_SPELLING = { windows: false, ...onVolume(VOLUME) };
 
 const ACME = { base: 'C:\\ws', ownRoot: 'C:\\ws\\orgs\\acme' };
 const DEFAULT_ORG = { base: 'C:\\ws', ownRoot: 'C:\\ws' };
@@ -157,7 +160,7 @@ test('a workspace named through a share this host serves (\\\\myhost\\ws, Z: map
   assert.equal(local.ino, shared.ino);
   assert.notEqual(local.dev, shared.dev);
   assert.equal(local.dev & 0xffffffffn, shared.dev);
-  const noFileId = { ...WINDOWS, statSync: () => { throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }); } };
+  const noFileId = { ...WINDOWS, openSync: () => { throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }); } };
   for (const [base, ownRoot] of [['\\\\myhost\\ws', '\\\\myhost\\ws\\orgs\\acme'], ['Z:\\', 'Z:\\orgs\\acme'], ['z:/', 'z:/ORGS/Acme'], ['\\\\MYHOST\\WS\\', '//myhost/ws/orgs/acme/']]) {
     const refusal = crawlScopeRefusal({ base, ownRoot }, WINDOWS);
     // Beta's file, a crawl root and a file not written yet there, the default org's part, the workspace itself, orgs\acme2.
@@ -178,6 +181,36 @@ test('a workspace named through a share this host serves (\\\\myhost\\ws, Z: map
   for (const p of ['C:\\ws\\packs\\demo.pack.yaml', 'c:/WS/Packs/demo.pack.yaml', 'C:\\WS~1', 'C:\\repo\\catalog.pack.yaml']) assert.equal(dflt(p), '', `read: ${p}`);
 });
 
+// libuv answers a stat by the path's name (GetFileInformationByName, Windows 11 24H2 and Server 2025) unless the path is
+// reached through a share or its last name is a reparse point, which it opens: 1.51.0 and later read all 64 bits of the
+// volume's serial by name, 1.49.0 to 1.50.x (Node 22.16.0's 1.49.2) the upper half of the file's 128-bit id — 0 on
+// NTFS — while a handle reports the serial's low 32 bits on every one (server/fixtures/ntfs.mjs, fastDev).
+const LIBUVS = [['1.51.0', null], ['1.49.2', 0n]];
+
+test('on every libuv a local path is placed in a workspace named through a share by its file id read through a handle — on 1.49.2 a stat by name reports no volume, and acme read beta\'s file on the local drive', () => {
+  for (const [libuv, fastDev] of LIBUVS) {
+    const volume = ntfsVolume(['C:\\ws\\orgs\\acme\\packs\\own.pack.yaml', 'C:\\ws\\orgs\\beta\\packs\\b1.pack.yaml', 'C:\\repo\\catalog.pack.yaml'], {
+      short: { 'C:\\ws': 'WS~1' },
+      shares: { '\\\\myhost\\ws': 'C:\\ws', '\\\\localhost\\C$': 'C:\\' },
+      mapped: { 'Z:': '\\\\localhost\\C$\\ws' },
+      fastDev,
+    });
+    const serial = (p) => { const fd = volume.openSync(p); try { return volume.fstatSync(fd).dev; } finally { volume.closeSync(fd); } };
+    assert.equal(serial('C:\\ws'), serial('\\\\myhost\\ws'), `libuv ${libuv}: through a handle C:\\ws and \\\\myhost\\ws report one serial`);
+    assert.equal(volume.statSync('C:\\ws').dev === 0n, fastDev === 0n, `libuv ${libuv}: by name C:\\ws reports ${fastDev === 0n ? 'no volume' : 'its volume'}`);
+    // A stat by name is on offer too, so a file id read by name again fails here on 1.49.2 alone.
+    const host = { windows: true, ...onVolume(volume), statSync: volume.statSync };
+    for (const [base, ownRoot] of [['\\\\myhost\\ws', '\\\\myhost\\ws\\orgs\\acme'], ['Z:\\', 'Z:\\orgs\\acme']]) {
+      const refusal = crawlScopeRefusal({ base, ownRoot }, host);
+      for (const p of [...BETA_FILE, 'c:/WS~1/orgs/beta', 'C:\\ws\\orgs\\beta\\new\\x.pack.yaml']) {
+        assert.equal(refusal(p), IN_ANOTHER_ORGS_PART, `libuv ${libuv}, ${base}: not acme's: ${p}`);
+      }
+      for (const p of [...ACME_FILE, 'C:\\repo\\catalog.pack.yaml']) assert.equal(refusal(p), '', `libuv ${libuv}, ${base}: read: ${p}`);
+    }
+    assert.equal(volume.opened(), 0, `libuv ${libuv}: every handle opened is closed`);
+  }
+});
+
 test('a workspace on a share: its own share name decides as a drive path does, another name of its server is refused, a local drive outside its storage is read', () => {
   // The share's server keeps the workspace at N:\obs on its own disk (the model's volume stands in for it); this host
   // reaches it as \\nas01\obs and by two more names of that server, and maps Y: to it.
@@ -189,7 +222,7 @@ test('a workspace on a share: its own share name decides as a drive path does, a
     shares: { '\\\\nas01\\obs': 'N:\\obs', '\\\\nas01.corp.example\\obs': 'N:\\obs', '\\\\10.0.0.5\\obs': 'N:\\obs' },
     mapped: { 'Y:': '\\\\nas01\\obs' },
   });
-  const host = { windows: true, path: win32, realpathSync: nas.realpathSync, statSync: nas.statSync };
+  const host = { windows: true, ...onVolume(nas) };
   const refusal = crawlScopeRefusal({ base: '\\\\nas01\\obs', ownRoot: '\\\\nas01\\obs\\orgs\\acme' }, host);
   // Where this host reaches the share's disk itself (here the model's one volume), N:\obs is one more name of the workspace.
   for (const p of ['\\\\nas01\\obs\\orgs\\beta\\packs\\b1.pack.yaml', '\\\\NAS01\\OBS\\ORGS\\BETA', '//nas01/obs/orgs/beta/', 'Y:\\orgs\\beta\\packs\\b1.pack.yaml',

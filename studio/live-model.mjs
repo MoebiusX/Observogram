@@ -139,6 +139,9 @@ export function preselectedKind(scopeFrom) {
 }
 
 const splitList = (text) => String(text ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+// Exclude patterns are separated by white space (a metric name has none; a
+// regex may carry a comma).
+const splitWords = (text) => String(text ?? '').split(/\s+/).filter(Boolean);
 
 // The scope fields, prefilled from the configured scope ({ defaults, from }).
 export function scopeFormModel(scope) {
@@ -147,6 +150,8 @@ export function scopeFormModel(scope) {
   return {
     prefixes: (d.metricPrefixes ?? []).join(', '),
     folders: (d.folderUids ?? []).join(', '),
+    exclude: (d.metricExclude ?? []).join(' '),
+    groups: (d.ruleGroups ?? []).join(', '),
     note: from === 'org' ? 'Prefilled from this org\'s configured snapshot scope.'
       : from === 'deployment' ? 'Prefilled from the server\'s configured snapshot scope.'
         : 'No snapshot scope is configured: empty fields read every metric name, dashboard and rule.',
@@ -154,9 +159,9 @@ export function scopeFormModel(scope) {
   };
 }
 
-// The request's scope from the two fields (what the person sees is what is sent).
-export function scopeFromForm({ prefixes = '', folders = '' } = {}) {
-  return { metricPrefixes: splitList(prefixes), folderUids: splitList(folders) };
+// The request's scope from the four fields (what the person sees is what is sent).
+export function scopeFromForm({ prefixes = '', folders = '', exclude = '', groups = '' } = {}) {
+  return { metricPrefixes: splitList(prefixes), folderUids: splitList(folders), metricExclude: splitWords(exclude), ruleGroups: splitList(groups) };
 }
 
 // The plan before a snapshot (fetchPlan's rows, the stages' labels) → the

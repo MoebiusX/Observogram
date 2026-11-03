@@ -11,6 +11,7 @@
 //   applyEnvironmentOverlay(spec, env)  -> { spec, effective }
 //   overlaidCanonical(canonical, env)   -> { canonical, effective }
 
+import { LIFECYCLE_ANNOTATION, lifecycleBySymbol } from './lifecycle.mjs';
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
@@ -92,6 +93,7 @@ export function adapt(canonical, opts = {}) {
   // Scaffold — never Declared — so the grade parks them.
   const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.', 'library.todo.'];
   const typePrefix = DECLARED_TYPE_PREFIX;
+  const lifecycleStatements = lifecycleBySymbol(annotations[LIFECYCLE_ANNOTATION]);
 
   const ctx = {
     spec,
@@ -110,6 +112,9 @@ export function adapt(canonical, opts = {}) {
     // (tools/lib/artefact-classify.mjs). Absent — every pack the crawler, the
     // fetcher or the library produces — nothing is added: no key, no change.
     typed: (id) => (typeof annotations[`${typePrefix}${id}`] === 'string' && annotations[`${typePrefix}${id}`] ? { type: annotations[`${typePrefix}${id}`] } : {}),
+    // A statement that the artefact was authored ahead of an environment
+    // (tools/lib/lifecycle.mjs). No statement, no key.
+    lifecycle: (symbol) => (lifecycleStatements.has(symbol) ? { lifecycle: lifecycleStatements.get(symbol) } : {}),
   };
 
   const layers = {
@@ -259,6 +264,7 @@ function adaptSLIs(ctx) {
     source: ctx.sourceOf(`slis.${sli.id}`),
 
     ...ctx.typed(`slis.${sli.id}`),
+    ...ctx.lifecycle(`slis.${sli.id}`),
     defines: `slis.${sli.id}`,
     spec: sli,
     mcp: ctx.mcpEvidence(`slis.${sli.id}`),
@@ -278,6 +284,7 @@ function adaptSLOs(ctx) {
     source: ctx.sourceOf(`slos.${slo.id}`),
 
     ...ctx.typed(`slos.${slo.id}`),
+    ...ctx.lifecycle(`slos.${slo.id}`),
     defines: `slos.${slo.id}`,
     refs: [normalizeSliRef(slo.sli)],
     spec: slo,
@@ -412,6 +419,48 @@ function adaptStorage(ctx) {
 // metric artefacts with origin metadata, so the graph can link an SLI series
 // back to the file/service that emits it.
 function adaptSourceMetricDefinitions(ctx) {
+  return [...adaptSourceMetricNames(ctx), ...adaptDynamicMetricFamilies(ctx)];
+}
+
+// A manifest's dynamic families (crawler.discovered.metric_families): one
+// artefact per pattern, `spec.name` the pattern so its identity is its own and
+// `spec.name_pattern` what tools/lib/diff.mjs recognises (with the origin) and
+// tests the other side's unmatched metric names against. The diff compiles it
+// under the same rule the manifest's reader did: an annotation is text.
+function adaptDynamicMetricFamilies(ctx) {
+  const raw = ctx.canonical?.metadata?.annotations?.['crawler.discovered.metric_families'];
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  let list;
+  try { list = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(f => typeof f?.pattern === 'string' && f.pattern)
+    .map((f, i) => ({
+      id: `METRIC-FAM-${pad(i + 1)}`,
+      title: f.pattern,
+      desc: f.file ? `dynamic metric family declared in ${f.file}` : 'dynamic metric family',
+      tool: 'Dynamic metric family',
+      tags: ['metric', 'declared', 'dynamic-family', f.exporter, f.type].filter(Boolean),
+      source: 'Declared',
+      expand: true,
+      parent: 'telemetry.metric_inventory',
+      spec: {
+        name: f.pattern,
+        name_pattern: f.pattern,
+        source: 'crawler.discovered',
+        origin_kind: 'exporter-family',
+        origin_file: f.file || null,
+        origin_service: f.exporter || null,
+        metric_type: f.type || null,
+        confidence: 'declared',
+        candidate: false,
+        help: f.help || null,
+        origin_labels: Array.isArray(f.labels) ? f.labels : [],
+      },
+    }));
+}
+
+function adaptSourceMetricNames(ctx) {
   const ann = ctx.canonical?.metadata?.annotations || {};
   const names = annotationList(
     ann['crawler.discovered.metric_names'],
@@ -431,6 +480,7 @@ function adaptSourceMetricDefinitions(ctx) {
       source: 'Declared',
       expand: true,
       parent: 'telemetry.metric_inventory',
+      ...ctx.lifecycle(`metrics.${name}`),
       spec: {
         name,
         source: 'crawler.discovered',
@@ -618,6 +668,7 @@ function adaptQueries(ctx) {
     source: ctx.sourceOf(`queries.recording_rules[${i}]`),
 
     ...ctx.typed(`queries.recording_rules[${i}]`),
+    ...ctx.lifecycle(`queries.recording_rules.${r.name}`),
     refs: extractRefs(r.expr),
     spec: r,
   }));
@@ -747,6 +798,7 @@ function adaptBurnRateAlerts(ctx) {
       source: ctx.sourceOf(`policy.burn_rate_alerts[${i}]`),
 
       ...ctx.typed(`policy.burn_rate_alerts[${i}]`),
+      ...ctx.lifecycle(`policy.burn_rate_alerts.${stripRefPrefix(a.slo).replace(/^slos\./, '')}`),
       refs: [normalizeSliRef(a.slo, 'slos')],
       spec: a,
     };
@@ -817,6 +869,7 @@ function adaptAlertRules(ctx) {
       source: ctx.sourceOf(`alerting.rules[${i}]`),
 
       ...ctx.typed(`alerting.rules[${i}]`),
+      ...ctx.lifecycle(`alerting.rules.${r.name}`),
       spec: r,
       mcp: ctx.mcpEvidence(`alerting.rules[${i}]`),
     };

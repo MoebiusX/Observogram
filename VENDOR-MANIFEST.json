@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "e1df9c697a218ac58e680faa31cb9a9de1aa7ff54c5163b8db75fe8a6c8ffbcf",
-      "bytes": 34920,
+      "sha256": "5cbfea00f54f92aa02833ec28960b36376946cf6f08e397dd149db8c5cb11b55",
+      "bytes": 37376,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -17,6 +17,7 @@
       ],
       "imports": [
         "tools/lib/good-when.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/traceability.mjs",
         "tools/lib/validator.mjs"
       ],
@@ -43,8 +44,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "2154b2cbbb096e087607af20a718c9ca06cf226839c8fdc6af9eef35506d2062",
-      "bytes": 30095,
+      "sha256": "9ea81c27b624641bc8b28149f1ce7c80772bb87e748f9c7a55dcd4435a348994",
+      "bytes": 30336,
       "exports": [
         "DEFINES_RULES",
         "FAMILIES",
@@ -73,8 +74,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "28f9f2669390b02432f3a85343f336b2c4afd995c05d581d1aee0c66b146a8b6",
-      "bytes": 25239,
+      "sha256": "0809ddf0910403e2b262110b03e6c2e2358a163926dc59c487293a9049b3a96f",
+      "bytes": 25540,
       "exports": [
         "REDACTED_CHANNEL_VALUE",
         "UNRESOLVED_CHANNEL_PREFIX",
@@ -91,6 +92,7 @@
       ],
       "imports": [
         "tools/lib/artefact-classify.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/promql-canon.mjs"
       ],
       "npm": [],
@@ -166,6 +168,31 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/blackbox.mjs": {
+      "sha256": "d16338aa5788c64d8736d14f65641395f9b8ef4da7541eca6c6b2ada1c773a19",
+      "bytes": 15695,
+      "exports": [
+        "BLACKBOX_KIND",
+        "DEFAULT_BLACKBOX_ADDRESS",
+        "DEFAULT_PROBE_TIMEOUT_SECONDS",
+        "blackboxFileName",
+        "blackboxScrapeFileName",
+        "classifyTarget",
+        "compileBlackboxModules",
+        "compileBlackboxScrapeConfig",
+        "durationSeconds",
+        "formatDuration",
+        "planBlackboxChecks"
+      ],
+      "imports": [
+        "tools/lib/mini-yaml.mjs",
+        "tools/lib/slug.mjs",
+        "tools/lib/validator.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/blast-radius.mjs": {
       "sha256": "5d6eef2a8699b8b844f1748e583934f8b93f15e16913dedcea72d26261f57ae1",
       "bytes": 12674,
@@ -185,7 +212,7 @@
       "changedSinceRelease": false
     },
     "tools/lib/brand.mjs": {
-      "sha256": "a3965a788f7d0073eef71ea05a690d51ba410fc755e15789e8496a047ea6238f",
+      "sha256": "f4161401e29e48ebb23cc56b8858972e976c935ffad89221b1f8350a70765c7d",
       "bytes": 12914,
       "exports": [
         "DEFAULT_BRAND",
@@ -275,10 +302,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/compile.mjs": {
-      "sha256": "4a53a483186fb98b69afa7207d088e9f6ae6059fa8e4af1923a9bf1c3ef95e4c",
-      "bytes": 80339,
+      "sha256": "4be1a0b282448a73d9026da45ff4c0bc43ad104d0bf860b52fe355c48157e67a",
+      "bytes": 86839,
       "exports": [
         "TARGETS",
+        "buildDeclaredAlertRules",
         "compile",
         "compileAlertmanager",
         "compileArtifact",
@@ -302,6 +330,7 @@
       "imports": [
         "tools/lib/artefact-model.mjs",
         "tools/lib/assurance-rules.mjs",
+        "tools/lib/blackbox.mjs",
         "tools/lib/burn-rules.mjs",
         "tools/lib/dashboards/generic.mjs",
         "tools/lib/mini-yaml.mjs",
@@ -310,7 +339,29 @@
         "tools/lib/validator.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "TARGETS",
+        "compile",
+        "compileAlertmanager",
+        "compileArtifact",
+        "compileAssuranceGrafanaManagedRules",
+        "compileAssurancePrometheusRules",
+        "compileCatalog",
+        "compileDeclaredPrometheusRule",
+        "compileGrafanaDashboard",
+        "compileGrafanaManagedRules",
+        "compileOtelCollector",
+        "compilePrometheusRules",
+        "compileSloGrafanaManagedRules",
+        "compileSloPrometheusRules",
+        "listProfiles",
+        "listProtocols",
+        "listTargets",
+        "parseVersion",
+        "resolveProfile",
+        "satisfies"
+      ]
     },
     "tools/lib/conformance.mjs": {
       "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
@@ -327,8 +378,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "f1d3065a32fb237b6a6602cebc0bd8c7e22c60a5921b24899e55c225e9890e4e",
-      "bytes": 17988,
+      "sha256": "fe84faaecf29d4da08baac7b51766edc71c89301c750bff766e9a8f93106e97e",
+      "bytes": 18338,
       "exports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
@@ -378,8 +429,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "6705a45caf5253caf795b0c23b5d1ea8cdbe75d8f91b4d748fec20911265c16f",
-      "bytes": 110301,
+      "sha256": "08e156a1f1b582dbbec85059843066da32e3771a054c59b76c253e2ad795583d",
+      "bytes": 140651,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -395,7 +446,9 @@
       "imports": [
         "tools/lib/alert-routes.mjs",
         "tools/lib/backend-products.mjs",
+        "tools/lib/exporter-metrics.mjs",
         "tools/lib/l2x.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
         "tools/lib/promql.mjs",
         "tools/lib/sli-inference.mjs",
@@ -494,8 +547,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "e4a0045d7d257c132f17e840ca2b5aa3841bb22d589dd0a0f490231149d319fd",
-      "bytes": 26482,
+      "sha256": "f276f83d62f43458511e5e6a97a23697f14b57563290dc0468923d2a5bb76544",
+      "bytes": 43992,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -504,11 +557,54 @@
       ],
       "imports": [
         "tools/lib/artefact-model.mjs",
+        "tools/lib/exporter-metrics.mjs",
         "tools/lib/identity-modes.mjs",
+        "tools/lib/lifecycle.mjs",
         "tools/lib/live-fetch.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/exporter-catalogue.mjs": {
+      "sha256": "594c0bb91e68a1a87a598ff57532d388e40f17a0133de6eec64db8e06c82cb9a",
+      "bytes": 5963,
+      "exports": [
+        "EXPORTER_CATALOGUE"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
+    "tools/lib/exporter-metrics.mjs": {
+      "sha256": "41297e4c9ad4d91b6be3d984f007632ea23a63b778123ccfa9f57ba8ebce649f",
+      "bytes": 27906,
+      "exports": [
+        "DYNAMIC_FAMILY_LIMITS",
+        "EXPOSITION_TYPES",
+        "GENERIC_METRIC_PREFIXES",
+        "asResolvedCatalogue",
+        "compileMetricFamilyPattern",
+        "inferExporterFamilies",
+        "isExpositionSnapshotPath",
+        "isMetricsManifestPath",
+        "isTestOrFixturePath",
+        "manifestFromExposition",
+        "matchExporterConfig",
+        "mayBeExporterConfig",
+        "metricFamilyPrefix",
+        "parseExposition",
+        "readMetricsManifest",
+        "resolveExporterCatalogue",
+        "safeSourceUrl"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/exporter-catalogue.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/good-when.mjs": {
       "sha256": "f89b81ef3c6afc30a60453deee4cc659503ec16f720351fcb61991766337e474",
@@ -624,8 +720,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/library.mjs": {
-      "sha256": "90ed9b24bdaba4f8d2174ebabcc07a944b69e6c1ea6b785d27fd279a90139c03",
-      "bytes": 91623,
+      "sha256": "059167a9e1417a56abfe3d66b86132e54acacba221e67f1540674675733066df",
+      "bytes": 96470,
       "exports": [
         "BURN_PROFILES",
         "CUSTOM_FIELDS",
@@ -666,10 +762,51 @@
       "npm": [],
       "changedSinceRelease": false
     },
-    "tools/lib/live-fetch.mjs": {
-      "sha256": "c095215c05f2a8615460cca0c79f1c53ac758953dfe38933968754bcd3a7d72b",
-      "bytes": 16778,
+    "tools/lib/lifecycle.mjs": {
+      "sha256": "5adfa802f9072bac0df802a9ac72d5fc08fed207aae463452cefd9ad087a2587",
+      "bytes": 7167,
       "exports": [
+        "LIFECYCLE_ANNOTATION",
+        "LIFECYCLE_STATES",
+        "lifecycleBySymbol",
+        "lifecycleStateFor",
+        "normalizeLifecycleEnvironment",
+        "readLifecycleBlock",
+        "sameDeployment"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
+    "tools/lib/live-fetch.mjs": {
+      "sha256": "8bfbcdf7d472765f7983cdd39fa564cefc2904927ef92615e366320951dd9293",
+      "bytes": 26087,
+      "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "fetchPlan",
+        "folderUidOf",
+        "inScope",
+        "normalizeScope",
+        "ruleGroupOf",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "LIVE_KINDS",
         "LIVE_SCOPE_ANNOTATION",
         "LIVE_STAGES",
@@ -688,14 +825,11 @@
         "scopeReason",
         "stageNoun",
         "stagesFor"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/mcp-client.mjs": {
-      "sha256": "4d3b8c6a2004ea32fb0b8d80102d705641be5db89e844f496de797c57df57c61",
-      "bytes": 22136,
+      "sha256": "e7e2630dbda52fe8c9d0c0869b477bba66f24c669e52879553365673ccecc5ab",
+      "bytes": 22474,
       "exports": [
         "INERT_TRANSPORT",
         "MAX_MCP_ANSWER_BYTES",
@@ -830,9 +964,52 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/pack-update.mjs": {
+      "sha256": "41fac82d31981dbd542903911a29bd6c8ab86a817517ecb64edd2a55b24de824",
+      "bytes": 32344,
+      "exports": [
+        "ADDITIONS_KEY",
+        "ADDITION_KINDS",
+        "ALERT_ENGINES",
+        "CHANNEL_KINDS",
+        "FAMILY_KINDS",
+        "MAX_ADDITIONS",
+        "SEVERITIES",
+        "SLUG_RE",
+        "UPDATE_PREVIOUS_KEY",
+        "UPDATE_PREVIOUS_VERSION_KEY",
+        "additionLabel",
+        "additionSloId",
+        "applyAdditions",
+        "artefactIndex",
+        "artefactLabel",
+        "checkAddition",
+        "comparePacks",
+        "defaultBurnWindows",
+        "fieldDiff",
+        "foreignAsAdditions",
+        "nextVersion",
+        "normalize",
+        "packOrigin",
+        "parseArtefactKey",
+        "previousOf",
+        "readAdditions",
+        "rebuildPack",
+        "recoverBuildInputs",
+        "stampUpdate",
+        "versionChains"
+      ],
+      "imports": [
+        "tools/lib/library.mjs",
+        "tools/lib/service-keys.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/profiles.mjs": {
-      "sha256": "027f2d9004a0858641baab79192a2a4019f58e608fb7c08380ddbace4de3141f",
-      "bytes": 11907,
+      "sha256": "d97132ade5956dc0796faebc3104b0d5b6d2bea050f9b255282254d6070afd6a",
+      "bytes": 12459,
       "exports": [
         "PRODUCTS",
         "PROTOCOLS",
@@ -862,8 +1039,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-lezer.mjs": {
-      "sha256": "9f3f1519095ec795fb42f9469afb39c0a8168ce639611175a5deb231d73cdfee",
-      "bytes": 3255,
+      "sha256": "b198d17f75ba19bfe47547d5f17c3c8ad5533c892bafcbb53b91f99f57f65c46",
+      "bytes": 3664,
       "exports": [
         "extractPromqlMetricNames",
         "parsePromqlDependencies"
@@ -877,20 +1054,26 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql.mjs": {
-      "sha256": "96932d45d3108373dd6b0305dc2d44d263f41780d2f4aba5c9145db4bb65b7ec",
-      "bytes": 11273,
+      "sha256": "85fdf72e24302095d0f3cad70aa7a4926203c44c9d1f938c42249d87738cafcb",
+      "bytes": 12043,
       "exports": [
         "PROMQL_KEYWORDS",
+        "colonEdged",
         "extractPromqlMetricNames",
         "parsePromqlDependencies"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "PROMQL_KEYWORDS",
+        "extractPromqlMetricNames",
+        "parsePromqlDependencies"
+      ]
     },
     "tools/lib/protocols.mjs": {
-      "sha256": "faf5642ee59c0dab9681116414c363901dfa29a508550785774403d73b2758b3",
-      "bytes": 17812,
+      "sha256": "04980bf11b7e1a65cd12c6874249630f4cc38feb510b30d3ff68b40d980cce6b",
+      "bytes": 19023,
       "exports": [
         "PROTOCOLS",
         "compareVersions",
@@ -905,8 +1088,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/remediation-flow.mjs": {
-      "sha256": "2e77ce4c873dacb591bbf56520fbed45a74adc0cf91cf949fd492722c843d61a",
-      "bytes": 27163,
+      "sha256": "f0fb4350dd30a5434e92e67b3f5ea5a655aece1ffb38f724ca5d744882c7d350",
+      "bytes": 27274,
       "exports": [
         "BLOCKING_STATES",
         "FLOW_STATES",
@@ -1083,10 +1266,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "945c3d06dfea10502c9952ccd295816f302766526aefa66fa2035fc178cffb15",
-      "bytes": 18734,
+      "sha256": "ce29be94f458982954ad6374de4a70533b066aa080dcf315e366ee324e65cc81",
+      "bytes": 19228,
       "exports": [
         "SPEC_DURATION_RE",
+        "SPEC_RECORDING_RULE_NAME_RE",
         "alertRuleExpr",
         "alertRuleWindows",
         "burnAlertsFromAlertRules",
@@ -1108,7 +1292,25 @@
         "tools/lib/slug.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "SPEC_DURATION_RE",
+        "alertRuleExpr",
+        "alertRuleWindows",
+        "burnAlertsFromAlertRules",
+        "burnCandidateFromAlertRule",
+        "canonicalRuleDuration",
+        "defaultBurnWindows",
+        "inferSlisFromRecordingRules",
+        "isGrafanaManagedRule",
+        "isSpecRecordingRuleName",
+        "mergeBurnAlertsBySlo",
+        "operationalAlertRule",
+        "operationalAlertRules",
+        "recordedSloForExpr",
+        "ruleNameToSliId",
+        "ruleNameToSloId"
+      ]
     },
     "tools/lib/slug.mjs": {
       "sha256": "bf9f4c4816363d65c66203e4f7fdbc061b9a144f909545278b7192b4ec903c51",
