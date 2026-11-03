@@ -213,14 +213,16 @@ function layerRowHtml(r) {
 // is the person's choice and survives a repaint (a check, a fact read).
 let layersOpen = false;
 function repoSummaryHtml(L) {
+  // One row per kind, its name and its count — a list to read down, not a
+  // sentence to parse. Spans: a summary holds phrasing content only.
   const counts = L.composition.length
-    ? L.composition.map((c) => `<span class="ov-comp__item"><b class="ov-comp__n">${c.count}</b> ${escapeHtml(c.name)}</span>`).join('<span class="ov-comp__sep"> · </span>')
-    : 'Nothing declared yet.';
+    ? `<span class="ov-comp">${L.composition.map((c) => `<span class="ov-comp__row"><span class="ov-comp__name">${escapeHtml(c.name)}</span><b class="ov-comp__n">${c.count}</b></span>`).join('')}</span>`
+    : '<span class="ov-comp ov-comp--none og-muted">Nothing declared yet.</span>';
   return `
       <details class="ov-repo"${layersOpen ? ' open' : ''}>
         <summary class="ov-repo__sum">
           <span class="ov-repo__head"><span class="ov-repo__title">In the repository</span><span class="ov-repo__toggle" aria-hidden="true"><span class="ov-repo__show">Show the layers</span><span class="ov-repo__hide">Hide the layers</span></span></span>
-          <span class="ov-comp og-muted">${counts}</span>
+          ${counts}
         </summary>
         <div class="ov-repo__layers">
           ${kindHeadHtml(L.rows[0].kinds)}

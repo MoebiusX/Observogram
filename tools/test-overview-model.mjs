@@ -912,7 +912,9 @@ test('renderOverview: the board — three numbered stages over three columns; th
   // The column opens on the summary: In the repository and its counts, closed; the stack is what it opens to; the stats stay outside.
   assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'the summary is the default, closed');
   const sum = html.slice(html.indexOf('<summary class="ov-repo__sum">'), html.indexOf('</summary>', html.indexOf('<summary class="ov-repo__sum">')));
-  assert.ok(sum.includes('<span class="ov-repo__title">In the repository</span>') && sum.includes('<span class="ov-comp__item"><b class="ov-comp__n">321</b> Dashboards/Recording Rules</span>'), 'the counts are the summary itself');
+  assert.ok(sum.includes('<span class="ov-repo__title">In the repository</span>') && sum.includes('<span class="ov-comp__row"><span class="ov-comp__name">Dashboards/Recording Rules</span><b class="ov-comp__n">321</b></span>'), 'the counts are the summary itself');
+  assert.equal(countOf(sum, '<span class="ov-comp__row">'), 5, 'one row per kind: a list, not a sentence');
+  assert.ok(!sum.includes(' · '), 'no run-on separators');
   assert.ok(!sum.includes('ov-layer') && html.indexOf('</summary>') < html.indexOf('<ol class="ov-stack"') && html.indexOf('<ol class="ov-stack"') < html.indexOf('</details>', html.indexOf('<details class="ov-repo">')), 'the layers are inside, behind the summary');
   assert.ok(html.indexOf('</details>', html.indexOf('<details class="ov-repo">')) < html.indexOf('<dl class="ov-stats">'), 'the stats stay in view, after it');
   assert.ok(!html.includes('ov-legend') && !html.includes('Cells, left to right'), 'the cells are labelled directly: no legend paragraph');
