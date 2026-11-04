@@ -12,8 +12,8 @@
 // Two layouts of the same model. The board (model.layout 'board') is three
 // columns under Expert's own words — Discover · Diagnose · Remediate — each
 // a picture of the machine: the stack's four layers with the kinds of signal
-// on each, the grade as a shield with its seven criteria open and the
-// specification's rules, the live fidelity as a ring with four counts and
+// on each, the grade as a shield with its seven criteria behind a click and
+// the specification's rules, the live fidelity as a ring with four counts and
 // the promises that hold, the delta as three counts and the one next step.
 // The simple layout is the three sentences alone. Should the board ever fail
 // to draw, the simple layout is drawn instead and the error logged: the
@@ -59,7 +59,8 @@ function gradeHtml(g) {
 
 // The seven criteria behind the letter: a yes / partly / no pill and one
 // sentence each, the points line first. Nothing when the model has no list
-// that adds up to the letter. Collapsed in the simple layout, open on the board.
+// that adds up to the letter. Collapsed in both layouts until the reader
+// opens it; on the board the rows are set larger (`open`).
 const WHY_MARK = { yes: ['ok', 'Yes'], partly: ['warn', 'Partly'], no: ['fail', 'No'] };
 function whyListHtml(g, { open = false } = {}) {
   if (!Array.isArray(g.why) || !g.why.length) return '';
@@ -328,20 +329,15 @@ function fidelityHtml(f) {
       ${stale}`;
 }
 
-// The seven rows open on a tall monitor, closed behind "Why this grade" on
-// a screen whose height the three columns must share (a laptop, a 1080p
-// monitor with the browser's chrome); headless, open. The host repaints
-// Overview when this query flips (studio/app.mjs), so a window dragged to
-// the other monitor gets the other reading.
-export const COMPACT_SCREEN_QUERY = '(max-height: 999px)';
-function compactScreen() {
-  try { return typeof window !== 'undefined' && !!window.matchMedia?.(COMPACT_SCREEN_QUERY)?.matches; } catch { return false; }
-}
-
+// The seven rows are more detail than the letter: always behind "Why this
+// grade", closed until the reader opens it, whatever room the screen has.
+// Opened, it stays open through the board's repaints (a check finishing),
+// as the Discover layers do.
+let whyOpen = false;
 function boardWhyHtml(g) {
   const list = whyListHtml(g, { open: true });
   if (!list) return '';
-  return compactScreen() ? disclosureHtml('Why this grade', list, { cls: 'ov-grade__why' }) : `<div class="ov-grade__why ov-grade__why--open">${list}</div>`;
+  return disclosureHtml('Why this grade', list, { cls: 'ov-grade__why', open: whyOpen });
 }
 
 const cardHeadHtml = (badge, id, question, sub) => `
@@ -553,4 +549,6 @@ export function renderOverview(container, model, host = appHost) {
   if (select) select.addEventListener('change', () => ov.selectService?.(Number(select.value)));
   const repo = container.querySelector('.ov-repo');
   if (repo) repo.addEventListener('toggle', () => { layersOpen = repo.open; });
+  const why = container.querySelector('.ov-board .ov-grade__why');
+  if (why) why.addEventListener('toggle', () => { whyOpen = why.open; });
 }
