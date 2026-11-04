@@ -1028,6 +1028,7 @@ const EXPECTED_CLASS = Object.freeze({
   'PATCH /api/services/:id': 'operator',
   'DELETE /api/services/:id': 'operator',
   'POST /api/services/:id/environments': 'operator',
+  'POST /api/services/:id/run': 'operator',
   'PATCH /api/environments/:id': 'operator',
   'DELETE /api/environments/:id': 'operator',
   'PUT /api/packs/:id/verdicts/:artefact': 'operator',
@@ -1077,10 +1078,10 @@ const EXPECTED_AUDIT_API = Object.freeze(['GET /api/audit']);
 // target — operator by class, yet answered without sign-in only at this
 // machine, closed when exposed, the CSRF header on every request.
 // The draft and the refresh join it (D7): one posture for every
-// server-side MCP request.
+// server-side MCP request — and a service's Run, which checks live.
 const EXPECTED_LIVE_MCP = Object.freeze([
   'POST /api/mcp/ping', 'GET /api/mcp/jobs', 'POST /api/mcp/jobs', 'GET /api/mcp/jobs/:jobId', 'POST /api/mcp/jobs/:jobId/cancel',
-  'POST /api/draft-from-mcp', 'POST /api/refresh-live',
+  'POST /api/draft-from-mcp', 'POST /api/refresh-live', 'POST /api/services/:id/run',
 ]);
 // The MCP server-settings API (rebadge batch 4, the opt-in pass-through):
 // a server-side request carrying an admin's secret — admin by class, direct
@@ -1531,6 +1532,7 @@ const PROBES = Object.freeze({
   'PATCH /api/services/:id': ['PATCH', '/api/services/999999'],
   'DELETE /api/services/:id': ['DELETE', '/api/services/999999'],
   'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
+  'POST /api/services/:id/run': ['POST', '/api/services/999999/run'],
   'PATCH /api/environments/:id': ['PATCH', '/api/environments/999999'],
   'DELETE /api/environments/:id': ['DELETE', '/api/environments/999999'],
   // The MCP endpoints: the list, an empty body (400), an unknown id (404).

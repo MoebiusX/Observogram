@@ -183,11 +183,32 @@ export function gatekeep(pack) {
   return null;
 }
 
+// Environment overrides are dotted paths into the spec, which the schema
+// leaves open (any key). tools/lib/adapter.mjs applies them; a path whose
+// segment names the prototype chain would write through it instead, so it is
+// refused here (and skipped there, for a pack stored before this check).
+const PROTOTYPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function overrideKeyErrors(pack, errors) {
+  const envs = pack?.spec?.environments;
+  if (!envs || typeof envs !== 'object') return;
+  for (const [name, env] of Object.entries(envs)) {
+    const overrides = env?.overrides;
+    if (!overrides || typeof overrides !== 'object') continue;
+    for (const key of Object.keys(overrides)) {
+      if (key.split('.').some((s) => PROTOTYPE_SEGMENTS.has(s))) {
+        errors.push(`$.spec.environments.${name}.overrides: key ${JSON.stringify(key)} is not a path into the spec (__proto__, constructor and prototype are refused)`);
+      }
+    }
+  }
+}
+
 // Convenience: gatekeep + full walker. Returns an array of error strings.
 export function validateCanonical(pack, schema) {
   const gate = gatekeep(pack);
   if (gate) return [gate];
   const errors = [];
   validate(pack, schema, '$', errors, schema);
+  overrideKeyErrors(pack, errors);
   return errors;
 }

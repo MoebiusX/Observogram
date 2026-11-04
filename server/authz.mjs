@@ -125,6 +125,15 @@ export function authGate(req, res, next) {
   });
 }
 
+// What the gate admitted, read as the request's own properties: a value
+// inherited through the prototype chain is never a credential.
+export function admittedBearer(req) {
+  return Object.hasOwn(req, 'observogramBearer') && req.observogramBearer === true;
+}
+export function admittedUser(req) {
+  return Object.hasOwn(req, 'observogramUser') ? req.observogramUser : null;
+}
+
 // ---------- tenancy (Stage 2 — workspace-per-org) ----------
 //
 // Always on (server/tenancy.mjs): every /api request runs inside an
@@ -144,13 +153,13 @@ export function orgContext(req, res, next) {
   const defaultOrg = defaultOrgId(db);
   let orgId;
   let memberships = null;
-  if (req.observogramBearer) {
+  if (admittedBearer(req)) {
     // The bearer is the deployment-level service account: it may target
     // any live org explicitly; without a header it lands in the default org.
     orgId = requested || defaultOrg;
     if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'`, denied: 'org' });
-  } else if (req.observogramUser) {
-    const user = req.observogramUser;
+  } else if (admittedUser(req)) {
+    const user = admittedUser(req);
     memberships = listMembershipsForUser(db, user.id);   // live orgs, first first
     if (user.isOwner) {
       // An owner may request any live org; they land in their first
@@ -180,8 +189,8 @@ export function orgContext(req, res, next) {
 // is an admin in every live org. `null` — an anonymous request in the
 // identity posture, which the gate's 401 never lets through — fails closed.
 function principalOf(req, { orgId, memberships }) {
-  const user = req.observogramUser;
-  if (req.observogramBearer) return { kind: 'bearer', actor: apiTokenLabel(), role: 'operator', owner: false };
+  const user = admittedUser(req);
+  if (admittedBearer(req)) return { kind: 'bearer', actor: apiTokenLabel(), role: 'operator', owner: false };
   if (user) {
     return {
       kind: 'session', actor: user.login, user, owner: user.isOwner,

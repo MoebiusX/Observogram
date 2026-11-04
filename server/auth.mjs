@@ -185,15 +185,25 @@ export function verifyPassword(password, rec) {
 
 // Naive brute-force damper: 5 failures per user+address → 30s lockout.
 // In-memory on purpose (stand-alone single instance); OIDC delegates
-// this problem to the IdP.
+// this problem to the IdP. Bounded: the key holds at most a login's length
+// (LOCAL_LOGIN_RE allows 64), and past LOGIN_FAILURE_SWEEP keys the ones
+// whose window has passed are dropped, so anonymous failures with fresh
+// usernames cannot grow the map without end.
+const LOGIN_WINDOW_MS = 30_000;
+const LOGIN_FAILURE_SWEEP = 1000;
 const failedLogins = new Map();
+function loginFailureKey(username, ip) { return `${String(username).slice(0, 64)}|${ip || ''}`; }
 function loginLocked(key) {
   const rec = failedLogins.get(key);
-  return !!rec && rec.count >= 5 && (Date.now() - rec.at) < 30_000;
+  return !!rec && rec.count >= 5 && (Date.now() - rec.at) < LOGIN_WINDOW_MS;
 }
 function noteLoginFailure(key) {
+  const now = Date.now();
   const rec = failedLogins.get(key) || { count: 0, at: 0 };
-  failedLogins.set(key, { count: rec.count + 1, at: Date.now() });
+  failedLogins.set(key, { count: rec.count + 1, at: now });
+  if (failedLogins.size > LOGIN_FAILURE_SWEEP) {
+    for (const [k, r] of failedLogins) if (now - r.at >= LOGIN_WINDOW_MS) failedLogins.delete(k);
+  }
 }
 function clearLoginFailures(key) { failedLogins.delete(key); }
 
@@ -529,7 +539,7 @@ function initLocalUsers(app, authorize) {
     const body = req.body || {};
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
-    const key = `${username}|${req.ip || ''}`;
+    const key = loginFailureKey(username, req.ip);
     const json = wantsJson(req);
     const fail = (msg, status = 401) => {
       noteLoginFailure(key);

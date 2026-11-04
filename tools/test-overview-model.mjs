@@ -25,8 +25,10 @@ import {
   shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
+  START_IDLE, startChoose, startAdopted,
+  REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formModel, savePlan,
 } from '../studio/overview-model.mjs';
-import { renderOverview } from '../studio/overview-view.mjs';
+import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
 
 // ---------- fixtures ----------
 
@@ -137,7 +139,7 @@ test('orderServicesForOverview / pickOverviewService: the row with a pack of its
 
 // ---------- the journey that checks this service ----------
 
-test('journeyForService: found by the pack file although scope.service is null; by slug, case-insensitively; another pack or service is not; scope.env prefers among several; null when none', () => {
+test('journeyForService: found by the pack file although scope.service is null; by slug, case-insensitively; another pack or service is not; scope.env first, another environment never; null when none', () => {
   // The real listing: scope.service is null, Pack A is the pack file — the pack is the link.
   assert.equal(journeyForService(journeys, { slug: 'krystaline', env: 'prod', packId: 'uploaded-krystaline-a37d2521' }), journey);
   assert.equal(journeyForService(journeys, { packId: 'uploaded-krystaline-a37d2521' }), journey, 'the pack alone suffices');
@@ -150,6 +152,11 @@ test('journeyForService: found by the pack file although scope.service is null; 
   assert.equal(journeyForService(journeys, { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService([scoped], { slug: 'kx-matcher', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService(journeys, { slug: null, env: null, packId: null }), null, 'nothing to match on matches nothing');
+  // The start saves a check of the service's own pack beside an older one scoped to the service: the board shows the start's.
+  const older = { ...journey, name: 'kx-wallet', packA: '/w/packs/old.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  const startCheck = { ...journey, name: 'kx-wallet-repo-vs-live', packA: '/w/packs/uploaded-kx-wallet-1.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  assert.equal(journeyForService([older, startCheck], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), startCheck, 'the check of the service\'s own pack wins over one merely scoped to it');
+  assert.equal(journeyForService([older], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), older, 'with none of its own pack, the scoped one');
   // A Windows path to the same pack file is the same link.
   assert.equal(journeyForService([{ ...journey, packA: 'C:\\demo\\.observogram-demo\\packs\\uploaded-krystaline-a37d2521.pack.yaml' }], { packId: 'uploaded-krystaline-a37d2521' })?.name, 'krystaline');
   // Among several journeys of the pack: the one whose scope.env is the environment on screen, else the first.
@@ -157,8 +164,17 @@ test('journeyForService: found by the pack file although scope.service is null; 
   const prod = { ...journey, name: 'krystaline-prod', scope: { env: 'prod', service: null, scopeMode: null } };
   assert.equal(journeyForService([staging, prod], { env: 'prod', packId: 'uploaded-krystaline-a37d2521' }), prod);
   assert.equal(journeyForService([staging, prod], { env: 'staging', packId: 'uploaded-krystaline-a37d2521' }), staging);
-  assert.equal(journeyForService([staging, prod], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), staging, 'no journey for dev: the first');
+  assert.equal(journeyForService([staging, prod], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), null, 'no journey for dev: none — a check of staging says nothing about dev');
   assert.equal(journeyForService([staging, prod], { env: null, packId: 'uploaded-krystaline-a37d2521' }), staging);
+  // A journey with no environment of its own checks whichever is on screen.
+  const unscoped = { ...journey, name: 'krystaline-any', scope: { env: null, service: null, scopeMode: null } };
+  assert.equal(journeyForService([staging, unscoped], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), unscoped);
+  // The environment before the pack: a Run's check of staging (the service's newest pack) is not prod's,
+  // when an older check scoped to the service and prod exists.
+  const runStaging = { ...journey, name: 'kx-exchange.staging', packA: '/w/packs/uploaded-kx-exchange-2.pack.yaml', scope: { service: 'kx-exchange', env: 'staging' } };
+  const oldProd = { ...journey, name: 'kx-exchange-prod', packA: '/w/packs/uploaded-kx-exchange-1.pack.yaml', scope: { service: 'kx-exchange', env: 'prod' } };
+  assert.equal(journeyForService([runStaging, oldProd], { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-kx-exchange-2' }), oldProd);
+  assert.equal(journeyForService([runStaging], { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-kx-exchange-2' }), null, 'prod was never checked');
   // None.
   assert.equal(journeyForService([], { slug: 'krystaline', packId: 'uploaded-krystaline-a37d2521' }), null);
   assert.equal(journeyForService(null, { slug: 'krystaline' }), null);
@@ -294,6 +310,15 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
   assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
+  // A Pack B with no refresh time (a pack file): the run records the age as null and the engine scores Fresh = no.
+  // Number(null) is 0 — "zero hours old" — which counted a point the engine never gave, so the list no longer added
+  // up to the letter and the sanity guard hid it. Null, and no freshness at all, are undated: Fresh says no, the list shows.
+  const undatedRun = { ...run, packB: { ...run.packB, source: 'file:pack-b.pack.yaml', refreshedAt: null }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } };
+  for (const [what, freshness] of [['null age', { liveAgeHours: null, refreshedAt: null }], ['no freshness', undefined]]) {
+    const undated = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...undatedRun, freshness }, journey: fileJourney, now: NOW }));
+    assert.equal(undated.why.length, 7, `${what}: the list is offered`);
+    assert.deepEqual([undated.letter, rows(undated.why).at(-1), undated.points], ['C', ['no', 'The recording does not say when it was taken, so it does not count as recent.'], '3.8 of 7 points. B starts at 4.4.'], what);
+  }
   // Nothing when it would not add up: another grade schema, a score the lines do not reach, drift scored on another construct, a diagnostic without the criteria.
   for (const [what, over] of [['schema', { grade: { ...run.grade, schema: 1 } }], ['score', { grade: { ...run.grade, score: 30, letter: 'D', letterLabel: 'Consumer Grade' } }], ['construct', { grade: { ...run.grade, driftConstruct: 'diff-buckets' } }]]) {
     const m = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, ...over }, journey, now: NOW }));
@@ -521,12 +546,42 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   const blank = { options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName: '', primary: null, layout: 'board', board: null };
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: down' }, catalog: packs })), { kind: 'error', error: '503: down', ...blank });
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: null } })), { kind: 'error', error: 'the services table could not be read', ...blank });
-  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank });
+  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank }, 'a host that does not run the start: the empty state as it was');
+  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs, startable: true })), { kind: 'empty', error: null, ...blank, sources: { enabled: true, reason: null }, start: { a: null } });
+  assert.deepEqual(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, access: { canWrite: false, reason: 'viewers cannot load packs' } }).sources, { enabled: false, reason: 'viewers cannot load packs' }, 'empty: a rank that cannot load a pack is told why');
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'loading', error: null } })), { kind: 'loading', error: null, ...blank });
   assert.equal(keep(buildOverviewModel({})).kind, 'empty', 'no status at all reads as empty, never as an error');
+  // A drift check started here: Pack A registered (its service now in the table), the start stays until step 2.
+  const started = keep(screen({ startable: true, start: { a: { id: 'kx-scan', label: 'krystaline (scanned draft)' } } }));
+  assert.deepEqual([started.kind, started.service, started.start, started.primary], ['empty', null, { a: { label: 'krystaline (scanned draft)' } }, null]);
+  assert.equal(keep(screen({ start: { a: { id: 'kx-scan', label: 'x' } } })).kind, 'service', 'a start state from a host that does not run the start changes nothing');
+  // A service with no pack at all (its pack dropped, the row kept): the start under its own header, not "Open Expert mode".
+  const packless = keep(screen({ startable: true, services: [{ ...KRYSTALINE, packs: [] }] }));
+  assert.deepEqual([packless.kind, packless.service.slug, packless.grade.label, packless.start, packless.sources, packless.next.button, packless.primary], ['service', 'krystaline', 'No pack yet', { a: null }, { enabled: true, reason: null }, null, null]);
+  const packlessOld = keep(screen({ services: [{ ...KRYSTALINE, packs: [] }] }));
+  assert.deepEqual([packlessOld.start, packlessOld.next.button.label, packlessOld.primary], [undefined, 'Open Expert mode', 'next'], 'not startable: Open Expert mode, as it was');
+  assert.equal(keep(screen({ startable: true, serviceId: 2 })).start, undefined, 'a member-only row stays Expert\'s: no start');
+  assert.equal(keep(screen({ startable: true })).start, undefined, 'a service with a pack of its own: no start');
   assert.equal(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'static', error: null } })).kind, 'error', 'any status but ok/loading with no rows is unreadable');
 });
 
+
+test('startChoose / startAdopted: the start\'s logic every host shares — Pack A kept at step 1, the pair to compare at step 2, the same pack refused as Pack B', () => {
+  assert.deepEqual(START_IDLE, { slot: null, a: null });
+  assert.ok(Object.isFrozen(START_IDLE));
+  assert.deepEqual(startChoose(START_IDLE, 'a'), { slot: 'a', a: null });
+  assert.deepEqual(startChoose(START_IDLE, 'anything'), { slot: 'a', a: null }, 'anything but b is step 1');
+  const a = { id: 'repo-1', label: 'krystaline (scanned)' };
+  const one = startAdopted(startChoose(START_IDLE, 'a'), a);
+  assert.deepEqual(one, { start: { slot: null, a }, compare: null, said: 'Pack A loaded: krystaline (scanned). Step 2: its live side.', refused: false });
+  assert.deepEqual(startChoose(one.start, 'b'), { slot: 'b', a });
+  const two = startAdopted(startChoose(one.start, 'b'), { id: 'live-1', label: 'production-live' });
+  assert.deepEqual(two, { start: START_IDLE, compare: { a, b: { id: 'live-1', label: 'production-live' } }, said: 'Comparing krystaline (scanned) against production-live.', refused: false });
+  assert.deepEqual(startAdopted(startChoose(one.start, 'b'), { id: 'repo-1', label: 'again' }), { start: { slot: null, a }, compare: null, said: 'That pack is Pack A already: step 2 needs its live side.', refused: true });
+  assert.deepEqual(startAdopted(startChoose(one.start, 'a'), { id: 'repo-2', label: 'other' }).start, { slot: null, a: { id: 'repo-2', label: 'other' } }, 'step 1 again: Change Pack A');
+  assert.deepEqual(startAdopted({ slot: 'b', a: null }, { id: 'x' }).start, { slot: null, a: { id: 'x', label: 'x' } }, 'no Pack A yet: the pack is Pack A');
+  assert.deepEqual(startAdopted(one.start, { label: 'no id' }), { start: one.start, compare: null, said: '', refused: false }, 'a pack with no id changes nothing');
+});
 
 // ---------- one primary across the screen ----------
 
@@ -534,7 +589,8 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
 // primary are those where nothing can be done from here: Unchanged against a recording (fresh or
 // stale — only a live journey can be checked again), the journeys listing unreadable (Retry is a
 // secondary button), the facts still being read (pending), and the screens without panels (loading /
-// empty / unreadable services, whose buttons are the empty state's secondaries). While a check is running the screen may offer one
+// empty / unreadable services, whose buttons are the empty state's secondaries), and a service with no pack at all, whose way
+// in is the start's cards (scan, upload), not a primary button. While a check is running the screen may offer one
 // primary (the last run's differences) or none (Unchanged): the Check button is busy either way.
 const STATES = {
   'never, no journey': { journeys: [] },
@@ -560,6 +616,8 @@ const STATES = {
   'running, unreachable': { run: lostRun, running: true },
   'no pack of its own': { serviceId: 2 },
   'no pack': { services: [{ ...KRYSTALINE, packs: [] }] },
+  'no pack, startable': { services: [{ ...KRYSTALINE, packs: [] }], startable: true },
+  'empty, startable': { services: [], startable: true },
   'grade error': { diagnosticError: 'bad yaml', journeys: [] },
   'start error': { startError: '502: gateway' },
   'journeys error': { journeysError: '500: boom', run: null },
@@ -569,7 +627,7 @@ const STATES = {
   empty: { services: [] },
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -703,10 +761,38 @@ test('renderOverview: a hostile service name is escaped; running is aria-busy; t
 });
 
 test('renderOverview: empty, error and loading render without throwing and without the panels; the markup\'s primary count agrees with the model in every state', () => {
+  const plain = overviewContainer();
+  assert.doesNotThrow(() => renderOverview(plain, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null } }), { overview: {} }));
+  assert.ok(plain.innerHTML.includes('<p class="ux-empty-title">No service to show yet.</p>') && plain.innerHTML.includes('A service appears here once a pack that names it is registered.'), 'not startable: the empty state as it was');
+  assert.ok(plain.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !plain.innerHTML.includes('ov-start'), 'no start drawn for a host that does not run it');
+  // A host that runs the start: its hooks on host.overview, startable in the model's input.
+  const hooks = { overview: { scan() {}, live() {}, upload() {}, resetStart() {}, explain() {}, expert() {} } };
   const empty = overviewContainer();
-  assert.doesNotThrow(() => renderOverview(empty, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null } }), { overview: {} }));
-  assert.ok(empty.innerHTML.includes('<p class="ux-empty-title">No service to show yet.</p>') && empty.innerHTML.includes('A service appears here once a pack that names it is registered.'));
+  assert.doesNotThrow(() => renderOverview(empty, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true }), hooks));
+  assert.ok(empty.innerHTML.includes('id="ov-start-h">No service to show yet.</h2>') && empty.innerHTML.includes('A service appears here once a pack that names it is registered'));
+  assert.ok(empty.innerHTML.includes('Scan a repo') && empty.innerHTML.includes('Generate from live') && empty.innerHTML.includes('Diagnose drift'), 'empty: the three steps');
+  // Step 1 offers the scan and an upload as Pack A; step 2 (live, or an upload as Pack B) waits for Pack A.
+  const stepOf = (html, n) => html.slice(html.indexOf(`aria-label="Step ${n}:`), n < 3 ? html.indexOf(`aria-label="Step ${n + 1}:`) : undefined);
+  assert.deepEqual(['ov-scan', 'ov-upload-a', 'ov-live', 'ov-upload-b'].map((a) => stepOf(empty.innerHTML, 1).includes(`data-ux-action="${a}"`)), [true, true, false, false], 'step 1: scan and upload');
+  assert.equal(countOf(stepOf(empty.innerHTML, 2), 'data-ux-action="ov-explain" aria-disabled="true" data-reason="Load Pack A first, in step 1."'), 2, 'step 2: live and upload, drawn waiting for Pack A');
+  const second = overviewContainer();
+  renderOverview(second, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, start: { a: { id: 'kx', label: 'kx <scan>' } } }), hooks);
+  assert.ok(stepOf(second.innerHTML, 1).includes('Pack A: kx &lt;scan&gt;') && stepOf(second.innerHTML, 1).includes('data-ux-action="ov-start-reset"') && !second.innerHTML.includes('data-ux-action="ov-scan"'), 'step 1 done: Pack A named, escaped, changeable');
+  assert.deepEqual(['ov-live', 'ov-upload-b'].map((a) => stepOf(second.innerHTML, 2).includes(`data-ux-action="${a}"`)), [true, true], 'step 2 open: live and upload as Pack B');
+  assert.equal(countOf(second.innerHTML, 'og-btn--primary'), 0);
+  const packless = overviewContainer();
+  renderOverview(packless, screen({ startable: true, services: [{ ...KRYSTALINE, name: 'k8s <x>', packs: [] }] }), hooks);
+  assert.ok(packless.innerHTML.includes('id="ov-service"') && packless.innerHTML.includes('id="ov-start-h">No pack for k8s &lt;x&gt; yet.</h2>'), 'a pack-less service: its header, then the start, named and escaped');
+  assert.ok(stepOf(packless.innerHTML, 1).includes('data-ux-action="ov-scan"') && !packless.innerHTML.includes('ov-grade') && !packless.innerHTML.includes('ov-next'), 'the start in place of the three panels');
   assert.ok(empty.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !empty.innerHTML.includes('ov-grade') && !empty.innerHTML.includes('id="ov-service"'));
+  const viewer = overviewContainer();
+  renderOverview(viewer, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, access: { canWrite: false, reason: 'viewers cannot load packs' } }), hooks);
+  assert.equal(countOf(viewer.innerHTML, 'data-ux-action="ov-explain" aria-disabled="true" data-reason="viewers cannot load packs"'), 4, 'empty, a viewer: the four cards drawn unavailable, each explains');
+  assert.ok(!viewer.innerHTML.includes('data-ux-action="ov-scan"'));
+  // A host that runs the start but supplies no live draft: that card drawn unavailable, never a card that does nothing.
+  const noLive = overviewContainer();
+  renderOverview(noLive, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, start: { a: { id: 'kx', label: 'kx' } } }), { overview: { ...hooks.overview, live: undefined } });
+  assert.ok(stepOf(noLive.innerHTML, 2).includes('data-reason="Not offered here."') && stepOf(noLive.innerHTML, 2).includes('data-ux-action="ov-upload-b"') && !noLive.innerHTML.includes('data-ux-action="ov-live"'), 'a missing hook: its card unavailable, the others live');
   const error = overviewContainer();
   assert.doesNotThrow(() => renderOverview(error, buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: <down>' } }), { overview: {} }));
   assert.ok(error.innerHTML.includes('<div class="ux-empty ux-tone-warn" role="note">') && error.innerHTML.includes('<p class="ux-empty-title">The services could not be read.</p>'));
@@ -794,7 +880,7 @@ test('layersModel: the four layers top down with the ten kinds each, counts of d
     ['ux', 'User experience', 0, 10, 0, 'fail', 0], ['app', 'Application', 7, 10, 70, 'ok', 80], ['platform', 'Platform', 4, 10, 40, 'warn', 4], ['infra', 'Infrastructure', 3, 10, 30, 'warn', 7],
   ]);
   assert.deepEqual(L.rows[1].kinds.map((k) => k.key), ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'], 'the ten kinds, in drawing order');
-  assert.deepEqual(L.rows[1].kinds.filter((k) => k.present).map((k) => k.label), ['17 indicators', '15 objectives', '37 metrics', '2 logs', '1 trace', '4 dashboards', '4 alerts']);
+  assert.deepEqual(L.rows[1].kinds.filter((k) => k.present).map((k) => k.label), ['17 indicators', '15 objectives', '37 metrics', '2 logs', '1 trace', '4 dashboards and panels', '4 alerts']);
   assert.deepEqual(L.rows[1].kinds.filter((k) => !k.present).map((k) => k.label), ['no runbooks', 'no chaos tests', 'no synthetic checks']);
   assert.deepEqual([L.coveragePct, L.unplaced, L.declared], [35, 7, 600], 'the average of the four layers is the engine\'s "35% average observed"');
   assert.deepEqual(L.composition, [{ name: 'SLI/SLO', count: 36 }, { name: 'Metrics/Logs/Traces', count: 226 }, { name: 'Dashboards/Recording Rules', count: 321 }, { name: 'Alerts/Policy/Self-healing', count: 15 }, { name: 'Self-check', count: 2 }]);
@@ -808,6 +894,39 @@ test('layersModel: the four layers top down with the ten kinds each, counts of d
   assert.deepEqual(compositionOf(null), []);
 });
 
+test('layersModel adds up: Declared is the plates plus Unplaced, each artefact once — a metric, a scrape job, an alert rule and a panel on their layer, a backend repeated as its signal counted once, what has no layer or no kind of its own in Unplaced and named (seen 2026-11-04: 699 declared, 93 on the plates, 6 unplaced)', async () => {
+  const { computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const layered = {
+    meta: { annotations: {} },
+    layers: {
+      L1: [{ id: 'SLI-01', title: 'kx_wallet_availability' }, { id: 'SLO-01', title: 'kx_wallet_availability' }],
+      L2: [
+        { id: 'BAK-01', title: 'metrics-prometheus node-exporter', spec: { signal: 'metrics' } }, { id: 'BAK-02', title: 'alerting-alertmanager', spec: { signal: 'alerting' } },
+        { id: 'METRIC-01', title: 'node_cpu_seconds_total' }, { id: 'METRIC-02', title: 'http_requests_total' }, { id: 'METRIC-03', title: 'widgets' },
+        { id: 'SCRAPE-01', title: 'scrape: postgres' }, { id: 'PIP-RCV-01', title: 'receiver: otlp' }, { id: 'OTEL-01' },
+      ],
+      L3: [{ id: 'DASH-01', title: 'k8s cluster' }, { id: 'PANEL-01', title: 'pod_restarts' }, { id: 'PANEL-02', title: 'rca' }],
+      L4: { alerting: [{ id: 'RULE-01', title: 'api_error_ratio_high' }, { id: 'ALR-01', title: 'SEV2 routes' }, { id: 'ALR-02', title: 'SEV1 routes' }] },
+      L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }],
+    },
+  };
+  const { cells, unkinded } = computePostureMatrix(layered, null);
+  const L = keep(layersModel({ cells, layered, unkinded }));
+  const plates = L.rows.reduce((n, r) => n + r.total, 0);
+  assert.deepEqual([L.declared, plates, L.unplaced, L.placeless, L.unkinded], [17, 9, 8, 2, 6]);
+  assert.equal(plates + L.unplaced, L.declared, 'the column adds up');
+  const row = (key) => L.rows.find((r) => r.key === key).kinds.filter((k) => k.count).map((k) => k.label);
+  assert.deepEqual(row('infra'), ['2 metrics', '2 dashboards and panels'], 'the backend and the node metric; the dashboard and its panel');
+  assert.deepEqual(row('platform'), ['1 metric'], 'the scrape job');
+  assert.deepEqual(row('app'), ['1 indicator', '1 objective', '1 metric', '1 alert'], 'the backend on app as its signal is not counted again');
+  assert.equal(L.rows.find((r) => r.key === 'app').kinds.find((k) => k.key === 'metric').present, true);
+  assert.equal(L.unplacedNote, '8 things are on no layer: 2 could not be placed on one, and 6 are no kind of signal of their own (2 platform-wide settings, 2 alert routes, 1 backend for another signal, 1 pipeline part).');
+  // A host that passes no unkinded (before 2026-11-04) keeps the old reading; one kindless thing alone reads singular.
+  assert.equal(layersModel({ cells, layered }).unplaced, 2);
+  assert.equal(layersModel({ cells: {}, unkinded: [{ id: 'ALR-01' }] }).unplacedNote, '1 thing is on no layer: no kind of signal of its own (1 alert route).');
+  assert.equal(layersModel({ cells: {}, unkinded: 4 }).unplacedNote, '4 things are on no layer: no kind of signal of their own.', 'a count, as a saved posture holds it');
+});
+
 test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the promises that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
   assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
   assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
@@ -818,14 +937,14 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
   assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
-  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack })).chains, null, 'no declared chains: no promises line');
+  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
   const never = keep(fidelityModel({}));
   assert.deepEqual([never.known, never.alignmentPct, never.tiles, never.chains, never.note], [false, null, [], null, 'Never checked against live.']);
   assert.equal(keep(fidelityModel({ run, journey, pack: { ...krystalinePack, id: 'other', name: 'v2' } })).known, false);
-  assert.equal(keep(fidelityModel({ run: lostRun, journey, pack: krystalinePack })).note, 'The live side did not answer the last check, so nothing is known about it right now.');
-  assert.equal(keep(fidelityModel({ run: partialRun, journey, pack: krystalinePack })).note, 'The live side showed less than the check before, so the counts cannot be compared yet.');
-  assert.deepEqual([fidelityModel({ run, journey: fileJourney, pack: krystalinePack }).against, fidelityModel({ run: { ...run, packB: { source: '/rec.json' } }, pack: krystalinePack }).against], ['recording', 'recording']);
+  assert.equal(keep(fidelityModel({ run: lostRun, journey, pack: krystalinePack, now: NOW })).note, 'The live side did not answer the last check, so nothing is known about it right now.');
+  assert.equal(keep(fidelityModel({ run: partialRun, journey, pack: krystalinePack, now: NOW })).note, 'The live side showed less than the check before, so the counts cannot be compared yet.');
+  assert.deepEqual([fidelityModel({ run, journey: fileJourney, pack: krystalinePack, now: NOW }).against, fidelityModel({ run: { ...run, packB: { source: '/rec.json' } }, pack: krystalinePack, now: NOW }).against], ['recording', 'recording']);
   const c = keep(changesModel({ fidelity: f }));
   assert.deepEqual(c.items.map((i) => [i.key, i.value, i.label, i.note, i.tone]), [
     ['add', 38, 'to add', 'declared in the repository, not running live', 'fail'], ['update', 5, 'to update', 'running live, but not as declared', 'warn'], ['review', 30, 'to review', 'running live, not in the repository', 'info'],
@@ -880,9 +999,16 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<span class="ov-cell ov-cell--on" title="37 metrics">37</span>') && html.includes('<span class="ov-cell" title="no runbooks"></span>'));
   assert.ok(html.includes('<span class="og-pill og-pill--ok ov-layer__n">7 of 10 kinds</span>') && html.includes('<span class="og-pill og-pill--fail ov-layer__n">0 of 10 kinds</span>'), 'the health pill');
   assert.ok(html.includes('<span class="ov-layer__total" title="declared on this layer"><b>80</b><small>declared</small></span>'), 'the count');
-  assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
+  assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards and panels · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
   assert.ok(html.includes('<div class="ov-stat" title="600 things declared in the repository."><dt>Declared</dt><dd>600</dd></div>') && html.includes('<dt>Coverage</dt><dd>35<small>%</small></dd>') && html.includes('<div class="ov-stat" title="7 things could not be placed on a layer."><dt>Unplaced</dt><dd>7</dd></div>'), 'the three stats');
-  assert.ok(html.includes('<details class="ux-disclosure ov-comp__wrap"><summary>In the repository</summary>') && html.includes('<span class="ov-comp__item"><b class="ov-comp__n">321</b> Dashboards/Recording Rules</span>'), 'the composition behind a compact row');
+  // The column opens on the summary: In the repository and its counts, closed; the stack is what it opens to; the stats stay outside.
+  assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'the summary is the default, closed');
+  const sum = html.slice(html.indexOf('<summary class="ov-repo__sum">'), html.indexOf('</summary>', html.indexOf('<summary class="ov-repo__sum">')));
+  assert.ok(sum.includes('<span class="ov-repo__title">In the repository</span>') && sum.includes('<span class="ov-comp__row"><span class="ov-comp__name">Dashboards/Recording Rules</span><b class="ov-comp__n">321</b></span>'), 'the counts are the summary itself');
+  assert.equal(countOf(sum, '<span class="ov-comp__row">'), 5, 'one row per kind: a list, not a sentence');
+  assert.ok(!sum.includes(' · '), 'no run-on separators');
+  assert.ok(!sum.includes('ov-layer') && html.indexOf('</summary>') < html.indexOf('<ol class="ov-stack"') && html.indexOf('<ol class="ov-stack"') < html.indexOf('</details>', html.indexOf('<details class="ov-repo">')), 'the layers are inside, behind the summary');
+  assert.ok(html.indexOf('</details>', html.indexOf('<details class="ov-repo">')) < html.indexOf('<dl class="ov-stats">'), 'the stats stay in view, after it');
   assert.ok(!html.includes('ov-legend') && !html.includes('Cells, left to right'), 'the cells are labelled directly: no legend paragraph');
   // Diagnose: one status strip for the column — what was graded against what, when, which families were not read, the cadence.
   assert.ok(html.includes('<div class="ov-status ov-status--warn" role="status"><span class="ov-status__dot" aria-hidden="true"></span>'));
@@ -891,7 +1017,9 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<div class="ov-shield ov-tone-warn" title="B · Industrial Grade — Suitable for production, maintenance, process control, and routine professional use." aria-label="Grade B"><span class="ov-shield__letter">B</span></div>'));
   assert.ok(html.includes('<div class="ov-grade__label">Industrial grade</div>') && html.includes('<div class="ov-grade__word">Almost diagnostic-grade</div>'));
   assert.ok(html.includes('<div class="ov-rules ov-rules--warn" title="12 of 15 required rules met for a tier 2 service."><div class="ov-rules__n"><b>12</b><span class="ov-rules__of">/ 15</span></div><div class="ov-rules__bar" role="img" aria-label="12 of 15 required rules met"><span style="width:80%"></span></div><span class="ov-rules__text">required rules met · tier 2</span></div>'));
-  assert.ok(html.includes('<div class="ov-grade__why ov-grade__why--open"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'headless: the seven rows open, no disclosure');
+  // The seven rows are behind Why this grade, closed, whatever room the screen has: the reader opens them.
+  assert.ok(html.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'the seven rows behind a closed disclosure');
+  assert.ok(!html.includes('<details class="ux-disclosure ov-grade__why" open>') && !html.includes('ov-grade__why--open'), 'never opened for the reader');
   assert.equal(countOf(html, '<li class="ov-gw '), 7);
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
   for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
@@ -1019,6 +1147,174 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
+
+// ---------- the service list: Overview's front door ----------
+
+const EP = { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' };
+const svcRow = (over = {}) => ({
+  id: 1, slug: 'checkout', name: 'Checkout', owners: [], tier: null, description: null,
+  repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: null },
+  source: { kind: 'observogram' }, createdAt: 't', updatedAt: 't',
+  environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }],
+  packs: [], ...over,
+});
+const lastRunAt = new Date(NOW - 2 * HOUR).toISOString();
+const listJourney = (name, scope, lastRun, packA = '/w/packs/x.pack.yaml') => ({ name, scope, packA, packB: 'mcp: https://mcp.example.test/mcp', lastRun });
+
+test('repositoryLine: GitHub as owner/repo with its branch, Azure DevOps as project/repo, a folder by its name with its path beneath; nothing → null', () => {
+  assert.deepEqual(repositoryLine({ kind: 'github', location: 'https://github.com/acme/checkout', ref: 'develop' }),
+    { kind: 'github', kindText: 'GitHub', text: 'acme/checkout', ref: 'develop', detail: 'develop', title: 'https://github.com/acme/checkout (develop)' });
+  assert.deepEqual(repositoryLine({ kind: 'ado', location: 'https://dev.azure.com/acme/My%20Shop/_git/checkout', ref: null }),
+    { kind: 'ado', kindText: 'Azure DevOps', text: 'My Shop/checkout', ref: null, detail: null, title: 'https://dev.azure.com/acme/My%20Shop/_git/checkout' });
+  assert.deepEqual(repositoryLine({ kind: 'path', location: 'C:\\src\\shop\\checkout', ref: null }),
+    { kind: 'path', kindText: 'Folder', text: 'checkout', ref: null, detail: 'C:\\src\\shop\\checkout', title: 'C:\\src\\shop\\checkout' });
+  assert.equal(repositoryLine(null), null);
+  assert.equal(repositoryLine({ kind: 'github' }), null);
+  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path']);
+});
+
+test('serviceListModel: one row per service and environment with its two places and its last check; what is missing says so; the rows a person can run first', () => {
+  const services = [
+    svcRow(),
+    svcRow({ id: 2, slug: 'basket', name: 'Basket', repository: null, packs: [{ id: 'uploaded-basket-1', role: 'primary' }], environments: [{ id: 21, name: 'prod', mcpEndpoint: null }] }),
+    svcRow({ id: 3, slug: 'kx-wallet', name: 'kx-wallet', repository: null, packs: [{ id: 'uploaded-live-1', role: 'member' }], environments: [{ id: 31, name: 'prod', mcpEndpoint: null }] }),
+    svcRow({ id: 4, slug: 'ledger', name: 'Ledger', environments: [] }),
+    svcRow({ id: 5, slug: 'search', name: 'Search', environments: [{ id: 51, name: 'prod', mcpEndpoint: null }, { id: 52, name: 'staging', mcpEndpoint: { id: 7, name: 'prod-mcp', origin: EP.origin } }] }),
+  ];
+  const catalog = [{ id: 'uploaded-basket-1', ok: true }, { id: 'uploaded-live-1', ok: true, live: 'scaffold' }];
+  const journeys = [
+    listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'gate-failed', alignmentPct: 75.4, gradeScore: 70 }),
+    listJourney('search.staging', { service: 'search', env: 'staging' }, { startedAt: lastRunAt, outcome: 'vantage-lost', alignmentPct: null, gradeScore: null }),
+  ];
+  const m = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW });
+  assert.equal(m.kind, 'list');
+  assert.equal(m.hidden, 1, 'kx-wallet — a live draft\'s member, no repository — is counted, not drawn');
+  assert.deepEqual(m.rows.map((r) => [r.key, r.complete]), [['1:prod', true], ['5:staging', true], ['2:prod', false], ['4:', false], ['5:prod', false]]);
+  const [checkout, searchStaging, basket, ledger, searchProd] = m.rows;
+  assert.deepEqual(checkout.repository.text, 'acme/checkout');
+  assert.deepEqual(checkout.live, { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' });
+  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail' });
+  assert.deepEqual(checkout.run, { enabled: true, reason: null, running: false });
+  assert.equal(checkout.journey, 'checkout.prod');
+  assert.deepEqual([searchStaging.last.state, searchStaging.last.word, searchStaging.last.letter], ['unreachable', 'Unreachable', null]);
+  assert.deepEqual([basket.run.enabled, basket.run.reason, basket.open.enabled], [false, "Say where Basket's repository is first.", true], 'its own pack opens the board');
+  assert.deepEqual([ledger.env, ledger.run.reason, ledger.last.word], [null, 'Add an environment to Ledger first.', 'Never checked']);
+  assert.deepEqual([searchProd.run.reason, searchProd.journey], ['Choose the live MCP endpoint for prod first.', null], 'a check of staging is not prod\'s');
+  // showAll draws the hidden one; running and a refusal ride on their row.
+  const all = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW, showAll: true,
+    running: { '1:prod': true }, results: { '5:staging': { error: '502: the live side did not answer' } } });
+  assert.equal(all.hidden, 0);
+  assert.ok(all.rows.some((r) => r.name === 'kx-wallet'));
+  assert.deepEqual(all.rows[0].run, { enabled: false, reason: null, running: true });
+  assert.equal(all.rows.find((r) => r.key === '5:staging').error, '502: the live side did not answer');
+  // The rank: every Run explains the role.
+  const viewer = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW, access: { canWrite: false, reason: 'needs the operator role in Acme — yours is viewer' } });
+  assert.deepEqual([viewer.canWrite, viewer.rows[0].run.enabled, viewer.rows[0].run.reason], [false, false, 'needs the operator role in Acme — yours is viewer']);
+  // No percentage in a string: the renderer writes the sign.
+  const strings = [];
+  const walk = (v) => { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+  walk(all);
+  assert.deepEqual(strings.filter((x) => x.includes('%')), []);
+  // Not read yet, could not be read, an empty table.
+  assert.equal(serviceListModel({ services: null, servicesStatus: { kind: 'loading' } }).kind, 'loading');
+  assert.deepEqual([serviceListModel({ services: null, servicesStatus: { kind: 'error', error: '500: boom' } }).kind, serviceListModel({ services: null, servicesStatus: { kind: 'error', error: '500: boom' } }).error], ['error', '500: boom']);
+  assert.deepEqual([serviceListModel({ services: [], servicesStatus: { kind: 'ok' } }).empty, rowKey(9, null)], [true, '9:']);
+  // The journeys listing failed: every row says so, never "never checked".
+  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeysError: '500: x', endpoints: [EP], now: NOW }).rows[0].last.word, 'Not known');
+});
+
+test('the form: opened blank or on a row; typing keeps its values; what is missing; the model it draws; the save plan completes a record, never a second one', () => {
+  const services = [svcRow()];
+  // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
+  const blank = formOpened(services, { endpoints: [EP] });
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '' }]);
+  assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
+  assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
+  // Opened on a row: its service and environment, the environment fixed.
+  const edit = formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP, { ...EP, id: 8 }] });
+  assert.deepEqual([edit.mode, edit.serviceId, edit.envFixed, edit.values.name, edit.values.location, edit.values.endpointId], ['edit', 1, true, 'Checkout', 'https://github.com/acme/checkout', '7']);
+  assert.equal(formOpened(services, { serviceId: 1, env: null }).envFixed, false, 'a service with no environment yet: the environment is typed');
+  // Typing.
+  const typed = formInput({ ...blank, error: 'x' }, 'name', 'Basket');
+  assert.deepEqual([typed.values.name, typed.error], ['Basket', null]);
+  assert.equal(formInput(blank, 'nope', 'x'), blank, 'an unknown field changes nothing');
+  assert.equal(formInput(FORM_CLOSED, 'name', 'x'), FORM_CLOSED);
+  // What is missing.
+  assert.deepEqual(formProblems(blank.values), { name: 'Name the service.', location: "Give the repository's address." });
+  assert.deepEqual(formProblems({ ...blank.values, name: 'B', kind: 'path', location: ' ', endpointId: NEW_ENDPOINT }), {
+    location: "Give the folder's full path on the server.", epUrl: "Give the MCP endpoint's URL.", epName: 'Name the endpoint.',
+  });
+  // The model.
+  const fm = formModel({ ...edit, focus: 'location' }, { endpoints: [EP], register: { allowed: false, why: 'MCP endpoints cannot be registered here' } });
+  assert.deepEqual([fm.open, fm.title, fm.nameFixed, fm.envFixed, fm.focus, fm.kind.kind], [true, 'Checkout · prod', true, true, 'location', 'github']);
+  assert.deepEqual(fm.kinds.map((k) => [k.kind, k.selected]), [['github', true], ['ado', false], ['path', false]]);
+  assert.deepEqual(fm.endpoints, [{ id: '7', name: 'prod-mcp', origin: 'https://mcp.example.test', selected: true }]);
+  assert.deepEqual(fm.newEndpoint, { allowed: false, reason: 'MCP endpoints cannot be registered here', selected: false });
+  assert.deepEqual(formModel(FORM_CLOSED), { open: false });
+  // The save plan: a new service, an endpoint by id, its environment created.
+  const fresh = savePlan({ ...blank.values, name: 'Basket', location: 'acme/basket', ref: 'main' }, { services });
+  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' } } }, env: { create: { name: 'prod' } }, envName: 'prod', name: 'Basket' });
+  // A name that keys an existing record completes it: the repository patched when it differs, the environment bound when it does not point there yet.
+  const same = savePlan({ ...edit.values }, { services, serviceId: 1 });
+  assert.deepEqual([same.service, same.env], [{ id: 1, patch: null }, { id: 11, bind: false }], 'nothing differs: no patch, no bind');
+  const moved = savePlan({ ...edit.values, name: 'CHECKOUT', location: 'acme/checkout-v2', endpointId: '8' }, { services });
+  assert.deepEqual([moved.service, moved.env], [{ id: 1, patch: { repository: { kind: 'github', location: 'acme/checkout-v2' } } }, { id: 11, bind: true }]);
+  const staging = savePlan({ ...edit.values, env: 'staging' }, { services, serviceId: 1 });
+  assert.deepEqual(staging.env, { create: { name: 'staging' } });
+  const newEp = savePlan({ ...blank.values, name: 'B', location: 'a/b', endpointId: NEW_ENDPOINT, epName: ' live ', epUrl: ' https://mcp.example.test/mcp ', epToken: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' }, { services });
+  assert.deepEqual(newEp.endpoint, { create: { name: 'live', url: 'https://mcp.example.test/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' } });
+});
+
+test('renderServiceList: the rows, one primary button (Add a service, or Save and run with the form open), the names escaped, the actions proxied; a headless host never throws', () => {
+  const services = [svcRow({ name: 'Check<img onerror=x>out' }), svcRow({ id: 4, slug: 'ledger', name: 'Ledger', environments: [] })];
+  const journeys = [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 })];
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW });
+  const c = overviewContainer();
+  const calls = [];
+  const host = { overview: { addService: () => calls.push(['add']), runService: (k) => calls.push(['run', k]), editService: (id, env) => calls.push(['edit', id, env]), openService: (id, env) => calls.push(['open', id, env]), compare: () => calls.push(['compare']) } };
+  renderServiceList(c, list, formModel(FORM_CLOSED), host);
+  const html = c.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary: Add a service');
+  assert.ok(html.includes('Add a service</button>'));
+  assert.ok(html.includes('Check&lt;img onerror=x&gt;out') && !html.includes('<img'), 'the name is escaped');
+  assert.ok(html.includes('<span class="ov-svc__letter ov-tone-ok" aria-label="Grade A" title="Diagnostic grade">A</span><span class="ov-svc__last-text"><b>Checked 2 hours ago</b><small>92% matches live</small></span>'), 'the letter and the match, the sign the renderer\'s');
+  assert.ok(html.includes('data-ux-action="ov-svc-run" data-key="1:prod"'));
+  assert.ok(html.includes('data-ux-action="ov-explain" aria-disabled="true" data-reason="Add an environment to Ledger first."'), 'a row that cannot run explains why');
+  assert.ok(html.includes('Upload one or compare two instead'), 'the host offers packs in hand');
+  c.click('ov-svc-run', { key: '1:prod' });
+  c.click('ov-svc-add');
+  c.click('ov-svc-edit', { service: '4', env: '' });
+  c.click('ov-svc-open', { service: '1', env: 'prod' });
+  assert.deepEqual(calls, [['run', '1:prod'], ['add'], ['edit', 4, null], ['open', 1, 'prod']]);
+  // The form open: Save and run is the one primary; Add a service steps aside.
+  const f = formModel({ ...formOpened(services, { endpoints: [EP] }), error: 'Some answers are missing — each is marked where it goes.' }, { endpoints: [EP] });
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, f, host);
+  assert.equal(countOf(c2.innerHTML, 'og-btn--primary'), 1);
+  assert.ok(c2.innerHTML.includes('>Save and run</button>') && !c2.innerHTML.includes('>Add a service</button>'));
+  assert.ok(c2.innerHTML.includes('<span class="ov-form__err">Name the service.</span>'), 'after a try, each missing answer is marked');
+  assert.ok(c2.innerHTML.includes('placeholder="https://github.com/owner/repo"'));
+  // Without a compare hook, no line offering one; a headless host never throws.
+  const c3 = overviewContainer();
+  assert.doesNotThrow(() => renderServiceList(c3, list, formModel(FORM_CLOSED), { overview: {} }));
+  assert.ok(!c3.innerHTML.includes('compare two instead'));
+  assert.doesNotThrow(() => renderServiceList(overviewContainer(), serviceListModel({ services: null, servicesStatus: { kind: 'loading' } }), formModel(FORM_CLOSED), {}));
+});
+
+test('buildOverviewModel with listable: the service header links back to the list; without it, nothing changes', () => {
+  const base = { services, servicesStatus: { kind: 'ok' }, catalog: packs, isLiveAggregatePack, diagnostic, decision, journeys, run, now: NOW };
+  assert.equal(buildOverviewModel({ ...base, listable: true }).back, true);
+  assert.equal(buildOverviewModel(base).back, false);
+  const c = overviewContainer();
+  const calls = [];
+  renderOverview(c, buildOverviewModel({ ...base, listable: true }), { overview: { backToList: () => calls.push('back') } });
+  assert.ok(c.innerHTML.includes('data-ux-action="ov-back"'));
+  c.click('ov-back');
+  assert.deepEqual(calls, ['back']);
+  const c2 = overviewContainer();
+  renderOverview(c2, buildOverviewModel(base), { overview: {} });
+  assert.ok(!c2.innerHTML.includes('ov-back'));
 });
 
 // ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------

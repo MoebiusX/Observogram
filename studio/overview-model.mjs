@@ -113,17 +113,23 @@ const normalizeKey = (s) => String(s || '').trim().toLowerCase();
 // its Pack A is the service's own pack file (the listing's `packA` is the
 // file path; a captured journey names the pack by id). The scope string is
 // also the diff's service scope, so a journey of a live aggregate is captured
-// without one — the pack is the surer link. Among several, the one whose
-// scope.env is the environment on screen; else the first.
+// without one — the pack is the surer link. A journey scoped to another
+// environment checks that one, never this: each environment has its own
+// check (a service's Run saves one per environment), so for an environment
+// nobody checked the answer is none. Among the rest, the ones scoped to this
+// environment first, then — within them — the ones that check the service's
+// own pack (a check saved by the start or a Run, beside an older one scoped
+// to the service); else the first.
 export function journeyForService(journeys, { slug = null, env = null, packId = null } = {}) {
   const list = Array.isArray(journeys) ? journeys.filter(Boolean) : [];
-  const mine = list.filter((j) => {
-    const scoped = slug && normalizeKey(j.scope?.service) === normalizeKey(slug);
-    const byPack = packId && baseName(j.packA) === `${packId}.pack.yaml`;
-    return scoped || byPack;
-  });
-  if (!mine.length) return null;
-  return mine.find((j) => env && j.scope?.env === env) || mine[0];
+  const byPack = (j) => !!packId && baseName(j.packA) === `${packId}.pack.yaml`;
+  const mine = list.filter((j) => byPack(j) || (slug && normalizeKey(j.scope?.service) === normalizeKey(slug)));
+  const fits = mine.filter((j) => !env || !j.scope?.env || j.scope.env === env);
+  if (!fits.length) return null;
+  const exact = env ? fits.filter((j) => j.scope?.env === env) : [];
+  const scoped = exact.length ? exact : fits;
+  const pool = scoped.some(byPack) ? scoped.filter(byPack) : scoped;
+  return pool[0];
 }
 
 // The listing says where Pack B comes from: "mcp: <url>" for a live draft,
@@ -242,12 +248,18 @@ function repositoryGradeLines(diagnostic) {
 // letter on screen: Drift-free is the integrity of the declared commitment
 // chains (the run's traceability), Fresh the age of the live picture when
 // the run read it. Null when the run scored drift on another construct.
+// The age is the run's `freshness.liveAgeHours`, null when Pack B carries no
+// `mcp.refreshedAt` (a pack file, a recording): the engine scores that Fresh
+// = no, so an age that is not a number is never fresh — Number(null) is 0,
+// "zero hours old", and would count a point the engine never gave.
 function liveGradeLines(run, { against, where, now }) {
   if (run?.grade?.driftConstruct !== 'requirement-chain' || !(Number(run.traceability?.declaredTotal) > 0)) return null;
   const pct = Number(run.traceability.integrityPct);
   if (!Number.isFinite(pct)) return null;
-  const ageHours = Number(run.freshness?.liveAgeHours);
-  const fresh = Number.isFinite(ageHours) ? ageHours * 3600e3 <= FRESH_WINDOW_MS : true;
+  const ageHours = run.freshness?.liveAgeHours;
+  const dated = typeof ageHours === 'number' && Number.isFinite(ageHours);
+  const fresh = dated && ageHours * 3600e3 <= FRESH_WINDOW_MS;
+  const picture = where === 'live' ? 'live picture' : 'recording';
   // The engine scores this criterion by the integrity itself (0.85 of a
   // point at 85 in 100) and calls it met at the bar: the mark follows the
   // bar, the points follow the integrity, above the bar too.
@@ -255,7 +267,9 @@ function liveGradeLines(run, { against, where, now }) {
     { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
       text: `Of what the repository promises, ${Math.round(pct)} in 100 holds up ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
-      text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.` : `The ${where === 'live' ? 'live picture' : 'recording'} was more than a day old when it was checked.` },
+      text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
+        : dated ? `The ${picture} was more than a day old when it was checked.`
+          : `The ${picture} does not say when it was taken, so it does not count as recent.` },
   ];
 }
 
@@ -544,30 +558,35 @@ export const BOARD_LAYERS = Object.freeze([
 ]);
 
 // The ten kinds the matrix knows, in drawing order, each with its plain
-// word (many, one).
+// word (many, one, and none when "no <many>" would not read). A dashboard's
+// panels count with the dashboards (the engine's dashboard kind is "a
+// human-readable view"), so the word names both.
 const SIGNAL_WORDS = {
   sli: ['indicators', 'indicator'], slo: ['objectives', 'objective'], metric: ['metrics', 'metric'], log: ['logs', 'log'], trace: ['traces', 'trace'],
-  dashboard: ['dashboards', 'dashboard'], alert: ['alerts', 'alert'], runbook: ['runbooks', 'runbook'], chaos: ['chaos tests', 'chaos test'], synthetic: ['synthetic checks', 'synthetic check'],
+  dashboard: ['dashboards and panels', 'dashboard or panel', 'no dashboards'], alert: ['alerts', 'alert'], runbook: ['runbooks', 'runbook'], chaos: ['chaos tests', 'chaos test'], synthetic: ['synthetic checks', 'synthetic check'],
 };
 const SIGNAL_ORDER = ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'];
 export const SIGNAL_KINDS = Object.freeze(SIGNAL_ORDER
   .filter((k) => POSTURE_MECHANISMS_PER_LAYER.some((m) => m.key === k))
-  .map((k) => ({ key: k, word: (SIGNAL_WORDS[k] || [k, k])[0], one: (SIGNAL_WORDS[k] || [k, k])[1] })));
+  .map((k) => {
+    const [word, one, none] = SIGNAL_WORDS[k] || [k, k];
+    return { key: k, word, one, none: none || `no ${word}` };
+  }));
 
 // A cell is the matrix's list of artefacts, or (in a test, or a saved
-// posture) just its count. The matrix lists a telemetry backend twice on the
-// application layer (as itself and as the signal it carries) and adds
-// evidence pseudo-artefacts from a live side's annotations; the board counts
-// what the repository declares, each artefact once — but a cell is present
-// (lit, and observed by the engine's Comprehensive criterion) when it holds
-// anything at all, evidence included.
+// posture) just its count. The matrix lists a telemetry backend twice (in
+// its own cell, and on the application layer as the signal it carries,
+// marked `_propagated`) and adds evidence pseudo-artefacts from a live
+// side's annotations; the board counts what the repository declares, each
+// artefact once — but a cell is present (lit, and observed by the engine's
+// Comprehensive criterion) when it holds anything at all, evidence included.
 const cellOf = (cells, key) => {
   const v = cells?.[key];
   if (!Array.isArray(v)) { const n = Number(v) || 0; return { count: n, present: n > 0 }; }
   const ids = new Set();
   let anonymous = 0;
   for (const a of v) {
-    if (!a || a._evidence) continue;
+    if (!a || a._evidence || a._propagated) continue;
     if (a.id) ids.add(a.id); else anonymous += 1;
   }
   return { count: ids.size + anonymous, present: v.length > 0 };
@@ -584,18 +603,43 @@ export function compositionOf(layered) {
   return LAYER_DEFS.filter((d) => counts[d.id] > 0).map((d) => ({ name: d.name, count: counts[d.id] }));
 }
 
-// layersModel({ cells, layered }) → { rows, coveragePct, unplaced, composition, declared, lead, coverage, unplacedNote } | null
+// What an artefact with no kind of its own is, in the Unplaced note's words
+// (the families studio/diagnostic-grade.mjs MECHANISM_BY_ID_PREFIX marks
+// null, and a backend whose signal is none of metrics, logs, traces).
+const UNKINDED_WORDS = [
+  ['ALR-', ['alert route', 'alert routes']],
+  ['PIP-', ['pipeline part', 'pipeline parts']],
+  ['COL-', ['collection agent', 'collection agents']],
+  ['BAK-', ['backend for another signal', 'backends for other signals']],
+];
+const PLATFORM_WIDE = ['platform-wide setting', 'platform-wide settings'];
+function unkindedNote(unkinded) {
+  const groups = new Map();
+  for (const a of unkinded) {
+    const id = String(a?.id || '');
+    const words = (UNKINDED_WORDS.find(([p]) => id.startsWith(p)) || [null, PLATFORM_WIDE])[1];
+    groups.set(words, (groups.get(words) || 0) + 1);
+  }
+  return [...groups].sort((a, b) => b[1] - a[1]).map(([[one, many], n]) => `${n} ${n === 1 ? one : many}`).join(', ');
+}
+
+// layersModel({ cells, layered, unkinded }) → { rows, coveragePct, unplaced, placeless, unkinded, composition, declared, lead, coverage, unplacedNote } | null
 //   rows      one per BOARD_LAYERS entry: { key, name, hint, covered, of, pct, total, tone,
 //             kinds: [{ key, word, count, present, label }] (all ten, in drawing order;
 //             a kind present by live evidence alone has count 0 and reads "seen live") }
 //   coveragePct  the engine's Comprehensive figure: the four layers' covered
 //             shares summed in the matrix's layer order, then rounded once
-export function layersModel({ cells = null, layered = null } = {}) {
+//   unkinded  the matrix's artefacts with no kind of their own
+//             (computePostureMatrix(...).unkinded; a list, or a count)
+//   unplaced  everything declared that is on no plate: `placeless` (a kind,
+//             no layer it could be placed on) plus `unkinded` — so the plates
+//             and Unplaced add up to Declared, each artefact counted once
+export function layersModel({ cells = null, layered = null, unkinded = null } = {}) {
   if (!cells) return null;
   const rows = BOARD_LAYERS.map((L) => {
     const kinds = SIGNAL_KINDS.map((k) => {
       const { count, present } = cellOf(cells, `${L.key}:${k.key}`);
-      const label = count > 0 ? `${count} ${count === 1 ? k.one : k.word}` : (present ? `${k.word} seen live` : `no ${k.word}`);
+      const label = count > 0 ? `${count} ${count === 1 ? k.one : k.word}` : (present ? `${k.word} seen live` : k.none);
       return { key: k.key, word: k.word, count, present, label };
     });
     const covered = kinds.filter((k) => k.present).length;
@@ -607,14 +651,21 @@ export function layersModel({ cells = null, layered = null } = {}) {
   let shares = 0;
   for (const l of POSTURE_LAYERS) { const r = rows.find((x) => x.key === l.key); if (r) shares += r.covered / r.of; }
   const coveragePct = Math.round(shares / rows.length * 100);
-  const unplaced = SIGNAL_KINDS.reduce((n, k) => n + cellOf(cells, `unknown:${k.key}`).count, 0);
+  const placeless = SIGNAL_KINDS.reduce((n, k) => n + cellOf(cells, `unknown:${k.key}`).count, 0);
+  const kindless = Array.isArray(unkinded) ? unkinded.length : (Number(unkinded) || 0);
+  const unplaced = placeless + kindless;
   const composition = compositionOf(layered);
   const declared = composition.reduce((n, c) => n + c.count, 0);
+  const what = Array.isArray(unkinded) && unkinded.length ? ` (${unkindedNote(unkinded)})` : '';
+  const unplacedNote = !unplaced ? ''
+    : !kindless ? `${things(placeless)} could not be placed on a layer.`
+      : !placeless ? `${things(kindless)} ${kindless === 1 ? 'is' : 'are'} on no layer: no kind of signal of ${kindless === 1 ? 'its' : 'their'} own${what}.`
+        : `${things(unplaced)} are on no layer: ${placeless} could not be placed on one, and ${kindless} ${kindless === 1 ? 'is' : 'are'} no kind of signal of ${kindless === 1 ? 'its' : 'their'} own${what}.`;
   return {
-    rows, coveragePct, unplaced, composition, declared,
+    rows, coveragePct, unplaced, placeless, unkinded: kindless, composition, declared,
     lead: declared ? `${things(declared)} declared in the repository.` : '',
     coverage: `Coverage reaches ${coveragePct} in 100 across the four layers.`,
-    unplacedNote: unplaced ? `${things(unplaced)} could not be placed on a layer.` : '',
+    unplacedNote,
   };
 }
 
@@ -704,17 +755,56 @@ export function changesModel({ fidelity = null } = {}) {
   return { known: true, items, total, sentence: total ? '' : 'Nothing to change: live matches what the repository declares.' };
 }
 
+// ---------- the drift check started here ----------
+//
+// The start (no service, or a service with no pack) is the drift check in
+// three steps: step 1 lands Pack A, step 2 Pack B, step 3 is the comparison.
+// The host keeps the state — it passes it to buildOverviewModel as `start` —
+// and owns the flows (its scan, its live draft, its upload); these two say
+// what each event does to the state, so every host routes the packs alike.
+// A state is { slot, a }: `slot` the pack the next flow fills ('a' | 'b' |
+// null), `a` Pack A once in ({ id, label }).
+export const START_IDLE = Object.freeze({ slot: null, a: null });
+
+// A start card opened one of the host's flows for `slot` ('a' | 'b').
+export function startChoose(start, slot) {
+  return { slot: slot === 'b' ? 'b' : 'a', a: start?.a ?? null };
+}
+
+// One of those flows registered `pack` ({ id, label }) while the board was
+// on screen. → { start, compare, said, refused }: step 1 keeps Pack A
+// (compare null; the board shows step 2 next); step 2 answers the pair the
+// host opens its comparison on (compare { a, b }) and the state is idle
+// again; the same pack offered as Pack B is refused and Pack A kept. `said`
+// is the sentence to announce. A pack with no id changes nothing.
+export function startAdopted(start, pack) {
+  const id = pack?.id ?? null;
+  const label = String(pack?.label || pack?.id || '');
+  const a = start?.a ?? null;
+  if (!id) return { start: start ?? START_IDLE, compare: null, said: '', refused: false };
+  if (start?.slot !== 'b' || !a) return { start: { slot: null, a: { id, label } }, compare: null, said: `Pack A loaded: ${label}. Step 2: its live side.`, refused: false };
+  if (a.id === id) return { start: { slot: null, a }, compare: null, said: 'That pack is Pack A already: step 2 needs its live side.', refused: true };
+  return { start: START_IDLE, compare: { a, b: { id, label } }, said: `Comparing ${a.label} against ${label}.`, refused: false };
+}
+
 // ---------- the whole screen ----------
+
+// Scan, live and upload are operator routes — a rank without them gets the
+// server's reason to draw.
+const sourcesOf = (access) => ({ enabled: access?.canWrite !== false, reason: access?.canWrite === false ? (access.reason || null) : null });
 
 // buildOverviewModel({ services, servicesStatus, catalog, serviceId, env, isLiveAggregatePack,
 //   diagnostic, diagnosticError, decision, journeys, journeysError, run, running, startError,
-//   now, productName, pending, layout, cells, layered, conformance, conformanceError })
+//   now, productName, pending, layout, cells, layered, conformance, conformanceError, access, start, startable, listable })
+// `listable`: the host draws the service list (serviceListModel, below) as
+// Overview's front door; the service's header then links back to it.
 export function buildOverviewModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], serviceId = null, env = null, isLiveAggregatePack = () => false,
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
-    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null,
+    layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
+    listable = false,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -725,32 +815,278 @@ export function buildOverviewModel(input = {}) {
   const own = ordered.filter((s) => packForService(s, catalog, { isLiveAggregatePack }).how === 'primary');
   const listed = own.length ? ordered.filter((s) => own.includes(s) || (picked.service && s.id === picked.service.id)) : ordered;
   const options = listed.map((s) => ({ id: s.id, name: s.name, selected: picked.service ? s.id === picked.service.id : false }));
-  if (!picked.service) {
+  // A drift check started here (step 1 loaded Pack A) stays on screen until
+  // step 2 opens the comparison — though registering Pack A has just put its
+  // service in the table.
+  // `startable`: the host runs the start (it supplies the start's hooks and
+  // routes packs with startAdopted). Without it the board is what it was —
+  // the empty state and "Open Expert mode" — so a host that copies these
+  // files and has not wired the start never draws cards that do nothing.
+  const started = startable && !!start?.a;
+  if (!picked.service || started) {
     const unreadable = servicesStatus && servicesStatus.kind !== 'ok' && servicesStatus.kind !== 'loading' ? (servicesStatus.error || 'the services table could not be read') : null;
-    return { kind: unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'), error: unreadable, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
+    const kind = started ? 'empty' : (unreadable ? 'error' : (servicesStatus?.kind === 'loading' ? 'loading' : 'empty'));
+    const blank = { kind, error: kind === 'error' ? unreadable : null, options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName, primary: null, layout, board: null };
+    // Empty: the drift check starts here. `start` is the check under way:
+    // Pack A once step 1 loaded it.
+    return kind === 'empty' && startable ? {
+      ...blank,
+      sources: sourcesOf(access),
+      start: { a: start?.a ? { label: String(start.a.label || start.a.id || 'Pack A') } : null },
+    } : blank;
   }
   const journey = journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null });
   const grade = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now });
   const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending });
-  const next = nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now });
+  // A service with no pack at all has nothing to grade: the drift check
+  // starts here, as with no service, under the service's own header — the
+  // start's cards are the way in, not "Open Expert mode". (A member-only row,
+  // whose one pack is a live aggregate's, stays Expert's to show.)
+  const startHere = startable && picked.how === 'none';
+  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now });
   // One primary button on the screen: the next step's when it has one, else
-  // the still-true panel's Check button.
-  const primary = next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null);
+  // the still-true panel's Check button; none over the start.
+  const primary = startHere ? null : (next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null));
   // The board's pictures, from the same facts: nothing while the facts are
   // still being read, nothing for a service without a pack of its own.
   const graded = picked.how === 'primary' && !pending;
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
-    layers: graded ? layersModel({ cells, layered }) : null,
+    layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
     fidelity: graded ? fidelity : null,
     changes: graded ? changesModel({ fidelity }) : null,
   };
   return {
-    kind: 'service', error: null, options,
+    kind: 'service', error: null, options, back: !!listable,
     service: { id: picked.service.id, name: picked.service.name, slug: picked.service.slug },
     envs: picked.envs.map((name) => ({ name, selected: name === picked.env })), env: picked.env,
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
     grade, still, next, primary, productName, layout, board,
+    ...(startHere ? { start: { a: null }, sources: sourcesOf(access) } : {}),
   };
+}
+
+// ---------- the service list: Overview's front door ----------
+//
+// A service is two places: its repository — where what it declares lives
+// (GitHub, Azure DevOps, or a folder on the server) — and, for each of its
+// environments, the live MCP endpoint that reads what runs there. The list
+// shows one row per service and environment with both places and its last
+// check; Run (the host's: POST /api/services/:id/run) scans the repository
+// again, checks the scan against live and saves the check. Add a service is
+// the form of four answers: the name, the environment, the repository, the
+// live endpoint. Everything here is pure: the host keeps the state (the
+// form's values, which row runs), carries out the save plan, and passes the
+// facts in — the services table, the journeys listing, the MCP endpoints.
+// A host that does not opt in (`listable`) never draws it.
+
+export const REPOSITORY_KINDS = Object.freeze([
+  Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one when the server has a GitHub token.' }),
+  Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: "Read with the server's Azure DevOps token." }),
+  Object.freeze({ kind: 'path', label: 'Folder', placeholder: 'C:\\src\\my-service  or  /srv/src/my-service', hint: 'A folder the server can read: its full path on the server.' }),
+]);
+const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
+export const NEW_ENDPOINT = 'new';
+
+const lastSegments = (p, n) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).slice(-n).join('/');
+const decoded = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+
+// The repository as one short line ({ kind, kindText, text, ref, title }), or null.
+export function repositoryLine(repository) {
+  if (!repository || typeof repository !== 'object' || !repository.location) return null;
+  const { kind, location, ref = null } = repository;
+  let text = location;
+  if (kind === 'github') text = lastSegments(location, 2);
+  else if (kind === 'ado') {
+    const m = /\/([^/]+)\/_git\/([^/?#]+)/.exec(location);
+    text = m ? `${decoded(m[1])}/${decoded(m[2])}` : location;
+  } else if (kind === 'path') text = lastSegments(location, 1) || location;
+  // A folder's second line is where it is; a remote one's, its branch.
+  const detail = kind === 'path' ? location : (ref || null);
+  return { kind, kindText: KIND_LABEL[kind] || String(kind || ''), text, ref: ref || null, detail, title: ref ? `${location} (${ref})` : location };
+}
+
+// The last check of a row, from the journeys listing's lastRun: never,
+// unreachable (the live side did not answer), or checked — the grade letter
+// the score earns and how much matches live (numbers; the renderer writes
+// the sign).
+function lastCheckOf(journey, now) {
+  const last = journey?.lastRun || null;
+  if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
+  const ago = agoText(last.startedAt, now);
+  if (last.outcome === 'vantage-lost' || last.outcome === 'error') {
+    return { state: 'unreachable', word: OVERVIEW_STATUS.unreachable, ago, letter: null, tone: 'warn', alignmentPct: null, gate: null };
+  }
+  const score = Number.isFinite(last.gradeScore) ? last.gradeScore : null;
+  const ig = score === null ? null : instrumentGradeFor(score);
+  return {
+    state: 'checked', word: ago ? `Checked ${ago}` : 'Checked', ago,
+    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? shortGradeLabel(ig) : '',
+    alignmentPct: Number.isFinite(last.alignmentPct) ? last.alignmentPct : null,
+    gate: last.outcome === 'pass' ? 'pass' : (last.outcome === 'gate-failed' ? 'fail' : null),
+  };
+}
+
+export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
+
+// serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack, journeys, journeysError,
+//   endpoints, access, now, running, results, showAll })
+//   running   { [rowKey]: true } — the rows whose Run is under way
+//   results   { [rowKey]: { error } } — the last Run's refusal, the server's sentence
+//   showAll   also list the services nobody gave a repository that have no pack of their own
+//             (the ones a live draft discovered): counted, not drawn, until asked
+// → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty }
+export function serviceListModel(input = {}) {
+  const {
+    services = null, servicesStatus = null, catalog = [], isLiveAggregatePack = () => false,
+    journeys = null, journeysError = null, endpoints = null, access = null, now = Date.now(),
+    running = {}, results = {}, showAll = false,
+  } = input;
+  const canWrite = access?.canWrite !== false;
+  const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
+  if (!Array.isArray(services)) {
+    const failed = !!servicesStatus && !['ok', 'loading'].includes(servicesStatus.kind);
+    return { kind: failed ? 'error' : 'loading', error: failed ? (servicesStatus.error || 'the services table could not be read') : null, rows: [], hidden: 0, canWrite, reason, empty: false };
+  }
+  const endpointById = new Map((Array.isArray(endpoints) ? endpoints : []).map((e) => [e.id, e]));
+  const listed = [];
+  let hidden = 0;
+  for (const s of services) {
+    if (!s) continue;
+    const { pack, how } = packForService(s, catalog, { isLiveAggregatePack });
+    const ownPack = how === 'primary';
+    if (!showAll && !s.repository && !ownPack) { hidden += 1; continue; }
+    const repository = repositoryLine(s.repository);
+    const envs = Array.isArray(s.environments) && s.environments.length ? s.environments : [null];
+    for (const env of envs) {
+      const key = rowKey(s.id, env?.name ?? null);
+      const ep = env?.mcpEndpoint ? (endpointById.get(env.mcpEndpoint.id) || env.mcpEndpoint) : null;
+      const live = ep ? { id: ep.id, name: ep.name, origin: ep.origin || '' } : null;
+      const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
+      const last = journeysError
+        ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
+        : lastCheckOf(journey, now);
+      const busy = !!running[key];
+      let why = reason;
+      if (!why && !env) why = `Add an environment to ${s.name} first.`;
+      else if (!why && !repository) why = `Say where ${s.name}'s repository is first.`;
+      else if (!why && !live) why = `Choose the live MCP endpoint for ${env.name} first.`;
+      listed.push({
+        key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
+        repository, live, last, journey: journey?.name || null,
+        run: { enabled: !why && !busy, reason: why, running: busy },
+        open: { enabled: ownPack || !!journey },
+        error: results[key]?.error || null,
+        complete: !!(env && repository && live),
+      });
+    }
+  }
+  // The rows a person can run first, then the ones still missing a place; by name, then environment.
+  listed.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)) || String(a.env || '').localeCompare(String(b.env || '')));
+  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0 };
+}
+
+// ---------- the Add a service form ----------
+//
+// The form's state is the host's: { open, mode: 'add' | 'edit', serviceId, envFixed, values, saving,
+// error }. `values` = { name, env, kind, location, ref, endpointId, epName, epUrl, epToken };
+// endpointId is an endpoint's id, NEW_ENDPOINT for one registered with the form, or ''.
+
+export const FORM_CLOSED = Object.freeze({ open: false });
+
+// The form opened: blank (add), or a row's service and environment (edit).
+export function formOpened(services, { serviceId = null, env = null, endpoints = [] } = {}) {
+  const s = Array.isArray(services) ? services.find((x) => x && x.id === serviceId) : null;
+  const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
+  const eps = Array.isArray(endpoints) ? endpoints : [];
+  let endpointId = '';
+  if (e?.mcpEndpoint?.id != null) endpointId = String(e.mcpEndpoint.id);
+  else if (eps.length === 1) endpointId = String(eps[0].id);
+  else if (!eps.length) endpointId = NEW_ENDPOINT;
+  const values = {
+    name: s?.name || '', env: e?.name || env || (s ? '' : 'prod'),
+    kind: s?.repository?.kind || 'github', location: s?.repository?.location || '', ref: s?.repository?.ref || '',
+    endpointId, epName: '', epUrl: '', epToken: '',
+  };
+  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null };
+}
+
+// One field typed into: the state with that value (only known fields).
+export function formInput(form, field, value) {
+  if (!form?.open || !Object.hasOwn(form.values || {}, field)) return form;
+  return { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+}
+
+const trimmed = (v) => String(v ?? '').trim();
+
+// What is missing before the form can be saved — { field: sentence }. The
+// server judges the rest (an address it cannot read, a folder it may not, an
+// endpoint origin it does not allow) and its sentence is shown as written.
+export function formProblems(values = {}) {
+  const out = {};
+  if (!trimmed(values.name)) out.name = 'Name the service.';
+  if (!trimmed(values.env)) out.env = 'Name the environment, e.g. prod.';
+  if (!REPOSITORY_KINDS.some((k) => k.kind === values.kind)) out.kind = 'Choose where the repository is.';
+  if (!trimmed(values.location)) out.location = values.kind === 'path' ? "Give the folder's full path on the server." : "Give the repository's address.";
+  if (!trimmed(values.endpointId)) out.endpointId = 'Choose the MCP endpoint that reads it live.';
+  if (values.endpointId === NEW_ENDPOINT) {
+    if (!trimmed(values.epUrl)) out.epUrl = "Give the MCP endpoint's URL.";
+    if (!trimmed(values.epName)) out.epName = 'Name the endpoint.';
+  }
+  return out;
+}
+
+// formModel(form, { endpoints, register, access }) → what the renderer draws:
+//   register  GET /api/mcp-endpoints' policy.register ({ allowed, why }) — may a new endpoint be registered here
+export function formModel(form, { endpoints = null, register = null, access = null } = {}) {
+  if (!form?.open) return { open: false };
+  const v = form.values || {};
+  const eps = Array.isArray(endpoints) ? endpoints : [];
+  const canWrite = access?.canWrite !== false;
+  const newAllowed = register ? register.allowed !== false : true;
+  return {
+    open: true, mode: form.mode, saving: !!form.saving, error: form.error || null, focus: form.focus || null,
+    title: form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',
+    nameFixed: form.mode === 'edit', envFixed: !!form.envFixed,
+    values: { ...v },
+    kinds: REPOSITORY_KINDS.map((k) => ({ ...k, selected: k.kind === v.kind })),
+    kind: REPOSITORY_KINDS.find((k) => k.kind === v.kind) || REPOSITORY_KINDS[0],
+    endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
+    newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
+    problems: formProblems(v),
+    canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
+}
+
+// The calls a save makes, in order, from the form's values and the facts on
+// hand — pure, so every host saves alike:
+//   endpoint  { create: { name, url, readTokenEnv? } } | { id }
+//   service   { create: { name, repository } } | { id, patch: { repository } | null }
+//   env       { create: { name } } | { id, bind: boolean } — bind: point it at the endpoint
+// A name that keys an existing record (the catalogue's slug rule, `keyOf`,
+// injected: tools/lib/service-keys.mjs normalizeServiceKey) is that record —
+// the form completes it, never a second one.
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null } = {}) {
+  const name = trimmed(values.name);
+  const envName = trimmed(values.env);
+  const repository = { kind: values.kind, location: trimmed(values.location), ...(trimmed(values.ref) ? { ref: trimmed(values.ref) } : {}) };
+  const list = Array.isArray(services) ? services.filter(Boolean) : [];
+  const existing = list.find((s) => s.id === serviceId) || list.find((s) => s.slug === keyOf(name)) || null;
+  const endpoint = values.endpointId === NEW_ENDPOINT
+    ? { create: { name: trimmed(values.epName), url: trimmed(values.epUrl), ...(trimmed(values.epToken) ? { readTokenEnv: trimmed(values.epToken) } : {}) } }
+    : { id: Number(values.endpointId) };
+  const sameRepo = (r) => !!r && r.kind === repository.kind && r.location === repository.location && (r.ref || '') === (repository.ref || '');
+  const service = existing
+    ? { id: existing.id, patch: sameRepo(existing.repository) ? null : { repository } }
+    : { create: { name, repository } };
+  const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
+  return {
+    endpoint, service,
+    env: env ? { id: env.id, bind: !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
+    envName, name,
+  };
+}
+function defaultKeyOf(s) {
+  return String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }

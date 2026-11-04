@@ -53,7 +53,7 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord } from './services-api.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
   pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
@@ -74,7 +74,7 @@ import {
   buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
-  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, profileEndpointNote, endpointDrift,
+  mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer, profileEndpointNote, endpointDrift,
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
@@ -113,9 +113,10 @@ import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
-import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS } from './overview-model.mjs';
-import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
-import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
+  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
+import { loadOverviewFacts, loadServiceListFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+import { renderOverview, renderServiceList } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -1079,6 +1080,12 @@ async function handleFile(file) {
       toast(`${file.name}: ${res.errors.length} validation error(s)`, 'error');
       return;
     }
+    if (overviewStartTakes(res)) {
+      const slot = overviewStart.slot;
+      const compared = await overviewStartAdopt(res.registered.id, file.name);
+      if (!compared) toast(`Loaded ${file.name} as Pack ${slot === 'b' ? 'B' : 'A'}`);
+      return;
+    }
     state.pack = res.adapted;
     state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
@@ -1230,6 +1237,9 @@ function setupUpload() {
     e.preventDefault();
     dragDepth = 0; overlay.hidden = true;
     document.body.classList.remove('is-dragging');
+    // Overview's start on screen: a file dropped anywhere is the next step's
+    // pack (Pack A, or Pack B once A is in), as its Upload card would make it.
+    if (state.mode === 'overview' && !overviewStart.slot && overviewModel().start) overviewStart = startChoose(overviewStart, overviewStart.a ? 'b' : 'a');
     handleFile(e.dataTransfer.files[0]);
   });
 }
@@ -1602,7 +1612,7 @@ function installObservaChrome(chrome) {
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
       if (action === 'settings') { enterSettings(null); return; }
-      if (action === 'overview') { setUiMode('overview'); enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv); return; }
+      if (action === 'overview') { setUiMode('overview'); enterOverviewFront(); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1803,9 +1813,13 @@ async function boot() {
   // boot-time mutations don't fire `schedule()` writes.
   // In Overview the snapshot's Expert fields are left as they are for the
   // next Expert session; only the service Overview showed is read back.
+  // Overview opens on its front door, the service list (a server without
+  // the services table — the static bundle — keeps the board).
   const saved = state.uiMode === 'overview' ? persistence.read() : null;
   const restored = state.uiMode === 'overview'
-    ? await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true })
+    ? (serviceListAvailable()
+      ? enterOverviewList()
+      : await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true }))
     : await rehydrateFromPersistence();
   persistence.resume();
   if (!restored) goHome();
@@ -1873,19 +1887,13 @@ function paintUiModeSwitch() {
 }
 
 function setupUiModeSwitch() {
-  // The board reads the screen's height once per paint (the seven criteria
-  // open or behind Why this grade): a window dragged to the other monitor
-  // is repainted when the query flips.
-  try {
-    window.matchMedia?.(COMPACT_SCREEN_QUERY)?.addEventListener?.('change', () => { if (state.mode === 'overview') renderMainView(); });
-  } catch (_) { /* no matchMedia: the first reading stands */ }
   const seg = document.querySelector('.observa-ui-mode');
   if (!seg) return;
   seg.querySelectorAll('[data-ui-mode]').forEach((b) => {
     b.addEventListener('click', () => {
       if (b.dataset.uiMode === 'overview') {
         setUiMode('overview');
-        enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+        enterOverviewFront();
       } else if (state.mode === 'overview') {
         enterExpert();
       } else {
@@ -1927,13 +1935,183 @@ function overviewModel() {
     diagnostic, diagnosticError, decision,
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
-    layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
-    now: Date.now(), productName: state.brand?.chrome?.name || '',
+    layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
+    now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
+    listable: serviceListAvailable(),
   });
 }
 
 function renderOverviewHost(view) {
+  if (overviewScreen === 'list' && serviceListAvailable()) {
+    renderServiceList(view, serviceListModelNow(), serviceFormModelNow(), overviewHost);
+    // The focus hint is for the draw that follows the event, never a later repaint.
+    if (listForm.open && listForm.focus) listForm = { ...listForm, focus: null };
+    return;
+  }
   renderOverview(view, overviewModel(), overviewHost);
+}
+
+// ---------- the service list: Overview's front door ----------
+//
+// overview-model.mjs serviceListModel / formModel word it; this controller
+// keeps its state — which screen Overview shows, the list's facts (the
+// journeys listing for each row's last check, the org's MCP endpoints for
+// the form), the form, the rows whose Run is under way — and carries out
+// the form's save plan (savePlan) and a row's Run (POST /api/services/:id/run).
+let overviewScreen = 'list';
+let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, loaded: false };
+let listForm = FORM_CLOSED;
+let listRunning = {};
+let listResults = {};
+let listShowAll = false;
+let listGeneration = 0;
+
+// The list needs the services table: the static bundle has none.
+function serviceListAvailable() {
+  return state.servicesStatus?.kind === 'ok' && Array.isArray(state.services);
+}
+
+function serviceListModelNow() {
+  return serviceListModel({
+    services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog, isLiveAggregatePack,
+    journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
+    access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll,
+  });
+}
+
+function serviceFormModelNow() {
+  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access });
+}
+
+async function refreshListFacts() {
+  const gen = ++listGeneration;
+  const facts = await loadServiceListFacts();
+  if (gen !== listGeneration) return;
+  listFacts = { ...facts, loaded: true };
+  if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+}
+
+// Overview's front door: the list where the services table exists, else the
+// board as before.
+function enterOverviewFront() {
+  if (serviceListAvailable()) { enterOverviewList(); return; }
+  enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+}
+
+// → true (the list is on screen).
+function enterOverviewList() {
+  navGeneration++;
+  state.mode = 'overview';
+  overviewScreen = 'list';
+  state.pack = null;
+  emptyVerdicts();
+  state.packB = null;
+  state.diff = null;
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  state.compileCatalog = null;
+  state.compileContent = null;
+  closeSettingsEditor({ focus: false });
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  refreshListFacts().catch((e) => { console.error('[overview list]', e); });
+  persistence.schedule();
+  return true;
+}
+
+const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) || null;
+
+function openListForm(serviceId = null, env = null) {
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [] });
+  const focus = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
+  listForm = { ...opened, focus };
+  renderMainView();
+}
+
+function listFormInput(field, value, { redraw = false } = {}) {
+  listForm = serviceFormInput(listForm, field, value);
+  if (field === 'kind') listForm = { ...listForm, focus: 'location' };
+  if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
+  if (redraw) renderMainView();
+}
+
+// The save plan, call by call. A step that succeeded is written back into
+// the form (the new endpoint's id), so a retry after a refusal further on
+// does not register it twice; the server's sentence is the form's error.
+async function saveListForm({ run = false } = {}) {
+  if (!listForm.open || listForm.saving) return;
+  const problems = formProblems(listForm.values);
+  if (Object.keys(problems).length) {
+    listForm = { ...listForm, error: 'Some answers are missing — each is marked where it goes.', focus: Object.keys(problems)[0] };
+    renderMainView();
+    return;
+  }
+  listForm = { ...listForm, saving: true, error: null };
+  renderMainView();
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId });
+  let serviceId = plan.service.id ?? null;
+  try {
+    let endpointId = plan.endpoint.id;
+    if (plan.endpoint.create) {
+      const ep = await createEndpoint(plan.endpoint.create);
+      endpointId = ep.id;
+      listForm = { ...listForm, values: { ...listForm.values, endpointId: String(ep.id) } };
+    }
+    if (plan.service.create) serviceId = (await createServiceRecord(plan.service.create)).id;
+    else if (plan.service.patch) await patchService(serviceId, plan.service.patch);
+    if (plan.env.create) await createEnvironment(serviceId, { name: plan.envName, mcpEndpointId: endpointId });
+    else if (plan.env.bind) await patchEnvironment(plan.env.id, { mcpEndpointId: endpointId });
+  } catch (e) {
+    // What did land (a new endpoint, the record) is read back, so a retry finds it.
+    await refreshServices();
+    await refreshListFacts();
+    listForm = { ...listForm, saving: false, serviceId: serviceId ?? listForm.serviceId, error: e?.message || String(e) };
+    renderMainView();
+    return;
+  }
+  await refreshServices();
+  listForm = FORM_CLOSED;
+  await refreshListFacts();
+  announce(`${plan.name} · ${plan.envName} saved.`);
+  if (run) await runListRow(rowKey(serviceId, plan.envName));
+  else renderMainView();
+}
+
+// A row's Run: the repository scanned again and checked against live
+// (POST /api/services/:id/run), then the list read again — the new pack, the
+// new last check. A 502 has kept a record when the live side was lost; the
+// re-read shows it, and the row says what happened.
+async function runListRow(key) {
+  const row = listRow(key);
+  if (!row || listRunning[key]) return;
+  if (!row.run.enabled) { explainUnavailable(row.run.reason); return; }
+  listRunning = { ...listRunning, [key]: true };
+  listResults = { ...listResults, [key]: null };
+  renderMainView();
+  announce(`Running ${row.name} · ${row.env}: scanning the repository, then checking live…`);
+  let error = null;
+  let out = null;
+  try { out = await runServiceRecord(row.serviceId, row.env); }
+  catch (e) { error = e?.message || String(e); }
+  listRunning = { ...listRunning };
+  delete listRunning[key];
+  if (error) listResults = { ...listResults, [key]: { error } };
+  await refreshCatalogue();
+  await refreshListFacts();
+  if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+  if (error) { announce(`${row.name} · ${row.env}: the run did not finish.`); return; }
+  const g = out?.record?.grade;
+  const pct = out?.record?.drift?.alignmentPct;
+  toast(`${row.name} · ${row.env} checked: ${out?.scan?.files ?? '?'} files from ${out?.scan?.source || 'the repository'}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, 'ok');
+}
+
+function openListService(serviceId, env) {
+  overviewScreen = 'board';
+  enterOverview(Number.isInteger(serviceId) ? serviceId : null, env || null);
 }
 
 async function refreshOverviewFacts() {
@@ -1961,6 +2139,7 @@ async function enterOverview(serviceId = null, env = null, { rehydrate = false }
   if (!picked.service && rehydrate) return false;
   navGeneration++;
   state.mode = 'overview';
+  overviewScreen = 'board';
   state.pack = null;
   emptyVerdicts();
   state.packB = null;
@@ -2059,7 +2238,86 @@ const overviewActions = {
   openNeuron: openOverviewNeuron,
   expert: enterExpert,
   retry: async () => { await refreshServices(); await refreshOverviewFacts(); },
+  // No service yet: the drift check starts from here, through Expert's own
+  // entry points (the header is hidden in Overview, as on the home: upload
+  // goes straight to the file picker). Each names the slot its pack fills.
+  scan: () => { overviewStart = startChoose(overviewStart, 'a'); $('#crawl-btn')?.click(); },
+  live: () => { overviewStart = startChoose(overviewStart, 'b'); if ($('#draft-mcp-panel')?.hidden) $('#draft-mcp-btn')?.click(); },
+  upload: (slot) => { overviewStart = startChoose(overviewStart, slot); $('#file-input')?.click(); },
+  resetStart: () => { overviewStart = START_IDLE; renderMainView(); },
+  explain: explainUnavailable,
+  // The service list (renderServiceList) and the board's way back to it.
+  backToList: enterOverviewList,
+  addService: () => openListForm(null, null),
+  editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
+  formInput: listFormInput,
+  saveService: saveListForm,
+  closeForm: () => { listForm = FORM_CLOSED; renderMainView(); },
+  runService: runListRow,
+  openService: openListService,
+  showAll: () => { listShowAll = true; renderMainView(); },
+  // Packs already in hand: Expert's home — upload, scan, compare.
+  compare: () => { setUiMode('expert'); goHome(); },
 };
+
+// The drift check started from Overview's start (overview-model.mjs
+// START_IDLE / startChoose / startAdopted — the logic every host shares):
+// `slot` is the pack the next scan, live draft or upload fills, `a` Pack A
+// once step 1 loaded it. Only an adopt that lands while Overview is on
+// screen is taken; anywhere else the flows keep their own routing.
+let overviewStart = START_IDLE;
+const overviewStartTakes = (res) => state.mode === 'overview' && !!overviewStart.slot && !!res?.registered?.id;
+// Step 2 under way: Pack A in, the live panel opened for Pack B, Overview on screen.
+const overviewStartWaitsForB = () => state.mode === 'overview' && overviewStart.slot === 'b' && !!overviewStart.a;
+
+// Step 1 keeps Overview on screen with Pack A remembered; step 2 is the
+// comparison (step 3, automatic): Expert's Diagnose on A against B.
+// → true when the comparison opened.
+async function overviewStartAdopt(id, label) {
+  await refreshCatalogue();
+  const { start, compare, said, refused } = startAdopted(overviewStart, { id, label });
+  overviewStart = start;
+  if (!compare) {
+    renderMainView();
+    if (refused) toast(said, 'error'); else announce(said);
+    return false;
+  }
+  await overviewStartCheck(compare);
+  return true;
+}
+
+// Step 3, in Overview: the pair becomes the service's check (POST
+// /api/journeys/capture, under the name the start owns — `<service>-repo-vs-live`,
+// replaced when the start runs again, never another check's), and the check
+// runs on the service's board (Check now), which then shows the drift: the
+// grade against live, what matches, what to add, update and review. Should
+// the server refuse to save it (an origin a journey may not fetch, a rank
+// that may not save one), the comparison opens in Expert's Diagnose instead
+// and the toast says why.
+async function overviewStartCheck({ a, b }) {
+  const metaA = state.catalog.find((p) => p.id === a.id);
+  const slug = serviceKeyForPack(metaA) || null;
+  const env = defaultEnvFor(a.id);
+  try {
+    if (!slug) throw new Error('Pack A names no service');
+    await api('/api/journeys/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `${slug}-repo-vs-live`, packAId: a.id, packBId: b.id, service: slug, ...(env ? { env } : {}) }),
+    });
+  } catch (e) {
+    toast(`The check could not be saved (${e.message}) — the comparison opens in Diagnose instead.`, 'error');
+    setUiMode('expert');
+    state.view = 'compare';
+    enterCompareMode(a.id, env, b.id, defaultEnvFor(b.id));
+    return;
+  }
+  toast(`Checking ${a.label} against ${b.label}…`, 'ok');
+  const service = (state.services || []).find((s) => s.slug === slug);
+  await enterOverview(service?.id ?? null, env);
+  await refreshOverviewFacts();
+  if (state.mode === 'overview' && overviewFacts.journey) await runOverviewCheck();
+}
 const overviewHost = { renderMainView, renderTabs, overview: overviewActions };
 
 // ============================================================
@@ -4278,7 +4536,7 @@ function setupHomeAffordance() {
   }
   const brand = document.querySelector('.observa-brand');
   // The brand is "start over": Overview's front door in Overview, home in Expert.
-  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverview(); return; } goHome(); });
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverviewFront(); return; } goHome(); });
 }
 
 // ============================================================
@@ -7019,6 +7277,12 @@ async function doCrawlFromGithub() {
       setGhStatus(`error: ${out.error || 'unknown'}${hint}`, 'error');
       return;
     }
+    if (!out.canonical) {
+      // Nothing to draw: the result box reads the pack it does not have.
+      $('#crawl-result').hidden = true;
+      setGhStatus(`done in ${out.tookMs}ms · no observability artefacts found in this repo`, 'warn');
+      return;
+    }
     crawlState.lastResult = out;
     renderCrawlResult(out);
     followReplacedPack(out.registered?.id).catch(() => {});
@@ -7114,6 +7378,7 @@ function renderCrawlResult(out) {
 //
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
+  if (overviewStartTakes(res)) return overviewStartAdopt(res.registered.id, sourceLabel);
   // An entry the scan or draft route registered arrives as its id alone
   // (registeredOrValidated): enterAnalyzeMode / enterCompareMode load it.
   if (res.adapted) {
@@ -7986,6 +8251,7 @@ function setupDraftFromMcpPanel() {
   // Any change to the target or its key: a ping never stands for another.
   for (const id of ['draft-mcp-url', 'draft-mcp-auth']) $(`#${id}`)?.addEventListener('input', clearLivePing);
   $('#live-test-btn').onclick = () => testLiveConnection();
+  $('#live-register-btn').onclick = () => registerAndRetestLive();
   for (const radio of document.querySelectorAll('input[name="live-kind"]')) {
     radio.addEventListener('change', () => { liveUi.kindChosen = liveKind(); paintLiveChoice(); });
   }
@@ -8021,6 +8287,7 @@ const liveUi = {
   job: null,         // { id, kind, label, records, since, view, answer }
   timer: null,
   kindChosen: null,  // the person's own choice in this panel
+  registerOffer: null, // originRefusalOffer's answer to the last test, while it stands
 };
 let liveFetchLib = null;
 const loadLiveFetchLib = async () => (liveFetchLib ??= await import('/lib/live-fetch.mjs'));
@@ -8042,7 +8309,44 @@ function clearLivePing() {
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
   setLiveStatus('live-ping-status', '');
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
+}
+
+// The origin rule refused a typed URL this reader may register
+// (originRefusalOffer): the button beside the refusal offers it.
+function paintLiveRegisterOffer(offer) {
+  liveUi.registerOffer = offer;
+  const btn = $('#live-register-btn');
+  if (!btn) return;
+  btn.hidden = !offer;
+  btn.textContent = offer ? offer.label : '';
+}
+
+// Register and test again: the typed URL becomes the org's endpoint (the
+// server judges its origin again and audits it), the picker selects it, and
+// the connection is tested by its id. A refusal is said where the test's is.
+async function registerAndRetestLive() {
+  const offer = liveUi.registerOffer;
+  const btn = $('#live-register-btn');
+  if (!offer || btn?.disabled) return;
+  btn.disabled = true;
+  setLiveStatus('live-ping-status', `registering ${offer.name} as an MCP endpoint…`);
+  let created = null;
+  try {
+    created = await createEndpoint({ name: offer.name, url: offer.url });
+  } catch (e) {
+    setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  paintLiveRegisterOffer(null);
+  if (!created) return;
+  state.mcpEndpoints = [...(Array.isArray(state.mcpEndpoints) ? state.mcpEndpoints : []).filter((ep) => ep.id !== created.id), created];
+  paintMcpTarget('draft', { chosen: String(created.id) });
+  toast(`Registered ${created.name} as an MCP endpoint`);
+  await testLiveConnection();
 }
 
 function liveKind() {
@@ -8093,6 +8397,7 @@ async function testLiveConnection() {
   const { body: target } = mcpTargetOf('draft');
   liveUi.ping = null;
   renderPingResult($('#live-ping-result'), null);
+  paintLiveRegisterOffer(null);
   paintLiveSteps();
   if (!target) { setLiveStatus('live-ping-status', mcpTargetMissing('draft'), 'error'); return; }
   const btn = $('#live-test-btn');
@@ -8121,6 +8426,7 @@ async function testLiveConnection() {
     setLiveStatus('live-ping-status', model.status, model.tone === 'ok' ? 'ok' : 'error');
   } catch (e) {
     setLiveStatus('live-ping-status', `error: ${e.message}`, 'error');
+    paintLiveRegisterOffer(originRefusalOffer(e, target, state.mcpTargetPolicy?.register ?? null));
   } finally {
     btn.disabled = false;
   }
@@ -8224,6 +8530,15 @@ async function finishLiveJob(answer) {
   // The result is shown here (the panel open), or the toast below says it: the key goes.
   forgetLiveJob();
   paintLiveSteps();
+  // Overview's start waiting for Pack B (step 2 opened this panel): the
+  // job's pack is Pack B, and the comparison (step 3) opens by itself —
+  // never "Open it", which would show the live pack alone and drop Pack A.
+  if (model?.registered?.id && overviewStartWaitsForB()) {
+    $('#draft-mcp-panel').hidden = true;
+    const compared = await overviewStartAdopt(model.registered.id, model.registered.label || model.registered.id);
+    if (!compared) toast(`Registered: ${model.registered.label}`, 'ok');
+    return;
+  }
   renderLiveResult($('#live-result'), model, {
     onOpen: (id) => openLivePack(id),
     onCompare: (id) => compareWithLivePack(id),
@@ -8257,6 +8572,7 @@ async function showLiveDraftResult(answer) {
 }
 
 async function openLivePack(id) {
+  if (overviewStartWaitsForB()) { $('#draft-mcp-panel').hidden = true; await overviewStartAdopt(id, id); return; }
   $('#draft-mcp-panel').hidden = true;
   await refreshCatalogue();
   state.view = 'layers';

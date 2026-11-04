@@ -84,7 +84,7 @@ export function servicesRoutes({ authorize }) {
   }));
 
   router.post('/api/services', authorize('POST /api/services'), handler((req, res, { db, actor }) => {
-    const service = createServiceFromApi(db, actor, bodyOf(req));
+    const service = createServiceFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
     res.status(201).json({ ok: true, service: serviceViewOf(db, service) });
   }));
 
@@ -94,12 +94,12 @@ export function servicesRoutes({ authorize }) {
     res.json({ ok: true, service: serviceViewOf(db, service) });
   }));
 
-  // Any of name, owners, tier, description; the slug is fixed (packs link
-  // to it). Nothing differing → 200 with changed: [] and no row.
+  // Any of name, owners, tier, description, repository; the slug is fixed
+  // (packs link to it). Nothing differing → 200 with changed: [] and no row.
   router.patch('/api/services/:id', authorize('PATCH /api/services/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
-    const { service, changed } = updateServiceFromApi(db, actor, id, bodyOf(req));
+    const { service, changed } = updateServiceFromApi(db, actor, id, bodyOf(req), { caller: mcpCallerOf(req) });
     res.json({ ok: true, service: serviceViewOf(db, service), changed });
   }));
 

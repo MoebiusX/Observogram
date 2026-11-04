@@ -172,9 +172,9 @@ fail, and for a service without a pack of its own).
 
 | Column | Question | What is drawn | Where it comes from |
 | --- | --- | --- | --- |
-| Discover | What is in place? | *Layers*: the stack top down (user experience · application · platform · infrastructure), each layer a translucent plate in its identity colour with an outline icon, its name and hint, a green / amber / red pill (*7 of 10 kinds*) and its count; the ten cells labelled above the first row (*SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*) and lit in the layer's colour where the repository declares that kind, with the count; three stats (declared · coverage · unplaced); the pack's own layers behind a compact *In the repository* row | `computePostureMatrix(pack, null).cells`, distinct declared artefacts per cell; `layerItemsFor` per pack layer; the four layers' average is the Comprehensive criterion |
+| Discover | What is in place? | *Layers*: the stack top down (user experience · application · platform · infrastructure), each layer a translucent plate in its identity colour with an outline icon, its name and hint, a green / amber / red pill (*7 of 10 kinds*) and its count; the ten cells labelled above the first row (*SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*) and lit in the layer's colour where the repository declares that kind, with the count; three stats (declared · coverage · unplaced), where the plates plus *Unplaced* are *Declared*, each artefact once — *Unplaced* is what has no layer it could be placed on and what is no kind of signal of its own (an alert route, a pipeline part, a platform-wide setting); the pack's own layers behind a compact *In the repository* row | `computePostureMatrix(pack, null).cells`, distinct declared artefacts per cell; `layerItemsFor` per pack layer; the four layers' average is the Comprehensive criterion |
 | Diagnose | (the status strip) | One line for the column: what was graded against what, when, which probe families could not be read, the cadence — said once, never repeated under the results | the grade's basis, the run's time, `probes.failed`, the journey's schedule |
-| Diagnose | A — Are the right signals in place? | The grade letter in a shield; its ladder name in plain words; beside it the specification's required rules (*12 / 15 required rules met · tier 2*, a bar); the seven criteria as one plain sentence each with a *Yes · Partly · No* pill, the yeses first, and the sum with the next band (*4.8 of 7 points. B+ starts at 5.3.*) — open on a tall monitor, behind *Why this grade* under 1000 px | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone; `GET /api/packs/:id/conformance`; the seven lines from the pack-alone criteria plus the run's chain integrity and live age, withheld unless they add up to the letter |
+| Diagnose | A — Are the right signals in place? | The grade letter in a shield; its ladder name in plain words; beside it the specification's required rules (*12 / 15 required rules met · tier 2*, a bar); the seven criteria as one plain sentence each with a *Yes · Partly · No* pill, the yeses first, and the sum with the next band (*4.8 of 7 points. B+ starts at 5.3.*) — behind *Why this grade*, closed until the reader opens it, whatever the screen's room | `computeDiagnosticGrade` — the journey's last run when it graded this pack against live, else the pack alone; `GET /api/packs/:id/conformance`; the seven lines from the pack-alone criteria plus the run's chain integrity and live age, withheld unless they add up to the letter |
 | Diagnose | B — Can you trust what the signals show? | The alignment as a ring; four counts — *match · run differently · not running live · live only*; the promises as a bar (*5 of 18 promises hold end to end, 1 in part.*); then one of four words — *Never checked · Unchanged · Changed · Unreachable* — and one sentence with a time, and **Check again**. Withheld with the reason, never as zeros, when nothing live was seen whole | the service's journey and its last run (`/api/journeys`, `…/runs`): `drift`, `traceability`, `probes` |
 | Remediate | What to change? | *Changes to apply*: three tiles — *to add · to update · to review*, each with its outline icon, its count and a one-line note (*review* never reads as removal); one sentence, one primary button, quiet links, at most three plain items behind *Why* | the run's drift counts; the assessment's causes when nothing live was checked |
 
@@ -194,6 +194,32 @@ letter falls back to the repository's and says why, Check again is the one
 thing to do. The service picker lists the rows with a pack of their own; a row that only
 appears in a live draft has nothing to grade and is Expert's to show (it
 stays listed only while it is the one remembered).
+
+**Overview's front door is the service list.** A service is checked in two
+places — its repository, where what it should have is declared, and its
+live MCP endpoint, per environment, where what it has is read — and the list
+is one row per service and environment with both, its last check and three
+actions:
+
+| Column | What is drawn | Where it comes from |
+| --- | --- | --- |
+| Service | the name and the environment as a pill; *Add an environment* when it has none | `GET /api/services` |
+| Repository | the kind in small caps (*GitHub · Azure DevOps · Folder*) over `owner/repo`, `project/repo` or the folder's name, the branch or the full path beneath; *Add the repository* when there is none | the service's `repository` |
+| Live | *MCP* over the endpoint's name and host; *Choose the MCP endpoint* when there is none | the environment's `mcpEndpoint` |
+| Last check | the grade letter in a tile, *Checked 2 hours ago*, *75% matches live* — or *Never checked · Run it to check*, *Unreachable* | the journey `<slug>.<env>` in `GET /api/journeys` (`lastRun`); a journey of another environment is never this row's |
+| (actions) | **Run** (scan the repository again and check it against live), *Open →* (the board), *Change* | `POST /api/services/:id/run` |
+
+**Add a service** (the one primary button; with the form open, **Save and
+run**) is four numbered answers: *1 Service*, *2 Environment* (prod by
+default), *3 Repository — where it is declared* (GitHub · Azure DevOps ·
+Folder, the address, an optional branch), *4 Live — where it runs* (the org's
+endpoints, or a new one when this reader may register it). A missing answer
+is marked where it goes once a save was tried; the server's refusal is shown
+as its sentence; a name that keys an existing record completes it. Services a
+live draft discovered, with no repository and no pack of their own, are
+counted under the list (*3 more services were seen live with no repository
+yet. Show them*). A row that cannot run explains why when pressed. The
+board's header carries **← Services** back.
 
 The switch between the two faces sits in the chrome on every screen. Expert
 is one click away and unchanged; Overview is the first-run default when the

@@ -517,6 +517,9 @@ function loadPackFile(path, baseDir, scope = null) {
 
 // Minimal repo walk for the crawl source — mirrors tools/crawl-repo.mjs's
 // filters (that script runs main() on import, so it can't be imported).
+// walkRepoFiles(root, { scope }) → { <relative path>: text } is also a
+// service's Run on a folder repository (server/repo-sources.mjs), under the
+// same crawl scope.
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.observogram', '.tomograph', 'coverage', 'vendor']);
 const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt|prom|metrics)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -627,7 +630,7 @@ function refuseOutOfScope(p, scope, what) {
   if (why) throw new Error(`${what} ${p} ${why}`);
 }
 
-function walkRepo(root, { scope = null } = {}) {
+export function walkRepoFiles(root, { scope = null } = {}) {
   const refusal = crawlScopeRefusal(scope);
   const why = refusal?.(root);
   if (why) throw new Error(`crawl source ${root} ${why}`);
@@ -666,7 +669,7 @@ async function resolvePackA(def, baseDir, crawlScope = null) {
   if (def.packA.file) return loadPackFile(def.packA.file, baseDir, crawlScope);
   const c = def.packA.crawl;
   const root = resolve(baseDir || '.', c.path);
-  const files = walkRepo(root, { scope: crawlScope });
+  const files = walkRepoFiles(root, { scope: crawlScope });
   if (!Object.keys(files).length) throw new Error(`crawl source ${root}: no scannable files found`);
   const out = crawlFiles(files, {
     repoName: c.name || undefined,

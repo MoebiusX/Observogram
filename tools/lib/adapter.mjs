@@ -1024,8 +1024,16 @@ function deepClone(x) {
   return out;
 }
 
+// An override key is a dotted path into the spec. A segment naming the
+// prototype chain would walk out of the spec into Object.prototype — every
+// object of the process — so such a path is skipped here and refused at
+// validation (tools/lib/validator.mjs; tools/lib/library.mjs refuses the same
+// names in its own overrides).
+const PROTOTYPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function setDottedPath(obj, path, value) {
   const parts = String(path).split('.');
+  if (parts.some((k) => PROTOTYPE_SEGMENTS.has(k))) return;
   let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const k = parts[i];

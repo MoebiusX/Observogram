@@ -61,6 +61,7 @@ const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 // not a use) must be one of these known URL paths, pinned per file. studio/
 // is browser code (window.location, fetch URLs) and is not scanned.
 const PATHNAME_ALLOWED = Object.freeze({
+  'server/ado-crawl.mjs': 1,            // an Azure DevOps repository URL's path (org, project, _git, repo)
   'server/store/identity.mjs': 1,       // the OIDC issuer URL's well-known suffix
   'server/routes/mcp-settings.mjs': 2,  // an MCP server's settings URL path, for a refusal and the audit row
   'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths

@@ -593,6 +593,20 @@ function inferPackSource(pack) {
 // Pure (no DOM, no studio state) so the CLI journey runner can compute the
 // same posture the Diagnose view renders. The view imports these back.
 
+// The layer words, tried in this order: UX first (most specific, least
+// likely to overlap), application last (a broad catch-all for service-level
+// names).
+const LAYER_PATTERNS = [
+  ['ux',       /(rum|page_load|page-load|conversion|journey|frontend|apdex|lcp|fid|cls|business_outcome|web_vitals|user_satisfaction|customer_)/],
+  ['infra',    /(host_|node_|disk_|cpu_|memory_|pod_|container_|kube_|k8s|cluster_|kubelet|cadvisor|node-exporter|kube-state|kubernetes|oom_|networkinterface|tcp_|conn_track|cert_expiry|containeroom|diskexhaustion)/],
+  ['platform', /(db_|database_|postgres|mysql|mongo|redis|cache_|queue_|kafka|rabbit|consumer_lag|broker_|bucket_|mq_|elasticsearch_|opensearch_|alertmanager|kong|envoy|traefik|gateway_|graylog)/],
+  ['app',      /(availability|success_ratio|error_ratio|latency|p95|p99|p99\.9|request_|http_|api_|service_|endpoint_|error_budget|latency_budget|burn_rate|errorbudget|latencybudget|burnrate|finops|krystalinex)/],
+];
+function layerOfText(hay) {
+  for (const [layer, re] of LAYER_PATTERNS) if (re.test(hay)) return layer;
+  return null;
+}
+
 export function classifyArtefactLayer(art, pack) {
   if (!art) return null;
   const ann = pack?.meta?.annotations || pack?.metadata?.annotations || {};
@@ -615,18 +629,8 @@ export function classifyArtefactLayer(art, pack) {
   if (override && ['infra','platform','app','ux'].includes(override)) return override;
 
   const hay = `${id} ${title} ${folder} ${refsStr} ${sourceSlug} ${tags}`;
-
-  // UX patterns first (most specific, least likely to overlap)
-  if (/(rum|page_load|page-load|conversion|journey|frontend|apdex|lcp|fid|cls|business_outcome|web_vitals|user_satisfaction|customer_)/.test(hay)) return 'ux';
-
-  // INFRA patterns
-  if (/(host_|node_|disk_|cpu_|memory_|pod_|container_|kube_|k8s|cluster_|kubelet|cadvisor|node-exporter|kube-state|kubernetes|oom_|networkinterface|tcp_|conn_track|cert_expiry|containeroom|diskexhaustion)/.test(hay)) return 'infra';
-
-  // PLATFORM patterns
-  if (/(db_|database_|postgres|mysql|mongo|redis|cache_|queue_|kafka|rabbit|consumer_lag|broker_|bucket_|mq_|elasticsearch_|opensearch_|alertmanager|kong|envoy|traefik|gateway_|graylog)/.test(hay)) return 'platform';
-
-  // APPLICATION (intentionally last — broad catch-all for service-level)
-  if (/(availability|success_ratio|error_ratio|latency|p95|p99|p99\.9|request_|http_|api_|service_|endpoint_|error_budget|latency_budget|burn_rate|errorbudget|latencybudget|burnrate|finops|krystalinex)/.test(hay)) return 'app';
+  const named = layerOfText(hay);
+  if (named) return named;
 
   // Backends with a telemetry signal but no layer-specific tokens
   // (e.g. dashboards-grafana, traces-jaeger) default to APP, since the
@@ -643,29 +647,190 @@ export function classifyArtefactLayer(art, pack) {
   return null;  // genuinely uncategorised
 }
 
+// ---------- the layer an artefact's name does not say ----------
+//
+// classifyArtefactLayer reads an artefact's own name. Many have none a layer
+// word is in — a panel titled rca_failure_ratio, an alert rule named
+// HighErrorRate, a metric named ALERTS — and before 2026-11-04 those were
+// unplaced, a third of a pack and more. resolveArtefactLayers gives each the
+// layer what it is part of, or what it reads, says. In this order, each step
+// only for the artefacts the steps before left without a layer, so nothing
+// classifyArtefactLayer places moves:
+//   'name'     classifyArtefactLayer: the id, title, folder, refs, source,
+//              tags, and an `annotations.layer.<id>` override
+//   'query'    its own queries (expr, query, good, total…): the metric names
+//              in them, by vote (label matchers, by-clauses, strings dropped)
+//   'parent'   what it belongs to or refers to, placed by name or query: a
+//              panel's dashboard (`parent`), a burn-rate alert's objective
+//              (`refs`), a metric's dashboards (`spec.used_by`), by vote
+//   'readers'  a metric: the placed artefacts whose queries read it, by vote
+//   'exports'  a scrape job: the metrics it exports (or, for a live job, the
+//              declared job of the same name), by vote
+// A vote takes the layer most of the voices name; a tie leaves none.
+const QUERY_KEY_RE = /^(expr|query|good|total|numerator|denominator|metrics|origin_query)$/i;
+function queryTextsOf(art) {
+  const out = [];
+  const walk = (o, depth) => {
+    if (!o || typeof o !== 'object' || Array.isArray(o) || depth > 2) return;
+    for (const [k, v] of Object.entries(o)) {
+      if (QUERY_KEY_RE.test(k)) {
+        if (typeof v === 'string') out.push(v);
+        else if (Array.isArray(v)) for (const x of v) if (typeof x === 'string') out.push(x);
+      } else walk(v, depth + 1);
+    }
+  };
+  walk(art?.spec, 0);
+  return out;
+}
+// The metric names a query reads: what is left once the strings, the label
+// matchers and the label lists of by / without / on / ignoring / group_* go.
+function metricNamesIn(texts) {
+  const names = new Set();
+  for (const t of texts) {
+    const bare = String(t)
+      .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`/g, ' ')
+      .replace(/\{[^}]*\}/g, ' ')
+      .replace(/\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)/gi, ' ');
+    for (const m of bare.match(/[a-zA-Z_:][a-zA-Z0-9_:]*/g) || []) names.add(m.toLowerCase());
+  }
+  return [...names];
+}
+function vote(layers) {
+  const n = new Map();
+  for (const l of layers) if (l) n.set(l, (n.get(l) || 0) + 1);
+  const ranked = [...n].sort((a, b) => b[1] - a[1]);
+  if (!ranked.length || (ranked[1] && ranked[1][1] === ranked[0][1])) return null;
+  return ranked[0][0];
+}
+const queryLayer = (art) => vote(metricNamesIn(queryTextsOf(art)).map(layerOfText));
+const METRIC_ID_RE = /^METRIC-/;
+const SCRAPE_ID_RE = /^SCRAPE-/;
+
+// resolveArtefactLayers(pack) → Map(id → { layer, how }) over every artefact
+// of the seven layers that carries an id; `how` is one of the steps above,
+// or null with the layer.
+export function resolveArtefactLayers(pack) {
+  const all = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'].flatMap((L) => layerItemsFor(pack, L)).filter((a) => a && a.id);
+  const out = new Map();
+  const set = (a, layer, how) => out.set(a.id, { layer, how: layer ? how : null });
+  const layerOf = (id) => out.get(id)?.layer || null;
+  const open = () => all.filter((a) => !layerOf(a.id));
+  for (const a of all) {
+    const named = classifyArtefactLayer(a, pack);
+    set(a, named || queryLayer(a), named ? 'name' : 'query');
+  }
+  // What it belongs to or refers to, placed by its own words.
+  const byDefines = new Map(all.filter((a) => a.defines).map((a) => [a.defines, a.id]));
+  const owners = (a) => {
+    const keys = [a.parent, ...(Array.isArray(a.refs) ? a.refs : [])];
+    for (const u of (Array.isArray(a.spec?.used_by) ? a.spec.used_by : [])) {
+      const m = /^dashboard:([^/]+)/.exec(String(u));
+      if (m) keys.push(`dashboards.${m[1]}`);
+    }
+    return keys.map((k) => byDefines.get(k)).filter((id) => id && id !== a.id);
+  };
+  const placedOwn = new Map([...out].map(([id, v]) => [id, v.layer]));
+  for (const a of open()) set(a, vote(owners(a).map((id) => placedOwn.get(id))), 'parent');
+  // A metric: what reads it.
+  const readers = new Map();
+  for (const a of all) {
+    const layer = layerOf(a.id);
+    if (!layer || METRIC_ID_RE.test(a.id) || SCRAPE_ID_RE.test(a.id)) continue;
+    for (const name of metricNamesIn(queryTextsOf(a))) {
+      if (!readers.has(name)) readers.set(name, []);
+      readers.get(name).push(layer);
+    }
+  }
+  for (const a of open()) {
+    if (!METRIC_ID_RE.test(a.id)) continue;
+    set(a, vote(readers.get(String(a.spec?.name || a.title || '').toLowerCase()) || []), 'readers');
+  }
+  // A scrape job: the metrics it exports; a live job, the declared job of its name.
+  const byMetric = new Map();
+  for (const a of all) if (METRIC_ID_RE.test(a.id)) {
+    const name = String(a.spec?.name || a.title || '').toLowerCase();
+    if (name && layerOf(a.id) && !byMetric.has(name)) byMetric.set(name, layerOf(a.id));
+  }
+  const declaredJobs = new Map();
+  for (const a of open()) {
+    if (!SCRAPE_ID_RE.test(a.id) || !Array.isArray(a.spec?.exports)) continue;
+    set(a, vote(a.spec.exports.map((m) => byMetric.get(String(m).toLowerCase()))), 'exports');
+  }
+  for (const a of all) if (SCRAPE_ID_RE.test(a.id) && a.spec?.job && layerOf(a.id)) declaredJobs.set(String(a.spec.job), layerOf(a.id));
+  for (const a of open()) {
+    if (!SCRAPE_ID_RE.test(a.id) || !a.spec?.job) continue;
+    set(a, declaredJobs.get(String(a.spec.job)) || null, 'exports');
+  }
+  return out;
+}
+
+// The adapter's id families (tools/lib/adapter.mjs; the same prefixes as
+// tools/lib/artefact-classify.mjs ID_RULES, which tools/test-diagnostic-
+// grade.mjs holds this table to), each with the kind of signal it is. The
+// longer prefix first where one contains another. A family whose kind is
+// null has none of its own: a part of another artefact (an alert's route),
+// pipeline plumbing (a receiver, a processor, a collection agent), or
+// configuration that holds platform-wide (the OTel SDK, profiling, network
+// and policy engines, a mesh, baselines, an import).
+//   'by-signal'  a backend: its signal (metrics, logs, traces) is its kind
+//   'scrape'     a scrape job: metrics, or logs for a log shipper — the
+//                rule the scrape-job evidence below follows
+export const MECHANISM_BY_ID_PREFIX = Object.freeze([
+  ['SLI-',        'sli'],
+  ['SLO-',        'slo'],
+  ['OTEL-',       null],
+  ['BAK-',        'by-signal'],
+  ['PIP-RCV-',    null],
+  ['PIP-PRC-',    null],
+  ['PIP-EXP-MET', 'metric'],
+  ['PIP-EXP-LOG', 'log'],
+  ['PIP-EXP-TRC', 'trace'],
+  ['STO-MET-',    'metric'],
+  ['STO-LOG-',    'log'],
+  ['STO-TRC-',    'trace'],
+  ['SCRAPE-SRC-', 'scrape'],
+  ['SCRAPE-',     'scrape'],
+  ['METRIC-SRC-', 'metric'],
+  ['METRIC-',     'metric'],
+  ['PROF-',       null],
+  ['NET-',        null],
+  ['POE-',        null],
+  ['MESH-',       null],
+  ['COL-',        null],
+  ['QRY-',        'metric'],
+  ['VIEW-',       'metric'],
+  ['DASH-',       'dashboard'],
+  ['PANEL-',      'dashboard'],
+  ['POL-',        'alert'],
+  ['FCST-',       'alert'],
+  ['ALR-',        null],
+  ['RULE-',       'alert'],
+  ['HEAL-',       'runbook'],
+  ['BASE-',       null],
+  ['CHAOS-',      'chaos'],
+  ['SYN-',        'synthetic'],
+  ['IMP-',        null],
+].map((r) => Object.freeze(r)));
+
+const LOG_SHIPPER_RE = /promtail|fluent|loki|log/i;
+const SIGNAL_MECHANISM = { metrics: 'metric', logs: 'log', traces: 'trace' };
+
 // Classifier — returns the mechanism for an artefact (only one most-
-// likely mechanism per artefact). Returns null when the artefact
-// isn't a mechanism-bearing artefact (e.g. OTel SDK config covers
-// 'instrumentation' platform-wide).
+// likely mechanism per artefact), by its id family above. Returns null
+// when the artefact has no kind of its own (the families marked null,
+// a backend whose signal is none of the three, an id of no family).
+// Before 2026-11-04 it knew ten families only, so a declared metric,
+// a scrape job, an alert rule or a dashboard panel had no kind and
+// was left off the matrix without a word.
 export function classifyArtefactMechanism(art) {
   if (!art) return null;
   const id = String(art.id || '');
-  if (/^SLI-/.test(id))    return 'sli';
-  if (/^SLO-/.test(id))    return 'slo';
-  if (/^DASH-/.test(id))   return 'dashboard';
-  if (/^POL-/.test(id))    return 'alert';
-  if (/^HEAL-/.test(id))   return 'runbook';
-  if (/^CHAOS-/.test(id))  return 'chaos';
-  if (/^SYN-/.test(id))    return 'synthetic';
-  if (/^QRY-/.test(id) || /^VIEW-/.test(id)) return 'metric';
-  // Backends carry a SIGNAL — telemetry mechanism, not layer-mechanism.
-  if (/^BAK-/.test(id)) {
-    const sig = String(art.spec?.signal || art.signal || '').toLowerCase();
-    if (sig === 'metrics') return 'metric';
-    if (sig === 'logs')    return 'log';
-    if (sig === 'traces')  return 'trace';
-  }
-  return null;
+  const rule = MECHANISM_BY_ID_PREFIX.find(([prefix]) => id.startsWith(prefix));
+  if (!rule) return null;
+  const mech = rule[1];
+  if (mech === 'by-signal') return SIGNAL_MECHANISM[String(art.spec?.signal || art.signal || '').toLowerCase()] || null;
+  if (mech === 'scrape') return LOG_SHIPPER_RE.test(`${art.title || ''} ${art.spec?.job || art.job || ''}`) ? 'log' : 'metric';
+  return mech;
 }
 
 export function computePostureMatrix(packA, packB) {
@@ -690,13 +855,18 @@ export function computePostureMatrix(packA, packB) {
     platformWide.baselines = true;
   }
 
+  // The artefacts the walk finds with no kind of their own (see
+  // MECHANISM_BY_ID_PREFIX): on no cell, listed so a reader can count them.
+  const unkinded = [];
+  // Each artefact's layer by its name, else by what it is part of or reads.
+  const resolved = resolveArtefactLayers(packA);
   const allLayers = ['L1','L2','L2X','L3','L4','L5','GOV'];
   for (const L of allLayers) {
     const items = layerItemsFor(packA, L);
     for (const art of items) {
       const mech = classifyArtefactMechanism(art);
-      if (!mech) continue;
-      const layer = classifyArtefactLayer(art, packA);
+      if (!mech) { unkinded.push(art); continue; }
+      const layer = art.id && resolved.has(art.id) ? resolved.get(art.id).layer : classifyArtefactLayer(art, packA);
       // When layer is null, bucket under 'unknown' so the matrix can
       // still surface the artefact's existence without claiming a
       // layer. UI shows these in a tiny "unclassified" footer.
@@ -712,6 +882,9 @@ export function computePostureMatrix(packA, packB) {
   // (services emitting telemetry). Light up App's row for each signal
   // we have a backend for. Other layers stay evidence-driven (scrape
   // jobs, recording rules, firing alerts) so we don't overclaim.
+  // The backend already sits in its own cell from the walk above: here it
+  // is the signal it carries, marked `_propagated`, so a cell it lights is
+  // present while a count of the repository's artefacts takes it once.
   const signalToMech = { metrics: 'metric', logs: 'log', traces: 'trace', profiles: 'profile' };
   for (const a of L2) {
     if (!/^BAK-/.test(a.id || '')) continue;
@@ -720,7 +893,7 @@ export function computePostureMatrix(packA, packB) {
     if (!mech) continue;
     const key = `app:${mech}`;
     if (!cells[key]) cells[key] = [];
-    cells[key].push(a);
+    cells[key].push({ ...a, _propagated: true });
   }
 
   // Also consider the firing-alerts evidence — these are layer-bearing
@@ -754,12 +927,12 @@ export function computePostureMatrix(packA, packB) {
     const layer = classifyArtefactLayer(fakeArt, packA);
     // Most scrape jobs evidence metrics; some specifically evidence logs
     // (promtail, fluentbit). Default to metric.
-    const mech = /promtail|fluent|loki|log/i.test(job) ? 'log' : 'metric';
+    const mech = LOG_SHIPPER_RE.test(job) ? 'log' : 'metric';
     const key = `${layer || 'unknown'}:${mech}`;
     if (!cells[key]) cells[key] = [];
     cells[key].push({ id: `scrape/${job}`, title: job, _evidence: true });
   }
 
-  return { cells, platformWide };
+  return { cells, platformWide, unkinded };
 }
 

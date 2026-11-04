@@ -71,7 +71,7 @@ import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
-import { parseGithubUrl, selectCrawlerFiles, ghFetch } from './github-crawl.mjs';
+import { parseGithubUrl, fetchGithubFiles } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
@@ -84,9 +84,14 @@ import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { journeyPackBSource, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { fetchRepositoryFiles } from './repo-sources.mjs';
+import { getService } from './store/services.mjs';
+import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
+import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
+import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
-import { authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole } from './authz.mjs';
+import { admittedBearer, admittedUser, authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -363,9 +368,24 @@ app.use(mcpSettingsRoutes({ authorize }));
 // decoder is the attack surface the October 2026 Node security release names
 // (the Brotli out-of-bounds write, CVE-2026-111497): the runtime floor carries
 // the fix, this keeps untrusted bytes away from the decoder on any runtime.
-app.use(express.json({ limit: '16mb', inflate: false }));   // /api/crawl can carry a whole repo's worth of YAML
-app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb', inflate: false }));
-app.use(express.urlencoded({ extended: false, limit: '64kb', inflate: false }));   // /auth/login form
+//
+// The large caps are for a caller the gate admitted to /api: the bearer, a
+// session, or the open posture (/api/crawl can carry a whole repo's worth of
+// YAML). Everyone else — the /auth/* forms, a non-API path, an anonymous read
+// in the token posture — is read up to 64 KiB: nothing they send needs more,
+// and parsing 16 MB of JSON can take more heap than the pod is given.
+const ANONYMOUS_BODY_LIMIT = '64kb';
+const TEXT_TYPES = ['application/x-yaml', 'text/yaml', 'text/plain'];
+const admittedToApi = (req) => req.path.startsWith('/api/')
+  && (admittedBearer(req) || !!admittedUser(req) || requestPosture(req).startsWith('open-'));
+const parsers = {
+  json: [express.json({ limit: '16mb', inflate: false }), express.json({ limit: ANONYMOUS_BODY_LIMIT, inflate: false })],
+  text: [express.text({ type: TEXT_TYPES, limit: '4mb', inflate: false }), express.text({ type: TEXT_TYPES, limit: ANONYMOUS_BODY_LIMIT, inflate: false })],
+};
+const forCaller = (req, [admitted, anonymous]) => (admittedToApi(req) ? admitted : anonymous);
+app.use(function jsonParser(req, res, next) { return forCaller(req, parsers.json)(req, res, next); });
+app.use(function textParser(req, res, next) { return forCaller(req, parsers.text)(req, res, next); });
+app.use(express.urlencoded({ extended: false, limit: ANONYMOUS_BODY_LIMIT, inflate: false }));   // /auth/login form
 
 // Identity routes (/auth/*) — inert in local mode; throws fail-closed at
 // boot when OIDC is configured incompletely. See server/auth.mjs.
@@ -403,7 +423,8 @@ app.use(function bodyParserError(err, req, res, next) {
   if (res.headersSent) return next(err);
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
-      const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
+      const limit = !err.limit ? '16MB'
+        : err.limit >= 1024 * 1024 ? Math.round(err.limit / 1024 / 1024) + 'MB' : Math.round(err.limit / 1024) + 'KB';
       return res.status(413).json({
         ok: false,
         error: `Request body too large (cap ${limit}). The crawler should filter to observability artefacts only — drop a large repo and the client will pre-classify; if you're hitting this you may have an in-flight build.`,
@@ -452,10 +473,10 @@ app.get('/api/orgs', authorize('GET /api/orgs'), (req, res) => {
   const principal = req.observogramPrincipal;
   const active = currentOrg();
   let orgs;
-  if (req.observogramBearer) {
+  if (admittedBearer(req)) {
     orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account', effectiveRole: effectiveRoleOf(principal) }));
-  } else if (req.observogramUser) {
-    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({
+  } else if (admittedUser(req)) {
+    orgs = listMembershipsForUser(db, admittedUser(req).id).map((m) => ({
       id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role, effectiveRole: effectiveRoleOf(principal, m.role),
     }));
     if (principal?.owner && !orgs.some((o) => o.id === active)) {
@@ -1119,21 +1140,35 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-  // A live Pack B is a server-side request to an MCP target (R4, decision
-  // D6): resolved before anything runs — through the org's registered
-  // endpoint (packB.mcp.endpointId), or a raw url as a typed URL, which
-  // only an admin may send. A refusal sends nothing and writes no row; the
-  // def's authEnv is never read here.
+  const targets = journeyRunTargets(req, def);
+  if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
+  await executeJourneyRun(req, res, def, targets);
+});
+
+// What a run of `def` reaches, resolved before anything runs →
+// { mcpTarget, notifyHook } or { refused: { status, body } }. A live Pack B
+// is a server-side request to an MCP target (R4, decision D6): through the
+// org's registered endpoint (packB.mcp.endpointId), or a raw url as a typed
+// URL, which only an admin may send. A refusal sends nothing and writes no
+// row; the def's authEnv is never read here. Then the notify hook (above).
+function journeyRunTargets(req, def) {
   const usesMcp = !!def.packB?.mcp && (!def.packB.file || def.inventory !== undefined);
   const mcpTarget = usesMcp ? resolveJourneyMcp(currentStore(), def.packB.mcp, { caller: mcpCallerOf(req) }) : null;
-  if (mcpTarget?.status) return res.status(mcpTarget.status).json(mcpRefusalBody(mcpTarget));
+  if (mcpTarget?.status) return { refused: { status: mcpTarget.status, body: mcpRefusalBody(mcpTarget) } };
   let notifyHook = null;
   if (def.notify) {
     const posture = notifyPostureRefusal({ ...mcpCallerOf(req), host: listenOf(req).host });
-    if (posture) return res.status(posture.status).json({ ok: false, error: posture.error, denied: posture.denied });
+    if (posture) return { refused: { status: posture.status, body: { ok: false, error: posture.error, denied: posture.denied } } };
     notifyHook = resolveJourneyNotify(currentStore(), def.notify, { org: currentOrg(), journey: def.name, file: journeyFileOf(def) });
-    if (notifyHook.refused) return res.status(400).json({ ok: false, error: notifyHook.refused });
+    if (notifyHook.refused) return { refused: { status: 400, body: { ok: false, error: notifyHook.refused } } };
   }
+  return { mcpTarget, notifyHook };
+}
+
+// The run itself, its journey.run row and the answer: 200 { ok, record } —
+// the gate's outcome is data — or 502 when a source could not be resolved.
+// `extra` rides on either answer (a service's Run adds its scan).
+async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
   const t0 = new Date();
   // The row's notify key (only for a journey with `notify`): from the
   // record's delivery, or — no record — nothing left the server.
@@ -1165,7 +1200,7 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
       tookMs: finite(record.tookMs),
       ...notifyOf(record.notify),
     }), { tag: 'journey' });
-    res.json({ ok: true, record, ...(auditError ? { auditError } : {}) });
+    res.json({ ok: true, record, ...extra, ...(auditError ? { auditError } : {}) });
   } catch (e) {
     const auditError = auditAfter(req, runRow({
       startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
@@ -1173,8 +1208,116 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
       // The vantage-lost path posted from the record it kept (runJourney sets e.notify).
       ...notifyOf(e?.notify),
     }), { tag: 'journey' });
-    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(auditError ? { auditError } : {}) });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...extra, ...(auditError ? { auditError } : {}) });
   }
+}
+
+// POST /api/services/:id/run — a service's Run (studio Overview's service
+// list): the service record says where its declaration lives (its
+// repository) and each environment where it runs (the environment's MCP
+// endpoint), so one call does the whole check, every time with fresh eyes:
+//   1. the targets — the environment's endpoint resolved as a journey's
+//      Pack B is (a refusal scans nothing and sends nothing), the folder
+//      rule read again for a folder repository;
+//   2. the scan — the repository read now (server/repo-sources.mjs) and
+//      crawled under the service's slug and the environment's name, so the
+//      scan is the service's own pack; registered under one label per
+//      service and environment, so the next Run replaces it;
+//   3. the check, saved — the journey `<slug>.<env>`: the scan as Pack A,
+//      the endpoint as Pack B; an existing one keeps its gate, schedule,
+//      notify and budget — and run, as POST /api/journeys/:name/run runs it.
+// Body: { env } (may be left out when the service has one environment).
+// 200 { ok, record, pack, journey, scan }; 400/404 for a service,
+// environment or repository the request cannot use; 409 for a record that
+// says nowhere to look (no repository, no endpoint); 422 for a scan that
+// read nothing or made no valid pack; 502 when the repository or the live
+// side did not answer (the live side's loss keeps a record, as a journey's).
+// Writes the pack's rows, a journey.capture row ({ via: 'service' }) and the
+// journey.run row.
+app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async (req, res) => {
+  const db = currentStore();
+  const id = positiveId(req.params.id);
+  const service = id === null ? null : getService(db, id);
+  if (!service) return res.status(404).json({ ok: false, error: SERVICE_WAYS.noService(req.params.id) });
+  const envs = listEnvironmentsOf(db, service.id);
+  const envName = typeof req.body?.env === 'string' ? req.body.env.trim() : '';
+  const env = envName ? envs.find((e) => e.name === envName) : (envs.length === 1 ? envs[0] : null);
+  if (!env) {
+    const error = envName ? `${service.name} has no environment "${envName}" — add it to the service first`
+      : envs.length ? `name the environment to run: ${envs.map((e) => e.name).join(', ')}` : `${service.name} has no environment yet — add one, with the MCP endpoint that reads it`;
+    return res.status(envName ? 404 : 400).json({ ok: false, error });
+  }
+  if (!service.repository) {
+    return res.status(409).json({ ok: false, error: `${service.name} names no repository yet — say where its declaration lives: GitHub, Azure DevOps or a folder on the server` });
+  }
+  if (env.mcpEndpointId === null || env.mcpEndpointId === undefined) {
+    return res.status(409).json({ ok: false, error: `${service.name} in ${env.name} has no live target yet — choose the MCP endpoint that reads it` });
+  }
+  if (service.repository.kind === 'path') {
+    const why = folderRefusal(service.repository.location, mcpCallerOf(req));
+    if (why) return res.status(403).json({ ok: false, error: why });
+  }
+  try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  const endpoint = getMcpEndpointRow(db, env.mcpEndpointId);
+  const name = `${service.slug}.${env.name}`.replace(/[^A-Za-z0-9._-]/g, '_');
+  let previous = null;
+  try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
+  const keep = (k) => (previous && previous[k] !== undefined ? { [k]: previous[k] } : {});
+  const def = {
+    packA: { file: '' },
+    packB: { mcp: { url: safeMcpUrlOf(endpoint?.url || '') || String(endpoint?.url || ''), endpointId: env.mcpEndpointId } },
+    env: env.name,
+    service: service.slug,
+    gate: previous?.gate && typeof previous.gate === 'object' ? previous.gate : { minAlignmentPct: 85 },
+    ...keep('schedule'), ...keep('stackBudget'), ...keep('notify'), ...keep('keepLivePack'),
+  };
+  // 1. The targets, before anything is read or sent.
+  const targets = journeyRunTargets(req, { ...def, name });
+  if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
+  // 2. The scan.
+  const t0 = Date.now();
+  let read;
+  try {
+    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
+  } catch (e) {
+    const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
+    process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${e.message})\n`);
+    return res.status(status).json({ ok: false, error: `the repository could not be read: ${e.message}` });
+  }
+  const scan = { source: read.source, ref: read.ref, files: Object.keys(read.files).length, candidates: read.candidates, skipped: read.skipped.length };
+  if (!scan.files) {
+    return res.status(422).json({ ok: false, error: `${read.source} has no file the scan reads — Prometheus rules, OpenTelemetry collector configs, Grafana dashboards, compose files, Helm values or metrics code`, scan });
+  }
+  let canonical;
+  try { ({ canonical } = crawlFiles(read.files, { repoName: service.slug, environment: env.name })); }
+  catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
+  const errors = validateCanonical(canonical, SCHEMA);
+  if (errors.length) {
+    return res.status(422).json({ ok: false, error: `the scan of ${read.source} did not make a valid pack: ${errors[0]}`, errors: errors.slice(0, 20), scan });
+  }
+  const label = `${service.name} · ${env.name} · repository`;
+  const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source} → ${packId} in ${Date.now() - t0}ms\n`);
+  // 3. The check, saved and run.
+  def.packA = { file: join(workspaceInfo().packs, `${packId}.pack.yaml`).replaceAll('\\', '/') };
+  let saved;
+  try {
+    saved = saveJourneyDef(name, def, {
+      banner: [
+        `Saved by the service ${service.slug}, environment ${env.name}, on ${new Date().toISOString()}.`,
+        'Its Run (POST /api/services/:id/run) scans the repository again and rewrites packA;',
+        'Check now (POST /api/journeys/:name/run) checks live against the last scan.',
+      ],
+    });
+  } catch (e) { return res.status(400).json({ ok: false, error: e.message, scan }); }
+  auditAfter(req, {
+    action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
+    detail: { via: 'service', service: bounded(service.slug), env: bounded(env.name), packA: packId, live: true },
+  }, { tag: 'journey' });
+  let runDef;
+  try { runDef = loadJourneyDef(saved.name, { allowPath: false }); }
+  catch (e) { return res.status(500).json({ ok: false, error: e.message, scan }); }
+  await executeJourneyRun(req, res, runDef, targets, { pack: { id: packId, label }, journey: saved.name, scan });
 });
 
 // POST /api/journeys/capture — "save this comparison as a journey". The
@@ -1903,7 +2046,7 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 //
 // Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
 // ----------------------------------------------------------------
-// parseGithubUrl / selectCrawlerFiles / ghFetch live in server/github-crawl.mjs.
+// parseGithubUrl / fetchGithubFiles (selectCrawlerFiles, ghFetch) live in server/github-crawl.mjs.
 
 app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, res) => {
   const body = req.body || {};
@@ -1919,28 +2062,14 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
   const t0 = Date.now();
 
   try {
-    // 1. Resolve default branch when no ref given.
-    let ref = explicitRef;
-    if (!ref) {
-      const repoMeta = await ghFetch(`/repos/${owner}/${repo}`).then(r => r.json());
-      ref = repoMeta.default_branch || 'main';
-    }
-
-    // 2. List the full tree at that ref.
-    const treeResp = await ghFetch(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`)
-      .then(r => r.json());
-    if (treeResp.truncated) {
+    // 1–4. The default branch when no ref is given, the tree, the
+    // crawler-relevant blobs downloaded (server/github-crawl.mjs fetchGithubFiles).
+    const { ref, candidates: candidateCount, files, skipped, truncated } = await fetchGithubFiles({ owner, repo, ref: explicitRef });
+    if (truncated) {
       process.stderr.write(`[crawl-github] tree truncated for ${owner}/${repo}@${ref}; some files may be missing\n`);
     }
 
-    // 3. Filter to crawler-relevant blobs.
-    const FILE_CAP_BYTES = 1 * 1024 * 1024;        // 1 MB / file
-    const TOTAL_CAP_BYTES = 16 * 1024 * 1024;      // 16 MB total
-    const MAX_FILES = 200;
-    // isCrawlerFile's blobs first, the exporter candidates after them.
-    const candidates = selectCrawlerFiles(treeResp.tree, { maxFiles: MAX_FILES, fileCapBytes: FILE_CAP_BYTES });
-
-    if (candidates.length === 0) {
+    if (candidateCount === 0) {
       return res.json({
         ok: true,
         canonical: null,
@@ -1953,29 +2082,10 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       });
     }
 
-    // 4. Download contents in parallel (raw content endpoint).
-    let totalBytes = 0;
-    const files = {};
-    const skipped = [];
-    await Promise.all(candidates.map(async (node) => {
-      try {
-        const contentRes = await ghFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(node.path).replace(/%2F/g, '/')}?ref=${encodeURIComponent(ref)}`, {
-          headers: { Accept: 'application/vnd.github.raw+json' },
-        });
-        const text = await contentRes.text();
-        if (text.length > FILE_CAP_BYTES) { skipped.push(`${node.path} (size ${text.length})`); return; }
-        if (totalBytes + text.length > TOTAL_CAP_BYTES) { skipped.push(`${node.path} (total cap)`); return; }
-        files[node.path] = text;
-        totalBytes += text.length;
-      } catch (e) {
-        skipped.push(`${node.path} (${e.message})`);
-      }
-    }));
-
     if (Object.keys(files).length === 0) {
       return res.json({
         ok: true, canonical: null, canonicalYaml: '',
-        summary: { source: 'github', repo: `${owner}/${repo}`, ref, files: { total: candidates.length, classified: 0 } },
+        summary: { source: 'github', repo: `${owner}/${repo}`, ref, files: { total: candidateCount, classified: 0 } },
         validation: { ok: false, errors: ['all candidate files were skipped (size caps or download errors)'] },
         registered: null, tookMs: Date.now() - t0, notes: skipped,
       });

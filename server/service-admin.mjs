@@ -25,12 +25,15 @@
 //
 // No SQL of its own: every read and write goes through server/store/*.
 
+import { delimiter, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
 import { credentialThatRides, exposedWay, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
 import { validateMcpUrl } from './mcp-url.mjs';
+import { adoHostRefusal, parseAdoUrl } from './ado-crawl.mjs';
+import { parseGithubUrl } from './github-crawl.mjs';
 import { currentOrg } from './org-context.mjs';
 import { atomic } from './store/db.mjs';
 import { createService, deleteService, getService, getServiceBySlug, listServices, updateService } from './store/services.mjs';
@@ -86,6 +89,14 @@ export const WAYS = Object.freeze({
   mcpEndpointIdShape: 'mcpEndpointId must be a positive integer',
   anotherVariable: (id) => ` — PATCH /api/mcp-endpoints/${id} names another variable`,
   typedUserinfo: 'a typed MCP URL may not carry user:password — send the token as mcpAuth',
+  repository: 'a repository is { kind, location, ref } — kind github, ado or path — or null',
+  repositoryKind: (x) => `a repository's kind is github, ado or path, not ${JSON.stringify(x)}`,
+  repositoryGithub: (x) => `${JSON.stringify(x)} is not a GitHub repository — https://github.com/<owner>/<repo>, or <owner>/<repo>`,
+  repositoryAdo: (x) => `${JSON.stringify(x)} is not an Azure DevOps repository — https://dev.azure.com/<org>/<project>/_git/<repo>`,
+  repositoryPath: (x) => `${JSON.stringify(x)} is not a folder path on the server — give its full path (C:\\src\\shop, /srv/src/shop)`,
+  repositoryRef: 'a branch is 1–200 characters with no spaces',
+  repositoryFolderRoots: (x) => `${JSON.stringify(x)} is not under a folder this server reads repositories from (OBSERVOGRAM_REPO_ROOTS)`,
+  repositoryFolderPosture: "a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS on the server, or from the server's own machine while it runs without sign-in on loopback — list the folder there, or give a GitHub or Azure DevOps repository",
   tokenUnset: (ep) => `MCP endpoint "${ep.name}" reads its token from ${ep.readTokenEnv}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`,
 });
 
@@ -180,6 +191,71 @@ function parseMcpEndpointId(db, value) {
   return id;
 }
 
+// ---------- the repository ----------
+
+export const REPOSITORY_KINDS = Object.freeze(['github', 'ado', 'path']);
+const REF_RE = /^[^\s~^:?*[\\]{1,200}$/;
+
+// The folders the server reads repositories from: OBSERVOGRAM_REPO_ROOTS,
+// split on commas and on the platform's path-list delimiter, absolute ones only.
+export function repositoryRoots(raw = process.env.OBSERVOGRAM_REPO_ROOTS) {
+  const split = delimiter === ';' ? /[,;]/ : /[,:]/;
+  return String(raw || '').split(split).map((x) => x.trim()).filter((x) => x && isAbsolute(x)).map((x) => resolvePath(x));
+}
+
+const ON_WINDOWS = process.platform === 'win32';
+const folded = (x) => (ON_WINDOWS ? x.toLowerCase() : x);
+const within = (p, dir) => folded(p) === folded(dir) || folded(p).startsWith(folded(dir.endsWith(sep) ? dir : dir + sep));
+
+// Why the server will not read this folder for this caller, or '' when it
+// will: under a listed root, or — no root listed — a request sent straight
+// to a loopback server without sign-in (the person's own machine). Checked
+// when the record is written and again when it runs.
+export function folderRefusal(location, caller, { roots = repositoryRoots() } = {}) {
+  if (roots.length) return roots.some((r) => within(resolvePath(location), r)) ? '' : WAYS.repositoryFolderRoots(location);
+  return caller?.posture === 'open-loopback' && caller?.direct === true ? '' : WAYS.repositoryFolderPosture;
+}
+
+// undefined → undefined (not sent); null → null (none yet); else the
+// normalised { kind, location, ref }: a GitHub repository as
+// https://github.com/<owner>/<repo>, an Azure DevOps one as parseAdoUrl's
+// location (its host Azure DevOps Services or a listed Server), a folder as
+// its full path — which `caller` (mcpCallerOf(req)) may name. `ref` is a
+// branch or null (the default branch); a URL that names one (…/tree/<ref>,
+// ?version=GB<ref>) gives it when `ref` is not sent.
+export function parseRepository(value, { caller = null } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!isPlainObject(value) || Object.keys(value).some((k) => !['kind', 'location', 'ref'].includes(k))) invalid(WAYS.repository);
+  const { kind } = value;
+  if (!REPOSITORY_KINDS.includes(kind)) invalid(WAYS.repositoryKind(kind));
+  const location = typeof value.location === 'string' ? value.location.trim() : '';
+  if (!location || location.length > URL_MAX) {
+    invalid(kind === 'github' ? WAYS.repositoryGithub(value.location) : kind === 'ado' ? WAYS.repositoryAdo(value.location) : WAYS.repositoryPath(value.location));
+  }
+  let ref = null;
+  if (value.ref !== undefined && value.ref !== null && value.ref !== '') {
+    if (typeof value.ref !== 'string' || !REF_RE.test(value.ref.trim())) invalid(WAYS.repositoryRef);
+    ref = value.ref.trim();
+  }
+  if (kind === 'github') {
+    const gh = parseGithubUrl(location);
+    if (!gh) invalid(WAYS.repositoryGithub(location));
+    return { kind, location: `https://github.com/${gh.owner}/${gh.repo}`, ref: ref ?? gh.ref ?? null };
+  }
+  if (kind === 'ado') {
+    const ado = parseAdoUrl(location);
+    if (!ado) invalid(WAYS.repositoryAdo(location));
+    const why = adoHostRefusal(new URL(ado.base).origin);
+    if (why) invalid(why);
+    return { kind, location: ado.location, ref: ref ?? ado.ref ?? null };
+  }
+  if (!isAbsolute(location)) invalid(WAYS.repositoryPath(location));
+  const why = folderRefusal(location, caller);
+  if (why) invalid(why);
+  return { kind, location: resolvePath(location), ref: null };
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // The keys of `next` whose value differs from `current`'s (JSON-equal
@@ -190,10 +266,12 @@ function changedFields(current, next) {
 
 // ---------- services ----------
 
-export function createServiceFromApi(db, actor, { slug, name, owners, tier, description } = {}) {
+// `caller` (mcpCallerOf(req)) decides whether a folder repository may be named.
+export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
+    repository: parseRepository(repository, { caller }) ?? null,
   };
   return atomic(db, () => {
     const existing = getServiceBySlug(db, fields.slug);
@@ -203,7 +281,7 @@ export function createServiceFromApi(db, actor, { slug, name, owners, tier, desc
 }
 
 // → { service, changed: [fields] }; nothing differs → changed: [] and no row.
-export function updateServiceFromApi(db, actor, id, patch = {}) {
+export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null } = {}) {
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) missing(WAYS.noService(id));
@@ -213,6 +291,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}) {
     if (patch.owners !== undefined) next.owners = parseOwners(patch.owners);
     if (patch.tier !== undefined) next.tier = parseTier(patch.tier);
     if (patch.description !== undefined) next.description = parseDescription(patch.description);
+    if (patch.repository !== undefined) next.repository = parseRepository(patch.repository, { caller });
     const changed = changedFields(current, next);
     if (!changed.length) return { service: current, changed };
     const service = updateService(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
@@ -379,6 +458,7 @@ const byRoleThenId = (a, b) => (a.role === b.role ? (a.packId < b.packId ? -1 : 
 function serviceView(service, environments, links) {
   return {
     id: service.id, slug: service.slug, name: service.name, owners: service.owners, tier: service.tier, description: service.description,
+    repository: service.repository ?? null,
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),
