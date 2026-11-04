@@ -196,10 +196,19 @@ buildOverviewModel({
   journeys, journeysError, run,                 // GET /api/journeys and the service's newest run record
   running, startError, pending,                 // a check in flight, a refused start, facts still being read
   layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
+  unkinded,                                     // computePostureMatrix(layered).unkinded (optional: below)
   access, start, startable,                     // the reader's rank ({ canWrite, reason }); the start's state; true when you run the start (below)
   now, productName,
 });
 ```
+
+`unkinded` is the matrix's list of the artefacts with no kind of signal of
+their own (an alert route, a pipeline receiver, the OTel SDK, baselines;
+`MECHANISM_BY_ID_PREFIX` in `studio/diagnostic-grade.mjs` says which). With
+it, *Unplaced* counts them beside what could not be placed on a layer, and
+the Discover column adds up: the plates plus *Unplaced* are *Declared*,
+each artefact once. Without it, *Unplaced* counts only the artefacts with
+no layer, as before 2026-11-04.
 
 The shapes are the ones the fixtures under `tools/fixtures/overview/` carry
 (`services.json`, `packs.json`, `journeys.json`, a real run, a half-blind

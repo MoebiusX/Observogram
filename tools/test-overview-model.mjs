@@ -870,7 +870,7 @@ test('layersModel: the four layers top down with the ten kinds each, counts of d
     ['ux', 'User experience', 0, 10, 0, 'fail', 0], ['app', 'Application', 7, 10, 70, 'ok', 80], ['platform', 'Platform', 4, 10, 40, 'warn', 4], ['infra', 'Infrastructure', 3, 10, 30, 'warn', 7],
   ]);
   assert.deepEqual(L.rows[1].kinds.map((k) => k.key), ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'], 'the ten kinds, in drawing order');
-  assert.deepEqual(L.rows[1].kinds.filter((k) => k.present).map((k) => k.label), ['17 indicators', '15 objectives', '37 metrics', '2 logs', '1 trace', '4 dashboards', '4 alerts']);
+  assert.deepEqual(L.rows[1].kinds.filter((k) => k.present).map((k) => k.label), ['17 indicators', '15 objectives', '37 metrics', '2 logs', '1 trace', '4 dashboards and panels', '4 alerts']);
   assert.deepEqual(L.rows[1].kinds.filter((k) => !k.present).map((k) => k.label), ['no runbooks', 'no chaos tests', 'no synthetic checks']);
   assert.deepEqual([L.coveragePct, L.unplaced, L.declared], [35, 7, 600], 'the average of the four layers is the engine\'s "35% average observed"');
   assert.deepEqual(L.composition, [{ name: 'SLI/SLO', count: 36 }, { name: 'Metrics/Logs/Traces', count: 226 }, { name: 'Dashboards/Recording Rules', count: 321 }, { name: 'Alerts/Policy/Self-healing', count: 15 }, { name: 'Self-check', count: 2 }]);
@@ -882,6 +882,39 @@ test('layersModel: the four layers top down with the ten kinds each, counts of d
   assert.deepEqual([fromArrays.unplaced, fromArrays.declared, fromArrays.lead, fromArrays.composition, fromArrays.unplacedNote], [1, 0, '', [], '1 thing could not be placed on a layer.']);
   assert.equal(layersModel({ cells: null }), null, 'no matrix, no stack');
   assert.deepEqual(compositionOf(null), []);
+});
+
+test('layersModel adds up: Declared is the plates plus Unplaced, each artefact once — a metric, a scrape job, an alert rule and a panel on their layer, a backend repeated as its signal counted once, what has no layer or no kind of its own in Unplaced and named (seen 2026-11-04: 699 declared, 93 on the plates, 6 unplaced)', async () => {
+  const { computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const layered = {
+    meta: { annotations: {} },
+    layers: {
+      L1: [{ id: 'SLI-01', title: 'kx_wallet_availability' }, { id: 'SLO-01', title: 'kx_wallet_availability' }],
+      L2: [
+        { id: 'BAK-01', title: 'metrics-prometheus node-exporter', spec: { signal: 'metrics' } }, { id: 'BAK-02', title: 'alerting-alertmanager', spec: { signal: 'alerting' } },
+        { id: 'METRIC-01', title: 'node_cpu_seconds_total' }, { id: 'METRIC-02', title: 'http_requests_total' }, { id: 'METRIC-03', title: 'widgets' },
+        { id: 'SCRAPE-01', title: 'scrape: postgres' }, { id: 'PIP-RCV-01', title: 'receiver: otlp' }, { id: 'OTEL-01' },
+      ],
+      L3: [{ id: 'DASH-01', title: 'k8s cluster' }, { id: 'PANEL-01', title: 'pod_restarts' }, { id: 'PANEL-02', title: 'rca' }],
+      L4: { alerting: [{ id: 'RULE-01', title: 'api_error_ratio_high' }, { id: 'ALR-01', title: 'SEV2 routes' }, { id: 'ALR-02', title: 'SEV1 routes' }] },
+      L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }],
+    },
+  };
+  const { cells, unkinded } = computePostureMatrix(layered, null);
+  const L = keep(layersModel({ cells, layered, unkinded }));
+  const plates = L.rows.reduce((n, r) => n + r.total, 0);
+  assert.deepEqual([L.declared, plates, L.unplaced, L.placeless, L.unkinded], [17, 9, 8, 2, 6]);
+  assert.equal(plates + L.unplaced, L.declared, 'the column adds up');
+  const row = (key) => L.rows.find((r) => r.key === key).kinds.filter((k) => k.count).map((k) => k.label);
+  assert.deepEqual(row('infra'), ['2 metrics', '2 dashboards and panels'], 'the backend and the node metric; the dashboard and its panel');
+  assert.deepEqual(row('platform'), ['1 metric'], 'the scrape job');
+  assert.deepEqual(row('app'), ['1 indicator', '1 objective', '1 metric', '1 alert'], 'the backend on app as its signal is not counted again');
+  assert.equal(L.rows.find((r) => r.key === 'app').kinds.find((k) => k.key === 'metric').present, true);
+  assert.equal(L.unplacedNote, '8 things are on no layer: 2 could not be placed on one, and 6 are no kind of signal of their own (2 platform-wide settings, 2 alert routes, 1 backend for another signal, 1 pipeline part).');
+  // A host that passes no unkinded (before 2026-11-04) keeps the old reading; one kindless thing alone reads singular.
+  assert.equal(layersModel({ cells, layered }).unplaced, 2);
+  assert.equal(layersModel({ cells: {}, unkinded: [{ id: 'ALR-01' }] }).unplacedNote, '1 thing is on no layer: no kind of signal of its own (1 alert route).');
+  assert.equal(layersModel({ cells: {}, unkinded: 4 }).unplacedNote, '4 things are on no layer: no kind of signal of their own.', 'a count, as a saved posture holds it');
 });
 
 test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the promises that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
@@ -956,7 +989,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<span class="ov-cell ov-cell--on" title="37 metrics">37</span>') && html.includes('<span class="ov-cell" title="no runbooks"></span>'));
   assert.ok(html.includes('<span class="og-pill og-pill--ok ov-layer__n">7 of 10 kinds</span>') && html.includes('<span class="og-pill og-pill--fail ov-layer__n">0 of 10 kinds</span>'), 'the health pill');
   assert.ok(html.includes('<span class="ov-layer__total" title="declared on this layer"><b>80</b><small>declared</small></span>'), 'the count');
-  assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
+  assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards and panels · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
   assert.ok(html.includes('<div class="ov-stat" title="600 things declared in the repository."><dt>Declared</dt><dd>600</dd></div>') && html.includes('<dt>Coverage</dt><dd>35<small>%</small></dd>') && html.includes('<div class="ov-stat" title="7 things could not be placed on a layer."><dt>Unplaced</dt><dd>7</dd></div>'), 'the three stats');
   // The column opens on the summary: In the repository and its counts, closed; the stack is what it opens to; the stats stay outside.
   assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'the summary is the default, closed');

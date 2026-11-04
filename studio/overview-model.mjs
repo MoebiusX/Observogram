@@ -552,30 +552,35 @@ export const BOARD_LAYERS = Object.freeze([
 ]);
 
 // The ten kinds the matrix knows, in drawing order, each with its plain
-// word (many, one).
+// word (many, one, and none when "no <many>" would not read). A dashboard's
+// panels count with the dashboards (the engine's dashboard kind is "a
+// human-readable view"), so the word names both.
 const SIGNAL_WORDS = {
   sli: ['indicators', 'indicator'], slo: ['objectives', 'objective'], metric: ['metrics', 'metric'], log: ['logs', 'log'], trace: ['traces', 'trace'],
-  dashboard: ['dashboards', 'dashboard'], alert: ['alerts', 'alert'], runbook: ['runbooks', 'runbook'], chaos: ['chaos tests', 'chaos test'], synthetic: ['synthetic checks', 'synthetic check'],
+  dashboard: ['dashboards and panels', 'dashboard or panel', 'no dashboards'], alert: ['alerts', 'alert'], runbook: ['runbooks', 'runbook'], chaos: ['chaos tests', 'chaos test'], synthetic: ['synthetic checks', 'synthetic check'],
 };
 const SIGNAL_ORDER = ['sli', 'slo', 'metric', 'log', 'trace', 'dashboard', 'alert', 'runbook', 'chaos', 'synthetic'];
 export const SIGNAL_KINDS = Object.freeze(SIGNAL_ORDER
   .filter((k) => POSTURE_MECHANISMS_PER_LAYER.some((m) => m.key === k))
-  .map((k) => ({ key: k, word: (SIGNAL_WORDS[k] || [k, k])[0], one: (SIGNAL_WORDS[k] || [k, k])[1] })));
+  .map((k) => {
+    const [word, one, none] = SIGNAL_WORDS[k] || [k, k];
+    return { key: k, word, one, none: none || `no ${word}` };
+  }));
 
 // A cell is the matrix's list of artefacts, or (in a test, or a saved
-// posture) just its count. The matrix lists a telemetry backend twice on the
-// application layer (as itself and as the signal it carries) and adds
-// evidence pseudo-artefacts from a live side's annotations; the board counts
-// what the repository declares, each artefact once — but a cell is present
-// (lit, and observed by the engine's Comprehensive criterion) when it holds
-// anything at all, evidence included.
+// posture) just its count. The matrix lists a telemetry backend twice (in
+// its own cell, and on the application layer as the signal it carries,
+// marked `_propagated`) and adds evidence pseudo-artefacts from a live
+// side's annotations; the board counts what the repository declares, each
+// artefact once — but a cell is present (lit, and observed by the engine's
+// Comprehensive criterion) when it holds anything at all, evidence included.
 const cellOf = (cells, key) => {
   const v = cells?.[key];
   if (!Array.isArray(v)) { const n = Number(v) || 0; return { count: n, present: n > 0 }; }
   const ids = new Set();
   let anonymous = 0;
   for (const a of v) {
-    if (!a || a._evidence) continue;
+    if (!a || a._evidence || a._propagated) continue;
     if (a.id) ids.add(a.id); else anonymous += 1;
   }
   return { count: ids.size + anonymous, present: v.length > 0 };
@@ -592,18 +597,43 @@ export function compositionOf(layered) {
   return LAYER_DEFS.filter((d) => counts[d.id] > 0).map((d) => ({ name: d.name, count: counts[d.id] }));
 }
 
-// layersModel({ cells, layered }) → { rows, coveragePct, unplaced, composition, declared, lead, coverage, unplacedNote } | null
+// What an artefact with no kind of its own is, in the Unplaced note's words
+// (the families studio/diagnostic-grade.mjs MECHANISM_BY_ID_PREFIX marks
+// null, and a backend whose signal is none of metrics, logs, traces).
+const UNKINDED_WORDS = [
+  ['ALR-', ['alert route', 'alert routes']],
+  ['PIP-', ['pipeline part', 'pipeline parts']],
+  ['COL-', ['collection agent', 'collection agents']],
+  ['BAK-', ['backend for another signal', 'backends for other signals']],
+];
+const PLATFORM_WIDE = ['platform-wide setting', 'platform-wide settings'];
+function unkindedNote(unkinded) {
+  const groups = new Map();
+  for (const a of unkinded) {
+    const id = String(a?.id || '');
+    const words = (UNKINDED_WORDS.find(([p]) => id.startsWith(p)) || [null, PLATFORM_WIDE])[1];
+    groups.set(words, (groups.get(words) || 0) + 1);
+  }
+  return [...groups].sort((a, b) => b[1] - a[1]).map(([[one, many], n]) => `${n} ${n === 1 ? one : many}`).join(', ');
+}
+
+// layersModel({ cells, layered, unkinded }) → { rows, coveragePct, unplaced, placeless, unkinded, composition, declared, lead, coverage, unplacedNote } | null
 //   rows      one per BOARD_LAYERS entry: { key, name, hint, covered, of, pct, total, tone,
 //             kinds: [{ key, word, count, present, label }] (all ten, in drawing order;
 //             a kind present by live evidence alone has count 0 and reads "seen live") }
 //   coveragePct  the engine's Comprehensive figure: the four layers' covered
 //             shares summed in the matrix's layer order, then rounded once
-export function layersModel({ cells = null, layered = null } = {}) {
+//   unkinded  the matrix's artefacts with no kind of their own
+//             (computePostureMatrix(...).unkinded; a list, or a count)
+//   unplaced  everything declared that is on no plate: `placeless` (a kind,
+//             no layer it could be placed on) plus `unkinded` — so the plates
+//             and Unplaced add up to Declared, each artefact counted once
+export function layersModel({ cells = null, layered = null, unkinded = null } = {}) {
   if (!cells) return null;
   const rows = BOARD_LAYERS.map((L) => {
     const kinds = SIGNAL_KINDS.map((k) => {
       const { count, present } = cellOf(cells, `${L.key}:${k.key}`);
-      const label = count > 0 ? `${count} ${count === 1 ? k.one : k.word}` : (present ? `${k.word} seen live` : `no ${k.word}`);
+      const label = count > 0 ? `${count} ${count === 1 ? k.one : k.word}` : (present ? `${k.word} seen live` : k.none);
       return { key: k.key, word: k.word, count, present, label };
     });
     const covered = kinds.filter((k) => k.present).length;
@@ -615,14 +645,21 @@ export function layersModel({ cells = null, layered = null } = {}) {
   let shares = 0;
   for (const l of POSTURE_LAYERS) { const r = rows.find((x) => x.key === l.key); if (r) shares += r.covered / r.of; }
   const coveragePct = Math.round(shares / rows.length * 100);
-  const unplaced = SIGNAL_KINDS.reduce((n, k) => n + cellOf(cells, `unknown:${k.key}`).count, 0);
+  const placeless = SIGNAL_KINDS.reduce((n, k) => n + cellOf(cells, `unknown:${k.key}`).count, 0);
+  const kindless = Array.isArray(unkinded) ? unkinded.length : (Number(unkinded) || 0);
+  const unplaced = placeless + kindless;
   const composition = compositionOf(layered);
   const declared = composition.reduce((n, c) => n + c.count, 0);
+  const what = Array.isArray(unkinded) && unkinded.length ? ` (${unkindedNote(unkinded)})` : '';
+  const unplacedNote = !unplaced ? ''
+    : !kindless ? `${things(placeless)} could not be placed on a layer.`
+      : !placeless ? `${things(kindless)} ${kindless === 1 ? 'is' : 'are'} on no layer: no kind of signal of ${kindless === 1 ? 'its' : 'their'} own${what}.`
+        : `${things(unplaced)} are on no layer: ${placeless} could not be placed on one, and ${kindless} ${kindless === 1 ? 'is' : 'are'} no kind of signal of ${kindless === 1 ? 'its' : 'their'} own${what}.`;
   return {
-    rows, coveragePct, unplaced, composition, declared,
+    rows, coveragePct, unplaced, placeless, unkinded: kindless, composition, declared,
     lead: declared ? `${things(declared)} declared in the repository.` : '',
     coverage: `Coverage reaches ${coveragePct} in 100 across the four layers.`,
-    unplacedNote: unplaced ? `${things(unplaced)} could not be placed on a layer.` : '',
+    unplacedNote,
   };
 }
 
@@ -758,7 +795,7 @@ export function buildOverviewModel(input = {}) {
     services = null, servicesStatus = null, catalog = [], serviceId = null, env = null, isLiveAggregatePack = () => false,
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
-    layout = 'board', cells = null, layered = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
+    layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -806,7 +843,7 @@ export function buildOverviewModel(input = {}) {
   const graded = picked.how === 'primary' && !pending;
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
-    layers: graded ? layersModel({ cells, layered }) : null,
+    layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
     fidelity: graded ? fidelity : null,
     changes: graded ? changesModel({ fidelity }) : null,
