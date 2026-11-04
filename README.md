@@ -1307,8 +1307,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.6.0 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.6.0
+docker build -t observogram:0.6.2 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.6.2
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2603,6 +2603,13 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
    and `packc store restore` refuses a v2 backup on a v1 build, so take a
    `packc store backup` before the upgrade. `packc store export` writes no
    verdict or waiver (a pre-store build has nowhere to hold them).
+4. **Schema v3** (0.6.2): a store build from this version on migrates a v2
+   database to v3 at its first start — one column, `services.repository`
+   (where a service's declaration lives; `null` on every service it
+   finds); every row a v2 store held is kept. The door is one-way as
+   above: a v2 build (0.6.0) refuses a v3 database (`the database is at
+   schema v3, but this build knows up to v2`) and a v3 backup, so take a
+   `packc store backup` before the upgrade.
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
