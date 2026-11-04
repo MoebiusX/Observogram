@@ -420,6 +420,122 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   }
 }
 
+// ---------- every adapter family has a kind, or says it has none ----------
+// Before 2026-11-04 the classifier knew ten families: a declared metric, a
+// scrape job, an alert rule or a dashboard panel had no kind and was left
+// off the posture matrix without a word, so the Overview board's layers
+// counted 91 of a pack's 600 artefacts.
+{
+  const { MECHANISM_BY_ID_PREFIX, classifyArtefactMechanism, computePostureMatrix, layerItemsFor } = await import('../studio/diagnostic-grade.mjs');
+  const { ID_RULES } = await import('../tools/lib/artefact-classify.mjs');
+  // The engine is zero-import, so it keeps its own table: the same families as the adapter's.
+  const ours = MECHANISM_BY_ID_PREFIX.map(([p]) => p);
+  const theirs = ID_RULES.map(([p]) => p);
+  assert(JSON.stringify([...ours].sort()) === JSON.stringify([...theirs].sort()), 'MECHANISM_BY_ID_PREFIX names exactly the families of artefact-classify ID_RULES', { onlyOurs: ours.filter((p) => !theirs.includes(p)), onlyTheirs: theirs.filter((p) => !ours.includes(p)) });
+  for (let i = 0; i < ours.length; i++) for (let j = i + 1; j < ours.length; j++) {
+    assert(!ours[j].startsWith(ours[i]), `${ours[i]} comes after ${ours[j]}, which it contains — the longer prefix first`);
+  }
+  const kinds = new Set(POSTURE_MECHANISMS_PER_LAYER.map((m) => m.key));
+  for (const [p, mech] of MECHANISM_BY_ID_PREFIX) assert(mech === null || mech === 'by-signal' || mech === 'scrape' || kinds.has(mech), `${p} maps to a kind the matrix draws`, mech);
+  const cases = [
+    [{ id: 'SLI-01' }, 'sli'], [{ id: 'SLO-01' }, 'slo'],
+    [{ id: 'METRIC-SRC-01', title: 'http_requests_total' }, 'metric'], [{ id: 'METRIC-FAM-01' }, 'metric'], [{ id: 'METRIC-01' }, 'metric'],
+    [{ id: 'SCRAPE-SRC-01', title: 'node-exporter' }, 'metric'], [{ id: 'SCRAPE-01', title: 'scrape: promtail' }, 'log'],
+    [{ id: 'PIP-EXP-MET' }, 'metric'], [{ id: 'PIP-EXP-LOG' }, 'log'], [{ id: 'PIP-EXP-TRC' }, 'trace'], [{ id: 'PIP-RCV-01', title: 'receiver: otlp' }, null],
+    [{ id: 'STO-TRC-01' }, 'trace'], [{ id: 'QRY-01' }, 'metric'], [{ id: 'VIEW-01' }, 'metric'],
+    [{ id: 'DASH-01' }, 'dashboard'], [{ id: 'PANEL-01', title: 'rca_failure_ratio' }, 'dashboard'],
+    [{ id: 'POL-01' }, 'alert'], [{ id: 'FCST-01' }, 'alert'], [{ id: 'RULE-01', title: 'HighErrorRate' }, 'alert'], [{ id: 'ALR-01', title: 'SEV2 routes' }, null],
+    [{ id: 'HEAL-01' }, 'runbook'], [{ id: 'CHAOS-01' }, 'chaos'], [{ id: 'SYN-01' }, 'synthetic'],
+    [{ id: 'BAK-01', spec: { signal: 'metrics' } }, 'metric'], [{ id: 'BAK-02', signal: 'logs' }, 'log'], [{ id: 'BAK-03', spec: { signal: 'alerting' } }, null],
+    [{ id: 'OTEL-01' }, null], [{ id: 'BASE-01' }, null], [{ id: 'MESH-01' }, null], [{ id: 'IMP-01' }, null], [{ id: 'X-01' }, null], [{}, null], [null, null],
+  ];
+  for (const [art, want] of cases) {
+    const got = classifyArtefactMechanism(art);
+    assert(got === want, `classifyArtefactMechanism(${JSON.stringify(art)}) is ${want}`, got);
+  }
+  // The matrix places every artefact it walks exactly once — in one cell, or in `unkinded` — and a
+  // backend it repeats on the application layer as its signal is marked, so a count takes it once.
+  const pack = {
+    meta: { annotations: { 'mcp.discovered.scrape_jobs': 'node-exporter' } },
+    layers: {
+      L1: [{ id: 'SLI-01', title: 'kx_wallet_availability' }],
+      L2: [{ id: 'BAK-01', title: 'metrics-prometheus node-exporter', spec: { signal: 'metrics' } }, { id: 'BAK-02', title: 'alerting-alertmanager', spec: { signal: 'alerting' } }, { id: 'METRIC-01', title: 'node_cpu_seconds_total' }, { id: 'METRIC-02', title: 'widgets' }, { id: 'SCRAPE-01', title: 'scrape: promtail' }, { id: 'OTEL-01' }],
+      L3: [{ id: 'DASH-01', title: 'k8s cluster' }, { id: 'PANEL-01', title: 'pod_restarts' }],
+      L4: { alerting: [{ id: 'RULE-01', title: 'api_error_ratio_high' }, { id: 'RULE-02', title: 'HighErrorRate' }, { id: 'ALR-01', title: 'SEV2 routes' }] },
+      L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }],
+    },
+  };
+  const { cells, unkinded } = computePostureMatrix(pack, null);
+  const walked = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'].flatMap((L) => layerItemsFor(pack, L)).map((a) => a.id);
+  const counted = Object.values(cells).flat().filter((a) => !a._evidence && !a._propagated).map((a) => a.id);
+  const listed = unkinded.map((a) => a.id);
+  assert(JSON.stringify([...counted, ...listed].sort()) === JSON.stringify([...walked].sort()), 'every walked artefact is counted once: in a cell or in unkinded', { counted, listed, walked });
+  assert(JSON.stringify(listed.sort()) === JSON.stringify(['ALR-01', 'BAK-02', 'BASE-01', 'OTEL-01']), 'unkinded: the alert route, the alerting backend, baselines, the SDK', listed);
+  assert(cells['infra:metric'].some((a) => a.id === 'BAK-01' && !a._propagated) && cells['app:metric'].some((a) => a.id === 'BAK-01' && a._propagated), 'the backend in its own cell, and on app as its signal, marked');
+  assert(cells['app:alert']?.some((a) => a.id === 'RULE-01') && cells['unknown:alert']?.some((a) => a.id === 'RULE-02'), 'an alert rule is an alert: on the layer its name says (api_error_ratio_high: app), else unplaced (HighErrorRate)', cells);
+  assert(cells['infra:dashboard']?.some((a) => a.id === 'PANEL-01'), 'a panel is a dashboard view, on its own layer', cells);
+  assert(cells['unknown:metric']?.some((a) => a.id === 'METRIC-02'), 'a metric whose name says no layer is unplaced, not dropped', cells);
+}
+
+// ---------- the layer an artefact's name does not say ----------
+// Before 2026-11-04 an artefact whose own name carries no layer word was
+// unplaced: on the demo pack 215 of 600, panels titled rca_failure_ratio,
+// alert rules named HighErrorRate, metrics named ALERTS. Each step only
+// fills what the steps before left, so nothing placed by name moves.
+{
+  const { resolveArtefactLayers, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const pack = {
+    meta: { annotations: { 'layer.PANEL-E': 'ux' } },
+    layers: {
+      L1: [{ id: 'SLO-01', title: 'kx_wallet_availability', defines: 'slos.wallet' }],
+      L2: [
+        { id: 'METRIC-SRC-01', title: 'widgets_total', spec: { name: 'widgets_total', used_by: ['dashboard:d1/widgets'] } },
+        { id: 'METRIC-01', title: 'gizmos_total', spec: { name: 'gizmos_total' } },
+        { id: 'METRIC-02', title: 'thingies_total', spec: { name: 'thingies_total' } },
+        { id: 'SCRAPE-SRC-01', title: 'gizmo-svc', spec: { job: 'gizmo-svc', exports: ['gizmos_total'] } },
+        { id: 'SCRAPE-01', title: 'scrape: gizmo-svc', spec: { job: 'gizmo-svc' } },
+      ],
+      L3: [
+        { id: 'DASH-01', title: 'k8s cluster', defines: 'dashboards.d1' },
+        { id: 'PANEL-A', title: 'rca', parent: 'dashboards.d1' },
+        { id: 'PANEL-B', title: 'traffic', parent: 'dashboards.d1', spec: { expr: 'sum(rate(http_requests_total{pod_name="x", job="node-exporter"}[5m])) by (pod_name, container_id)' } },
+        { id: 'PANEL-C', title: 'node_load', parent: 'dashboards.d2' },
+        { id: 'PANEL-D', title: 'mixed', parent: 'dashboards.d1', spec: { expr: 'node_cpu_seconds_total + http_requests_total' } },
+        { id: 'PANEL-E', title: 'pod_restarts', parent: 'dashboards.d1' },
+        { id: 'PANEL-F', title: 'orphan' },
+      ],
+      L4: {
+        policy: [{ id: 'POL-01', title: 'burn-rate alert: wallet', refs: ['slos.wallet'] }],
+        alerting: [
+          { id: 'RULE-01', title: 'GizmoStorm', spec: { expr: 'rate(gizmos_total[5m]) > 1 and on(instance) http_requests_total > 0' } },
+          { id: 'RULE-02', title: 'ThingiesApp', spec: { expr: 'http_requests_total > 0 unless thingies_total' } },
+          { id: 'RULE-03', title: 'ThingiesNode', spec: { expr: 'node_cpu_seconds_total > 0 unless thingies_total' } },
+        ],
+      },
+    },
+  };
+  const r = resolveArtefactLayers(pack);
+  const got = (id) => { const v = r.get(id); return v ? `${v.layer}/${v.how}` : 'missing'; };
+  for (const [id, want, why] of [
+    ['DASH-01', 'infra/name', 'placed by its own name, as before'],
+    ['PANEL-C', 'infra/name', 'its own name wins over anything inherited'],
+    ['PANEL-E', 'ux/name', 'the annotation override wins over its name and its dashboard'],
+    ['PANEL-B', 'app/query', 'its own query (label matchers, strings and by-labels dropped) before its dashboard'],
+    ['PANEL-D', 'infra/parent', 'a query that names two layers once each is a tie: its dashboard decides'],
+    ['PANEL-A', 'infra/parent', 'a panel takes its dashboard’s layer'],
+    ['POL-01', 'app/parent', 'a burn-rate alert takes its objective’s layer'],
+    ['METRIC-SRC-01', 'infra/parent', 'a declared metric takes its dashboards’ layer (spec.used_by)'],
+    ['RULE-01', 'app/query', 'an alert rule by the metrics it reads'],
+    ['METRIC-01', 'app/readers', 'a metric takes the layer of what reads it'],
+    ['METRIC-02', 'null/null', 'read on two layers once each: a tie, unplaced'],
+    ['SCRAPE-SRC-01', 'app/exports', 'a scrape job by the metrics it exports'],
+    ['SCRAPE-01', 'app/exports', 'a live job by the declared job of its name'],
+    ['PANEL-F', 'null/null', 'nothing to go by: unplaced'],
+  ]) assert(got(id) === want, `${id}: ${why}`, { got: got(id), want });
+  const { cells } = computePostureMatrix(pack, null);
+  assert(cells['infra:dashboard']?.some((a) => a.id === 'PANEL-A') && cells['app:alert']?.some((a) => a.id === 'POL-01') && cells['unknown:metric']?.some((a) => a.id === 'METRIC-02'), 'the matrix places by the resolved layer', cells);
+}
+
 // ---------- the vendoring seam (docs/VENDORING.md) ----------
 // Downstream studios vendor these files verbatim; an import creeping in
 // breaks their build, not ours — so CI holds the line here.

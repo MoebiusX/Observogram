@@ -1930,7 +1930,7 @@ function overviewModel() {
     diagnostic, diagnosticError, decision,
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
     running: f.running, startError: f.startError,
-    layout: overviewLayout, cells: posture?.cells || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
+    layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
   });
 }
