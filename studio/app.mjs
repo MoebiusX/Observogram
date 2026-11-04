@@ -115,7 +115,7 @@ import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted } from './overview-model.mjs';
 import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
-import { renderOverview, COMPACT_SCREEN_QUERY } from './overview-view.mjs';
+import { renderOverview } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -1882,12 +1882,6 @@ function paintUiModeSwitch() {
 }
 
 function setupUiModeSwitch() {
-  // The board reads the screen's height once per paint (the seven criteria
-  // open or behind Why this grade): a window dragged to the other monitor
-  // is repainted when the query flips.
-  try {
-    window.matchMedia?.(COMPACT_SCREEN_QUERY)?.addEventListener?.('change', () => { if (state.mode === 'overview') renderMainView(); });
-  } catch (_) { /* no matchMedia: the first reading stands */ }
   const seg = document.querySelector('.observa-ui-mode');
   if (!seg) return;
   seg.querySelectorAll('[data-ui-mode]').forEach((b) => {

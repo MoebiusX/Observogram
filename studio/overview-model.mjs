@@ -242,12 +242,18 @@ function repositoryGradeLines(diagnostic) {
 // letter on screen: Drift-free is the integrity of the declared commitment
 // chains (the run's traceability), Fresh the age of the live picture when
 // the run read it. Null when the run scored drift on another construct.
+// The age is the run's `freshness.liveAgeHours`, null when Pack B carries no
+// `mcp.refreshedAt` (a pack file, a recording): the engine scores that Fresh
+// = no, so an age that is not a number is never fresh — Number(null) is 0,
+// "zero hours old", and would count a point the engine never gave.
 function liveGradeLines(run, { against, where, now }) {
   if (run?.grade?.driftConstruct !== 'requirement-chain' || !(Number(run.traceability?.declaredTotal) > 0)) return null;
   const pct = Number(run.traceability.integrityPct);
   if (!Number.isFinite(pct)) return null;
-  const ageHours = Number(run.freshness?.liveAgeHours);
-  const fresh = Number.isFinite(ageHours) ? ageHours * 3600e3 <= FRESH_WINDOW_MS : true;
+  const ageHours = run.freshness?.liveAgeHours;
+  const dated = typeof ageHours === 'number' && Number.isFinite(ageHours);
+  const fresh = dated && ageHours * 3600e3 <= FRESH_WINDOW_MS;
+  const picture = where === 'live' ? 'live picture' : 'recording';
   // The engine scores this criterion by the integrity itself (0.85 of a
   // point at 85 in 100) and calls it met at the bar: the mark follows the
   // bar, the points follow the integrity, above the bar too.
@@ -255,7 +261,9 @@ function liveGradeLines(run, { against, where, now }) {
     { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
       text: `Of what the repository promises, ${Math.round(pct)} in 100 holds up ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
-      text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.` : `The ${where === 'live' ? 'live picture' : 'recording'} was more than a day old when it was checked.` },
+      text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
+        : dated ? `The ${picture} was more than a day old when it was checked.`
+          : `The ${picture} does not say when it was taken, so it does not count as recent.` },
   ];
 }
 

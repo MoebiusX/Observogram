@@ -300,6 +300,15 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
   assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
+  // A Pack B with no refresh time (a pack file): the run records the age as null and the engine scores Fresh = no.
+  // Number(null) is 0 — "zero hours old" — which counted a point the engine never gave, so the list no longer added
+  // up to the letter and the sanity guard hid it. Null, and no freshness at all, are undated: Fresh says no, the list shows.
+  const undatedRun = { ...run, packB: { ...run.packB, source: 'file:pack-b.pack.yaml', refreshedAt: null }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } };
+  for (const [what, freshness] of [['null age', { liveAgeHours: null, refreshedAt: null }], ['no freshness', undefined]]) {
+    const undated = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...undatedRun, freshness }, journey: fileJourney, now: NOW }));
+    assert.equal(undated.why.length, 7, `${what}: the list is offered`);
+    assert.deepEqual([undated.letter, rows(undated.why).at(-1), undated.points], ['C', ['no', 'The recording does not say when it was taken, so it does not count as recent.'], '3.8 of 7 points. B starts at 4.4.'], what);
+  }
   // Nothing when it would not add up: another grade schema, a score the lines do not reach, drift scored on another construct, a diagnostic without the criteria.
   for (const [what, over] of [['schema', { grade: { ...run.grade, schema: 1 } }], ['score', { grade: { ...run.grade, score: 30, letter: 'D', letterLabel: 'Consumer Grade' } }], ['construct', { grade: { ...run.grade, driftConstruct: 'diff-buckets' } }]]) {
     const m = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, ...over }, journey, now: NOW }));
@@ -965,7 +974,9 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<div class="ov-shield ov-tone-warn" title="B · Industrial Grade — Suitable for production, maintenance, process control, and routine professional use." aria-label="Grade B"><span class="ov-shield__letter">B</span></div>'));
   assert.ok(html.includes('<div class="ov-grade__label">Industrial grade</div>') && html.includes('<div class="ov-grade__word">Almost diagnostic-grade</div>'));
   assert.ok(html.includes('<div class="ov-rules ov-rules--warn" title="12 of 15 required rules met for a tier 2 service."><div class="ov-rules__n"><b>12</b><span class="ov-rules__of">/ 15</span></div><div class="ov-rules__bar" role="img" aria-label="12 of 15 required rules met"><span style="width:80%"></span></div><span class="ov-rules__text">required rules met · tier 2</span></div>'));
-  assert.ok(html.includes('<div class="ov-grade__why ov-grade__why--open"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'headless: the seven rows open, no disclosure');
+  // The seven rows are behind Why this grade, closed, whatever room the screen has: the reader opens them.
+  assert.ok(html.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'the seven rows behind a closed disclosure');
+  assert.ok(!html.includes('<details class="ux-disclosure ov-grade__why" open>') && !html.includes('ov-grade__why--open'), 'never opened for the reader');
   assert.equal(countOf(html, '<li class="ov-gw '), 7);
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
   for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
