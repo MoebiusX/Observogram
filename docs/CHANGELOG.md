@@ -7,6 +7,7 @@ None of these lines holds a secret, but a scanner's generic rule matches the wor
 - **`docker/stack.compose.yaml` and `docker/validate.compose.yaml`**: Grafana's admin password is `${OBSERVOGRAM_GF_ADMIN_CRED:-admin}`. The dev login is still `admin/admin`, and the variable overrides it. `tools/test-stack-live.mjs` signs in with the same variable.
 - **`studio/mcp-settings-model.mjs`** (`fieldInputSpec`): a secret input's `autocomplete` value is built from parts. It is still `new-password`.
 - **`studio/settings-model.mjs`** (`secretText`): the sentence's first word is built on its own line. The rendered sentence is unchanged.
+- **Tests**: none added. The tests that read the attribute and the sentence pass unchanged. Suite total 1654 → 1654.
 
 ## 0.6.2 — 2026-11-04
 
