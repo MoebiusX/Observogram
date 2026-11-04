@@ -4,8 +4,9 @@
 // studio/overview-model.mjs buildOverviewModel(...) — pure, already worded —
 // and the actions ride on host.overview: selectService(id), selectEnv(name),
 // checkNow(), openDiscover(), openDiagnose(), openRemediate(), openNeuron(),
-// expert(), retry(), and with no service yet scan(), live(), upload(slot),
-// resetStart(), explain(reason). A headless host ({ overview: {} }) never throws. The
+// expert(), retry(), backToList() (a host with the service list), and with no
+// service yet scan(), live(), upload(slot), resetStart(), explain(reason). The
+// service list (renderServiceList, at the end) has its own. A headless host ({ overview: {} }) never throws. The
 // pieces are the design kit's (.og-*); the zone is .ov-* (studio/ux.css).
 // Exactly one primary button per state.
 //
@@ -31,8 +32,10 @@ function headHtml(model) {
       <div class="og-seg ov-envs" role="group" aria-label="Environment">
         ${model.envs.map((e) => `<button type="button" class="og-btn ov-env" data-ux-action="ov-env" data-env="${escapeHtml(e.name)}" aria-pressed="${e.selected ? 'true' : 'false'}">${escapeHtml(e.name)}</button>`).join('')}
       </div>` : (model.env ? `<span class="og-pill ov-env-one">${escapeHtml(model.env)}</span>` : '');
+  const back = model.back ? '<button type="button" class="og-btn og-btn--text ov-link ov-head__back" data-ux-action="ov-back"><span class="ov-link__arrow" aria-hidden="true">←</span> Services</button>' : '';
   return `
     <div class="ov-head">
+      ${back}
       <label class="og-eyebrow ov-head__label" for="ov-service">Service</label>
       <select class="og-input ov-service" id="ov-service" aria-label="Service">${options}</select>
       ${envs}
@@ -544,6 +547,7 @@ export function renderOverview(container, model, host = appHost) {
     'ov-upload-b': () => ov.upload?.('b'),
     'ov-start-reset': () => ov.resetStart?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
+    'ov-back': () => ov.backToList?.(),
   });
   const select = container.querySelector('#ov-service');
   if (select) select.addEventListener('change', () => ov.selectService?.(Number(select.value)));
@@ -551,4 +555,205 @@ export function renderOverview(container, model, host = appHost) {
   if (repo) repo.addEventListener('toggle', () => { layersOpen = repo.open; });
   const why = container.querySelector('.ov-board .ov-grade__why');
   if (why) why.addEventListener('toggle', () => { whyOpen = why.open; });
+}
+
+// ---------- the service list: Overview's front door ----------
+//
+// renderServiceList(container, list, form, host): `list` is overview-model.mjs
+// serviceListModel(...), `form` its formModel(...). The actions ride on
+// host.overview: addService(), editService(serviceId, env), runService(key),
+// openService(serviceId, env), formInput(field, value), saveService({ run }),
+// closeForm(), showAll(), compare(). One primary button: Add a service, or —
+// with the form open — Save and run.
+
+const SVC_ICONS = {
+  github: 'M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21',
+  ado: 'M4 7 14 3l6 3v12l-6 3-10-4 10 1V6L7 9v7l-3-1Z',
+  path: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
+  live: 'M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v8M2 12h0M22 12h0',
+};
+const svcIcon = (name) => `<svg class="ov-ic ov-svc__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${SVC_ICONS[name] || ''}"></path></svg>`;
+const attr = (v) => escapeHtml(String(v ?? ''));
+
+function svcRepoCell(r) {
+  if (!r.repository) {
+    return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Add the repository</button>`;
+  }
+  const p = r.repository;
+  return `<span class="ov-svc__place" title="${attr(p.title)}">${svcIcon(p.kind)}<span class="ov-svc__place-text"><span class="ov-svc__kind">${escapeHtml(p.kindText)}</span><span class="ov-svc__loc">${escapeHtml(p.text)}</span>${p.detail ? `<span class="ov-svc__ref">${escapeHtml(p.detail)}</span>` : ''}</span></span>`;
+}
+
+function svcLiveCell(r) {
+  if (!r.env) return '<span class="og-muted">—</span>';
+  if (!r.live) {
+    return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
+  }
+  return `<span class="ov-svc__place" title="${attr(r.live.origin)}">${svcIcon('live')}<span class="ov-svc__place-text"><span class="ov-svc__kind">MCP</span><span class="ov-svc__loc">${escapeHtml(r.live.name)}</span>${r.live.origin ? `<span class="ov-svc__ref">${escapeHtml(r.live.origin.replace(/^https?:\/\//, ''))}</span>` : ''}</span></span>`;
+}
+
+function svcLastCell(r) {
+  const l = r.last;
+  if (r.run.running) {
+    return '<span class="ov-svc__last-text" role="status"><b>Running…</b><small>Scanning the repository, then checking live</small></span>';
+  }
+  const letter = l.letter ? `<span class="ov-svc__letter ov-tone-${attr(l.tone)}" aria-label="Grade ${attr(l.letter)}"${l.gradeLabel ? ` title="${attr(l.gradeLabel)}"` : ''}>${escapeHtml(l.letter)}</span>` : '<span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">–</span>';
+  const sub = l.state === 'checked' && l.alignmentPct !== null ? `${Math.round(l.alignmentPct)}% matches live`
+    : l.state === 'unreachable' ? (l.ago ? `${l.ago}: the live side did not answer` : 'the live side did not answer')
+      : l.state === 'never' ? 'Run it to check' : '';
+  return `${letter}<span class="ov-svc__last-text"><b>${escapeHtml(l.word)}</b>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>`;
+}
+
+function svcRowHtml(r) {
+  const runBtn = r.run.enabled || r.run.running
+    ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''}>${r.run.running ? 'Running…' : 'Run'}</button>`
+    : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}">Run</button>`;
+  const openBtn = r.open.enabled && r.env
+    ? `<button type="button" class="og-btn og-btn--text ov-link ov-svc__open" data-ux-action="ov-svc-open" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Open <span class="ov-link__arrow" aria-hidden="true">→</span></button>` : '';
+  const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change where ${attr(r.name)}${r.env ? ` · ${attr(r.env)}` : ''} is">Change</button>`;
+  return `
+      <li class="ov-svc${r.complete ? '' : ' ov-svc--incomplete'}">
+        <div class="ov-svc__who">
+          <span class="ov-svc__name">${escapeHtml(r.name)}</span>
+          ${r.env ? `<span class="og-pill ov-svc__env">${escapeHtml(r.env)}</span>` : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="">Add an environment</button>`}
+        </div>
+        <div class="ov-svc__cell" data-col="Repository">${svcRepoCell(r)}</div>
+        <div class="ov-svc__cell" data-col="Live">${svcLiveCell(r)}</div>
+        <div class="ov-svc__cell ov-svc__last" data-col="Last check">${svcLastCell(r)}</div>
+        <div class="ov-svc__acts">${runBtn}${openBtn}${editBtn}</div>${r.error ? `
+        <p class="ov-svc__error" role="alert">${escapeHtml(r.error)}</p>` : ''}
+      </li>`;
+}
+
+const fieldErr = (f, key, shown) => (shown && f.problems[key] ? `<span class="ov-form__err">${escapeHtml(f.problems[key])}</span>` : '');
+
+function svcFormHtml(f) {
+  const v = f.values;
+  const shown = !!f.error;   // the field notes appear once a save was tried
+  const kinds = f.kinds.map((k) => `<button type="button" class="og-btn ov-form__kind" data-ux-action="ov-form-kind" data-kind="${attr(k.kind)}" aria-pressed="${k.selected ? 'true' : 'false'}">${svcIcon(k.kind)}${escapeHtml(k.label)}</button>`).join('');
+  const eps = f.endpoints.map((e) => `<option value="${attr(e.id)}"${e.selected ? ' selected' : ''}>${escapeHtml(e.name)}${e.origin ? ` — ${escapeHtml(e.origin.replace(/^https?:\/\//, ''))}` : ''}</option>`).join('');
+  const newOpt = `<option value="new"${f.newEndpoint.selected ? ' selected' : ''}${f.newEndpoint.allowed ? '' : ' disabled'}>A new MCP endpoint…${f.newEndpoint.allowed ? '' : ' (not here)'}</option>`;
+  const newFields = f.newEndpoint.selected ? `
+          <div class="ov-form__sub">
+            <label class="ov-form__f"><span class="ov-form__l">Endpoint URL</span><input class="og-input" data-field="epUrl" value="${attr(v.epUrl)}" placeholder="https://mcp.example.com/mcp" autocomplete="off" spellcheck="false">${fieldErr(f, 'epUrl', shown)}</label>
+            <label class="ov-form__f"><span class="ov-form__l">Its name</span><input class="og-input" data-field="epName" value="${attr(v.epName)}" placeholder="prod-mcp" autocomplete="off">${fieldErr(f, 'epName', shown)}</label>
+            <label class="ov-form__f"><span class="ov-form__l">Token variable <em>optional</em></span><input class="og-input" data-field="epToken" value="${attr(v.epToken)}" placeholder="the server's variable holding its token" autocomplete="off" spellcheck="false"></label>
+          </div>` : '';
+  const off = !f.canWrite;
+  return `
+    <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
+      <header class="ov-form__head">
+        <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
+        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared or where it runs. Each Run reads both again.' : 'Four answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
+      </header>
+      <ol class="ov-form__steps">
+        <li class="ov-form__step">
+          <span class="ov-form__n">1</span>
+          <label class="ov-form__f"><span class="ov-form__l">Service</span><input class="og-input" data-field="name" value="${attr(v.name)}" placeholder="checkout" autocomplete="off"${f.nameFixed ? ' readonly' : ''}>${fieldErr(f, 'name', shown)}</label>
+        </li>
+        <li class="ov-form__step">
+          <span class="ov-form__n">2</span>
+          <label class="ov-form__f"><span class="ov-form__l">Environment</span><input class="og-input" data-field="env" value="${attr(v.env)}" placeholder="prod" autocomplete="off"${f.envFixed ? ' readonly' : ''}>${fieldErr(f, 'env', shown)}</label>
+        </li>
+        <li class="ov-form__step">
+          <span class="ov-form__n">3</span>
+          <div class="ov-form__f">
+            <span class="ov-form__l">Repository — where it is declared</span>
+            <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>
+            <div class="ov-form__pair">
+              <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
+              ${f.kind.kind === 'path' ? '' : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
+            </div>
+            <span class="ov-form__hint og-muted">${escapeHtml(f.kind.hint)}</span>${fieldErr(f, 'location', shown)}
+          </div>
+        </li>
+        <li class="ov-form__step">
+          <span class="ov-form__n">4</span>
+          <div class="ov-form__f">
+            <span class="ov-form__l">Live — where it runs</span>
+            <select class="og-input" data-field="endpointId" aria-label="The MCP endpoint that reads it live">
+              ${f.endpoints.length ? '' : '<option value="" disabled>No MCP endpoint is registered yet</option>'}${f.endpoints.length && !v.endpointId ? '<option value="" selected disabled>Choose an MCP endpoint</option>' : ''}${eps}${newOpt}
+            </select>${f.newEndpoint.allowed ? '' : `
+            <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}
+          </div>
+        </li>
+      </ol>${f.error ? `
+      <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
+      <div class="ov-form__acts">
+        <button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-run"${f.saving || off ? ' disabled' : ''}${off ? ` title="${attr(f.reason)}"` : ''}>${f.saving ? 'Saving…' : 'Save and run'}</button>
+        <button type="button" class="og-btn" data-ux-action="ov-form-save"${f.saving || off ? ' disabled' : ''}>Save</button>
+        <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
+      </div>
+    </form>`;
+}
+
+export function serviceListHtml(list, form, ov = {}) {
+  const f = form?.open ? form : null;
+  const add = f ? '' : (list.canWrite
+    ? '<button type="button" class="og-btn og-btn--primary ov-svcs__add" data-ux-action="ov-svc-add">Add a service</button>'
+    : `<button type="button" class="og-btn og-btn--primary ov-svcs__add" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(list.reason)}" title="${attr(list.reason)}">Add a service</button>`);
+  let body;
+  if (list.kind === 'loading') body = '<p class="ov-loading og-muted" role="status">Reading the services…</p>';
+  else if (list.kind === 'error') {
+    body = emptyStateHtml({ title: 'The services could not be read.', checked: list.error || '', actions: [{ action: 'ov-retry', label: 'Retry' }], tone: 'warn' });
+  } else if (list.empty) {
+    body = f ? '' : `
+      <div class="ov-svcs__empty og-panel">
+        <p class="ov-col__lead">No service yet.</p>
+        <p class="ov-col__note og-muted">A service is checked in two places: its repository, where what it should have is declared, and its live MCP endpoint, where what it has is read. Add one to start.</p>
+      </div>`;
+  } else {
+    body = `
+      <div class="ov-svcs__table">
+        <div class="ov-svcs__cols" aria-hidden="true"><span>Service</span><span>Repository</span><span>Live</span><span>Last check</span><span></span></div>
+        <ul class="ov-svcs__rows" aria-label="Services">${list.rows.map(svcRowHtml).join('')}
+        </ul>
+      </div>`;
+  }
+  const more = list.hidden ? `
+      <p class="ov-svcs__more og-muted">${list.hidden} more ${list.hidden === 1 ? 'service was' : 'services were'} seen live with no repository yet. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-all">Show ${list.hidden === 1 ? 'it' : 'them'}</button></p>` : '';
+  const compare = typeof ov.compare === 'function' ? `
+      <p class="ov-svcs__foot og-muted">Already have the packs? <button type="button" class="ov-start__expert" data-ux-action="ov-svc-compare">Upload one or compare two instead</button></p>` : '';
+  return `
+    <section class="ov-svcs" aria-labelledby="ov-svcs-h">
+      <header class="ov-svcs__head">
+        <div class="ov-svcs__titles">
+          <h1 class="ov-svcs__h" id="ov-svcs-h">Services</h1>
+          <p class="ov-svcs__lede og-muted">Each one is checked where it is declared — its repository — against where it runs, read through its live MCP endpoint.</p>
+        </div>
+        ${add}
+      </header>${f ? svcFormHtml(f) : ''}${body}${more}${compare}
+    </section>`;
+}
+
+// Draws the list into `container` and wires it to host.overview.
+export function renderServiceList(container, list, form, host = appHost) {
+  const ov = host?.overview || {};
+  container.innerHTML = `<div class="ov-page ov-page--list">${serviceListHtml(list, form, ov)}</div>`;
+  const svcEnv = (el) => (el.dataset.env ? el.dataset.env : null);
+  wireUxActions(container, {
+    'ov-svc-add': () => ov.addService?.(),
+    'ov-svc-edit': (ev, el) => ov.editService?.(Number(el.dataset.service), svcEnv(el)),
+    'ov-svc-run': (ev, el) => ov.runService?.(el.dataset.key),
+    'ov-svc-open': (ev, el) => ov.openService?.(Number(el.dataset.service), svcEnv(el)),
+    'ov-svc-all': () => ov.showAll?.(),
+    'ov-svc-compare': () => ov.compare?.(),
+    'ov-form-kind': (ev, el) => ov.formInput?.('kind', el.dataset.kind, { redraw: true }),
+    'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.({ run: true }); },
+    'ov-form-save': () => ov.saveService?.({ run: false }),
+    'ov-form-close': () => ov.closeForm?.(),
+    'ov-retry': () => ov.retry?.(),
+    'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
+  });
+  const formEl = container.querySelector('.ov-form');
+  if (formEl) {
+    formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.({ run: true }); });
+    formEl.querySelectorAll('[data-field]').forEach((input) => {
+      // The select re-draws the form (the new-endpoint fields); typing keeps the host's copy in step.
+      const event = input.tagName === 'SELECT' ? 'change' : 'input';
+      input.addEventListener(event, () => ov.formInput?.(input.dataset.field, input.value, { redraw: input.tagName === 'SELECT' }));
+    });
+    // The field the host asks for (the form just opened, the kind or the endpoint just changed).
+    const want = form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
+    if (want) { want.focus({ preventScroll: true }); if (want.value && typeof want.select === 'function') want.select(); }
+  }
 }

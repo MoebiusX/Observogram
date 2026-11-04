@@ -53,7 +53,7 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord } from './services-api.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
   pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
@@ -113,9 +113,10 @@ import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
-import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted } from './overview-model.mjs';
-import { loadOverviewFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
-import { renderOverview } from './overview-view.mjs';
+import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
+  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
+import { loadOverviewFacts, loadServiceListFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+import { renderOverview, renderServiceList } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -1611,7 +1612,7 @@ function installObservaChrome(chrome) {
       const action = item.dataset.action;
       if (action === 'about') { openAboutModal(); return; }
       if (action === 'settings') { enterSettings(null); return; }
-      if (action === 'overview') { setUiMode('overview'); enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv); return; }
+      if (action === 'overview') { setUiMode('overview'); enterOverviewFront(); return; }
       // Admin tools proxy to the header's original controls. Deferred, so
       // this click's own document-level outside-click handlers (the MCP
       // panel closes on any click outside it) run before the panel opens.
@@ -1812,9 +1813,13 @@ async function boot() {
   // boot-time mutations don't fire `schedule()` writes.
   // In Overview the snapshot's Expert fields are left as they are for the
   // next Expert session; only the service Overview showed is read back.
+  // Overview opens on its front door, the service list (a server without
+  // the services table — the static bundle — keeps the board).
   const saved = state.uiMode === 'overview' ? persistence.read() : null;
   const restored = state.uiMode === 'overview'
-    ? await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true })
+    ? (serviceListAvailable()
+      ? enterOverviewList()
+      : await enterOverview(Number.isInteger(saved?.overviewServiceId) ? saved.overviewServiceId : null, typeof saved?.overviewEnv === 'string' ? saved.overviewEnv : null, { rehydrate: true }))
     : await rehydrateFromPersistence();
   persistence.resume();
   if (!restored) goHome();
@@ -1888,7 +1893,7 @@ function setupUiModeSwitch() {
     b.addEventListener('click', () => {
       if (b.dataset.uiMode === 'overview') {
         setUiMode('overview');
-        enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+        enterOverviewFront();
       } else if (state.mode === 'overview') {
         enterExpert();
       } else {
@@ -1932,11 +1937,181 @@ function overviewModel() {
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
+    listable: serviceListAvailable(),
   });
 }
 
 function renderOverviewHost(view) {
+  if (overviewScreen === 'list' && serviceListAvailable()) {
+    renderServiceList(view, serviceListModelNow(), serviceFormModelNow(), overviewHost);
+    // The focus hint is for the draw that follows the event, never a later repaint.
+    if (listForm.open && listForm.focus) listForm = { ...listForm, focus: null };
+    return;
+  }
   renderOverview(view, overviewModel(), overviewHost);
+}
+
+// ---------- the service list: Overview's front door ----------
+//
+// overview-model.mjs serviceListModel / formModel word it; this controller
+// keeps its state — which screen Overview shows, the list's facts (the
+// journeys listing for each row's last check, the org's MCP endpoints for
+// the form), the form, the rows whose Run is under way — and carries out
+// the form's save plan (savePlan) and a row's Run (POST /api/services/:id/run).
+let overviewScreen = 'list';
+let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, loaded: false };
+let listForm = FORM_CLOSED;
+let listRunning = {};
+let listResults = {};
+let listShowAll = false;
+let listGeneration = 0;
+
+// The list needs the services table: the static bundle has none.
+function serviceListAvailable() {
+  return state.servicesStatus?.kind === 'ok' && Array.isArray(state.services);
+}
+
+function serviceListModelNow() {
+  return serviceListModel({
+    services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog, isLiveAggregatePack,
+    journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
+    access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll,
+  });
+}
+
+function serviceFormModelNow() {
+  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access });
+}
+
+async function refreshListFacts() {
+  const gen = ++listGeneration;
+  const facts = await loadServiceListFacts();
+  if (gen !== listGeneration) return;
+  listFacts = { ...facts, loaded: true };
+  if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+}
+
+// Overview's front door: the list where the services table exists, else the
+// board as before.
+function enterOverviewFront() {
+  if (serviceListAvailable()) { enterOverviewList(); return; }
+  enterOverview(state.serviceId ?? state.overviewServiceId, state.serviceEnv ?? state.overviewEnv);
+}
+
+// → true (the list is on screen).
+function enterOverviewList() {
+  navGeneration++;
+  state.mode = 'overview';
+  overviewScreen = 'list';
+  state.pack = null;
+  emptyVerdicts();
+  state.packB = null;
+  state.diff = null;
+  state.selectedPackId = null;
+  state.selectedEnv = null;
+  state.conformance = null;
+  state.symbolTable = null;
+  state.compileCatalog = null;
+  state.compileContent = null;
+  closeSettingsEditor({ focus: false });
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  refreshListFacts().catch((e) => { console.error('[overview list]', e); });
+  persistence.schedule();
+  return true;
+}
+
+const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) || null;
+
+function openListForm(serviceId = null, env = null) {
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [] });
+  const focus = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
+  listForm = { ...opened, focus };
+  renderMainView();
+}
+
+function listFormInput(field, value, { redraw = false } = {}) {
+  listForm = serviceFormInput(listForm, field, value);
+  if (field === 'kind') listForm = { ...listForm, focus: 'location' };
+  if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
+  if (redraw) renderMainView();
+}
+
+// The save plan, call by call. A step that succeeded is written back into
+// the form (the new endpoint's id), so a retry after a refusal further on
+// does not register it twice; the server's sentence is the form's error.
+async function saveListForm({ run = false } = {}) {
+  if (!listForm.open || listForm.saving) return;
+  const problems = formProblems(listForm.values);
+  if (Object.keys(problems).length) {
+    listForm = { ...listForm, error: 'Some answers are missing — each is marked where it goes.', focus: Object.keys(problems)[0] };
+    renderMainView();
+    return;
+  }
+  listForm = { ...listForm, saving: true, error: null };
+  renderMainView();
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId });
+  let serviceId = plan.service.id ?? null;
+  try {
+    let endpointId = plan.endpoint.id;
+    if (plan.endpoint.create) {
+      const ep = await createEndpoint(plan.endpoint.create);
+      endpointId = ep.id;
+      listForm = { ...listForm, values: { ...listForm.values, endpointId: String(ep.id) } };
+    }
+    if (plan.service.create) serviceId = (await createServiceRecord(plan.service.create)).id;
+    else if (plan.service.patch) await patchService(serviceId, plan.service.patch);
+    if (plan.env.create) await createEnvironment(serviceId, { name: plan.envName, mcpEndpointId: endpointId });
+    else if (plan.env.bind) await patchEnvironment(plan.env.id, { mcpEndpointId: endpointId });
+  } catch (e) {
+    // What did land (a new endpoint, the record) is read back, so a retry finds it.
+    await refreshServices();
+    await refreshListFacts();
+    listForm = { ...listForm, saving: false, serviceId: serviceId ?? listForm.serviceId, error: e?.message || String(e) };
+    renderMainView();
+    return;
+  }
+  await refreshServices();
+  listForm = FORM_CLOSED;
+  await refreshListFacts();
+  announce(`${plan.name} · ${plan.envName} saved.`);
+  if (run) await runListRow(rowKey(serviceId, plan.envName));
+  else renderMainView();
+}
+
+// A row's Run: the repository scanned again and checked against live
+// (POST /api/services/:id/run), then the list read again — the new pack, the
+// new last check. A 502 has kept a record when the live side was lost; the
+// re-read shows it, and the row says what happened.
+async function runListRow(key) {
+  const row = listRow(key);
+  if (!row || listRunning[key]) return;
+  if (!row.run.enabled) { explainUnavailable(row.run.reason); return; }
+  listRunning = { ...listRunning, [key]: true };
+  listResults = { ...listResults, [key]: null };
+  renderMainView();
+  announce(`Running ${row.name} · ${row.env}: scanning the repository, then checking live…`);
+  let error = null;
+  let out = null;
+  try { out = await runServiceRecord(row.serviceId, row.env); }
+  catch (e) { error = e?.message || String(e); }
+  listRunning = { ...listRunning };
+  delete listRunning[key];
+  if (error) listResults = { ...listResults, [key]: { error } };
+  await refreshCatalogue();
+  await refreshListFacts();
+  if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+  if (error) { announce(`${row.name} · ${row.env}: the run did not finish.`); return; }
+  const g = out?.record?.grade;
+  const pct = out?.record?.drift?.alignmentPct;
+  toast(`${row.name} · ${row.env} checked: ${out?.scan?.files ?? '?'} files from ${out?.scan?.source || 'the repository'}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, 'ok');
+}
+
+function openListService(serviceId, env) {
+  overviewScreen = 'board';
+  enterOverview(Number.isInteger(serviceId) ? serviceId : null, env || null);
 }
 
 async function refreshOverviewFacts() {
@@ -1964,6 +2139,7 @@ async function enterOverview(serviceId = null, env = null, { rehydrate = false }
   if (!picked.service && rehydrate) return false;
   navGeneration++;
   state.mode = 'overview';
+  overviewScreen = 'board';
   state.pack = null;
   emptyVerdicts();
   state.packB = null;
@@ -2070,6 +2246,18 @@ const overviewActions = {
   upload: (slot) => { overviewStart = startChoose(overviewStart, slot); $('#file-input')?.click(); },
   resetStart: () => { overviewStart = START_IDLE; renderMainView(); },
   explain: explainUnavailable,
+  // The service list (renderServiceList) and the board's way back to it.
+  backToList: enterOverviewList,
+  addService: () => openListForm(null, null),
+  editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
+  formInput: listFormInput,
+  saveService: saveListForm,
+  closeForm: () => { listForm = FORM_CLOSED; renderMainView(); },
+  runService: runListRow,
+  openService: openListService,
+  showAll: () => { listShowAll = true; renderMainView(); },
+  // Packs already in hand: Expert's home — upload, scan, compare.
+  compare: () => { setUiMode('expert'); goHome(); },
 };
 
 // The drift check started from Overview's start (overview-model.mjs
@@ -4348,7 +4536,7 @@ function setupHomeAffordance() {
   }
   const brand = document.querySelector('.observa-brand');
   // The brand is "start over": Overview's front door in Overview, home in Expert.
-  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverview(); return; } goHome(); });
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); if (state.uiMode === 'overview') { enterOverviewFront(); return; } goHome(); });
 }
 
 // ============================================================

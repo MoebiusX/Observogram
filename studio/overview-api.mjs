@@ -72,3 +72,23 @@ export async function runServiceCheck(name, { fetchFn = requestJson } = {}) {
     body: '{}',
   });
 }
+
+// The service list's facts: the journeys listing (each row's last check) and
+// the org's MCP endpoints with what may be registered here (the form's
+// fourth answer). Each failure is a sentence, never thrown:
+//   { journeys, journeysError, endpoints, endpointsError, register }
+export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
+  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null };
+  await Promise.all([
+    fetchFn('/api/journeys')
+      .then((body) => { out.journeys = Array.isArray(body?.journeys) ? body.journeys : []; })
+      .catch((e) => { out.journeysError = sentence(e); }),
+    fetchFn('/api/mcp-endpoints')
+      .then((body) => {
+        out.endpoints = Array.isArray(body?.endpoints) ? body.endpoints : [];
+        out.register = body?.policy?.register ?? null;
+      })
+      .catch((e) => { out.endpointsError = sentence(e); }),
+  ]);
+  return out;
+}

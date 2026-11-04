@@ -341,7 +341,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
       assert.deepEqual(payView.environments.map((e) => [e.name, e.tier, e.effectiveTier, e.mcpEndpoint]),
         [['prod', 'tier-2', 'tier-2', { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example' }], ['staging', null, 'tier-1', null]]);

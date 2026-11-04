@@ -26,8 +26,9 @@ import {
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
   START_IDLE, startChoose, startAdopted,
+  REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formModel, savePlan,
 } from '../studio/overview-model.mjs';
-import { renderOverview } from '../studio/overview-view.mjs';
+import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
 
 // ---------- fixtures ----------
 
@@ -138,7 +139,7 @@ test('orderServicesForOverview / pickOverviewService: the row with a pack of its
 
 // ---------- the journey that checks this service ----------
 
-test('journeyForService: found by the pack file although scope.service is null; by slug, case-insensitively; another pack or service is not; scope.env prefers among several; null when none', () => {
+test('journeyForService: found by the pack file although scope.service is null; by slug, case-insensitively; another pack or service is not; scope.env first, another environment never; null when none', () => {
   // The real listing: scope.service is null, Pack A is the pack file — the pack is the link.
   assert.equal(journeyForService(journeys, { slug: 'krystaline', env: 'prod', packId: 'uploaded-krystaline-a37d2521' }), journey);
   assert.equal(journeyForService(journeys, { packId: 'uploaded-krystaline-a37d2521' }), journey, 'the pack alone suffices');
@@ -163,8 +164,17 @@ test('journeyForService: found by the pack file although scope.service is null; 
   const prod = { ...journey, name: 'krystaline-prod', scope: { env: 'prod', service: null, scopeMode: null } };
   assert.equal(journeyForService([staging, prod], { env: 'prod', packId: 'uploaded-krystaline-a37d2521' }), prod);
   assert.equal(journeyForService([staging, prod], { env: 'staging', packId: 'uploaded-krystaline-a37d2521' }), staging);
-  assert.equal(journeyForService([staging, prod], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), staging, 'no journey for dev: the first');
+  assert.equal(journeyForService([staging, prod], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), null, 'no journey for dev: none — a check of staging says nothing about dev');
   assert.equal(journeyForService([staging, prod], { env: null, packId: 'uploaded-krystaline-a37d2521' }), staging);
+  // A journey with no environment of its own checks whichever is on screen.
+  const unscoped = { ...journey, name: 'krystaline-any', scope: { env: null, service: null, scopeMode: null } };
+  assert.equal(journeyForService([staging, unscoped], { env: 'dev', packId: 'uploaded-krystaline-a37d2521' }), unscoped);
+  // The environment before the pack: a Run's check of staging (the service's newest pack) is not prod's,
+  // when an older check scoped to the service and prod exists.
+  const runStaging = { ...journey, name: 'kx-exchange.staging', packA: '/w/packs/uploaded-kx-exchange-2.pack.yaml', scope: { service: 'kx-exchange', env: 'staging' } };
+  const oldProd = { ...journey, name: 'kx-exchange-prod', packA: '/w/packs/uploaded-kx-exchange-1.pack.yaml', scope: { service: 'kx-exchange', env: 'prod' } };
+  assert.equal(journeyForService([runStaging, oldProd], { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-kx-exchange-2' }), oldProd);
+  assert.equal(journeyForService([runStaging], { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-kx-exchange-2' }), null, 'prod was never checked');
   // None.
   assert.equal(journeyForService([], { slug: 'krystaline', packId: 'uploaded-krystaline-a37d2521' }), null);
   assert.equal(journeyForService(null, { slug: 'krystaline' }), null);
@@ -1137,6 +1147,174 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
+
+// ---------- the service list: Overview's front door ----------
+
+const EP = { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' };
+const svcRow = (over = {}) => ({
+  id: 1, slug: 'checkout', name: 'Checkout', owners: [], tier: null, description: null,
+  repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: null },
+  source: { kind: 'observogram' }, createdAt: 't', updatedAt: 't',
+  environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }],
+  packs: [], ...over,
+});
+const lastRunAt = new Date(NOW - 2 * HOUR).toISOString();
+const listJourney = (name, scope, lastRun, packA = '/w/packs/x.pack.yaml') => ({ name, scope, packA, packB: 'mcp: https://mcp.example.test/mcp', lastRun });
+
+test('repositoryLine: GitHub as owner/repo with its branch, Azure DevOps as project/repo, a folder by its name with its path beneath; nothing → null', () => {
+  assert.deepEqual(repositoryLine({ kind: 'github', location: 'https://github.com/acme/checkout', ref: 'develop' }),
+    { kind: 'github', kindText: 'GitHub', text: 'acme/checkout', ref: 'develop', detail: 'develop', title: 'https://github.com/acme/checkout (develop)' });
+  assert.deepEqual(repositoryLine({ kind: 'ado', location: 'https://dev.azure.com/acme/My%20Shop/_git/checkout', ref: null }),
+    { kind: 'ado', kindText: 'Azure DevOps', text: 'My Shop/checkout', ref: null, detail: null, title: 'https://dev.azure.com/acme/My%20Shop/_git/checkout' });
+  assert.deepEqual(repositoryLine({ kind: 'path', location: 'C:\\src\\shop\\checkout', ref: null }),
+    { kind: 'path', kindText: 'Folder', text: 'checkout', ref: null, detail: 'C:\\src\\shop\\checkout', title: 'C:\\src\\shop\\checkout' });
+  assert.equal(repositoryLine(null), null);
+  assert.equal(repositoryLine({ kind: 'github' }), null);
+  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path']);
+});
+
+test('serviceListModel: one row per service and environment with its two places and its last check; what is missing says so; the rows a person can run first', () => {
+  const services = [
+    svcRow(),
+    svcRow({ id: 2, slug: 'basket', name: 'Basket', repository: null, packs: [{ id: 'uploaded-basket-1', role: 'primary' }], environments: [{ id: 21, name: 'prod', mcpEndpoint: null }] }),
+    svcRow({ id: 3, slug: 'kx-wallet', name: 'kx-wallet', repository: null, packs: [{ id: 'uploaded-live-1', role: 'member' }], environments: [{ id: 31, name: 'prod', mcpEndpoint: null }] }),
+    svcRow({ id: 4, slug: 'ledger', name: 'Ledger', environments: [] }),
+    svcRow({ id: 5, slug: 'search', name: 'Search', environments: [{ id: 51, name: 'prod', mcpEndpoint: null }, { id: 52, name: 'staging', mcpEndpoint: { id: 7, name: 'prod-mcp', origin: EP.origin } }] }),
+  ];
+  const catalog = [{ id: 'uploaded-basket-1', ok: true }, { id: 'uploaded-live-1', ok: true, live: 'scaffold' }];
+  const journeys = [
+    listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'gate-failed', alignmentPct: 75.4, gradeScore: 70 }),
+    listJourney('search.staging', { service: 'search', env: 'staging' }, { startedAt: lastRunAt, outcome: 'vantage-lost', alignmentPct: null, gradeScore: null }),
+  ];
+  const m = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW });
+  assert.equal(m.kind, 'list');
+  assert.equal(m.hidden, 1, 'kx-wallet — a live draft\'s member, no repository — is counted, not drawn');
+  assert.deepEqual(m.rows.map((r) => [r.key, r.complete]), [['1:prod', true], ['5:staging', true], ['2:prod', false], ['4:', false], ['5:prod', false]]);
+  const [checkout, searchStaging, basket, ledger, searchProd] = m.rows;
+  assert.deepEqual(checkout.repository.text, 'acme/checkout');
+  assert.deepEqual(checkout.live, { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' });
+  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail' });
+  assert.deepEqual(checkout.run, { enabled: true, reason: null, running: false });
+  assert.equal(checkout.journey, 'checkout.prod');
+  assert.deepEqual([searchStaging.last.state, searchStaging.last.word, searchStaging.last.letter], ['unreachable', 'Unreachable', null]);
+  assert.deepEqual([basket.run.enabled, basket.run.reason, basket.open.enabled], [false, "Say where Basket's repository is first.", true], 'its own pack opens the board');
+  assert.deepEqual([ledger.env, ledger.run.reason, ledger.last.word], [null, 'Add an environment to Ledger first.', 'Never checked']);
+  assert.deepEqual([searchProd.run.reason, searchProd.journey], ['Choose the live MCP endpoint for prod first.', null], 'a check of staging is not prod\'s');
+  // showAll draws the hidden one; running and a refusal ride on their row.
+  const all = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW, showAll: true,
+    running: { '1:prod': true }, results: { '5:staging': { error: '502: the live side did not answer' } } });
+  assert.equal(all.hidden, 0);
+  assert.ok(all.rows.some((r) => r.name === 'kx-wallet'));
+  assert.deepEqual(all.rows[0].run, { enabled: false, reason: null, running: true });
+  assert.equal(all.rows.find((r) => r.key === '5:staging').error, '502: the live side did not answer');
+  // The rank: every Run explains the role.
+  const viewer = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW, access: { canWrite: false, reason: 'needs the operator role in Acme — yours is viewer' } });
+  assert.deepEqual([viewer.canWrite, viewer.rows[0].run.enabled, viewer.rows[0].run.reason], [false, false, 'needs the operator role in Acme — yours is viewer']);
+  // No percentage in a string: the renderer writes the sign.
+  const strings = [];
+  const walk = (v) => { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+  walk(all);
+  assert.deepEqual(strings.filter((x) => x.includes('%')), []);
+  // Not read yet, could not be read, an empty table.
+  assert.equal(serviceListModel({ services: null, servicesStatus: { kind: 'loading' } }).kind, 'loading');
+  assert.deepEqual([serviceListModel({ services: null, servicesStatus: { kind: 'error', error: '500: boom' } }).kind, serviceListModel({ services: null, servicesStatus: { kind: 'error', error: '500: boom' } }).error], ['error', '500: boom']);
+  assert.deepEqual([serviceListModel({ services: [], servicesStatus: { kind: 'ok' } }).empty, rowKey(9, null)], [true, '9:']);
+  // The journeys listing failed: every row says so, never "never checked".
+  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeysError: '500: x', endpoints: [EP], now: NOW }).rows[0].last.word, 'Not known');
+});
+
+test('the form: opened blank or on a row; typing keeps its values; what is missing; the model it draws; the save plan completes a record, never a second one', () => {
+  const services = [svcRow()];
+  // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
+  const blank = formOpened(services, { endpoints: [EP] });
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '' }]);
+  assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
+  assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
+  // Opened on a row: its service and environment, the environment fixed.
+  const edit = formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP, { ...EP, id: 8 }] });
+  assert.deepEqual([edit.mode, edit.serviceId, edit.envFixed, edit.values.name, edit.values.location, edit.values.endpointId], ['edit', 1, true, 'Checkout', 'https://github.com/acme/checkout', '7']);
+  assert.equal(formOpened(services, { serviceId: 1, env: null }).envFixed, false, 'a service with no environment yet: the environment is typed');
+  // Typing.
+  const typed = formInput({ ...blank, error: 'x' }, 'name', 'Basket');
+  assert.deepEqual([typed.values.name, typed.error], ['Basket', null]);
+  assert.equal(formInput(blank, 'nope', 'x'), blank, 'an unknown field changes nothing');
+  assert.equal(formInput(FORM_CLOSED, 'name', 'x'), FORM_CLOSED);
+  // What is missing.
+  assert.deepEqual(formProblems(blank.values), { name: 'Name the service.', location: "Give the repository's address." });
+  assert.deepEqual(formProblems({ ...blank.values, name: 'B', kind: 'path', location: ' ', endpointId: NEW_ENDPOINT }), {
+    location: "Give the folder's full path on the server.", epUrl: "Give the MCP endpoint's URL.", epName: 'Name the endpoint.',
+  });
+  // The model.
+  const fm = formModel({ ...edit, focus: 'location' }, { endpoints: [EP], register: { allowed: false, why: 'MCP endpoints cannot be registered here' } });
+  assert.deepEqual([fm.open, fm.title, fm.nameFixed, fm.envFixed, fm.focus, fm.kind.kind], [true, 'Checkout · prod', true, true, 'location', 'github']);
+  assert.deepEqual(fm.kinds.map((k) => [k.kind, k.selected]), [['github', true], ['ado', false], ['path', false]]);
+  assert.deepEqual(fm.endpoints, [{ id: '7', name: 'prod-mcp', origin: 'https://mcp.example.test', selected: true }]);
+  assert.deepEqual(fm.newEndpoint, { allowed: false, reason: 'MCP endpoints cannot be registered here', selected: false });
+  assert.deepEqual(formModel(FORM_CLOSED), { open: false });
+  // The save plan: a new service, an endpoint by id, its environment created.
+  const fresh = savePlan({ ...blank.values, name: 'Basket', location: 'acme/basket', ref: 'main' }, { services });
+  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' } } }, env: { create: { name: 'prod' } }, envName: 'prod', name: 'Basket' });
+  // A name that keys an existing record completes it: the repository patched when it differs, the environment bound when it does not point there yet.
+  const same = savePlan({ ...edit.values }, { services, serviceId: 1 });
+  assert.deepEqual([same.service, same.env], [{ id: 1, patch: null }, { id: 11, bind: false }], 'nothing differs: no patch, no bind');
+  const moved = savePlan({ ...edit.values, name: 'CHECKOUT', location: 'acme/checkout-v2', endpointId: '8' }, { services });
+  assert.deepEqual([moved.service, moved.env], [{ id: 1, patch: { repository: { kind: 'github', location: 'acme/checkout-v2' } } }, { id: 11, bind: true }]);
+  const staging = savePlan({ ...edit.values, env: 'staging' }, { services, serviceId: 1 });
+  assert.deepEqual(staging.env, { create: { name: 'staging' } });
+  const newEp = savePlan({ ...blank.values, name: 'B', location: 'a/b', endpointId: NEW_ENDPOINT, epName: ' live ', epUrl: ' https://mcp.example.test/mcp ', epToken: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' }, { services });
+  assert.deepEqual(newEp.endpoint, { create: { name: 'live', url: 'https://mcp.example.test/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN' } });
+});
+
+test('renderServiceList: the rows, one primary button (Add a service, or Save and run with the form open), the names escaped, the actions proxied; a headless host never throws', () => {
+  const services = [svcRow({ name: 'Check<img onerror=x>out' }), svcRow({ id: 4, slug: 'ledger', name: 'Ledger', environments: [] })];
+  const journeys = [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 })];
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW });
+  const c = overviewContainer();
+  const calls = [];
+  const host = { overview: { addService: () => calls.push(['add']), runService: (k) => calls.push(['run', k]), editService: (id, env) => calls.push(['edit', id, env]), openService: (id, env) => calls.push(['open', id, env]), compare: () => calls.push(['compare']) } };
+  renderServiceList(c, list, formModel(FORM_CLOSED), host);
+  const html = c.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary: Add a service');
+  assert.ok(html.includes('Add a service</button>'));
+  assert.ok(html.includes('Check&lt;img onerror=x&gt;out') && !html.includes('<img'), 'the name is escaped');
+  assert.ok(html.includes('<span class="ov-svc__letter ov-tone-ok" aria-label="Grade A" title="Diagnostic grade">A</span><span class="ov-svc__last-text"><b>Checked 2 hours ago</b><small>92% matches live</small></span>'), 'the letter and the match, the sign the renderer\'s');
+  assert.ok(html.includes('data-ux-action="ov-svc-run" data-key="1:prod"'));
+  assert.ok(html.includes('data-ux-action="ov-explain" aria-disabled="true" data-reason="Add an environment to Ledger first."'), 'a row that cannot run explains why');
+  assert.ok(html.includes('Upload one or compare two instead'), 'the host offers packs in hand');
+  c.click('ov-svc-run', { key: '1:prod' });
+  c.click('ov-svc-add');
+  c.click('ov-svc-edit', { service: '4', env: '' });
+  c.click('ov-svc-open', { service: '1', env: 'prod' });
+  assert.deepEqual(calls, [['run', '1:prod'], ['add'], ['edit', 4, null], ['open', 1, 'prod']]);
+  // The form open: Save and run is the one primary; Add a service steps aside.
+  const f = formModel({ ...formOpened(services, { endpoints: [EP] }), error: 'Some answers are missing — each is marked where it goes.' }, { endpoints: [EP] });
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, f, host);
+  assert.equal(countOf(c2.innerHTML, 'og-btn--primary'), 1);
+  assert.ok(c2.innerHTML.includes('>Save and run</button>') && !c2.innerHTML.includes('>Add a service</button>'));
+  assert.ok(c2.innerHTML.includes('<span class="ov-form__err">Name the service.</span>'), 'after a try, each missing answer is marked');
+  assert.ok(c2.innerHTML.includes('placeholder="https://github.com/owner/repo"'));
+  // Without a compare hook, no line offering one; a headless host never throws.
+  const c3 = overviewContainer();
+  assert.doesNotThrow(() => renderServiceList(c3, list, formModel(FORM_CLOSED), { overview: {} }));
+  assert.ok(!c3.innerHTML.includes('compare two instead'));
+  assert.doesNotThrow(() => renderServiceList(overviewContainer(), serviceListModel({ services: null, servicesStatus: { kind: 'loading' } }), formModel(FORM_CLOSED), {}));
+});
+
+test('buildOverviewModel with listable: the service header links back to the list; without it, nothing changes', () => {
+  const base = { services, servicesStatus: { kind: 'ok' }, catalog: packs, isLiveAggregatePack, diagnostic, decision, journeys, run, now: NOW };
+  assert.equal(buildOverviewModel({ ...base, listable: true }).back, true);
+  assert.equal(buildOverviewModel(base).back, false);
+  const c = overviewContainer();
+  const calls = [];
+  renderOverview(c, buildOverviewModel({ ...base, listable: true }), { overview: { backToList: () => calls.push('back') } });
+  assert.ok(c.innerHTML.includes('data-ux-action="ov-back"'));
+  c.click('ov-back');
+  assert.deepEqual(calls, ['back']);
+  const c2 = overviewContainer();
+  renderOverview(c2, buildOverviewModel(base), { overview: {} });
+  assert.ok(!c2.innerHTML.includes('ov-back'));
 });
 
 // ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------

@@ -195,6 +195,32 @@ thing to do. The service picker lists the rows with a pack of their own; a row t
 appears in a live draft has nothing to grade and is Expert's to show (it
 stays listed only while it is the one remembered).
 
+**Overview's front door is the service list.** A service is checked in two
+places — its repository, where what it should have is declared, and its
+live MCP endpoint, per environment, where what it has is read — and the list
+is one row per service and environment with both, its last check and three
+actions:
+
+| Column | What is drawn | Where it comes from |
+| --- | --- | --- |
+| Service | the name and the environment as a pill; *Add an environment* when it has none | `GET /api/services` |
+| Repository | the kind in small caps (*GitHub · Azure DevOps · Folder*) over `owner/repo`, `project/repo` or the folder's name, the branch or the full path beneath; *Add the repository* when there is none | the service's `repository` |
+| Live | *MCP* over the endpoint's name and host; *Choose the MCP endpoint* when there is none | the environment's `mcpEndpoint` |
+| Last check | the grade letter in a tile, *Checked 2 hours ago*, *75% matches live* — or *Never checked · Run it to check*, *Unreachable* | the journey `<slug>.<env>` in `GET /api/journeys` (`lastRun`); a journey of another environment is never this row's |
+| (actions) | **Run** (scan the repository again and check it against live), *Open →* (the board), *Change* | `POST /api/services/:id/run` |
+
+**Add a service** (the one primary button; with the form open, **Save and
+run**) is four numbered answers: *1 Service*, *2 Environment* (prod by
+default), *3 Repository — where it is declared* (GitHub · Azure DevOps ·
+Folder, the address, an optional branch), *4 Live — where it runs* (the org's
+endpoints, or a new one when this reader may register it). A missing answer
+is marked where it goes once a save was tried; the server's refusal is shown
+as its sentence; a name that keys an existing record completes it. Services a
+live draft discovered, with no repository and no pack of their own, are
+counted under the list (*3 more services were seen live with no repository
+yet. Show them*). A row that cannot run explains why when pressed. The
+board's header carries **← Services** back.
+
 The switch between the two faces sits in the chrome on every screen. Expert
 is one click away and unchanged; Overview is the first-run default when the
 services table has rows, the home when the workspace is empty. The choice is

@@ -190,6 +190,11 @@ export const ROUTES = Object.freeze({
   'POST /api/services': { class: 'operator', audit: ['service.create'] },
   'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
   'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
+  // A service's Run (server/index.mjs): its repository scanned and
+  // registered as its pack, its check saved and run against the
+  // environment's MCP endpoint — the live MCP API's posture, as every
+  // server-side MCP request.
+  'POST /api/services/:id/run': { class: 'operator', ...LIVE, csrf: 'always', audit: [...PACK_REGISTER, 'journey.capture', 'journey.run'] },
   'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
   'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
   'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },

@@ -384,12 +384,13 @@ const V2_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'org
 // The synthetic steps below sit after every real one.
 const NEXT = SCHEMA_VERSION + 1;
 
-test('migrations from user_version 0: schema v2 exactly, with a store_id and the audit triggers', async () => {
+test('migrations from user_version 0: schema v3 exactly, with a store_id and the audit triggers', async () => {
   const path = join(tempDir(), 'm.db');
   const db = await openStore({ path });
   try {
-    assert.equal(userVersion(db), 2);
+    assert.equal(userVersion(db), 3);
     assert.deepEqual(tables(db), V2_TABLES);
+    assert.ok(pragma(db, 'table_info(services)').some((c) => c.name === 'repository' && c.type === 'TEXT' && c.notnull === 0), 'v3: services.repository, TEXT, nullable');
     const id = prepare(db, "SELECT value FROM schema_meta WHERE key = 'store_id'").get().value;
     assert.match(id, /^[0-9a-f-]{36}$/);
     const triggers = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all().map((r) => r.name);
@@ -409,7 +410,7 @@ test('migrations from user_version 0: schema v2 exactly, with a store_id and the
   }
   // A second open applies nothing.
   const raw = await openRaw(path);
-  assert.deepEqual(runMigrations(raw), { from: 2, to: 2, applied: [] });
+  assert.deepEqual(runMigrations(raw), { from: 3, to: 3, applied: [] });
   raw.close();
 });
 
@@ -489,7 +490,7 @@ test('a failing step rolls back, leaves user_version and foreign_keys ON; a step
 // The one-way door GAP batch 2 opened: a v1 file (every pre-batch store)
 // gets the two tables with every row it held intact. Built through openRaw
 // + the first STEP alone: openStore would write a v2 store.
-test('a real v1 file migrates to v2: the verdicts and waivers tables with their foreign keys, every pre-existing row intact', async () => {
+test('a real v1 file migrates to v3: the verdicts and waivers tables with their foreign keys, the repository column, every pre-existing row intact', async () => {
   const path = join(tempDir('v1-real'), 'observogram.db');
   const db = await openRaw(path);
   try {
@@ -506,9 +507,10 @@ test('a real v1 file migrates to v2: the verdicts and waivers tables with their 
     const counts = () => Object.fromEntries(['users', 'orgs', 'memberships', 'services', 'packs', 'pack_services', 'audit'].map((t) => [t, prepare(db, `SELECT count(*) AS n FROM ${t}`).get().n]));
     const before = counts();
     pragma(db, 'foreign_keys=ON');
-    assert.deepEqual(runMigrations(db), { from: 1, to: 2, applied: [2] });
+    assert.deepEqual(runMigrations(db), { from: 1, to: 3, applied: [2, 3] });
     assert.deepEqual(tables(db), V2_TABLES);
     assert.deepEqual(counts(), before, 'every pre-existing row is still there');
+    assert.equal(prepare(db, 'SELECT repository FROM services WHERE id = 1').get().repository, null, 'v3: a service from before names no repository');
     assert.deepEqual(pragma(db, 'foreign_key_check'), []);
     assert.deepEqual(pragma(db, 'foreign_key_list(verdicts)').map((r) => [r.table, r.from, r.to]).sort(), [['packs', 'org_id', 'org_id'], ['packs', 'pack_id', 'id']]);
     assert.deepEqual(pragma(db, 'foreign_key_list(waivers)').map((r) => [r.table, r.from, r.to]).sort(),
@@ -538,7 +540,7 @@ test('a database from a newer build is refused, not migrated', async () => {
   const db = await v1WithChildren(path);
   pragma(db, 'user_version=7');
   db.close();
-  await assert.rejects(openStore({ path }), /schema v7, but this build knows up to v2/);
+  await assert.rejects(openStore({ path }), new RegExp(`schema v7, but this build knows up to v${SCHEMA_VERSION}`));
 });
 
 // ---------- Concurrency ----------
@@ -2106,7 +2108,7 @@ test('packc store backup while a server holds the store: every committed row, no
     assert.equal((await writer.exited(10_000, 'the backup')).code, 0);
     const got = await readStore(dest);
     assert.match(r.stdout, new RegExp(`backup written: ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v2`));
+    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v${SCHEMA_VERSION}`));
     assert.deepEqual(got.logins, ['committed-before']);
     assert.equal(got.journal, 'delete', 'a VACUUM INTO file is rollback-journal');
     const raw = await openRaw(dest);
@@ -2225,7 +2227,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
 
   const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v2\\); previous store_id: ${backupId}`));
+  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v${SCHEMA_VERSION}\\); previous store_id: ${backupId}`));
   assert.match(r.stdout, /moved aside: .*observogram\.db\.pre-restore-\d{8}T\d{9}Z/);
   assert.match(r.stdout, /in WAL mode already/);
   const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
@@ -2254,7 +2256,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
   assert.notEqual(otherId, backupId);
   const r2 = await packc(['store', 'restore', otherBackup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r2.code, 0, r2.stderr);
-  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v2\\); previous store_id: ${backupId}`));
+  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v${SCHEMA_VERSION}\\); previous store_id: ${backupId}`));
 
   // A fresh deployment with no database yet: restore just puts it in place.
   const freshPath = join(tempDir('rs-fresh'), 'db', 'observogram.db');
