@@ -131,7 +131,7 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
-| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
 | [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
 | [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
@@ -227,7 +227,8 @@ with its own implementations:
 host.overview = {
   selectService(id), selectEnv(name),           // the picker and the environment switch
   checkNow(),                                   // Check again → runServiceCheck, then re-read the facts
-  openDiscover(), openDiagnose(), openRemediate(), openNeuron(),   // the column links and "See the differences"
+  openDiscover(compare), openDiagnose(compare), openRemediate(compare),   // the column links (compare: below)
+  openNeuron(),                                 // "See the differences"
   expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
   scan(), live(), upload(slot), resetStart(),   // the start's ways in (below): your repo scan, your live draft, your upload into 'a' or 'b'; Change Pack A
   explain(reason),                              // a start card the reader's rank cannot use, activated
@@ -236,6 +237,23 @@ host.overview = {
 ```
 
 A hook a host does not supply is a no-op (the view calls them optionally).
+
+The three column links hand their hook `model.compare`: the comparison the
+board graded, so the view the host opens can show the same one. It is
+`{ packBId, envB, label }` — the live pack the journey's last run read, with
+`envB` `null` because the run adapted Pack B with no environment — or
+`null`. `boardComparison({ journey, run, catalog, pack })` decides it, and it
+is set only when all of these hold:
+- the journeys listing names a `livePack: { id, label, refreshedAt }` for the
+  journey (Observogram's server keeps every live run's Pack B as one);
+- `refreshedAt` is the read the board's run names (`packB.refreshedAt`);
+- that run is the board's letter (`runGradesBoard`: it graded this pack and
+  its live side did not shrink since the check before);
+- the catalogue has the pack.
+
+A host whose listing has no `livePack` always gets `null`, and a hook that
+ignores the argument opens what it opened before. Only a column link
+carries the id; the vocabulary rule skips `compare`, and nothing renders it.
 At most one `.og-btn--primary` is drawn in any state, and as many as the
 model's `primary` says; the simple layout is drawn instead of the board when
 `model.layout` is `'simple'`, when the service's only pack is a live

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Fixed: Expert opened from the board shows the comparison the board graded
+After a service's Run, the board said *B · Industrial grade, graded against live*. Its *Open in Discover / Diagnose / Remediate* opened Expert with the scan as Pack A and no Pack B, so Diagnose graded the repository alone and read *C · Field grade, 43%* beside it. Nothing had kept the live side the run read, so Expert had nothing to bind.
+- **The engine** (`tools/lib/journey.mjs`, which the vendor manifest excludes, so the manifest is unchanged): `runJourney` takes `onPackB({ canonical, source, live, refreshedAt })`, called once the run is complete and its record is on disk, with the Pack B it graded. `live` is true only for an MCP read, never for a file. The CLI passes none.
+- **The server** (`server/index.mjs`): every live run through `POST /api/journeys/:name/run` or a service's `POST /api/services/:id/run` keeps that Pack B as the journey's live pack.
+  - It is registered under one label per journey: `<service> · <env> · live` for a service's own journey (beside its `… · repository` scan), else `<journey> · live`. The source is `journey-live:<name>`, and the next run replaces it.
+  - The 200 adds `livePack: { id, label }`. A keep that fails never fails the run: the answer carries `livePackError` instead.
+  - `GET /api/journeys` adds `livePack: { id, label, refreshedAt } | null` per journey.
+  - Like any live draft, the kept pack links to the services it names as a member, never as a primary. A service it names that is not in the table yet is added, hidden from the list as *seen live with no repository yet*.
+  - A run that lost its vantage keeps nothing.
+- **The board** (`studio/overview-model.mjs`, `studio/overview-view.mjs`): `boardComparison({ journey, run, catalog, pack })` → `{ packBId, envB: null, label } | null`, carried as `model.compare`. Each column link hands it to its hook: `openDiscover(compare)`, `openDiagnose(compare)`, `openRemediate(compare)`. It is set only when all of these hold:
+  - the listing's live pack is the read the board's run names (`packB.refreshedAt`);
+  - that run is the board's letter: `runGradesBoard`, now shared with `gradeModel`, which requires that it graded this pack and that its live side did not shrink;
+  - the catalogue has the pack.
+
+  A check that saw less than the one before is graded from the repository alone, on the board and now in Expert too (seen on the demo: the board read C while that partial read, bound, graded B in Expert). A host whose server keeps no live pack gets `null` and opens what it did before (`docs/VENDORING.md`).
+- **The studio** (`studio/app.mjs`): the hooks bind it as Pack B with no environment, as the run adapted it (`openServiceIn`'s `compare`). From the board, Pack B is that comparison or none: a Pack B left from an earlier Expert visit is cleared. *Check now* reads the catalogue again after the check, so the links find the pack that check kept.
+- **Seen in a browser** on a fresh `npm run demo`: GitHub `MoebiusX/KrystalineX` against the live endpoint, *Save and run*, then the board's three links.
+  - Expert's Diagnose read B · 70%, and its diff matched the run record count for count (aligned 228, drifted 43, 28 · 271 · 34, alignment 68%).
+  - *Check again* replaced the live pack, and the links followed it.
+  - A partial read opened Expert on the repository alone (C · 43%, as the board said).
+- **Tests**:
+  - `server/test-service-run.mjs`: a Run keeps the pack under `Shop API · prod · live`, the listing names it with the record's read time, it is never the service's primary and adds no environment, and a second Run and a Check now each leave exactly one.
+  - `tools/test-journey.mjs`: `onPackB` after the record is written, live for an MCP read, not for a file.
+  - `tools/test-overview-model.mjs`: `boardComparison` in every case, including the shrunk read, and the three links carrying it. The pack id never reaches the page, and the vocabulary guard skips `compare`, which is handed to the host and never drawn.
+  - Suite total 1654 → 1656: the two new tests are the server's and the model's; the engine's cases are assertions in an existing test.
+
 ## 0.6.2 — 2026-11-04
 
 **The service-and-Overview release.** A service is its repository and its live endpoint: the record holds where its repository is (GitHub, Azure DevOps or a folder) and, per environment, the MCP endpoint that reads what runs, and one Run scans the one, reads the other and grades the difference. Overview is the studio's front door: the list of services, then a board per service under Discover · Diagnose · Remediate, drawn on the engine's own numbers (the posture matrix now places every adapter family, so Discover adds up) and starting the drift check itself. Build reopens a registered pack and saves its next version; the library gains the generic base and five dependency entries; the blackbox exporter is the first producer-side compile target. A comparison reads closer to what a team means: a snapshot's scope can exclude metric names by pattern and name rule groups, a metrics manifest can declare the names an exporter mints at runtime, rules authored ahead of an environment say so, spec 1.4's 2026-11-01 revision keeps a service's recording-rule names, and the crawler learns metrics from prebuilt exporters and an OTel collector's scrape jobs. Fixed: a template variable or a subquery's resolution no longer reads as a metric name, an exporter no longer lends its name to the service scope, and a live dashboard reaches the scope through the metrics its panels query. Security: the Node floor moves to 22.23.4 (the October 2026 security release), an environment override stays inside the spec, and a caller the gate has not admitted is read up to 64 KiB. The store moves to schema v3 (`services.repository`), a one-way door: 0.6.0 refuses a database this build has opened. The Overview board joins the vendorable set, and the manifest's verify step names a marked local patch.

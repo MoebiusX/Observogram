@@ -139,6 +139,27 @@ export function journeyIsLive(journey) {
   return /^mcp:/i.test(String(journey?.packB || ''));
 }
 
+// The comparison the board graded, for Expert's views: the live side the
+// journey's last run read, which a host's server keeps as a pack (the
+// journeys listing's `livePack: { id, label, refreshedAt }`) — only when it
+// is THAT run's read (the same refreshedAt the record names as
+// packB.refreshedAt), that run is the one the board's letter comes from
+// (runGradesBoard: it graded `pack`, its live side did not shrink), and the
+// catalogue has it. → { packBId, envB, label }, where envB is null: the run
+// adapted Pack B with no environment. null otherwise — no live run yet, a
+// run that lost its vantage or saw less than the check before (the board
+// grades the repository alone then, and so does Expert), a recording, a
+// listing without the field — and Expert opens on the repository alone, as
+// before: a host whose server keeps no live pack is unchanged.
+export function boardComparison({ journey = null, run = null, catalog = [], pack = null } = {}) {
+  const kept = journey?.livePack;
+  const read = run?.packB?.refreshedAt;
+  if (!kept || typeof kept.id !== 'string' || !kept.id || !read || kept.refreshedAt !== read) return null;
+  if (!runGradesBoard(run, pack)) return null;
+  if (!(Array.isArray(catalog) ? catalog : []).some((p) => p && p.id === kept.id && p.ok !== false)) return null;
+  return { packBId: kept.id, envB: null, label: typeof kept.label === 'string' && kept.label ? kept.label : null };
+}
+
 // ---------- a live side that showed less than the check before ----------
 
 // The run's causes.vantage compares which probe families failed with the
@@ -186,6 +207,15 @@ export function verdictWordFor(scorePct) {
 
 // A run graded THIS pack when its Pack A is the pack on screen: the record's
 // packA.source is the pack file (named by id), else name and version agree.
+// Whether the run's grade is the board's letter for `pack`: it finished (pass
+// or gate-failed) with a letter, graded this pack, and its live side did not
+// shrink since the check before (vantageShrank). gradeModel letters by it;
+// boardComparison hands Expert the run's live read only by it.
+export function runGradesBoard(run, pack) {
+  return !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter
+    && !vantageShrank(run).length && runGradedPack(run, pack);
+}
+
 export function runGradedPack(run, pack) {
   if (!run || !pack) return false;
   const src = run.packA?.source;
@@ -336,8 +366,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // A run that saw less of the live side than the check before graded a
   // smaller picture: not usable as the letter, and the source line says so.
   const shrank = vantageShrank(run);
-  const usable = run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && run.grade?.letter && !shrank.length && runGradedPack(run, pack);
-  if (usable) {
+  if (runGradesBoard(run, pack)) {
     const ig = instrumentGradeFor(Number(run.grade.score)) || { letter: run.grade.letter, label: run.grade.letterLabel || '', blurb: '' };
     const letter = run.grade.letter;
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
@@ -862,6 +891,9 @@ export function buildOverviewModel(input = {}) {
     service: { id: picked.service.id, name: picked.service.name, slug: picked.service.slug },
     envs: picked.envs.map((name) => ({ name, selected: name === picked.env })), env: picked.env,
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
+    // What the columns' "Open in …" carry to the host: the comparison the
+    // board graded (boardComparison), null while nothing graded it.
+    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack }) : null,
     grade, still, next, primary, productName, layout, board,
     ...(startHere ? { start: { a: null }, sources: sourcesOf(access) } : {}),
   };

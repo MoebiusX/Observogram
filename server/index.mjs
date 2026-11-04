@@ -86,7 +86,7 @@ import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
-import { getService } from './store/services.mjs';
+import { getService, getServiceBySlug } from './store/services.mjs';
 import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
 import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
@@ -933,6 +933,7 @@ function journeyFileOf(def) {
 
 app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
   try {
+    const kept = livePacksByJourney();
     const journeys = listJourneys().map(name => {
       let def = null;
       // A definition that fails to load is still listed, with the reason:
@@ -953,6 +954,11 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         packB: def?.packB?.mcp ? `mcp: ${def.packB.mcp.url}` : (def?.packB?.file || null),
         gate: def?.gate || {},
         scope: { env: def?.env || null, service: def?.service || null, scopeMode: def?.scopeMode || null },
+        // The live side the last live run graded, kept as a pack (keepLivePackOf):
+        // { id, label, refreshedAt } — refreshedAt is the read's own time, the
+        // one its run record names as packB.refreshedAt — or null when no
+        // run has kept one.
+        livePack: kept.get(name) || null,
         // Step 5: the declared cadence (parsed the way the CLI parses it —
         // cadenceMs null with a note for an irregular cron), the posture
         // budget inputs and the notify block as env var NAMES only (with
@@ -1167,7 +1173,9 @@ function journeyRunTargets(req, def) {
 
 // The run itself, its journey.run row and the answer: 200 { ok, record } —
 // the gate's outcome is data — or 502 when a source could not be resolved.
-// `extra` rides on either answer (a service's Run adds its scan).
+// A live Pack B is kept as the journey's live pack (keepLivePackOf): the
+// 200 adds `livePack: { id, label }`. `extra` rides on either answer (a
+// service's Run adds its scan).
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
   const t0 = new Date();
   // The row's notify key (only for a journey with `notify`): from the
@@ -1184,7 +1192,9 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
     // A crawl: walk, a file: source and an inventory site read only this
     // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
     // another org's part is refused.
+    let packB = null;
     const record = await runJourney(def, {
+      onPackB: (pack) => { packB = pack; },
       crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() },
       resolveMcp: () => {
         if (!mcpTarget) throw new Error(`journey ${def.name}: Pack B's MCP was not resolved`);
@@ -1192,6 +1202,7 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       },
       resolveNotify: (n) => notifyTargetOf(n, { url: notifyHook.url, auth: notifyHook.auth }),
     });
+    const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({
       startedAt: bounded(record.startedAt), outcome: bounded(record.outcome, 100),
       alignmentPct: finite(record.drift?.alignmentPct), gradeScore: finite(record.grade?.score),
@@ -1200,7 +1211,12 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       tookMs: finite(record.tookMs),
       ...notifyOf(record.notify),
     }), { tag: 'journey' });
-    res.json({ ok: true, record, ...extra, ...(auditError ? { auditError } : {}) });
+    res.json({
+      ok: true, record, ...extra,
+      ...(kept?.id ? { livePack: { id: kept.id, label: kept.label } } : {}),
+      ...(kept?.error ? { livePackError: kept.error } : {}),
+      ...(auditError ? { auditError } : {}),
+    });
   } catch (e) {
     const auditError = auditAfter(req, runRow({
       startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
@@ -1210,6 +1226,46 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
     }), { tag: 'journey' });
     res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...extra, ...(auditError ? { auditError } : {}) });
   }
+}
+
+// A live run's Pack B, kept as its journey's live pack: the read the record
+// graded, so Expert opened from the board can bind it as Pack B and show the
+// comparison the board shows (a re-draft would be another read). One per
+// journey — registered under the journey's live label, which the registry
+// replaces, so each run replaces the last — with the source
+// `journey-live:<name>`, which the journeys listing reads back. The label is
+// `<service> · <env> · live` for a service's own journey (beside its
+// `… · repository` scan), else `<journey> · live`. A file Pack B is never
+// kept (runJourney says `live` only for an MCP read), nor a run that lost
+// its vantage (it read nothing). A failed keep never fails the run: the
+// answer carries `livePackError`, and one line goes to stderr.
+const JOURNEY_LIVE_SOURCE = 'journey-live:';
+const serviceJourneyName = (slug, env) => `${slug}.${env}`.replace(/[^A-Za-z0-9._-]/g, '_');
+function journeyLiveLabel(def) {
+  const service = def.service && def.env ? getServiceBySlug(currentStore(), def.service) : null;
+  return service && def.name === serviceJourneyName(service.slug, def.env) ? `${service.name} · ${def.env} · live` : `${def.name} · live`;
+}
+function keepLivePackOf(req, def, canonical) {
+  const label = journeyLiveLabel(def);
+  try { return { id: registerUploadedPack(req, canonical, `${JOURNEY_LIVE_SOURCE}${def.name}`, label), label }; }
+  catch (e) {
+    process.stderr.write(`[journey] ${def.name}: the live pack was not kept (${e.message})
+`);
+    return { error: `the live pack was not kept: ${e.message}` };
+  }
+}
+// journey name → { id, label, refreshedAt } of the newest pack its runs kept.
+function livePacksByJourney() {
+  const out = new Map();
+  for (const [id, rec] of uploadsMap()) {
+    const source = typeof rec?.source === 'string' ? rec.source : '';
+    if (!source.startsWith(JOURNEY_LIVE_SOURCE)) continue;
+    out.set(source.slice(JOURNEY_LIVE_SOURCE.length), {
+      id, label: rec.label || null,
+      refreshedAt: rec.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null,
+    });
+  }
+  return out;
 }
 
 // POST /api/services/:id/run — a service's Run (studio Overview's service
@@ -1225,15 +1281,16 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
 //      service and environment, so the next Run replaces it;
 //   3. the check, saved — the journey `<slug>.<env>`: the scan as Pack A,
 //      the endpoint as Pack B; an existing one keeps its gate, schedule,
-//      notify and budget — and run, as POST /api/journeys/:name/run runs it.
+//      notify and budget — and run, as POST /api/journeys/:name/run runs it,
+//      which keeps the live side it read as `<service> · <env> · live`.
 // Body: { env } (may be left out when the service has one environment).
-// 200 { ok, record, pack, journey, scan }; 400/404 for a service,
+// 200 { ok, record, pack, journey, scan, livePack }; 400/404 for a service,
 // environment or repository the request cannot use; 409 for a record that
 // says nowhere to look (no repository, no endpoint); 422 for a scan that
 // read nothing or made no valid pack; 502 when the repository or the live
 // side did not answer (the live side's loss keeps a record, as a journey's).
-// Writes the pack's rows, a journey.capture row ({ via: 'service' }) and the
-// journey.run row.
+// Writes the rows of both packs, a journey.capture row ({ via: 'service' })
+// and the journey.run row.
 app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async (req, res) => {
   const db = currentStore();
   const id = positiveId(req.params.id);
@@ -1259,7 +1316,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   const endpoint = getMcpEndpointRow(db, env.mcpEndpointId);
-  const name = `${service.slug}.${env.name}`.replace(/[^A-Za-z0-9._-]/g, '_');
+  const name = serviceJourneyName(service.slug, env.name);
   let previous = null;
   try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
   const keep = (k) => (previous && previous[k] !== undefined ? { [k]: previous[k] } : {});

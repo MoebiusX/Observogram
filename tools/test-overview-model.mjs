@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   UI_MODES, OVERVIEW_STATUS, FRESH_WINDOW_MS,
-  decideUiMode, orderServicesForOverview, pickOverviewService, journeyForService, journeyIsLive,
+  decideUiMode, orderServicesForOverview, pickOverviewService, journeyForService, journeyIsLive, boardComparison,
   shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
@@ -76,6 +76,10 @@ const lostRun = { ...run, outcome: 'vantage-lost' };
 const partialRun = fixture('krystaline-run-partial');
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
+
+// The live pack the server kept from that run (GET /api/journeys `livePack`), and its catalogue entry.
+const LIVE_ENTRY = { id: 'uploaded-krystaline-live-5e1f', label: 'krystaline · prod · live', description: 'Uploaded pack — journey-live:krystaline', live: 'scaffold', source: 'uploaded', ok: true };
+const keptJourney = { ...journey, livePack: { id: LIVE_ENTRY.id, label: LIVE_ENTRY.label, refreshedAt: run.packB.refreshedAt } };
 
 // buildOverviewModel's input for the real screen: krystaline on prod, +2h after the run.
 const screen = (over = {}) => buildOverviewModel({
@@ -194,6 +198,39 @@ test('journeyIsLive: "mcp: …" as Pack B is live; a file path, nothing, or no j
 });
 
 // ---------- the grade words ----------
+
+test('boardComparison: the live pack the journey\'s last run read, only when that run is the board\'s letter (it graded this pack, its live side did not shrink) and the catalogue has it; Pack B with no environment, as the run adapted it; null otherwise', () => {
+  const catalog = [...packs, LIVE_ENTRY];
+  const pack = krystalinePack;
+  const pair = { packBId: LIVE_ENTRY.id, envB: null, label: 'krystaline · prod · live' };
+  const keptFor = (r) => ({ ...journey, livePack: { id: LIVE_ENTRY.id, label: LIVE_ENTRY.label, refreshedAt: r.packB.refreshedAt } });
+  assert.deepEqual(boardComparison({ journey: keptJourney, run, catalog, pack }), pair);
+  // Another read than the run shown (the listing moved on), a run that lost its vantage (it read nothing), no run.
+  assert.equal(boardComparison({ journey: { ...keptJourney, livePack: { ...keptJourney.livePack, refreshedAt: '2026-10-28T09:00:00.000Z' } }, run, catalog, pack }), null, 'another read than the one the board shows');
+  assert.equal(boardComparison({ journey: keptJourney, run: { ...run, outcome: 'vantage-lost', packB: { source: run.packB.source } }, catalog, pack }), null, 'a run that lost its vantage');
+  assert.equal(boardComparison({ journey: keptJourney, run: null, catalog, pack }), null, 'no run');
+  // A check whose live side showed less than the one before: the board grades the repository alone, so Expert gets no Pack B
+  // either (seen 2026-11-04: the board read C from the repository while that read, bound, graded B in Expert).
+  assert.ok(vantageShrank(partialRun).length > 0 && runGradedPack(partialRun, pack), 'the fixture is a shrunk read of this same pack');
+  assert.equal(boardComparison({ journey: keptFor(partialRun), run: partialRun, catalog, pack }), null, 'a live side that shrank');
+  assert.equal(keep(screen({ journeys: [keptFor(partialRun)], catalog, run: partialRun })).grade.basis, 'repository', 'and the board grades the repository alone then');
+  // A run of another Pack A than the board's pack.
+  assert.equal(boardComparison({ journey: keptJourney, run, catalog, pack: { ...pack, id: 'uploaded-other-0000', name: 'other', version: '9' } }), null, 'a run that graded another pack');
+  assert.equal(boardComparison({ journey: keptJourney, run, catalog }), null, 'no pack named');
+  // Not in the catalogue (evicted, or another org's), a listing without the field, nothing at all.
+  assert.equal(boardComparison({ journey: keptJourney, run, catalog: packs, pack }), null, 'not in the catalogue');
+  assert.equal(boardComparison({ journey: keptJourney, run, catalog: [...packs, { ...LIVE_ENTRY, ok: false }], pack }), null, 'a catalogue entry that failed');
+  assert.equal(boardComparison({ journey, run, catalog, pack }), null, 'a listing without livePack (a host whose server keeps none)');
+  assert.equal(boardComparison({ journey: { ...keptJourney, livePack: null }, run, catalog, pack }), null);
+  assert.equal(boardComparison({}), null);
+  assert.deepEqual(boardComparison({ journey: { ...keptJourney, livePack: { ...keptJourney.livePack, label: '' } }, run, catalog, pack }), { ...pair, label: null }, 'no label: null, never ""');
+  // The screen carries it exactly when its letter is the run's — never while reading, never for a member-only row.
+  const m = keep(screen({ journeys: [keptJourney], catalog }));
+  assert.deepEqual([m.compare, m.grade.basis], [pair, 'live']);
+  assert.equal(keep(screen()).compare, null, 'the listing names no live pack');
+  assert.equal(keep(screen({ journeys: [keptJourney], catalog, pending: true })).compare, null, 'reading');
+  assert.equal(keep(screen({ journeys: [keptJourney], catalog, serviceId: 2 })).compare, null, 'no pack of its own');
+});
 
 test('shortGradeLabel: the first word of each of the seven ladder labels, then "grade"; verdictWordFor: the engine\'s four bands at their edges', () => {
   assert.deepEqual([
@@ -1034,6 +1071,19 @@ test('renderOverview: the board — three numbered stages over three columns; th
   for (const [action, label] of [['ov-open-discover', 'Open in Discover'], ['ov-next-diagnose', 'Open in Diagnose'], ['ov-open-remediate', 'Open in Remediate']]) assert.ok(html.includes(`<button type="button" class="og-btn og-btn--text ov-link" data-ux-action="${action}">${label} <span class="ov-link__arrow" aria-hidden="true">→</span></button>`), label);
   c.click('ov-open-discover'); c.click('ov-next-diagnose'); c.click('ov-open-remediate'); c.click('ov-next-neuron'); c.click('ov-check');
   assert.deepEqual(calls, ['discover', 'diagnose', 'remediate', 'neuron', 'check']);
+  // The column links carry the comparison the board graded: the live pack its run read, null without one.
+  const carried = [];
+  const opens = { overview: { openDiscover: (x) => carried.push(['discover', x]), openDiagnose: (x) => carried.push(['diagnose', x]), openRemediate: (x) => carried.push(['remediate', x]) } };
+  const withLive = board({ diagnostic: diagnosticFull, journeys: [keptJourney], catalog: [...packs, LIVE_ENTRY] });
+  assert.ok(withLive.compare, 'the model carries the comparison');
+  const lc = overviewContainer();
+  renderOverview(lc, withLive, opens);
+  assert.ok(!lc.innerHTML.includes(LIVE_ENTRY.id) && !lc.innerHTML.includes('uploaded-'), 'the pack id rides on the click, never on the page');
+  lc.click('ov-open-discover'); lc.click('ov-next-diagnose'); lc.click('ov-open-remediate');
+  const nc = overviewContainer();
+  renderOverview(nc, board({ diagnostic: diagnosticFull }), opens);
+  nc.click('ov-next-diagnose');
+  assert.deepEqual(carried, [['discover', withLive.compare], ['diagnose', withLive.compare], ['remediate', withLive.compare], ['diagnose', null]]);
   assert.ok(!/<(img|script)\b/.test(html), 'no raw markup');
   assert.equal((html.match(/%<\//g) || []).length, 2, 'two percent signs reach the page: the ring\'s and the coverage stat\'s');
   // Never checked: the strip says so, the ring is empty, the counts withheld with their reason; the next step is the one primary.
@@ -1108,10 +1158,13 @@ test('the board agrees with the engine: a cell lit by live evidence alone is pre
 //
 // Last, so every model the tests above kept — the board's included — is walked.
 
+// `compare` is what a column link hands the host (a pack id, by design) and
+// is never drawn — the board's render test checks the id stays off the page.
+const HANDED_TO_HOST = new Set(['compare']);
 const stringsOf = (value, out = []) => {
   if (typeof value === 'string') out.push(value);
   else if (Array.isArray(value)) value.forEach((v) => stringsOf(v, out));
-  else if (value && typeof value === 'object') Object.values(value).forEach((v) => stringsOf(v, out));
+  else if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => { if (!HANDED_TO_HOST.has(k)) stringsOf(v, out); });
   return out;
 };
 

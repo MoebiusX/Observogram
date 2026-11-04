@@ -1126,6 +1126,22 @@ try {
     try { fakeDef('fake-bad-policy', ['keepLivePack: sometimes']); } catch (e) { policyErr = e.message; }
     assert(/journey fake-bad-policy: keepLivePack must be one of transitions, always, never \(got "sometimes"\)/.test(policyErr || ''), 'an unknown keepLivePack value is refused at load time, naming the allowed values', policyErr);
     assert(loadJourneyDef('fake-live').keepLivePack === undefined, 'a journey without keepLivePack loads unchanged (the default applies at run time)');
+    // onPackB: the Pack B the run graded, handed over once its record is on
+    // disk — `live` for an MCP read, never for a file.
+    const recordsOf = (name) => readdirSync(join(TMP, 'runs', name)).filter(f => f.endsWith('.json')).length;
+    let handed = null;
+    const o1 = await runJourney(fakeDef('fake-onpackb'), { onPackB: (p) => { handed = { ...p, records: recordsOf('fake-onpackb') }; } });
+    assert(handed && handed.live === true && handed.canonical?.metadata?.name === o1.packB.name && handed.source === o1.packB.source && /^mcp:/.test(handed.source)
+             && handed.refreshedAt === o1.packB.refreshedAt && !!handed.refreshedAt && handed.records === 1,
+           'a live run hands over the Pack B it graded, live, with the read time its record names, after the record is written', handed && { ...handed, canonical: undefined });
+    writeFileSync(join(TMP, 'journeys', 'fake-onpackb-file.journey.yaml'), [
+      'name: fake-onpackb-file',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    ].join('\n'));
+    let handedFile = null;
+    await runJourney(loadJourneyDef('fake-onpackb-file'), { onPackB: (p) => { handedFile = p; } });
+    assert(handedFile && handedFile.live === false && !/^mcp:/.test(handedFile.source), 'a file Pack B is handed over too, never as live', handedFile && { ...handedFile, canonical: undefined });
     // Pruning: retention drops records, then their orphaned snapshots — never a survivor's.
     process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '2';
     const orphan = '2000-01-01T00-00-00-000Z.json';
