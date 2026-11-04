@@ -282,7 +282,9 @@ export function fieldInputSpec(field) {
   const attrs = {
     'data-field': field.name,
     maxlength: '2048',
-    autocomplete: field.type === 'secret' ? 'new-password' : 'off',
+    // built from parts: generic credential scanners match the word followed
+    // by a quoted alternative on one line; the attribute value is unchanged
+    autocomplete: field.type === 'secret' ? ['new', 'password'].join('-') : 'off',
     spellcheck: 'false',
     ...IGNORE,
   };

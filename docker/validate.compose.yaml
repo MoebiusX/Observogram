@@ -13,7 +13,8 @@ services:
       - "127.0.0.1:13000:3000"
     environment: &gf-env
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # dev login admin/admin; override with OBSERVOGRAM_GF_ADMIN_CRED
+      GF_SECURITY_ADMIN_PASSWORD: ${OBSERVOGRAM_GF_ADMIN_CRED:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
