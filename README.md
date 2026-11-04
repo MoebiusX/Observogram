@@ -910,9 +910,10 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | Method | Path | Who | Body | What it does |
 |---|---|---|---|---|
 | `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; a slug in use is 409 naming its id |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
+| `POST` | `/api/services/:id/run` | operator | `{ env? }` | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
 | `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
@@ -1085,6 +1086,50 @@ with their URLs, and never changes an endpoint.
   so. A deploy profile remembers its endpoint per org; a profile with a
   typed URL, opened by a reader who may not type one, says so and sends the
   list's endpoint.
+
+#### A Service's Run
+
+A service is checked in two places: its **repository**, where what it should
+have is declared, and, for each environment, the **MCP endpoint** that reads
+what it has. The service record holds the first (`repository`), the
+environment the second (`mcpEndpointId`); Overview's front door is the list
+of both with **Add a service** (four answers: the name, the environment, the
+repository, the live endpoint) and **Run** on every row.
+
+`repository` is `{ kind, location, ref? }`:
+
+| `kind` | `location` | Read with |
+|---|---|---|
+| `github` | `https://github.com/<owner>/<repo>` or `<owner>/<repo>` (…`/tree/<ref>` names a branch) | the contents API with `GITHUB_TOKEN` on the server (a private repository); without one, `raw.githubusercontent.com` (a public one, outside the API's hourly quota) |
+| `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | `AZURE_DEVOPS_TOKEN` (a personal access token with Code (Read)); the token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
+| `path` | a folder's full path on the server | the server's own file system, under the org's part of the workspace; taken only under a folder listed in `OBSERVOGRAM_REPO_ROOTS` (comma-separated), or — none listed — from the server's own machine while it runs without sign-in on loopback |
+
+`ref` is a branch (the default branch when left out). `POST
+/api/services/:id/run` with `{ env }` (left out when the service has one
+environment) does the whole check:
+
+1. **The targets** — the environment's endpoint, resolved as a journey's
+   live Pack B is (a refusal reads nothing and sends nothing); a folder's
+   rule is read again.
+2. **The scan** — the repository read now and crawled under the service's
+   slug and the environment's name, so the scan is the service's own pack
+   (`primary`), registered under the label `<name> · <env> · repository`:
+   the next Run's scan replaces it.
+3. **The check** — saved as the journey `<slug>.<env>` (the scan as Pack A,
+   the endpoint as Pack B; an existing one keeps its gate, schedule, notify
+   and budget) and run, exactly as `POST /api/journeys/:name/run` runs it.
+   **Check now** on the board re-checks live against the last scan; **Run**
+   reads the repository again too.
+
+The answer is `{ ok, record, pack: { id, label }, journey, scan: { source,
+ref, files, candidates, skipped } }`. A service or environment that is not
+there is 404; a record that says nowhere to look — no repository, no
+endpoint — is 409 naming what to add; a scan that read nothing, or made no
+valid pack, is 422; a repository or live side that did not answer is 502
+(the live side's loss keeps a run record, as a journey's does). The route
+takes the live MCP API's posture — the CSRF header always, a direct
+loopback request without sign-in, closed when exposed — and writes the
+pack's rows, `journey.capture { via: 'service' }` and `journey.run`.
 
 ### The Audit
 
@@ -3101,9 +3146,10 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
 | `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository` (`changed` lists what differed; nothing → no audit row) |
+| `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |
 | `GET` | `/api/services/:id/waivers` | The service's waivers of conformance findings (GAP batch 2), newest first, history included: `{ ok, service: { id, slug }, waivers[], counts: { active, expired, revoked } }` — each `{ id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason }`; the `author` is the audit actor, visible to every member — see [Waive A Conformance Finding](#waive-a-conformance-finding) |

@@ -1,6 +1,6 @@
 // server/store/migrations.mjs — ordered schema steps keyed by PRAGMA
 // user_version (docs/STORE_PLAN.md §1 "Migrations", §2 "Schema v1" and
-// "Schema v2").
+// "Schema v2"; schema v3 below adds the service's repository).
 //
 // Step N takes the store from user_version N-1 to N. For each pending step
 // the runner:
@@ -207,6 +207,19 @@ CREATE TABLE waivers (
 CREATE INDEX waivers_service ON waivers (service_id, org_id);
 `;
 
+// ---------- schema v3 — the service's repository ----------
+//
+// Where a service's declaration lives (studio Overview's service list): a
+// JSON object { kind, location, ref } — kind github | ado | path, the
+// location as server/service-admin.mjs parseRepository normalised it, ref a
+// branch or null (the default branch) — or NULL while nobody has said. The
+// service's Run reads the repository from here, scans it and checks the
+// scan against each environment's MCP endpoint. Its own column, so a
+// backfilled service (one a pack registration created) simply has none.
+const SCHEMA_V3 = `
+ALTER TABLE services ADD COLUMN repository TEXT;
+`;
+
 export const STEPS = [
   {
     version: 1,
@@ -221,6 +234,13 @@ export const STEPS = [
     name: 'gap-batch-2',
     up(db) {
       execScript(db, SCHEMA_V2);
+    },
+  },
+  {
+    version: 3,
+    name: 'service-repository',
+    up(db) {
+      execScript(db, SCHEMA_V3);
     },
   },
 ];

@@ -205,7 +205,7 @@ const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 90071992
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
-const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
@@ -248,7 +248,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.checkout = json.service.id;
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
   // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
@@ -256,7 +256,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.payments = second.json.service.id;
   assert.deepEqual(stamped(second.json.service), {
     id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
-    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
   // tier: null is "graded by the pack", explicitly.
@@ -292,7 +292,7 @@ test('GET /api/services and GET /api/services/:id: the views by slug, as a viewe
   const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
   assert.deepEqual(stamped(one.json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
   for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
@@ -305,7 +305,7 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
-    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
   // Only what differs is a change (and a row names only those fields).
@@ -895,7 +895,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, source: { kind: 'observogram' },
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
@@ -935,7 +935,7 @@ test('a register writes the service, environment and link rows by the person reg
   ids.demo = demo.id;
   ids.demoProd = demo.environments[0].id;
   assert.deepEqual(stamped(demo), {
-    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, source: { kind: 'observogram' },
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
     environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1269,7 +1269,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, source: { kind: 'observogram' },
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],

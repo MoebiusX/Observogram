@@ -2,6 +2,9 @@
 // §2). Every call reads currentOrg() and touches only that org's rows; a
 // call outside runWithOrg() throws. tier is the service's criticality (the
 // pack's bindings.criticality vocabulary), not a library minTier.
+// repository is where the service's declaration lives (schema v3): an object
+// { kind, location, ref } as server/service-admin.mjs parseRepository
+// normalised it, or null.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -13,8 +16,16 @@ export function rowToService(r) {
   if (!r) return null;
   return {
     id: r.id, orgId: r.org_id, slug: r.slug, name: r.name, owners: fromJson(r.owners, []),
-    tier: r.tier, description: r.description, createdAt: r.created_at, updatedAt: r.updated_at,
+    tier: r.tier, description: r.description, repository: fromJson(r.repository ?? null, null),
+    createdAt: r.created_at, updatedAt: r.updated_at,
   };
+}
+
+// null, or a plain object (the admin module owns its shape).
+function repositoryJson(repository) {
+  if (repository === null || repository === undefined) return null;
+  if (typeof repository !== 'object' || Array.isArray(repository)) throw new TypeError('observogram store: repository is an object or null');
+  return JSON.stringify(repository);
 }
 
 function requireOwners(owners) {
@@ -41,15 +52,16 @@ export function listServices(db) {
 
 // detail extends the service.create row ({ via: 'pack', pack } when a
 // register or the import created it).
-export function createService(db, actor, { slug, name, owners = [], tier = null, description = null }, { detail = null } = {}) {
+export function createService(db, actor, { slug, name, owners = [], tier = null, description = null, repository = null }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(slug, 'slug');
   requireText(name, 'name');
   const at = nowIso();
   return atomic(db, () => {
-    const row = prepare(db, `INSERT INTO services (org_id, slug, name, owners, tier, description, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`).get(
-      org, slug, name, toJson(requireOwners(owners)), optionalText(tier, 'tier'), optionalText(description, 'description', { max: 4000 }), at, at);
+    const row = prepare(db, `INSERT INTO services (org_id, slug, name, owners, tier, description, repository, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`).get(
+      org, slug, name, toJson(requireOwners(owners)), optionalText(tier, 'tier'), optionalText(description, 'description', { max: 4000 }),
+      repositoryJson(repository), at, at);
     writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail });
     return rowToService(row);
   });
@@ -63,8 +75,9 @@ export function updateService(db, actor, id, patch) {
     owners: patch.owners === undefined ? undefined : toJson(requireOwners(patch.owners)),
     tier: patch.tier === undefined ? undefined : optionalText(patch.tier, 'tier'),
     description: patch.description === undefined ? undefined : optionalText(patch.description, 'description', { max: 4000 }),
+    repository: patch.repository === undefined ? undefined : repositoryJson(patch.repository),
   };
-  const { sql, params, fields } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description' });
+  const { sql, params, fields } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) throw notFound('service', id);

@@ -125,3 +125,23 @@ export function verdictLoader({ fetchFn = requestJson, concurrency = 4 } = {}) {
     pending() { return inFlight.size; },
   };
 }
+
+// ---------- the service record's places (Overview's service list) ----------
+//
+// The environment and MCP endpoint calls the list's form also makes are
+// studio/settings-api.mjs's (createEnvironment, patchEnvironment, createEndpoint).
+
+const jsonBody = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+
+// POST /api/services → ServiceView (operator; a 409 throws `409: service "<slug>" exists …`).
+export async function createServiceRecord(body, { fetchFn = requestJson } = {}) {
+  const doc = await fetchFn('/api/services', jsonBody('POST', body));
+  return doc?.service ?? null;
+}
+
+// POST /api/services/:id/run { env } → { record, pack, journey, scan } — the repository scanned
+// and checked against live. A 502 (the repository or the live side did not answer) throws its
+// sentence with `.status`; the live side's loss has kept a record, which the next read shows.
+export async function runServiceRecord(id, env, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(id)}/run`, jsonBody('POST', env ? { env } : {}));
+}

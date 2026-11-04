@@ -198,6 +198,7 @@ buildOverviewModel({
   layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
   unkinded,                                     // computePostureMatrix(layered).unkinded (optional: below)
   access, start, startable,                     // the reader's rank ({ canWrite, reason }); the start's state; true when you run the start (below)
+  listable,                                     // true when you draw the service list as the front door (below): the header links back
   now, productName,
 });
 ```
@@ -230,6 +231,7 @@ host.overview = {
   expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
   scan(), live(), upload(slot), resetStart(),   // the start's ways in (below): your repo scan, your live draft, your upload into 'a' or 'b'; Change Pack A
   explain(reason),                              // a start card the reader's rank cannot use, activated
+  backToList(),                                 // ← Services, with `listable` (the service list: below)
 };
 ```
 
@@ -284,6 +286,58 @@ its live job (a finished job's pack is Pack B), its file upload (a file
 dropped on the page while the start is up fills the next step). The static bundle (DOWNSTREAM.md
 §10) does not draw Overview: its shim answers the services and journeys
 routes with 501.
+
+**The service list** is Overview's front door where the services table
+exists: one row per service and environment with its two places — the
+repository (`repository` on the service record: GitHub, Azure DevOps or a
+folder on the server) and the live MCP endpoint (the environment's
+`mcpEndpoint`) — its last check, and *Run*, *Open*, *Change*; *Add a service*
+is the form of four answers. It is opt-in like the start: without
+`listable: true` the board's header has no way back, and nothing else
+changes. The models are pure; the state (the form, which row runs, whether
+the board or the list is on screen) is the host's:
+
+```js
+import { serviceListModel, formOpened, formInput, formProblems, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
+import { renderServiceList } from './overview-view.mjs';
+import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys + GET /api/mcp-endpoints, failures as sentences
+import { createServiceRecord, patchService, runServiceRecord } from './services-api.mjs';
+
+const facts = await loadServiceListFacts();     // { journeys, journeysError, endpoints, endpointsError, register }
+let form = FORM_CLOSED;
+const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
+  journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
+  access, now: Date.now(), running, results, showAll });         // running / results: { [rowKey(serviceId, env)]: true | { error } }
+renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access }), host);
+
+host.overview = {
+  ...host.overview,
+  addService() { form = { ...formOpened(services, { endpoints: facts.endpoints }), focus: 'name' }; repaint(); },
+  editService(serviceId, env) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints }), focus: 'location' }; repaint(); },
+  formInput(field, value, { redraw } = {}) { form = formInput(form, field, value); if (redraw) repaint(); },
+  async saveService({ run }) {                  // formProblems(form.values) first; then the plan, call by call:
+    const plan = savePlan(form.values, { services, keyOf: normalizeServiceKey, serviceId: form.serviceId });
+    // plan.endpoint.create → POST /api/mcp-endpoints; plan.service.create → POST /api/services (createServiceRecord),
+    // plan.service.patch → PATCH /api/services/:id; plan.env.create → POST /api/services/:id/environments,
+    // plan.env.bind → PATCH /api/environments/:id { mcpEndpointId }. Then re-read, and Run when asked.
+  },
+  closeForm() { form = FORM_CLOSED; repaint(); },
+  runService(key) { /* POST /api/services/:id/run { env } (runServiceRecord), then re-read the list's facts */ },
+  openService(serviceId, env) { /* draw the board for that row */ },
+  backToList() { /* draw the list again */ },
+  showAll() { /* list the services a live draft discovered too */ },
+  compare() { /* optional: your way to packs already in hand; without it the line is not drawn */ },
+};
+```
+
+A row whose Run cannot start says why (`run.reason`: no environment, no
+repository, no endpoint, the reader's rank) and its button explains instead
+of acting; `savePlan` completes the record a name keys (`keyOf` is the
+catalogue's slug rule) and never makes a second one. `journeyForService`
+is the rule for a row's last check: a journey scoped to another environment
+is never this one's. The studio's wiring is `renderOverviewHost`,
+`saveListForm`, `runListRow` and `overviewActions` in `studio/app.mjs`; the
+server's half is `POST /api/services/:id/run` (README, *A Service's Run*).
 
 **Staying current:** the headless suite is the smoke test — copy
 `tools/test-overview-model.mjs` and `tools/fixtures/overview/` beside the
