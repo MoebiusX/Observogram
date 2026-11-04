@@ -442,6 +442,9 @@ const START_CARDS = {
     { action: 'ov-upload-b', glyph: '▤', label: 'Upload a pack', sub: 'a live snapshot or another v1.4 manifest, as Pack B' },
   ],
 };
+// The hook each card calls (host.overview): a host that does not supply one
+// gets that card drawn unavailable, never a card that does nothing.
+const START_HOOK = { 'ov-scan': 'scan', 'ov-upload-a': 'upload', 'ov-live': 'live', 'ov-upload-b': 'upload' };
 function startCardHtml(c, reason) {
   const off = !!reason;
   return `
@@ -452,8 +455,9 @@ function startCardHtml(c, reason) {
             <span class="ov-start__why">${escapeHtml(reason)}</span>` : ''}
           </button>`;
 }
-function startHtml(sources, start, serviceName = null) {
+function startHtml(sources, start, serviceName = null, ov = {}) {
   const denied = sources && sources.enabled === false ? (sources.reason || 'Not available for your role here.') : '';
+  const offered = (c) => (typeof ov[START_HOOK[c.action]] === 'function' ? '' : 'Not offered here.');
   const a = start?.a || null;
   const steps = START_STEPS.map((st) => `
         <li class="ov-step${st.n === 1 && a ? ' ov-step--done' : ''}">
@@ -470,8 +474,8 @@ function startHtml(sources, start, serviceName = null) {
             <span class="ov-start__sub">loaded — now its live side, in step 2</span>
             <button type="button" class="ov-start__expert" data-ux-action="ov-start-reset">Change Pack A</button>
           </div>`
-    : START_CARDS.a.map((c) => startCardHtml(c, denied)).join('');
-  const colB = START_CARDS.b.map((c) => startCardHtml(c, denied || (a ? '' : 'Load Pack A first, in step 1.'))).join('');
+    : START_CARDS.a.map((c) => startCardHtml(c, denied || offered(c))).join('');
+  const colB = START_CARDS.b.map((c) => startCardHtml(c, denied || offered(c) || (a ? '' : 'Load Pack A first, in step 1.'))).join('');
   return `
     <section class="ov-start" aria-labelledby="ov-start-h">
       <header class="ov-start__head">
@@ -486,7 +490,7 @@ function startHtml(sources, start, serviceName = null) {
         <div class="ov-start__col" role="group" aria-label="Step 2: Pack B">${colB}
         </div>
         <div class="ov-start__col" role="group" aria-label="Step 3: the comparison">
-          <p class="ov-start__auto og-muted">Opens by itself once both packs are in: the declared side against the live side, in Diagnose.</p>
+          <p class="ov-start__auto og-muted">Runs by itself once both packs are in: what the repository declares, checked against what runs live.</p>
         </div>
       </div>
       <p class="ov-start__foot og-muted">Already have packs? <button type="button" class="ov-start__expert" data-ux-action="ov-expert">Open Expert mode</button></p>
@@ -497,8 +501,15 @@ export function renderOverview(container, model, host = appHost) {
   const ov = host?.overview || {};
   let body;
   let board = false;
-  if (model.kind === 'empty') {
-    body = startHtml(model.sources, model.start);
+  if (model.kind === 'empty' && model.start) {
+    body = startHtml(model.sources, model.start, null, ov);
+  } else if (model.kind === 'empty') {
+    body = emptyStateHtml({
+      title: 'No service to show yet.',
+      checked: 'the services table of this organisation',
+      body: 'A service appears here once a pack that names it is registered.',
+      actions: [{ action: 'ov-expert', label: 'Open Expert mode' }],
+    });
   } else if (model.kind === 'error') {
     body = emptyStateHtml({
       title: 'The services could not be read.',
@@ -509,7 +520,7 @@ export function renderOverview(container, model, host = appHost) {
   } else if (model.kind === 'loading') {
     body = '<p class="ov-loading og-muted" role="status">Reading the services…</p>';
   } else if (model.kind === 'service' && model.start) {
-    body = headHtml(model) + startHtml(model.sources, model.start, model.service?.name);
+    body = headHtml(model) + startHtml(model.sources, model.start, model.service?.name, ov);
   } else if (boardApplies(model)) {
     try { body = headHtml(model) + boardBodyHtml(model); board = true; }
     catch (e) {

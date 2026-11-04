@@ -131,7 +131,7 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
-| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `decideUiMode`, `decideOverviewLayout`); see *The Overview board* below |
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
 | [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
 | [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
@@ -196,7 +196,7 @@ buildOverviewModel({
   journeys, journeysError, run,                 // GET /api/journeys and the service's newest run record
   running, startError, pending,                 // a check in flight, a refused start, facts still being read
   layout, cells, layered, conformance, conformanceError,   // 'board' | 'simple'; computePostureMatrix(layered).cells; the layered pack; GET /api/packs/:id/conformance
-  access, start,                                // the reader's rank ({ canWrite, reason }); the drift check under way ({ a: { id, label } } once Pack A is in)
+  access, start, startable,                     // the reader's rank ({ canWrite, reason }); the start's state; true when you run the start (below)
   now, productName,
 });
 ```
@@ -219,7 +219,7 @@ host.overview = {
   checkNow(),                                   // Check again → runServiceCheck, then re-read the facts
   openDiscover(), openDiagnose(), openRemediate(), openNeuron(),   // the column links and "See the differences"
   expert(), retry(),                            // the mode switch; the Retry of an unreadable listing
-  scan(), live(), upload(slot), resetStart(),   // the start's ways in: a repo scan (Pack A), a live draft (Pack B), an upload into 'a' or 'b'; Change Pack A
+  scan(), live(), upload(slot), resetStart(),   // the start's ways in (below): your repo scan, your live draft, your upload into 'a' or 'b'; Change Pack A
   explain(reason),                              // a start card the reader's rank cannot use, activated
 };
 ```
@@ -229,12 +229,50 @@ At most one `.og-btn--primary` is drawn in any state, and as many as the
 model's `primary` says; the simple layout is drawn instead of the board when
 `model.layout` is `'simple'`, when the service's only pack is a live
 aggregate's, or when the board throws (the error is logged and the screen
-never goes blank). With no service, or a service with no pack at all, the
-model carries `start` and the view draws the drift check's three steps —
-Pack A from a scan or an upload, Pack B from a live draft or an upload — in
-place of the panels; the host routes the pack each way in produces (the
-studio keeps Pack A while Overview is on screen, and opens the comparison
-once Pack B is in). The static bundle (DOWNSTREAM.md
+never goes blank).
+
+**The start** is the drift check run from the board when there is nothing to
+grade — no service, or a service with no pack at all: step 1 lands Pack A (a
+repo scan or an upload), step 2 Pack B (a live draft or an upload), step 3
+is your comparison of the two. It is opt-in: without `startable: true` the
+board draws what it always did — *No service to show yet* and *Open Expert
+mode* — so a host that copies a newer board before wiring the start loses
+nothing. With it, the model carries `start` and the view draws the three
+steps in place of the panels; a card whose hook you do not supply is drawn
+unavailable (*Not offered here*), never one that does nothing. The flows are
+yours; the routing is the model's, so every host keeps Pack A and pairs the
+packs alike:
+
+```js
+import { START_IDLE, startChoose, startAdopted } from './overview-model.mjs';
+
+let start = START_IDLE;                         // keep it beside the model's other inputs
+host.overview.scan = () => { start = startChoose(start, 'a'); openYourScan(); };
+host.overview.live = () => { start = startChoose(start, 'b'); openYourLiveDraft(); };
+host.overview.upload = (slot) => { start = startChoose(start, slot); openYourFilePicker(); };
+host.overview.resetStart = () => { start = START_IDLE; repaint(); };
+
+// When one of those flows registers a pack while the board is on screen:
+const { start: next, compare, said, refused } = startAdopted(start, { id, label });
+start = next;
+if (compare) runYourCheck(compare.a.id, compare.b.id);         // step 3 (the studio: below)
+else repaint();                                                 // Pack A in: step 2 opens
+announce(said);                                                 // `refused`: the same pack offered as Pack B
+
+render(buildOverviewModel({ ...facts, access, start, startable: true }));
+```
+
+Registering Pack A usually creates its service; the model keeps the start
+on screen while `start.a` is set, so the board does not jump to an empty
+service between the steps. Step 3 is the host's; the studio keeps it on the
+board: it saves the pair as the service's check (`POST /api/journeys/capture`,
+named `<service>-repo-vs-live`), re-reads the board's facts and runs the check
+(`runServiceCheck`), so the board shows the grade against live and what to
+change; `journeyForService` prefers a check of the service's own pack, so the
+saved one is the one shown. The studio's wiring is `overviewActions`,
+`overviewStartAdopt` and `overviewStartCheck` in `studio/app.mjs`: its scan,
+its live job (a finished job's pack is Pack B), its file upload (a file
+dropped on the page while the start is up fills the next step). The static bundle (DOWNSTREAM.md
 §10) does not draw Overview: its shim answers the services and journeys
 routes with 501.
 

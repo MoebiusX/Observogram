@@ -25,6 +25,7 @@ import {
   shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
+  START_IDLE, startChoose, startAdopted,
 } from '../studio/overview-model.mjs';
 import { renderOverview } from '../studio/overview-view.mjs';
 
@@ -150,6 +151,11 @@ test('journeyForService: found by the pack file although scope.service is null; 
   assert.equal(journeyForService(journeys, { slug: 'kx-exchange', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService([scoped], { slug: 'kx-matcher', env: 'prod', packId: 'uploaded-krystaline-8ead3bb1' }), null);
   assert.equal(journeyForService(journeys, { slug: null, env: null, packId: null }), null, 'nothing to match on matches nothing');
+  // The start saves a check of the service's own pack beside an older one scoped to the service: the board shows the start's.
+  const older = { ...journey, name: 'kx-wallet', packA: '/w/packs/old.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  const startCheck = { ...journey, name: 'kx-wallet-repo-vs-live', packA: '/w/packs/uploaded-kx-wallet-1.pack.yaml', scope: { service: 'kx-wallet', env: 'prod' } };
+  assert.equal(journeyForService([older, startCheck], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), startCheck, 'the check of the service\'s own pack wins over one merely scoped to it');
+  assert.equal(journeyForService([older], { slug: 'kx-wallet', env: 'prod', packId: 'uploaded-kx-wallet-1' }), older, 'with none of its own pack, the scoped one');
   // A Windows path to the same pack file is the same link.
   assert.equal(journeyForService([{ ...journey, packA: 'C:\\demo\\.observogram-demo\\packs\\uploaded-krystaline-a37d2521.pack.yaml' }], { packId: 'uploaded-krystaline-a37d2521' })?.name, 'krystaline');
   // Among several journeys of the pack: the one whose scope.env is the environment on screen, else the first.
@@ -521,21 +527,42 @@ test('buildOverviewModel: the real screen end to end — krystaline on prod, gra
   const blank = { options: [], service: null, envs: [], env: null, grade: null, still: null, next: null, productName: '', primary: null, layout: 'board', board: null };
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: down' }, catalog: packs })), { kind: 'error', error: '503: down', ...blank });
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: null } })), { kind: 'error', error: 'the services table could not be read', ...blank });
-  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank, sources: { enabled: true, reason: null }, start: { a: null } });
-  assert.deepEqual(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, access: { canWrite: false, reason: 'viewers cannot load packs' } }).sources, { enabled: false, reason: 'viewers cannot load packs' }, 'empty: a rank that cannot load a pack is told why');
+  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs })), { kind: 'empty', error: null, ...blank }, 'a host that does not run the start: the empty state as it was');
+  assert.deepEqual(keep(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, catalog: packs, startable: true })), { kind: 'empty', error: null, ...blank, sources: { enabled: true, reason: null }, start: { a: null } });
+  assert.deepEqual(buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, access: { canWrite: false, reason: 'viewers cannot load packs' } }).sources, { enabled: false, reason: 'viewers cannot load packs' }, 'empty: a rank that cannot load a pack is told why');
   assert.deepEqual(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'loading', error: null } })), { kind: 'loading', error: null, ...blank });
   assert.equal(keep(buildOverviewModel({})).kind, 'empty', 'no status at all reads as empty, never as an error');
   // A drift check started here: Pack A registered (its service now in the table), the start stays until step 2.
-  const started = keep(screen({ start: { a: { id: 'kx-scan', label: 'krystaline (scanned draft)' } } }));
+  const started = keep(screen({ startable: true, start: { a: { id: 'kx-scan', label: 'krystaline (scanned draft)' } } }));
   assert.deepEqual([started.kind, started.service, started.start, started.primary], ['empty', null, { a: { label: 'krystaline (scanned draft)' } }, null]);
+  assert.equal(keep(screen({ start: { a: { id: 'kx-scan', label: 'x' } } })).kind, 'service', 'a start state from a host that does not run the start changes nothing');
   // A service with no pack at all (its pack dropped, the row kept): the start under its own header, not "Open Expert mode".
-  const packless = keep(screen({ services: [{ ...KRYSTALINE, packs: [] }] }));
+  const packless = keep(screen({ startable: true, services: [{ ...KRYSTALINE, packs: [] }] }));
   assert.deepEqual([packless.kind, packless.service.slug, packless.grade.label, packless.start, packless.sources, packless.next.button, packless.primary], ['service', 'krystaline', 'No pack yet', { a: null }, { enabled: true, reason: null }, null, null]);
-  assert.equal(keep(screen({ serviceId: 2 })).start, undefined, 'a member-only row stays Expert\'s: no start');
-  assert.equal(keep(screen({})).start, undefined, 'a service with a pack of its own: no start');
+  const packlessOld = keep(screen({ services: [{ ...KRYSTALINE, packs: [] }] }));
+  assert.deepEqual([packlessOld.start, packlessOld.next.button.label, packlessOld.primary], [undefined, 'Open Expert mode', 'next'], 'not startable: Open Expert mode, as it was');
+  assert.equal(keep(screen({ startable: true, serviceId: 2 })).start, undefined, 'a member-only row stays Expert\'s: no start');
+  assert.equal(keep(screen({ startable: true })).start, undefined, 'a service with a pack of its own: no start');
   assert.equal(keep(buildOverviewModel({ services: null, servicesStatus: { kind: 'static', error: null } })).kind, 'error', 'any status but ok/loading with no rows is unreadable');
 });
 
+
+test('startChoose / startAdopted: the start\'s logic every host shares — Pack A kept at step 1, the pair to compare at step 2, the same pack refused as Pack B', () => {
+  assert.deepEqual(START_IDLE, { slot: null, a: null });
+  assert.ok(Object.isFrozen(START_IDLE));
+  assert.deepEqual(startChoose(START_IDLE, 'a'), { slot: 'a', a: null });
+  assert.deepEqual(startChoose(START_IDLE, 'anything'), { slot: 'a', a: null }, 'anything but b is step 1');
+  const a = { id: 'repo-1', label: 'krystaline (scanned)' };
+  const one = startAdopted(startChoose(START_IDLE, 'a'), a);
+  assert.deepEqual(one, { start: { slot: null, a }, compare: null, said: 'Pack A loaded: krystaline (scanned). Step 2: its live side.', refused: false });
+  assert.deepEqual(startChoose(one.start, 'b'), { slot: 'b', a });
+  const two = startAdopted(startChoose(one.start, 'b'), { id: 'live-1', label: 'production-live' });
+  assert.deepEqual(two, { start: START_IDLE, compare: { a, b: { id: 'live-1', label: 'production-live' } }, said: 'Comparing krystaline (scanned) against production-live.', refused: false });
+  assert.deepEqual(startAdopted(startChoose(one.start, 'b'), { id: 'repo-1', label: 'again' }), { start: { slot: null, a }, compare: null, said: 'That pack is Pack A already: step 2 needs its live side.', refused: true });
+  assert.deepEqual(startAdopted(startChoose(one.start, 'a'), { id: 'repo-2', label: 'other' }).start, { slot: null, a: { id: 'repo-2', label: 'other' } }, 'step 1 again: Change Pack A');
+  assert.deepEqual(startAdopted({ slot: 'b', a: null }, { id: 'x' }).start, { slot: null, a: { id: 'x', label: 'x' } }, 'no Pack A yet: the pack is Pack A');
+  assert.deepEqual(startAdopted(one.start, { label: 'no id' }), { start: one.start, compare: null, said: '', refused: false }, 'a pack with no id changes nothing');
+});
 
 // ---------- one primary across the screen ----------
 
@@ -570,6 +597,8 @@ const STATES = {
   'running, unreachable': { run: lostRun, running: true },
   'no pack of its own': { serviceId: 2 },
   'no pack': { services: [{ ...KRYSTALINE, packs: [] }] },
+  'no pack, startable': { services: [{ ...KRYSTALINE, packs: [] }], startable: true },
+  'empty, startable': { services: [], startable: true },
   'grade error': { diagnosticError: 'bad yaml', journeys: [] },
   'start error': { startError: '502: gateway' },
   'journeys error': { journeysError: '500: boom', run: null },
@@ -579,7 +608,7 @@ const STATES = {
   empty: { services: [] },
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -713,8 +742,14 @@ test('renderOverview: a hostile service name is escaped; running is aria-busy; t
 });
 
 test('renderOverview: empty, error and loading render without throwing and without the panels; the markup\'s primary count agrees with the model in every state', () => {
+  const plain = overviewContainer();
+  assert.doesNotThrow(() => renderOverview(plain, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null } }), { overview: {} }));
+  assert.ok(plain.innerHTML.includes('<p class="ux-empty-title">No service to show yet.</p>') && plain.innerHTML.includes('A service appears here once a pack that names it is registered.'), 'not startable: the empty state as it was');
+  assert.ok(plain.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !plain.innerHTML.includes('ov-start'), 'no start drawn for a host that does not run it');
+  // A host that runs the start: its hooks on host.overview, startable in the model's input.
+  const hooks = { overview: { scan() {}, live() {}, upload() {}, resetStart() {}, explain() {}, expert() {} } };
   const empty = overviewContainer();
-  assert.doesNotThrow(() => renderOverview(empty, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null } }), { overview: {} }));
+  assert.doesNotThrow(() => renderOverview(empty, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true }), hooks));
   assert.ok(empty.innerHTML.includes('id="ov-start-h">No service to show yet.</h2>') && empty.innerHTML.includes('A service appears here once a pack that names it is registered'));
   assert.ok(empty.innerHTML.includes('Scan a repo') && empty.innerHTML.includes('Generate from live') && empty.innerHTML.includes('Diagnose drift'), 'empty: the three steps');
   // Step 1 offers the scan and an upload as Pack A; step 2 (live, or an upload as Pack B) waits for Pack A.
@@ -722,19 +757,23 @@ test('renderOverview: empty, error and loading render without throwing and witho
   assert.deepEqual(['ov-scan', 'ov-upload-a', 'ov-live', 'ov-upload-b'].map((a) => stepOf(empty.innerHTML, 1).includes(`data-ux-action="${a}"`)), [true, true, false, false], 'step 1: scan and upload');
   assert.equal(countOf(stepOf(empty.innerHTML, 2), 'data-ux-action="ov-explain" aria-disabled="true" data-reason="Load Pack A first, in step 1."'), 2, 'step 2: live and upload, drawn waiting for Pack A');
   const second = overviewContainer();
-  renderOverview(second, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, start: { a: { id: 'kx', label: 'kx <scan>' } } }), { overview: {} });
+  renderOverview(second, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, start: { a: { id: 'kx', label: 'kx <scan>' } } }), hooks);
   assert.ok(stepOf(second.innerHTML, 1).includes('Pack A: kx &lt;scan&gt;') && stepOf(second.innerHTML, 1).includes('data-ux-action="ov-start-reset"') && !second.innerHTML.includes('data-ux-action="ov-scan"'), 'step 1 done: Pack A named, escaped, changeable');
   assert.deepEqual(['ov-live', 'ov-upload-b'].map((a) => stepOf(second.innerHTML, 2).includes(`data-ux-action="${a}"`)), [true, true], 'step 2 open: live and upload as Pack B');
   assert.equal(countOf(second.innerHTML, 'og-btn--primary'), 0);
   const packless = overviewContainer();
-  renderOverview(packless, screen({ services: [{ ...KRYSTALINE, name: 'k8s <x>', packs: [] }] }), { overview: {} });
+  renderOverview(packless, screen({ startable: true, services: [{ ...KRYSTALINE, name: 'k8s <x>', packs: [] }] }), hooks);
   assert.ok(packless.innerHTML.includes('id="ov-service"') && packless.innerHTML.includes('id="ov-start-h">No pack for k8s &lt;x&gt; yet.</h2>'), 'a pack-less service: its header, then the start, named and escaped');
   assert.ok(stepOf(packless.innerHTML, 1).includes('data-ux-action="ov-scan"') && !packless.innerHTML.includes('ov-grade') && !packless.innerHTML.includes('ov-next'), 'the start in place of the three panels');
   assert.ok(empty.innerHTML.includes('data-ux-action="ov-expert">Open Expert mode</button>') && !empty.innerHTML.includes('ov-grade') && !empty.innerHTML.includes('id="ov-service"'));
   const viewer = overviewContainer();
-  renderOverview(viewer, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, access: { canWrite: false, reason: 'viewers cannot load packs' } }), { overview: {} });
+  renderOverview(viewer, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, access: { canWrite: false, reason: 'viewers cannot load packs' } }), hooks);
   assert.equal(countOf(viewer.innerHTML, 'data-ux-action="ov-explain" aria-disabled="true" data-reason="viewers cannot load packs"'), 4, 'empty, a viewer: the four cards drawn unavailable, each explains');
   assert.ok(!viewer.innerHTML.includes('data-ux-action="ov-scan"'));
+  // A host that runs the start but supplies no live draft: that card drawn unavailable, never a card that does nothing.
+  const noLive = overviewContainer();
+  renderOverview(noLive, buildOverviewModel({ services: [], servicesStatus: { kind: 'ok', error: null }, startable: true, start: { a: { id: 'kx', label: 'kx' } } }), { overview: { ...hooks.overview, live: undefined } });
+  assert.ok(stepOf(noLive.innerHTML, 2).includes('data-reason="Not offered here."') && stepOf(noLive.innerHTML, 2).includes('data-ux-action="ov-upload-b"') && !noLive.innerHTML.includes('data-ux-action="ov-live"'), 'a missing hook: its card unavailable, the others live');
   const error = overviewContainer();
   assert.doesNotThrow(() => renderOverview(error, buildOverviewModel({ services: null, servicesStatus: { kind: 'error', error: '503: <down>' } }), { overview: {} }));
   assert.ok(error.innerHTML.includes('<div class="ux-empty ux-tone-warn" role="note">') && error.innerHTML.includes('<p class="ux-empty-title">The services could not be read.</p>'));
