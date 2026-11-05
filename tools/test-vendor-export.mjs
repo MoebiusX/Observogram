@@ -15,7 +15,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkCopy, exportOf, renderVendorTree, VENDOR_TREE_FILE, writeExport } from './vendor-export.mjs';
+import { checkCopy, EXPORT_COPY_SKIP, exportOf, isExportCopy, renderVendorTree, VENDOR_TREE_FILE, writeExport } from './vendor-export.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const TOOL = join(ROOT, 'tools', 'vendor-export.mjs');
@@ -63,9 +63,13 @@ function tarFiles(buf) {
   return files;
 }
 
+// Inside an export copy there is no checkout of this repository to export:
+// each test skips there, saying so (tools/vendor-export.mjs isExportCopy).
+const IN_COPY = { skip: isExportCopy(ROOT) && EXPORT_COPY_SKIP.checkout };
+
 const BOUNDARY = (path) => path === 'AGENTS.md' || path.startsWith('.github/') || path.startsWith('.claude/');
 
-test('the export of HEAD is its tree minus export-ignore: the files and bytes `git archive` writes, the repository\'s own operation left out, VENDOR-TREE.json naming the commit, its date and its version', () => {
+test('the export of HEAD is its tree minus export-ignore: the files and bytes `git archive` writes, the repository\'s own operation left out, VENDOR-TREE.json naming the commit, its date and its version', IN_COPY, () => {
   const out = fresh();
   const tree = writeExport('HEAD', out);
   assert.equal(tree.format, 1);
@@ -91,7 +95,7 @@ test('the export of HEAD is its tree minus export-ignore: the files and bytes `g
   assert.throws(() => writeExport('HEAD', out), { message: `--out ${out} exists and is not empty` });
 });
 
-test('two exports of one commit are byte-identical: VENDOR-TREE.json, written one file per line, and every file', () => {
+test('two exports of one commit are byte-identical: VENDOR-TREE.json, written one file per line, and every file', IN_COPY, () => {
   const a = fresh();
   const b = fresh();
   writeExport('HEAD', a);
@@ -110,7 +114,7 @@ test('two exports of one commit are byte-identical: VENDOR-TREE.json, written on
   for (const f of parsed.files) assert.equal(sha256(readFileSync(join(b, ...f.path.split('/')))), f.sha256, f.path);
 });
 
-test('--check passes on an export and names every way a copy can differ: a 1-byte change, a marked local patch, line endings, a missing file, an extra one; node_modules is never read; the exit codes', () => {
+test('--check passes on an export and names every way a copy can differ: a 1-byte change, a marked local patch, line endings, a missing file, an extra one; node_modules is never read; the exit codes', IN_COPY, () => {
   const out = fresh();
   writeExport('HEAD', out);
   const ok = cli('--check', out);

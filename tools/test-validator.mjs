@@ -21,6 +21,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
+import { EXPORT_COPY_SKIP, isExportCopy } from './vendor-export.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEMA = JSON.parse(readFileSync(resolve(ROOT, SPEC_SCHEMA_PATH), 'utf8'));
@@ -182,25 +183,33 @@ const SCANNED = [
   ...walk(resolve(ROOT, 'tools')).filter(p => /\.mjs$/.test(p)),
   ...walk(resolve(ROOT, 'server')).filter(p => /\.mjs$/.test(p)),
   ...walk(resolve(ROOT, 'studio')).filter(p => /\.(mjs|html)$/.test(p)),
-  ...['package.json', '.github/workflows/ci.yml', 'README.md', 'docs/MODEL.md', 'docs/CONFORMANCE.md', 'docs/gen-site.md', 'docs/MCP_INTEGRATION.md', 'docs/ADAPTER.md', 'docs/BUILD_JOURNEY.md', 'library/README.md', 'vendor/observability-pack-spec/README.md'].map(f => resolve(ROOT, f)),
+  ...['package.json', 'README.md', 'docs/MODEL.md', 'docs/CONFORMANCE.md', 'docs/gen-site.md', 'docs/MCP_INTEGRATION.md', 'docs/ADAPTER.md', 'docs/BUILD_JOURNEY.md', 'library/README.md', 'vendor/observability-pack-spec/README.md'].map(f => resolve(ROOT, f)),
 ];
+// The workflow is scanned by its own test: an export copy has none (export-ignore), and that test skips there.
+const WORKFLOW = resolve(ROOT, '.github/workflows/ci.yml');
 // Lines that name an older version on purpose: the spec's own lineage, RFC-0001 (a 1.2 sibling layer), RFC-0002 (1.3's
 // good_when — every mention of the direction of a bound dates it), the layered JSON that predates the canonical manifest,
 // the VersionSpec history.
 const HISTORY = /RFC-0001|RFC-0002|good_when|[Tt]he direction of|since spec 1\.3|has a direction|carries a direction|its direction|the direction of|side of (?:a|the|its) [^.]*bound|the bound|a floor|a ceiling|1\.3 → 1\.4|1\.3 -> 1\.4|v1\.3\/ → v1\.4\/|remove v1\.3\/|1\.3 pack|1\.3 packs|1\.3-shaped|1\.3 example|every 1\.3|a 1\.3 |develop\) 1\.3|develop` 1\.3|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
-test('no scanned file names a spec version other than the current one', () => {
-  // `(?!\.\d|\d)`: not a longer version (1.2.3, 1.23) — a sentence-final "v1.2." still counts.
-  const other = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?!\\.\\d|\\d)|vendor/observability-pack-spec/v1\\.\\d(?!\\.\\d|\\d)|\\bv1\\.\\d(?!\\.\\d|\\d)\\b`, 'g');
+// `(?!\.\d|\d)`: not a longer version (1.2.3, 1.23) — a sentence-final "v1.2." still counts.
+const OTHER_VERSION = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?!\\.\\d|\\d)|vendor/observability-pack-spec/v1\\.\\d(?!\\.\\d|\\d)|\\bv1\\.\\d(?!\\.\\d|\\d)\\b`, 'g');
+function otherVersionsIn(files) {
   const offenders = [];
-  for (const file of SCANNED) {
+  for (const file of files) {
     const rel = file.slice(ROOT.length + 1).replace(/\\/g, '/');
     if (rel === 'tools/test-validator.mjs') continue;
     readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
       if (HISTORY.test(line)) return;
-      for (const m of line.matchAll(other)) if (!m[0].includes(SPEC_VERSION)) offenders.push(`${rel}:${i + 1}: ${m[0]}`);
+      for (const m of line.matchAll(OTHER_VERSION)) if (!m[0].includes(SPEC_VERSION)) offenders.push(`${rel}:${i + 1}: ${m[0]}`);
     });
   }
-  assert.deepEqual(offenders, [], 'every current-version mention follows SPEC_VERSION (1.4)');
+  return offenders;
+}
+test('no scanned file names a spec version other than the current one', () => {
+  assert.deepEqual(otherVersionsIn(SCANNED), [], 'every current-version mention follows SPEC_VERSION (1.4)');
+});
+test('the CI workflow names no spec version other than the current one', { skip: isExportCopy(ROOT) && EXPORT_COPY_SKIP.workflow }, () => {
+  assert.deepEqual(otherVersionsIn([WORKFLOW]), [], 'a workflow step that names a spec version follows SPEC_VERSION (1.4)');
 });
 
 // The studio's links to upstream: the footer's "spec v1.4", the Schema view's "ObservabilityPack v1.4 JSON Schema"

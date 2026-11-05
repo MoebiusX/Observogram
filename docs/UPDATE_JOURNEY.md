@@ -1811,6 +1811,12 @@ Each commit's suite total, in order:
     default, `--remote-fonts`, `--no-remote-fonts`, both refused, `--json`;
     T7 and C8 now build with no font flag, so their check in Chromium that no
     request leaves the loopback covers the default).
+13. C8's workflow half runs on its own (2026-11-05), so an export copy, which
+    has no workflow, skips it saying why while C8 still holds the documents:
+    one more test in `tools/test-bundle-compare.mjs`, that CI's workflow
+    installs no Playwright. The spec-version scan's workflow half moved
+    likewise, in `tools/test-validator.mjs`; the CHANGELOG entry carries the
+    suite's total.
 
 #### Found on the way: the collation and the taxonomy's clock
 

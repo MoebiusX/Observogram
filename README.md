@@ -370,7 +370,9 @@ elevated or not, so the count is one number everywhere). There are
 `server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
 `tools/test-journey.mjs` (1) — and 19 `SKIP win32:` lines once the loops
 unroll, plus the PID 1 namespace test's
-`# SKIP unshare --pid is unavailable here` and the Playwright skips. The
+`# SKIP unshare --pid is unavailable here` and the Playwright skips (and,
+inside a copy `npm run vendor-export` wrote, six `# SKIP an export copy: …`
+lines). The
 Windows leg fails unless a run prints exactly that number, and unless it ran
 the tests and the harness assertions the Ubuntu floor ran:
 `tools/tap-summary.mjs` holds it and prints the totals and every failure at

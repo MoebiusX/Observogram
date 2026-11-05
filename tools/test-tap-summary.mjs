@@ -22,6 +22,7 @@ import {
   KNOWN_SKIPS, README_WIN32_LINES_RE, annotation, compareShapes, decodeTap, isExpectedSkip, logLines, parseTap,
   notStartedBlock, readmeWin32Lines, reportCommand, runShape, skipGroup, summarize, unescapeTap, whereOf,
 } from './tap-summary.mjs';
+import { EXPORT_COPY_SKIP, isExportCopy } from './vendor-export.mjs';
 
 // A failing assertion's message, actual and expected are printed into the
 // TAP, and every suites step tees that TAP into its job's log, where the
@@ -1058,7 +1059,7 @@ const SUMMARY_IF = "if: ${{ !cancelled() && (steps.test.outcome == 'success' || 
 const keysOf = (st) => st.split('\n').filter((l) => l.trim() && !/^\s*#/.test(l)).slice(1);
 const keys = (...lines) => lines.map((l) => `        ${l}`);
 
-test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22 that runs the documented report command, npm test through tee under pipefail with a step timeout, and the summary held to README; windows and node-floor end with the summary and the shape upload, validate with the summary; windows-vs-linux compares the shapes', () => {
+test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22 that runs the documented report command, npm test through tee under pipefail with a step timeout, and the summary held to README; windows and node-floor end with the summary and the shape upload, validate with the summary; windows-vs-linux compares the shapes', { skip: isExportCopy(ROOT) && EXPORT_COPY_SKIP.workflow }, () => {
   const text = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   const jobs = workflowJobs(text);
   assert.ok(text.includes('# Validates every push to develop/main and every PR into develop or main.'));
