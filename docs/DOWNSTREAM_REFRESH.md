@@ -114,28 +114,31 @@ The Store*).
 Stop the server first: this step replaces the code it runs.
 
 ```bash
+git -C ../observogram-upstream checkout -q --detach origin/develop   # the newest export tool
 rm -rf vendor/observogram-app
-mkdir vendor/observogram-app
-git -C ../observogram-upstream -c core.autocrlf=false archive "$TARGET" | tar -x -C vendor/observogram-app
-git add -A vendor/observogram-app
-test "$(git write-tree --prefix=vendor/observogram-app/)" = "$(git -C ../observogram-upstream rev-parse "$TARGET^{tree}")" \
-  && echo "the copy is upstream's $TARGET, byte for byte"
+node ../observogram-upstream/tools/vendor-export.mjs --ref "$TARGET" --out vendor/observogram-app
+node ../observogram-upstream/tools/vendor-export.mjs --check vendor/observogram-app
+git add -A -f vendor/observogram-app
 ```
 
-The check compares the copy, as staged, with upstream's own tree for the
-target: one hash for every file, its path and its bytes. If it prints nothing,
-the copy is not upstream's. List the files that differ:
-
-```bash
-diff <(git -C ../observogram-upstream ls-tree -r --name-only "$TARGET") \
-     <(git ls-files vendor/observogram-app | sed 's#^vendor/observogram-app/##')
-```
-
-A file marked `<` is one the downstream's `.gitignore` keeps out. Stage them
-with `git add -f vendor/observogram-app` and run the check again. That is safe
-at this point, because the folder holds nothing but upstream's files yet. If
-the list is empty, a file's bytes changed on the way in: repeat step 3 as
-written.
+- **The export** writes the target's files, byte for byte from the commit. It
+  leaves out what upstream's `.gitattributes` marks `export-ignore`: its own
+  CI, agent settings and agent instructions (`.github/`, `.claude/`,
+  `AGENTS.md`), which would read as rules to an agent working in the
+  downstream. `git archive` and GitHub's source tarballs carry the same
+  files. Beside them it writes `VENDOR-TREE.json`: the commit, its version
+  and every file's sha256.
+- **`--check`** proves the copy against that list and prints
+  `all <n> files match`. Any other line names a file and how it differs:
+  `changed`, `local patch` (changed, and marked), `line endings`,
+  `missing` or `extra`. It needs neither git nor the clone, so once the copy
+  holds the tool, `node vendor/observogram-app/tools/vendor-export.mjs --check
+  vendor/observogram-app` proves it again at any time.
+- **`git add -f`** stages the files the downstream's `.gitignore` would keep
+  out. That is safe here, because the folder holds nothing but the export.
+- **Without a clone**, for example where the downstream cannot reach GitHub,
+  someone who has one runs the export and carries the folder across. `--check`
+  proves it on arrival.
 
 Then record the version and commit the copy on its own:
 
@@ -189,6 +192,15 @@ node vendor/observogram-app/tools/gen-vendor-manifest.mjs --smoke vendor/observo
   `drift (local patch (marked LOCAL DEVIATION) …)` for a module you patched on
   purpose, and then exits 1. Any other drift means the copy is not what step 3
   proved.
+- **Behind a registry mirror**, give npm the mirror for the install, with
+  `npm_config_registry=<mirror> npm ci` or the user's own npm configuration
+  (`npm config set registry <mirror>`). Never edit the copy's
+  `package-lock.json`: npm 10 swaps the lockfile's `registry.npmjs.org` for the
+  configured registry as it installs (`replace-registry-host`, `npmjs` by
+  default), and the integrity hashes hold for the same packages. An `.npmrc`
+  inside the copy is a local file that step 3 deletes, and npm does not read
+  the downstream root's `.npmrc` for the copy, which has its own
+  `package.json`.
 - **`npm test`** runs upstream's own suite on your copy. With no local patch it
   passes, as it did upstream. With one, the only failures should be the tests
   its commit message lists. A patch to a module the manifest lists always
@@ -229,6 +241,19 @@ Revert the newer commit first. If the new version has already opened the
 store, restore the backup from step 2 (`packc store restore`, README,
 *Upgrade And Roll Back*). After a one-way upgrade, nothing else gets the old
 version running again.
+
+## What upstream promises a copy
+
+- **Every commit exports the same way.** The export is the commit's tree minus
+  `export-ignore`, written from its blobs, so two exports of one commit are
+  identical, and `git archive` gives the same files.
+- **`export-ignore` names only the repository's own operation:** its CI, its
+  agent settings and its agent instructions. Everything that runs, tests or
+  documents the product ships.
+- **No build step.** The exported files run as they are, after `npm ci`.
+- **Releases are the bump points.** Each release section of the CHANGELOG
+  says what changed for a copy. A `develop` commit works too, but its changes
+  are only in `## Unreleased`.
 
 ## Which side is which
 

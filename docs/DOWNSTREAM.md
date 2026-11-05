@@ -114,9 +114,10 @@ patch from a copy that went wrong; markers that use other words are named
 with `--patch-marker <text>` (plain text, case-sensitive, never recorded
 here). A tree that vendors the whole repository
 rather than the listed modules is refreshed by
-[`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md): the copy is replaced and
-proven byte for byte against upstream's tree, and its local patches are one
-commit re-applied on top. Send upstream the patches that are engine concerns:
+[`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md): the copy is replaced from
+`npm run vendor-export` (the commit's files minus `export-ignore`) and proven
+byte for byte with its `--check` against the `VENDOR-TREE.json` the export
+writes, and its local patches are one commit re-applied on top. Send upstream the patches that are engine concerns:
 a merged patch stops being drift.
 
 ## 5. Run module smoke tests

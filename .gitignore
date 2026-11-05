@@ -67,3 +67,6 @@ docs/diagrams/_prev*
 
 # Generated provisioning files for the T2 provisioning-load test.
 docker/.t2-provisioning/
+
+# npm run vendor-export writes here by default
+/vendor-export/
