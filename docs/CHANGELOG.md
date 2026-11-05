@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed: upstream's `npm test` passes whole inside an export copy — the six tests that cannot run there skip, saying why
+A downstream that runs the whole repository from an export (`npm run vendor-export`, docs/DOWNSTREAM_REFRESH.md) saw six tests fail in its copy. Three read `.github/workflows/ci.yml`, which `export-ignore` leaves out. The three of `tools/test-vendor-export.mjs` export the repository's own git checkout, and inside a copy git answers for the downstream's tree around it.
+- **`tools/vendor-export.mjs`**: `isExportCopy(root)` is true for a folder with `VENDOR-TREE.json` at its root and no `.git` of its own, which an upstream checkout never is. `EXPORT_COPY_SKIP.workflow` and `.checkout` are the two reasons, each starting `an export copy: `.
+- **The six skip there**, each printing `# SKIP an export copy: <why>`, and nowhere else:
+  - `tools/test-vendor-export.mjs`: all three tests.
+  - `tools/test-tap-summary.mjs`: S10, the workflow's wiring.
+  - `tools/test-bundle-compare.mjs`: C8's check that CI's workflow installs no Playwright is now its own test. C8 still holds the documents to the limit in a copy.
+  - `tools/test-validator.mjs`: the workflow's spec-version scan is now its own test; every other file is still scanned in a copy.
+- **`tools/tap-summary.mjs`**: `KNOWN_SKIPS` names the `an export copy: ` prefix with its probe, so a copy's run summarised by it is not refused for an unknown reason.
+- **Docs**: DOWNSTREAM_REFRESH.md step 5, VENDORING.md, README and DOWNSTREAM.md name the six skips.
+- **Tests**: the two split-out checks are new tests, and each still names a step that installs Playwright or a stale version. A copy exported from this commit runs the whole suite with exactly those six skips added. Suite total 1675 → 1677 (written as 1663 → 1665 on its branch; chained after Browse…'s 1663 → 1675, the order the two merged in).
+
 ### Added: Overview's Folder answer can be picked from the server's folders — Browse…
 A service's folder repository was typed as a full path. A browser's own folder dialog cannot fill it: it never gives a folder's full path, and every Run reads the folder on the server again, so the picker lists the server's folders instead.
 - **`GET /api/repository-folders`** (`server/repository-folders.mjs`, operator, the services router): one folder and the folders inside it by name, each `repository` when it holds `.git` (a folder, or a worktree's file); never a file, `.git` or `node_modules`; at most 500 names, then `truncated`; `up` the folder above.
