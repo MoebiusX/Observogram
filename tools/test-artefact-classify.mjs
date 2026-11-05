@@ -13,16 +13,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { classify } from './lib/artefact-model.mjs';
 import { BOARD_LAYERS } from '../studio/discover-board.mjs';
 import { WIN32_PLATFORM } from '../server/fixtures/platform.mjs';
 import {
   FAMILIES, FAMILY_HOME, DEFINES_RULES, ID_RULES, ID_MATCH_LENGTH, PATTERN_MAX_LENGTH,
-  TAXONOMY_VERSION, TAXONOMY_VERSIONS, TAXONOMY_VERSION_LATEST, GLOSSARY_LIMITS,
+  TAXONOMY_VERSION, TAXONOMY_VERSIONS, TAXONOMY_VERSION_LATEST, GLOSSARY_LIMITS, TOOL_LABEL_LIMITS,
   classifyArtefact, familyOf, compileTaxonomy, validateTaxonomy, configureTaxonomy, activeTaxonomy, describeTaxonomy,
   compileBoundedPattern,
-  glossaryFor, glossaryByText, glossaryEntries,
+  glossaryFor, glossaryByText, glossaryEntries, toolLabels,
 } from './lib/artefact-classify.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import { bindTaxonomy } from '../studio/taxonomy.mjs';
@@ -185,9 +186,9 @@ test('compileTaxonomy refuses with exact texts; validateTaxonomy lists every rea
   refuses(null, 'taxonomy: must be an object');
   refuses([], 'taxonomy: must be an object');
   refuses('x', 'taxonomy: must be an object');
-  refuses({ version: 3 }, 'taxonomy: version must be 1 or 2');
-  refuses({}, 'taxonomy: version must be 1 or 2');
-  refuses({ version: '1' }, 'taxonomy: version must be 1 or 2');
+  refuses({ version: 4 }, 'taxonomy: version must be 1, 2 or 3');
+  refuses({}, 'taxonomy: version must be 1, 2 or 3');
+  refuses({ version: '1' }, 'taxonomy: version must be 1, 2 or 3');
   refuses({ version: 1, layers: {} }, 'taxonomy: unknown key "layers"');
   refuses({ version: 1, types: { PackSLI: 'indicator' } }, 'taxonomy: types.PackSLI: unknown family "indicator"');
   refuses({ version: 1, types: { PackSLI: 'unknown' } }, 'taxonomy: types.PackSLI: unknown family "unknown"');
@@ -209,8 +210,8 @@ test('compileTaxonomy refuses with exact texts; validateTaxonomy lists every rea
   refuses({ version: 1, ids: [{ pattern: '^svc-', family: 'nope' }] }, 'taxonomy: ids[0]: unknown family "nope"');
   refuses({ version: 1, ids: [{ pattern: '^svc-', family: 'sli', role: 7 }] }, 'taxonomy: ids[0]: role must be a non-empty string');
   // Every reason, in order; a passing file validates to [].
-  assert.deepEqual(validateTaxonomy({ version: 3, types: { A: 'x' }, ids: [{ pattern: 'u', family: 'sli' }] }),
-    ['taxonomy: version must be 1 or 2', 'taxonomy: types.A: unknown family "x"', 'taxonomy: ids[0]: pattern must be anchored (start with ^)']);
+  assert.deepEqual(validateTaxonomy({ version: 4, types: { A: 'x' }, ids: [{ pattern: 'u', family: 'sli' }] }),
+    ['taxonomy: version must be 1, 2 or 3', 'taxonomy: types.A: unknown family "x"', 'taxonomy: ids[0]: pattern must be anchored (start with ^)']);
   assert.deepEqual(validateTaxonomy({ version: 1 }), []);
   assert.deepEqual(validateTaxonomy({ version: 1, types: {}, ids: [] }), []);
   assert.deepEqual(validateTaxonomy({ version: 2 }), [], 'a v2 file without a glossary is valid');
@@ -496,9 +497,10 @@ test('configureTaxonomy installs the override process-wide, null restores the de
 
 test('TAXONOMY_VERSION stays 1 (a downstream writes it); TAXONOMY_VERSIONS and TAXONOMY_VERSION_LATEST name what compiles; the fixtures are one v1 and one v2 file', () => {
   assert.equal(TAXONOMY_VERSION, 1);
-  assert.deepEqual([...TAXONOMY_VERSIONS], [1, 2]);
-  assert.equal(TAXONOMY_VERSION_LATEST, 2);
-  assert.ok(Object.isFrozen(TAXONOMY_VERSIONS) && Object.isFrozen(GLOSSARY_LIMITS));
+  assert.deepEqual([...TAXONOMY_VERSIONS], [1, 2, 3]);
+  assert.equal(TAXONOMY_VERSION_LATEST, 3);
+  assert.ok(Object.isFrozen(TAXONOMY_VERSIONS) && Object.isFrozen(GLOSSARY_LIMITS) && Object.isFrozen(TOOL_LABEL_LIMITS));
+  assert.deepEqual(TOOL_LABEL_LIMITS, { label: 80, entries: 64 });
   assert.deepEqual(GLOSSARY_LIMITS, { term: 80, definition: 600, alias: 80, link: 2000, entries: 500 });
   assert.equal(V1.version, 1);
   assert.ok(!('glossary' in V1), 'taxonomy.json stays v1 (the 24 board goldens and the typed.mapped goldens rest on it)');
@@ -633,3 +635,97 @@ test('glossaryFor / glossaryByText / glossaryEntries read the active override by
 });
 
 function pick(o, ...keys) { return Object.fromEntries(keys.map(k => [k, o[k]])); }
+
+// ---------- schema v3: the tool labels ----------
+
+test('schema v3: toolLabels compile to a Map (values trimmed); a v3 file keeps its glossary; toolLabels under version 1 or 2 is an unknown key; toolLabels() reads the active override, an explicit one, and an older compiled object as none', () => {
+  const c = compileTaxonomy({ version: 3, toolLabels: { 'Grafana alerting': 'PrometheusRule', 'Prometheus promql-reference': ' Prometheus metric ' } });
+  assert.ok(c.toolLabels instanceof Map);
+  assert.deepEqual([...toolLabels(c)], [['Grafana alerting', 'PrometheusRule'], ['Prometheus promql-reference', 'Prometheus metric']]);
+  assert.equal(describeTaxonomy(c), '0 types, 0 id rules, 2 tool labels');
+  assert.equal(describeTaxonomy(compileTaxonomy(V1)), '7 types, 1 id rule', 'no labels, no mention');
+  assert.equal(compileTaxonomy({ ...V2, version: 3 }).glossary.entries.length, 6, 'the glossary stays valid under version 3');
+  assert.equal(toolLabels(compileTaxonomy({ version: 3 })).size, 0);
+  assert.equal(toolLabels(compileTaxonomy(V2)).size, 0);
+  for (const version of [1, 2]) {
+    assert.throws(() => compileTaxonomy({ version, toolLabels: { A: 'B' } }), { message: 'taxonomy: unknown key "toolLabels"' });
+  }
+  assert.equal(toolLabels().size, 0, 'nothing installed: no labels');
+  configureTaxonomy(c);
+  assert.equal(toolLabels().get('Grafana alerting'), 'PrometheusRule', 'the installed override by default');
+  assert.equal(toolLabels(null).size, 0, 'an explicit null: none');
+  configureTaxonomy({ types: new Map(), ids: [], glossary: c.glossary });
+  assert.equal(toolLabels().size, 0, 'a compiled object from a build before v3 installs and reads as no labels');
+  // A label never classifies: the same artefacts place the same with and without one.
+  const labelsOnly = compileTaxonomy({ version: 3, toolLabels: Object.fromEntries(allArtefacts(payment).map(a => [a.tool, 'Renamed'])) });
+  for (const a of allArtefacts(payment)) assert.deepEqual(classifyArtefact(a, labelsOnly), classifyArtefact(a, null), a.id);
+});
+
+test('every toolLabels refusal, with its exact text; validateTaxonomy lists them in file order', () => {
+  const refuses = (toolLabelsValue, message) => {
+    const json = { version: 3, toolLabels: toolLabelsValue };
+    assert.throws(() => compileTaxonomy(json), (e) => e.message === message, `${JSON.stringify(toolLabelsValue)} → ${message}`);
+    assert.ok(validateTaxonomy(json).includes(message), JSON.stringify(validateTaxonomy(json)));
+  };
+  const KEY = (k) => `taxonomy: toolLabels[${JSON.stringify(k)}]: a label must be one line of 1–${TOOL_LABEL_LIMITS.label} characters, with no space at either end`;
+  const VALUE = (k) => `taxonomy: toolLabels[${JSON.stringify(k)}]: the new label must be one line of 1–${TOOL_LABEL_LIMITS.label} characters`;
+  const SHAPE = 'taxonomy: toolLabels must be an object of label → label';
+  refuses([], SHAPE);
+  refuses('Grafana alerting', SHAPE);
+  refuses(null, SHAPE);
+  refuses(Object.fromEntries(Array.from({ length: TOOL_LABEL_LIMITS.entries + 1 }, (_, i) => [`T${i}`, 'x'])), `taxonomy: toolLabels: more than ${TOOL_LABEL_LIMITS.entries} entries`);
+  refuses({ '': 'x' }, KEY(''));
+  refuses({ ' Grafana alerting': 'x' }, KEY(' Grafana alerting'));
+  refuses({ 'Grafana alerting ': 'x' }, KEY('Grafana alerting '));
+  const long = 'a'.repeat(TOOL_LABEL_LIMITS.label + 1);
+  refuses({ [long]: 'x' }, KEY(long));
+  refuses({ 'a\nb': 'x' }, KEY('a\nb'));
+  refuses({ X: '' }, VALUE('X'));
+  refuses({ X: '   ' }, VALUE('X'));
+  refuses({ X: 7 }, VALUE('X'));
+  refuses({ X: long }, VALUE('X'));
+  refuses({ X: 'a\tb' }, VALUE('X'));
+  assert.deepEqual(validateTaxonomy({ version: 3, toolLabels: { '': 'x', Y: 'ok', X: '' } }), [KEY(''), VALUE('X')]);
+  const atLimit = Object.fromEntries(Array.from({ length: TOOL_LABEL_LIMITS.entries }, (_, i) => [`T${i}`, 'x']));
+  assert.equal(compileTaxonomy({ version: 3, toolLabels: atLimit }).toolLabels.size, TOOL_LABEL_LIMITS.entries, 'the limit itself compiles');
+});
+
+test('adapt renames `tool` by the installed toolLabels or opts.toolLabels and changes nothing else; with none, or opts.toolLabels: null, the pack is byte-identical; a comparison reads the same either way', () => {
+  const paymentCanonical = parse(read(`../${SPEC_DIR}/examples/payment-service.pack.yaml`));
+  const carlosCanonical = parse(read('../examples/krystaline-repo-carlos.pack.yaml'));
+  const LABELS = { 'Grafana alerting': 'PrometheusRule', 'Prometheus promql-reference': 'Prometheus metric' };
+  const count = (pack, tool) => allArtefacts(pack).filter(a => a.tool === tool).length;
+  // The only key that moves is `tool`, and only where a label names it.
+  const sameButTool = (before, after) => {
+    const a = allArtefacts(before);
+    const b = allArtefacts(after);
+    assert.equal(a.length, b.length);
+    a.forEach((x, i) => {
+      if (x.tool !== b[i].tool) assert.equal(b[i].tool, LABELS[x.tool], `${x.id}: ${x.tool} → ${b[i].tool}`);
+      assert.deepEqual({ ...b[i], tool: x.tool }, x, x.id);
+    });
+  };
+  assert.equal(count(payment, 'Grafana alerting'), 1, 'payment-service has one Grafana-engine rule');
+  const carlosQueryOnly = count(carlos, 'Prometheus promql-reference');
+  assert.ok(carlosQueryOnly > 0, 'krystaline-repo-carlos has metrics known only from a query');
+
+  const viaOpts = adapt(paymentCanonical, { toolLabels: LABELS });
+  assert.equal(count(viaOpts, 'Grafana alerting'), 0);
+  assert.equal(count(viaOpts, 'PrometheusRule'), count(payment, 'PrometheusRule') + 1);
+  sameButTool(payment, viaOpts);
+  assert.equal(JSON.stringify(adapt(paymentCanonical, { toolLabels: new Map(Object.entries(LABELS)) })), JSON.stringify(viaOpts), 'a Map reads as the object');
+
+  configureTaxonomy(compileTaxonomy({ version: 3, toolLabels: LABELS }));
+  const carlosLabelled = adapt(carlosCanonical);
+  assert.equal(count(carlosLabelled, 'Prometheus promql-reference'), 0);
+  assert.equal(count(carlosLabelled, 'Prometheus metric'), count(carlos, 'Prometheus metric') + carlosQueryOnly);
+  sameButTool(carlos, carlosLabelled);
+  assert.equal(JSON.stringify(adapt(paymentCanonical)), JSON.stringify(viaOpts), 'the installed taxonomy reads as opts.toolLabels');
+  assert.equal(JSON.stringify(adapt(paymentCanonical, { toolLabels: null })), JSON.stringify(payment), 'opts.toolLabels: null overrides the installed labels');
+  const labelledDiff = diffPacks(adapt(carlosCanonical), adapt(paymentCanonical));
+  configureTaxonomy(null);
+  assert.equal(JSON.stringify(adapt(paymentCanonical)), JSON.stringify(payment), 'nothing installed: byte-identical');
+  assert.equal(JSON.stringify(adapt(carlosCanonical)), JSON.stringify(carlos), 'nothing installed: byte-identical');
+  const plainDiff = diffPacks(adapt(carlosCanonical), adapt(paymentCanonical));
+  assert.deepEqual(labelledDiff.summary, plainDiff.summary, 'a label pairs, drifts and scores nothing');
+});

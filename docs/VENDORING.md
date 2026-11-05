@@ -33,7 +33,7 @@ prose contracts that follow.
 | [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/DOWNSTREAM.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
 | [`tools/lib/mcp-server-settings.mjs`](../tools/lib/mcp-server-settings.mjs) | imports `artefact-classify.mjs`, `mcp-url-safety.mjs` — copy the three together; no Node APIs | the MCP server-settings contract (rebadge batch 4) — the descriptor v1 an MCP server serves at `<root>/admin/schema` (`SETTINGS_DESCRIPTOR_VERSION`, `SETTINGS_DESCRIPTOR_PATH`, `SETTINGS_LIMITS`, `FIELD_TYPES`, `parseSettingsDescriptor`), the root and path rule (`settingsRoot`, `resolveSettingsPath`, `normaliseUrlValue`), the generic form (`genericDescriptor`, `GENERIC_NAMES`), the request (`settingsRequest`), the outcome and its redaction (`outcomeOf`, `redactEchoes`, `redactSecretKeys`) and the settings policy (`compileSettingsPolicy`, `policyFindings`); an MCP server author vendors it to validate a descriptor or policy file, and the studio's Server settings modal loads the same file |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`) |
-| [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1 or v2 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
+| [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1, v2 or v3 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), the v3 tool labels `toolLabels` (`TOOL_LABEL_LIMITS`; `adapter.mjs` imports it to rename `tool`), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
 | [`tools/lib/brand.mjs`](../tools/lib/brand.mjs) | zero-import, no Node APIs | the brand config — `DEFAULT_BRAND`, `normalizeBrand`, `brandChrome`, `brandTokensCss`, `brandShellHtml`; a downstream studio reads the same object its server injects (`#brand-config`) |
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
@@ -502,8 +502,8 @@ tree and put back only the rows below that say *keep*.
 | 01 RRNAME-PATTERN | Spec 1.4's 2026-11-01 revision, synced in #192: any Prometheus name with at least one `:` and no empty segment | Drop it. This is stricter than your patch: `foo:` and `foo::bar` do not validate, so rename any you have |
 | 02 METRICISH | #184: colon-edged tokens are not metrics, in both parsers | Drop it |
 | 03 UNMARKED | Not taken; it changes no behaviour | Yours to keep or drop. If you keep it, mark it (*Check the result*) |
-| 04 METRIC-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
-| 05 PROMRULE-LABEL | Not taken | Keep it, marked, in `tools/lib/adapter.mjs` |
+| 04 METRIC-LABEL | The taxonomy's `toolLabels` (schema version 3) | Drop it. In your taxonomy file, set `"version": 3` and `"toolLabels": { "Prometheus promql-reference": "Prometheus metric" }` |
+| 05 PROMRULE-LABEL | The taxonomy's `toolLabels` (schema version 3) | Drop it. Add `"Grafana alerting": "PrometheusRule"` to the same `toolLabels` |
 | 06 SEQUENTIAL-CALLS | Not taken: the transport hook already serialises every MCP request | Drop it and use your `serial-transport-hook` (*Sequential calls*) |
 | 07 EVENT-JUNK-FILTER | #187: `metricExclude`, a scope field | Drop it and set the variable (*Scope variables*) |
 | 08 SCOPED-RULE-GROUPS | #189: `ruleGroups`, a scope field, and the folder scope pushed down to the alert-rule tool | Drop it and set the variables. Recording rules by folder title were not built (*Scope variables*) |
@@ -594,17 +594,17 @@ node vendor/observogram-app/tools/gen-vendor-manifest.mjs --verify vendor/observ
 node vendor/observogram-app/tools/gen-vendor-manifest.mjs --smoke vendor/observogram-app
 ```
 
-Mark every changed line of a kept patch `// LOCAL DEVIATION (<org> <TAG>): <why>`. The only listed module
-that should report drift is `tools/lib/adapter.mjs`, as a local patch. The hint that only
+Mark every changed line of a kept patch `// LOCAL DEVIATION (<org> <TAG>): <why>`. With 04 and
+05 in the taxonomy, no patch is left, so no listed module should report drift. The hint that only
 line endings differ is a checkout setting, not a patch. `npm run sync-spec:check` should
 be clean, since the schema is no longer patched.
 
-Run upstream's `npm test` on the patched tree. With 04 and 05 applied to `f3f9266`, exactly
-four tests fail: `tools/test-adapt.mjs`, `tools/test-crawl-alerting-rules.mjs`,
-`tools/test-golden-diff.mjs` (15 goldens and the check that repeats one of them) and the
-manifest's in-sync check. Any other failure is real. Your `repro/demo.mjs` scenarios for 07,
-08, 09 and 11 drive your patches' shapes, so move them to the shapes above before reading
-their tables. Then run your own suite.
+Run upstream's `npm test` on the tree. With nothing patched, it passes whole. While 04 and 05
+were patches, they failed exactly four tests: `tools/test-adapt.mjs`,
+`tools/test-crawl-alerting-rules.mjs`, `tools/test-golden-diff.mjs` (15 goldens and the check
+that repeats one of them) and the manifest's in-sync check. Any other failure is real. Your
+`repro/demo.mjs` scenarios for 07, 08, 09 and 11 drive your patches' shapes, so move them to the
+shapes above before reading their tables. Then run your own suite.
 
 ### Sending more upstream
 
@@ -618,5 +618,3 @@ their tables. Then run your own suite.
 Upstream would still use three things from you: the alert-rule tool's recorded per-folder
 answer, the recording-rule tool's recorded answer, and whether your rules live in
 `PrometheusRule` custom resources, which would make walking them the next piece of work.
-If 04 and 05 are still worth carrying after this bump, say so: the likely shape is a pack
-annotation.

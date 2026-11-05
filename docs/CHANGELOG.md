@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added: the taxonomy renames the label an artefact shows for its implementation (schema version 3)
+A downstream that writes its alert rules as Prometheus rules and deploys them through Grafana saw them labelled *Grafana alerting*. A metric known only from a query read *Prometheus promql-reference*. It carried two patches to `tools/lib/adapter.mjs` to change those words, and they failed three upstream tests in its copy at every refresh.
+- **`tools/lib/artefact-classify.mjs`**: the taxonomy file's schema version 3 adds an optional `toolLabels` object, label → label, each one line of 1–80 characters, at most 64 (`TOOL_LABEL_LIMITS`).
+  - `TAXONOMY_VERSIONS` is `[1, 2, 3]` and `TAXONOMY_VERSION_LATEST` is 3.
+  - `toolLabels(taxonomy?)` reads the labels, and `describeTaxonomy` counts them.
+  - `glossary` stays valid under version 3, and `toolLabels` under 1 or 2 is an unknown key.
+  - A refused version now reads `version must be 1, 2 or 3`.
+- **`tools/lib/adapter.mjs`**: `adapt()` renames each artefact's `tool` by the installed taxonomy's labels, or by `opts.toolLabels` (a Map or an object; `null` for none). It now imports `artefact-classify.mjs`.
+- **Display only**: nothing that pairs, drifts, grades or classifies reads `tool`. Without the section every adapted pack is byte for byte what it was, and no golden moved.
+- **Where it applies**: the server and the static bundle, which both install the taxonomy, and `packc audit-report --taxonomy`.
+- **Docs**: README *Classify Typed Packs*, ADAPTER.md, DOWNSTREAM.md §9 and VENDORING.md. In VENDORING.md, *Bumping past the eleven-patch hand-off* now says to drop patches 04 and 05 and set the labels instead. `VENDOR-MANIFEST.json` is regenerated.
+- **Tests**:
+  - `tools/test-artefact-classify.mjs`: version 3 compiles, and every refusal has its exact text. The adapter renames `tool` and nothing else; with no labels a pack is byte-identical, and a comparison's summary is unchanged.
+  - `server/test-taxonomy.mjs`: a version 3 file boots and the log counts the labels. `POST /api/validate` adapts with them, and a server without the file does not.
+  - The version pins in `tools/test-studio-bundle.mjs` move to version 4.
+  - Suite total 1656 → 1660.
+
 ### Fixed: Expert opened from the board shows the comparison the board graded
 After a service's Run, the board said *B · Industrial grade, graded against live*. Its *Open in Discover / Diagnose / Remediate* opened Expert with the scan as Pack A and no Pack B, so Diagnose graded the repository alone and read *C · Field grade, 43%* beside it. Nothing had kept the live side the run read, so Expert had nothing to bind.
 - **The engine** (`tools/lib/journey.mjs`, which the vendor manifest excludes, so the manifest is unchanged): `runJourney` takes `onPackB({ canonical, source, live, refreshedAt })`, called once the run is complete and its record is on disk, with the Pack B it graded. `live` is true only for an MCP read, never for a file. The CLI passes none.

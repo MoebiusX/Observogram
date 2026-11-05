@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "14b20cd3fff239d7475e3e332b38b546241a9490d87513f8770f683dc391b881",
-      "bytes": 37852,
+      "sha256": "6d3c8bf001a931e27e96135e0832b0a2768d58ea2944fbfac5d2d1e6247900a8",
+      "bytes": 39275,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -16,6 +16,7 @@
         "overlaidCanonical"
       ],
       "imports": [
+        "tools/lib/artefact-classify.mjs",
         "tools/lib/good-when.mjs",
         "tools/lib/lifecycle.mjs",
         "tools/lib/traceability.mjs",
@@ -44,9 +45,37 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-classify.mjs": {
-      "sha256": "9ea81c27b624641bc8b28149f1ce7c80772bb87e748f9c7a55dcd4435a348994",
-      "bytes": 30336,
+      "sha256": "825799be2c218a50b5ee24f8d30c177c0b9c95c34d5d20454a956ebe23d4847b",
+      "bytes": 33454,
       "exports": [
+        "DEFINES_RULES",
+        "FAMILIES",
+        "FAMILY_HOME",
+        "GLOSSARY_LIMITS",
+        "ID_MATCH_LENGTH",
+        "ID_RULES",
+        "PATTERN_MAX_LENGTH",
+        "TAXONOMY_VERSION",
+        "TAXONOMY_VERSIONS",
+        "TAXONOMY_VERSION_LATEST",
+        "TOOL_LABEL_LIMITS",
+        "activeTaxonomy",
+        "classifyArtefact",
+        "compileBoundedPattern",
+        "compileTaxonomy",
+        "configureTaxonomy",
+        "describeTaxonomy",
+        "familyOf",
+        "glossaryByText",
+        "glossaryEntries",
+        "glossaryFor",
+        "toolLabels",
+        "validateTaxonomy"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "DEFINES_RULES",
         "FAMILIES",
         "FAMILY_HOME",
@@ -68,10 +97,7 @@
         "glossaryEntries",
         "glossaryFor",
         "validateTaxonomy"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/artefact-model.mjs": {
       "sha256": "0809ddf0910403e2b262110b03e6c2e2358a163926dc59c487293a9049b3a96f",

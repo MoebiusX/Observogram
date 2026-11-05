@@ -61,8 +61,8 @@ test('readTaxonomyConfig refuses a missing file, invalid JSON and an invalid doc
   assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: broken }), (e) => e.message.startsWith(`OBSERVOGRAM_TAXONOMY: ${broken}: invalid JSON: `));
   const unknown = file('unknown-family.json', JSON.stringify({ version: 1, types: { PackSLI: 'indicator' } }));
   assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: unknown }), { message: `OBSERVOGRAM_TAXONOMY: ${unknown}: taxonomy: types.PackSLI: unknown family "indicator"` });
-  const several = file('several.json', JSON.stringify({ version: 3, ids: [{ pattern: 'x', family: 'sli' }] }));
-  assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: several }), { message: `OBSERVOGRAM_TAXONOMY: ${several}: taxonomy: version must be 1 or 2 (+1 more)` });
+  const several = file('several.json', JSON.stringify({ version: 4, ids: [{ pattern: 'x', family: 'sli' }] }));
+  assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: several }), { message: `OBSERVOGRAM_TAXONOMY: ${several}: taxonomy: version must be 1, 2 or 3 (+1 more)` });
   // Schema v2's glossary needs `version: 2`: a v1 file carrying one is refused as an unknown key.
   const v1Glossary = file('v1-glossary.json', JSON.stringify({ ...FIXTURE_JSON, glossary: V2_JSON.glossary }));
   assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: v1Glossary }), { message: `OBSERVOGRAM_TAXONOMY: ${v1Glossary}: taxonomy: unknown key "glossary"` });
@@ -123,6 +123,37 @@ test('schema v2: a file with a glossary boots, the log line counts its terms, an
     assert.deepEqual(r.body.taxonomy.glossary.map(e => e.term), ['Service level indicator', 'Service level objective', 'Alert rule', 'Telemetry backend', 'Error budget', 'Criticality tier']);
     assert.ok(!JSON.stringify(r.body).includes(TMP) && !JSON.stringify(r.body).includes('fixtures/taxonomy'), 'the path is not in the body');
   } finally { await s.stop(); }
+});
+
+test('schema v3: a file with toolLabels boots, the log line counts them, GET /api/taxonomy serves them verbatim, and the server adapts with them (POST /api/validate) while a server without one does not', async () => {
+  const { parse } = await import('../tools/lib/mini-yaml.mjs');
+  const canonical = parse(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.4', 'examples', 'payment-service.pack.yaml'), 'utf8'));
+  const doc = { ...V2_JSON, version: 3, toolLabels: { 'Grafana alerting': 'PrometheusRule' } };
+  const v3 = file('taxonomy.v3.json', JSON.stringify(doc));
+  const ws = workspace();
+  const loud = boot(ws, { env: { ...TOKEN, OBSERVOGRAM_TAXONOMY: v3 }, silent: false });
+  assert.equal(loud.listening, true);
+  assert.deepEqual(loud.stdout.split('\n').filter(l => l.includes('[taxonomy]')), [`[taxonomy] loaded ${v3}: 7 types, 1 id rule, 6 glossary terms, 1 tool label`]);
+  // The rule tools the adapted pack shows, in pack order.
+  const ruleTools = async (base) => {
+    const r = await fetch(`${base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN.OBSERVOGRAM_API_TOKEN}` }, body: JSON.stringify(canonical) });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    return j.adapted.layers.L4.alerting.filter(a => a.id.startsWith('RULE-')).map(a => a.tool);
+  };
+  const s = await serve(ws, { env: { ...TOKEN, OBSERVOGRAM_TAXONOMY: v3 } });
+  try {
+    const r = await getTaxonomy(s.base);
+    assert.deepEqual(r.body, { ok: true, taxonomy: doc, configured: true });
+    assert.deepEqual(await ruleTools(s.base), ['PrometheusRule', 'PrometheusRule', 'PrometheusRule']);
+  } finally { await s.stop(); }
+  const plain = await serve(workspace(), { env: TOKEN });
+  try {
+    assert.deepEqual(await ruleTools(plain.base), ['PrometheusRule', 'PrometheusRule', 'Grafana alerting'], 'no taxonomy: the adapter\'s own label');
+  } finally { await plain.stop(); }
+  // toolLabels needs version 3.
+  const v2Labels = file('v2-labels.json', JSON.stringify({ ...V2_JSON, toolLabels: { A: 'B' } }));
+  assert.throws(() => readTaxonomyConfig({ OBSERVOGRAM_TAXONOMY: v2Labels }), { message: `OBSERVOGRAM_TAXONOMY: ${v2Labels}: taxonomy: unknown key "toolLabels"` });
 });
 
 test('an unknown family, a missing file or invalid JSON refuses the start, naming the variable, the path and the reason, before the store is touched', () => {

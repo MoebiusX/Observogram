@@ -7,6 +7,9 @@
 //
 // PUBLIC API
 //   adapt(canonicalPack, opts?)         -> layeredDisplayPack
+//     opts.environment                     the environment overlay to apply (default: the first)
+//     opts.toolLabels                      Map or { label: label } renaming `tool`; default: the
+//                                          installed taxonomy's (artefact-classify.mjs, schema v3)
 //   listEnvironments(canonicalPack)     -> string[]
 //   applyEnvironmentOverlay(spec, env)  -> { spec, effective }
 //   overlaidCanonical(canonical, env)   -> { canonical, effective }
@@ -15,6 +18,7 @@ import { LIFECYCLE_ANNOTATION, lifecycleBySymbol } from './lifecycle.mjs';
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
+import { toolLabels as activeToolLabels } from './artefact-classify.mjs';
 
 // `metadata.annotations["observogram.artefact.type.<symbol>"]` declares the
 // type of the artefact a canonical symbol projects to (`slis.<id>`,
@@ -158,6 +162,7 @@ export function adapt(canonical, opts = {}) {
     ],
     GOV: adaptImports(canonical),
   };
+  relabelTools(layers, toolLabelsOf(opts.toolLabels));
 
   const metaBindings = canonical.metadata?.bindings || {};
   return {
@@ -190,6 +195,27 @@ export function adapt(canonical, opts = {}) {
     layers,
     traceability: buildRequirementTraceability({ spec, annotations, layers }),
   };
+}
+
+// The label each artefact shows for its implementation (`tool`), renamed by
+// the taxonomy's `toolLabels` (schema v3, tools/lib/artefact-classify.mjs):
+// `opts.toolLabels` (a Map or an object of label → label) when the caller
+// passes one, else the taxonomy installed in this process. With none, nothing
+// changes, byte for byte. Display only: nothing that pairs, grades or
+// classifies reads `tool`.
+function toolLabelsOf(given) {
+  if (given instanceof Map) return given;
+  if (given && typeof given === 'object') return new Map(Object.entries(given));
+  if (given === undefined) return activeToolLabels();
+  return new Map();
+}
+
+function relabelTools(layers, labels) {
+  if (!labels.size) return;
+  const lists = [layers.L1, layers.L2, layers.L2X, layers.L3, layers.L4.policy, layers.L4.alerting, layers.L4.healing, layers.L5, layers.GOV];
+  for (const list of lists) {
+    for (const a of list) if (typeof a?.tool === 'string' && labels.has(a.tool)) a.tool = labels.get(a.tool);
+  }
 }
 
 export function listEnvironments(canonical) {
