@@ -86,6 +86,7 @@ import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
+import { readUpload } from './repository-uploads.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
 import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
@@ -1335,7 +1336,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   const t0 = Date.now();
   let read;
   try {
-    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
+    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() }, readUpload: () => readUpload(service.id) });
   } catch (e) {
     const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
     process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${e.message})\n`);

@@ -9,6 +9,8 @@
 //   path    a folder on the server, walked under the org's crawl scope
 //           (tools/lib/journey.mjs walkRepoFiles — never another org's part
 //           of the workspace)
+//   upload  the copy the person uploaded from their own machine
+//           (server/repository-uploads.mjs), read by `readUpload()`
 // → { files, ref, candidates, skipped, source } — `files` the map
 // crawlFiles() takes, `source` the words for where it came from. A remote
 // file that fails or does not fit is skipped and named; a repository the
@@ -18,6 +20,7 @@ import { statSync } from 'node:fs';
 import { walkRepoFiles } from '../tools/lib/journey.mjs';
 import { fetchGithubFiles, parseGithubUrl, selectCrawlerFiles } from './github-crawl.mjs';
 import { adoFileText, adoTree, parseAdoUrl } from './ado-crawl.mjs';
+import { UPLOAD_WAYS } from './repository-uploads.mjs';
 
 const FILE_CAP_BYTES = 1 * 1024 * 1024;
 const TOTAL_CAP_BYTES = 16 * 1024 * 1024;
@@ -52,8 +55,14 @@ async function fetchAdoFiles(location, ref, opts = {}) {
 }
 
 // `fetchImpl` (Azure DevOps), `ghFetchFn` and `rawFn` (GitHub) are the test seams.
-export async function fetchRepositoryFiles(repository, { crawlScope = null, fetchImpl, ghFetchFn, rawFn } = {}) {
+export async function fetchRepositoryFiles(repository, { crawlScope = null, readUpload = null, fetchImpl, ghFetchFn, rawFn } = {}) {
   const kind = repository?.kind;
+  if (kind === 'upload') {
+    const copy = typeof readUpload === 'function' ? readUpload() : null;
+    if (!copy) { const err = new Error(UPLOAD_WAYS.gone(repository.location)); err.status = 404; throw err; }
+    const files = { ...copy.files };
+    return { files, ref: null, candidates: Object.keys(files).length, skipped: [], source: `the upload ${copy.name}` };
+  }
   if (kind === 'github') {
     const gh = parseGithubUrl(repository.location);
     if (!gh) { const err = new Error(`${repository.location} is not a GitHub repository`); err.status = 400; throw err; }

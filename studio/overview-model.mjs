@@ -917,6 +917,8 @@ export const REPOSITORY_KINDS = Object.freeze([
   Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one when the server has a GitHub token.' }),
   Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: "Read with the server's Azure DevOps token." }),
   Object.freeze({ kind: 'path', label: 'Folder', placeholder: 'C:\\src\\my-service  or  /srv/src/my-service', hint: 'A folder the server can read: its full path on the server.' }),
+  // Offered only by a host that wires it (formModel's `uploads`): the files come from the person's own machine.
+  Object.freeze({ kind: 'upload', label: 'Upload', placeholder: '', hint: 'A folder or a .zip from your machine. Its files are kept for this service and each Run scans them again; upload again when they change.' }),
 ]);
 const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
 export const NEW_ENDPOINT = 'new';
@@ -924,10 +926,17 @@ export const NEW_ENDPOINT = 'new';
 const lastSegments = (p, n) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).slice(-n).join('/');
 const decoded = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 
-// The repository as one short line ({ kind, kindText, text, ref, title }), or null.
-export function repositoryLine(repository) {
+// The repository as one short line ({ kind, kindText, text, ref, detail, title }), or null.
+// An upload's second line is when it came and how much (`now` dates it).
+export function repositoryLine(repository, { now = Date.now() } = {}) {
   if (!repository || typeof repository !== 'object' || !repository.location) return null;
   const { kind, location, ref = null } = repository;
+  if (kind === 'upload') {
+    const ago = repository.uploadedAt ? agoText(repository.uploadedAt, now) : '';
+    const count = Number.isFinite(repository.files) ? `${repository.files} file${repository.files === 1 ? '' : 's'}` : '';
+    const detail = [ago ? `uploaded ${ago}` : 'uploaded', count].filter(Boolean).join(' · ');
+    return { kind, kindText: KIND_LABEL[kind], text: location, ref: null, detail, title: repository.uploadedAt ? `${location}, uploaded ${repository.uploadedAt}` : location };
+  }
   let text = location;
   if (kind === 'github') text = lastSegments(location, 2);
   else if (kind === 'ado') {
@@ -989,7 +998,7 @@ export function serviceListModel(input = {}) {
     const { pack, how } = packForService(s, catalog, { isLiveAggregatePack });
     const ownPack = how === 'primary';
     if (!showAll && !s.repository && !ownPack) { hidden += 1; continue; }
-    const repository = repositoryLine(s.repository);
+    const repository = repositoryLine(s.repository, { now });
     const envs = Array.isArray(s.environments) && s.environments.length ? s.environments : [null];
     for (const env of envs) {
       const key = rowKey(s.id, env?.name ?? null);
@@ -1041,15 +1050,22 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
     kind: s?.repository?.kind || 'github', location: s?.repository?.location || '', ref: s?.repository?.ref || '',
     endpointId, epName: '', epUrl: '', epToken: '',
   };
-  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null };
+  // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
+  const r = s?.repository;
+  const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
+  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null };
 }
 
 // One field typed into: the state with that value (only known fields). A
-// change of kind closes the folder panel (Browse…: below).
+// change of kind closes the folder panel (Browse…: below); a change to or
+// from Upload swaps the location — an upload's is its name, never an address.
 export function formInput(form, field, value) {
   if (!form?.open || !Object.hasOwn(form.values || {}, field)) return form;
   const next = { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
   if (field === 'kind' && next.browse) next.browse = null;
+  if (field === 'kind' && (form.values.kind === 'upload') !== (next.values.kind === 'upload')) {
+    next.values.location = next.values.kind === 'upload' ? (form.upload?.staged?.name || form.uploaded?.name || '') : '';
+  }
   return next;
 }
 
@@ -1063,7 +1079,10 @@ export function formProblems(values = {}) {
   if (!trimmed(values.name)) out.name = 'Name the service.';
   if (!trimmed(values.env)) out.env = 'Name the environment, e.g. prod.';
   if (!REPOSITORY_KINDS.some((k) => k.kind === values.kind)) out.kind = 'Choose where the repository is.';
-  if (!trimmed(values.location)) out.location = values.kind === 'path' ? "Give the folder's full path on the server." : "Give the repository's address.";
+  if (!trimmed(values.location)) {
+    out.location = values.kind === 'path' ? "Give the folder's full path on the server."
+      : values.kind === 'upload' ? 'Choose a folder or a .zip to upload.' : "Give the repository's address.";
+  }
   if (!trimmed(values.endpointId)) out.endpointId = 'Choose the MCP endpoint that reads it live.';
   if (values.endpointId === NEW_ENDPOINT) {
     if (!trimmed(values.epUrl)) out.epUrl = "Give the MCP endpoint's URL.";
@@ -1072,24 +1091,27 @@ export function formProblems(values = {}) {
   return out;
 }
 
-// formModel(form, { endpoints, register, access, folders }) → what the renderer draws:
+// formModel(form, { endpoints, register, access, folders, uploads, now }) → what the renderer draws:
 //   register  GET /api/mcp-endpoints' policy.register ({ allowed, why }) — may a new endpoint be registered here
 //   folders   loadServiceListFacts' `folders` ({ allowed, why }) — may a folder be picked on the server
 //             (Browse…: below); without it the Folder answer is typed, as before
-export function formModel(form, { endpoints = null, register = null, access = null, folders = null } = {}) {
+//   uploads   true when the host wires Upload (below): the kind is offered; without it, never
+export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;
   const newAllowed = register ? register.allowed !== false : true;
+  const offered = REPOSITORY_KINDS.filter((k) => k.kind !== 'upload' || uploads || v.kind === 'upload');
   return {
     open: true, mode: form.mode, saving: !!form.saving, error: form.error || null, focus: form.focus || null,
     title: form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',
     nameFixed: form.mode === 'edit', envFixed: !!form.envFixed,
     values: { ...v },
-    kinds: REPOSITORY_KINDS.map((k) => ({ ...k, selected: k.kind === v.kind })),
-    kind: REPOSITORY_KINDS.find((k) => k.kind === v.kind) || REPOSITORY_KINDS[0],
+    kinds: offered.map((k) => ({ ...k, selected: k.kind === v.kind })),
+    kind: offered.find((k) => k.kind === v.kind) || offered[0],
     browse: browseModel(form, v, folders, canWrite),
+    upload: uploadModel(form, v, { uploads, canWrite, now }),
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
     problems: formProblems(v),
@@ -1204,17 +1226,82 @@ function browseModel(form, v, folders, canWrite) {
   };
 }
 
+// ---------- Upload: the repository from the person's own machine ----------
+//
+// The files a person picks — a folder or a .zip — are read by their browser
+// (the host's: studio/repository-files.mjs in the studio) and kept on the
+// server as the service's copy (PUT /api/services/:id/repository-upload); each
+// Run scans the copy. Opt-in: formModel offers the kind only with `uploads`.
+// The state rides on the form (`form.upload`); the host reads between the
+// steps:
+//   a pick or a drop   uploadReading(form, name), then the host reads the files
+//   the files read     uploadStaged(form, { name, files, bytes, skipped, ignored, truncated })
+//   a read that failed uploadFailed(form, error)
+// The save plan carries the staged files (savePlan's `upload`); nothing is
+// sent before Save.
+
+// A size as a person reads it: KB under a megabyte (never "0 MB"), MB with one decimal above.
+const mbText = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`);
+
+export function uploadReading(form, name) {
+  if (!form?.open) return form;
+  return { ...form, upload: { reading: String(name || 'the files') }, values: { ...form.values, kind: 'upload' }, error: null };
+}
+
+export function uploadStaged(form, read) {
+  if (!form?.open) return form;
+  const files = read?.files && typeof read.files === 'object' ? read.files : {};
+  const count = Object.keys(files).length;
+  if (!count) return uploadFailed(form, `${read?.name || 'That folder'} holds no file the scan reads — Prometheus rules, collector configs, dashboards, compose files, Helm values or metrics code`);
+  const staged = {
+    name: String(read.name || 'upload'), files, count, bytes: Number(read.bytes) || 0,
+    skipped: Array.isArray(read.skipped) ? read.skipped : [], ignored: Number(read.ignored) || 0, truncated: read.truncated === true,
+  };
+  return { ...form, upload: { staged }, values: { ...form.values, kind: 'upload', location: staged.name }, error: null, focus: 'upload' };
+}
+
+export function uploadFailed(form, error) {
+  if (!form?.open) return form;
+  return { ...form, upload: { error: sentenceOf(error) }, focus: 'upload' };
+}
+
+// formModel's `upload`: { offered, state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, note, error }.
+function uploadModel(form, v, { uploads, canWrite, now }) {
+  if (v.kind !== 'upload') return { offered: !!uploads, state: null, text: '', note: '', error: null };
+  const u = form.upload || {};
+  const base = { offered: !!uploads && canWrite, error: null, note: '' };
+  if (u.reading) return { ...base, state: 'reading', text: `Reading ${u.reading}…` };
+  if (u.staged) {
+    const s = u.staged;
+    const parts = [];
+    if (s.skipped.length) parts.push(`${s.skipped.length} not read: ${s.skipped.slice(0, 3).map((x) => `${x.path} (${x.why})`).join('; ')}${s.skipped.length > 3 ? '; …' : ''}`);
+    if (s.truncated) parts.push(`it stops at ${mbText(15 * 1024 * 1024)}: upload only the folder the scan needs`);
+    return { ...base, state: 'staged', text: `${s.name} · ${s.count} file${s.count === 1 ? '' : 's'} · ${mbText(s.bytes)} — uploaded when you save.`, note: parts.join(' · ') };
+  }
+  const failed = u.error ? { error: u.error } : {};
+  if (form.uploaded) {
+    const k = form.uploaded;
+    const ago = k.uploadedAt ? agoText(k.uploadedAt, now) : '';
+    return { ...base, ...failed, state: u.error ? 'failed' : 'kept', text: `${k.name} · uploaded${ago ? ` ${ago}` : ''}${k.files !== null ? ` · ${k.files} file${k.files === 1 ? '' : 's'}` : ''}. Choose again to replace it.` };
+  }
+  return { ...base, ...failed, state: u.error ? 'failed' : 'empty', text: 'Choose the folder, or a .zip of it, from your machine.' };
+}
+
 // The calls a save makes, in order, from the form's values and the facts on
 // hand — pure, so every host saves alike:
 //   endpoint  { create: { name, url, readTokenEnv? } } | { id }
 //   service   { create: { name, repository } } | { id, patch: { repository } | null }
 //   env       { create: { name } } | { id, bind: boolean } — bind: point it at the endpoint
+//   upload    { name, files } | null — PUT /api/services/:id/repository-upload, last
 // A name that keys an existing record (the catalogue's slug rule, `keyOf`,
 // injected: tools/lib/service-keys.mjs normalizeServiceKey) is that record —
-// the form completes it, never a second one.
-export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null } = {}) {
+// the form completes it, never a second one. An Upload never names its
+// repository: the service is created without one (or left as it is) and the
+// upload points it at its copy; `upload` is the staged files (form.upload.staged).
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
+  const uploading = values.kind === 'upload';
   const repository = { kind: values.kind, location: trimmed(values.location), ...(trimmed(values.ref) ? { ref: trimmed(values.ref) } : {}) };
   const list = Array.isArray(services) ? services.filter(Boolean) : [];
   const existing = list.find((s) => s.id === serviceId) || list.find((s) => s.slug === keyOf(name)) || null;
@@ -1222,13 +1309,14 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
     ? { create: { name: trimmed(values.epName), url: trimmed(values.epUrl), ...(trimmed(values.epToken) ? { readTokenEnv: trimmed(values.epToken) } : {}) } }
     : { id: Number(values.endpointId) };
   const sameRepo = (r) => !!r && r.kind === repository.kind && r.location === repository.location && (r.ref || '') === (repository.ref || '');
-  const service = existing
-    ? { id: existing.id, patch: sameRepo(existing.repository) ? null : { repository } }
-    : { create: { name, repository } };
+  let service;
+  if (uploading) service = existing ? { id: existing.id, patch: null } : { create: { name } };
+  else service = existing ? { id: existing.id, patch: sameRepo(existing.repository) ? null : { repository } } : { create: { name, repository } };
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
   return {
     endpoint, service,
     env: env ? { id: env.id, bind: !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
+    upload: uploading && upload?.files ? { name: upload.name, files: upload.files } : null,
     envName, name,
   };
 }

@@ -570,8 +570,10 @@ export function renderOverview(container, model, host = appHost) {
 // closeForm(), showAll(), compare(); and the Folder answer's panel when the
 // model offers Browse…: browseFolders() (Browse…, which closes an open
 // panel), openFolder(path) (a folder, Up, Start from the top — null is the
-// top), chooseFolder(path), closeFolders(). One primary button: Add a
-// service, or — with the form open — Save and run.
+// top), chooseFolder(path), closeFolders(); and Upload's when the model
+// offers it: pickRepositoryFolder(), pickRepositoryZip(),
+// dropRepository(dataTransfer). One primary button: Add a service, or — with
+// the form open — Save and run.
 
 const SVC_ICONS = {
   github: 'M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21',
@@ -640,6 +642,27 @@ function browseBtnHtml(f) {
   return `<button type="button" class="og-btn ov-form__browse" data-ux-action="ov-form-browse" aria-expanded="${f.browse.open ? 'true' : 'false'}" aria-controls="ov-folders"${f.saving ? ' disabled' : ''}>Browse…</button>`;
 }
 
+// Upload: the folder or .zip from the person's own machine — two buttons and
+// a drop target, the state as the model words it. A host that does not wire
+// it (the model's `offered`) gets the words without the buttons.
+function uploadHtml(f) {
+  const u = f.upload || {};
+  const off = f.saving || u.state === 'reading' ? ' disabled' : '';
+  const acts = u.offered ? `
+              <div class="ov-form__upload-acts">
+                <button type="button" class="og-btn" data-ux-action="ov-form-upload-folder"${off}>Choose a folder</button>
+                <button type="button" class="og-btn" data-ux-action="ov-form-upload-zip"${off}>Choose a .zip</button>
+                <span class="ov-form__upload-drop og-muted" aria-hidden="true">or drop it here</span>
+              </div>` : '';
+  const state = u.state === 'reading' ? ' role="status"' : '';
+  return `
+            <div class="ov-form__upload${u.state ? ` ov-form__upload--${attr(u.state)}` : ''}" data-upload-drop="${u.offered ? 'on' : 'off'}">${acts}
+              <span class="ov-form__upload-state"${state} data-field-focus="upload" tabindex="-1">${escapeHtml(u.text || '')}</span>${u.note ? `
+              <span class="ov-form__upload-note og-muted">${escapeHtml(u.note)}</span>` : ''}${u.error ? `
+              <span class="ov-form__err" role="alert">${escapeHtml(u.error)}</span>` : ''}
+            </div>`;
+}
+
 const UP_ICON = '<svg class="ov-ic ov-folders__up-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>';
 
 // The folders on the server: Up, where the panel is, the folders inside (a
@@ -701,11 +724,11 @@ function svcFormHtml(f) {
           <span class="ov-form__n">3</span>
           <div class="ov-form__f">
             <span class="ov-form__l">Repository — where it is declared</span>
-            <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>
+            <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>${f.kind.kind === 'upload' ? uploadHtml(f) : `
             <div class="ov-form__pair">
               <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
-            </div>${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
+            </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'location', shown)}
           </div>
         </li>
@@ -788,6 +811,8 @@ export function renderServiceList(container, list, form, host = appHost) {
     'ov-folders-open': (ev, el) => ov.openFolder?.(el.dataset.path ? el.dataset.path : null),
     'ov-folders-choose': (ev, el) => ov.chooseFolder?.(el.dataset.path),
     'ov-folders-close': () => ov.closeFolders?.(),
+    'ov-form-upload-folder': () => ov.pickRepositoryFolder?.(),
+    'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });
@@ -802,11 +827,24 @@ export function renderServiceList(container, list, form, host = appHost) {
     // Escape closes the folder panel, not the form.
     const panel = formEl.querySelector('.ov-folders');
     panel?.addEventListener?.('keydown', (ev) => { if (ev.key === 'Escape') { ev.preventDefault?.(); ov.closeFolders?.(); } });
+    // Upload's drop target: a folder or a .zip dropped on it is the host's to read.
+    const drop = formEl.querySelector('.ov-form__upload[data-upload-drop="on"]');
+    if (drop?.addEventListener) {
+      const over = (on) => (ev) => { ev.preventDefault?.(); drop.classList?.toggle('is-dragover', on); };
+      drop.addEventListener('dragenter', over(true));
+      drop.addEventListener('dragover', over(true));
+      drop.addEventListener('dragleave', over(false));
+      drop.addEventListener('drop', (ev) => { ev.preventDefault?.(); drop.classList?.remove('is-dragover'); ov.dropRepository?.(ev.dataTransfer); });
+    }
     // The field the host asks for (the form just opened, the kind or the endpoint just changed);
-    // 'folders' is the panel's first folder, else its first live button (a listing just drawn).
+    // 'folders' is the panel's first folder, else its first live button (a listing just drawn);
+    // 'upload' (or the location, which Upload has none of) is Upload's state, else its first button.
+    const uploading = !!formEl.querySelector('.ov-form__upload');
     const want = form?.focus === 'folders'
       ? (formEl.querySelector('.ov-folders__item:not([disabled])') || formEl.querySelector('.ov-folders button:not([disabled])'))
-      : form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
+      : (form?.focus === 'upload' || (form?.focus === 'location' && uploading))
+        ? (form.focus === 'upload' ? formEl.querySelector('[data-field-focus="upload"]') : null) || formEl.querySelector('.ov-form__upload button:not([disabled])')
+        : form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
     if (want) { want.focus({ preventScroll: true }); if (want.value && typeof want.select === 'function') want.select(); }
   }
 }

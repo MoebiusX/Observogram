@@ -339,3 +339,93 @@ test('the folder rule holds at run time: a folder outside OBSERVOGRAM_REPO_ROOTS
     delete process.env.OBSERVOGRAM_REPO_ROOTS;
   }
 });
+
+// ---------- a repository uploaded from the person's own machine ----------
+//
+// Overview's Upload: the files the browser read from a folder or a .zip are
+// kept as the service's copy (server/repository-uploads.mjs), and each Run
+// scans the copy. No token reads anything: the person's own access got the files.
+
+const { walkRepoFiles } = await import('../tools/lib/journey.mjs');
+const { parseUpload, uploadPathOf, UPLOAD_LIMITS, UPLOAD_WAYS } = await import('./repository-uploads.mjs');
+const { existsSync } = await import('node:fs');
+// The files as a browser reads a picked folder: each path under the folder's name.
+const UPLOADED = Object.fromEntries(Object.entries(walkRepoFiles(REPO)).map(([k, v]) => [`operational-alerts/${k}`, v]));
+const copyOf = (id) => runWithOrg('default', () => uploadPathOf(id));
+
+test('PUT /api/services/:id/repository-upload keeps the copy and points the record at it (one service.update row); POST and PATCH never name an upload; each refusal writes nothing', async () => {
+  const created = await call('POST', '/api/services', { name: 'Uploaded Shop' });
+  assert.equal(created.status, 201, created.text);
+  ids.uploaded = created.json.service.id;
+  const env = await call('POST', `/api/services/${ids.uploaded}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint });
+  assert.equal(env.status, 201, env.text);
+  const updates = auditRows('service.update').length;
+
+  for (const [body, error] of [
+    [undefined, UPLOAD_WAYS.body],
+    [{ name: 'x', files: [] }, UPLOAD_WAYS.body],
+    [{ files: UPLOADED }, UPLOAD_WAYS.name],
+    [{ name: 'two\nlines', files: UPLOADED }, UPLOAD_WAYS.name],
+    [{ name: 'empty', files: {} }, UPLOAD_WAYS.none],
+    [{ name: 'up', files: { '../outside.yaml': 'x' } }, UPLOAD_WAYS.path('../outside.yaml')],
+    [{ name: 'abs', files: { '/etc/x.yaml': 'x' } }, UPLOAD_WAYS.path('/etc/x.yaml')],
+    [{ name: 'drive', files: { 'C:/x.yaml': 'x' } }, UPLOAD_WAYS.path('C:/x.yaml')],
+    [{ name: 'dots', files: { 'a/./b.yaml': 'x' } }, UPLOAD_WAYS.path('a/./b.yaml')],
+    [{ name: 'bytes', files: { 'a.yaml': 7 } }, UPLOAD_WAYS.text('a.yaml')],
+  ]) {
+    const r = await call('PUT', `/api/services/${ids.uploaded}/repository-upload`, body);
+    assert.deepEqual([r.status, r.json?.error], [400, error], JSON.stringify(body)?.slice(0, 80));
+  }
+  assert.equal(existsSync(copyOf(ids.uploaded)), false, 'a refusal keeps no copy');
+  assert.equal(auditRows('service.update').length, updates, 'and writes no row');
+  assert.equal((await call('PUT', '/api/services/999999/repository-upload', { name: 'x', files: UPLOADED })).status, 404);
+  for (const [method, path] of [['POST', '/api/services'], ['PATCH', `/api/services/${ids.uploaded}`]]) {
+    const r = await call(method, path, { name: 'Named Upload', repository: { kind: 'upload', location: 'shop.zip' } });
+    assert.deepEqual([r.status, r.json.error], [400, WAYS.repositoryUploadNamed], method);
+  }
+
+  const before = Date.now();
+  const up = await call('PUT', `/api/services/${ids.uploaded}/repository-upload`, { name: ' operational-alerts.zip ', files: UPLOADED });
+  assert.equal(up.status, 200, up.text);
+  const bytes = Object.values(UPLOADED).reduce((n, v) => n + v.length, 0);
+  const repository = { kind: 'upload', location: 'operational-alerts.zip', ref: null, uploadedAt: up.json.upload.uploadedAt, files: Object.keys(UPLOADED).length, bytes };
+  assert.deepEqual([up.json.upload, up.json.service.repository], [repository, repository]);
+  assert.ok(Date.parse(repository.uploadedAt) >= before - 1000);
+  assert.deepEqual((await call('GET', `/api/services/${ids.uploaded}`)).json.service.repository, repository, 'the record says where its copy came from and when');
+  assert.equal(existsSync(copyOf(ids.uploaded)), true);
+  assert.equal(auditRows('service.update').length, updates + 1, 'one service.update row');
+
+  // The caps parseUpload holds (the JSON body limit refuses a larger request before it).
+  assert.throws(() => parseUpload({ name: 'big', files: { 'a.yaml': 'x'.repeat(UPLOAD_LIMITS.fileBytes + 1) } }), { message: UPLOAD_WAYS.fileTooBig('a.yaml') });
+  const four = Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`f${i}.yaml`, 'x'.repeat(UPLOAD_LIMITS.fileBytes)]));
+  assert.throws(() => parseUpload({ name: 'big', files: four }), { message: UPLOAD_WAYS.tooBig(4 * UPLOAD_LIMITS.fileBytes) });
+  const many = Object.fromEntries(Array.from({ length: UPLOAD_LIMITS.files + 1 }, (_, i) => [`f${i}.yaml`, '']));
+  assert.throws(() => parseUpload({ name: 'many', files: many }), { message: UPLOAD_WAYS.tooMany });
+});
+
+test('a Run scans the upload as the repository and registers it as the service\'s pack; a copy that is gone is named; a new upload replaces it; pointed elsewhere or deleted, the service takes its copy with it', async () => {
+  const r = await call('POST', `/api/services/${ids.uploaded}/run`, {});
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.json.scan.source, r.json.scan.files, r.json.scan.skipped], ['the upload operational-alerts.zip', Object.keys(UPLOADED).length, 0]);
+  assert.equal(r.json.journey, 'uploaded-shop.prod');
+  const svc = (await call('GET', `/api/services/${ids.uploaded}`)).json.service;
+  assert.deepEqual(svc.packs.filter((p) => p.role === 'primary').map((p) => [p.id, p.source]), [[r.json.pack.id, 'repository:upload']]);
+
+  rmSync(copyOf(ids.uploaded));
+  const gone = await call('POST', `/api/services/${ids.uploaded}/run`, {});
+  assert.deepEqual([gone.status, gone.json.error], [404, `the repository could not be read: ${UPLOAD_WAYS.gone('operational-alerts.zip')}`]);
+
+  const again = await call('PUT', `/api/services/${ids.uploaded}/repository-upload`, { name: 'operational-alerts', files: UPLOADED });
+  assert.equal(again.status, 200, again.text);
+  assert.equal(again.json.service.repository.location, 'operational-alerts', 'the new upload replaces the last');
+  assert.equal((await call('POST', `/api/services/${ids.uploaded}/run`, {})).status, 200);
+
+  const moved = await call('PATCH', `/api/services/${ids.uploaded}`, { repository: { kind: 'github', location: 'acme/shop' } });
+  assert.deepEqual([moved.status, moved.json.changed], [200, ['repository']]);
+  assert.equal(existsSync(copyOf(ids.uploaded)), false, 'pointed elsewhere: the copy goes');
+  await call('PUT', `/api/services/${ids.uploaded}/repository-upload`, { name: 'operational-alerts', files: UPLOADED });
+  assert.equal(existsSync(copyOf(ids.uploaded)), true);
+  const deleted = await call('DELETE', `/api/services/${ids.uploaded}`);
+  assert.equal(deleted.status, 200, deleted.text);
+  assert.equal(existsSync(copyOf(ids.uploaded)), false, 'deleted: the copy goes');
+});

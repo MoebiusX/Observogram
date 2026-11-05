@@ -28,6 +28,7 @@ import {
   START_IDLE, startChoose, startAdopted,
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formModel, savePlan,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
+  uploadReading, uploadStaged, uploadFailed,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders } from '../studio/overview-api.mjs';
@@ -1226,7 +1227,7 @@ test('repositoryLine: GitHub as owner/repo with its branch, Azure DevOps as proj
     { kind: 'path', kindText: 'Folder', text: 'checkout', ref: null, detail: 'C:\\src\\shop\\checkout', title: 'C:\\src\\shop\\checkout' });
   assert.equal(repositoryLine(null), null);
   assert.equal(repositoryLine({ kind: 'github' }), null);
-  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path']);
+  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path', 'upload'], 'Upload is offered only by a host that wires it (the uploads option of formModel)');
 });
 
 test('serviceListModel: one row per service and environment with its two places and its last check; what is missing says so; the rows a person can run first', () => {
@@ -1309,7 +1310,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   assert.deepEqual(formModel(FORM_CLOSED), { open: false });
   // The save plan: a new service, an endpoint by id, its environment created.
   const fresh = savePlan({ ...blank.values, name: 'Basket', location: 'acme/basket', ref: 'main' }, { services });
-  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' } } }, env: { create: { name: 'prod' } }, envName: 'prod', name: 'Basket' });
+  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' } } }, env: { create: { name: 'prod' } }, upload: null, envName: 'prod', name: 'Basket' });
   // A name that keys an existing record completes it: the repository patched when it differs, the environment bound when it does not point there yet.
   const same = savePlan({ ...edit.values }, { services, serviceId: 1 });
   assert.deepEqual([same.service, same.env], [{ id: 1, patch: null }, { id: 11, bind: false }], 'nothing differs: no patch, no bind');
@@ -1520,6 +1521,91 @@ test('buildOverviewModel with listable: the service header links back to the lis
   const c2 = overviewContainer();
   renderOverview(c2, buildOverviewModel(base), { overview: {} });
   assert.ok(!c2.innerHTML.includes('ov-back'));
+});
+
+// ---------- Upload: the repository from the person's own machine ----------
+
+const UPLOADED_AT = new Date(NOW - 2 * 24 * HOUR).toISOString();
+const uploadRow = () => svcRow({ id: 5, slug: 'ledger', name: 'Ledger', repository: { kind: 'upload', location: 'ledger-main.zip', ref: null, uploadedAt: UPLOADED_AT, files: 12, bytes: 4096 } });
+const READ = { name: 'shop-main', files: { 'shop-main/prometheus/rules.yaml': 'groups: []\n', 'shop-main/otel/collector.yaml': 'receivers: {}\n' }, bytes: 2.5 * 1024 * 1024, skipped: [{ path: 'shop-main/logo.yaml', why: 'it is not UTF-8 text' }], ignored: 40, truncated: false };
+
+test('Upload is offered only by a host that wires it (uploads); its row says what was uploaded and when; a form on an upload remembers it', () => {
+  const blank = formOpened([svcRow()], { endpoints: [EP] });
+  assert.deepEqual(formModel(blank).kinds.map((k) => k.kind), ['github', 'ado', 'path'], 'no uploads option: the form as before');
+  assert.deepEqual(formModel(blank, { uploads: true }).kinds.map((k) => k.kind), ['github', 'ado', 'path', 'upload']);
+  assert.deepEqual(repositoryLine(uploadRow().repository, { now: NOW }), { kind: 'upload', kindText: 'Upload', text: 'ledger-main.zip', ref: null, detail: 'uploaded 2 days ago · 12 files', title: `ledger-main.zip, uploaded ${UPLOADED_AT}` });
+  const row = serviceListModel({ services: [uploadRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows[0];
+  assert.deepEqual([row.repository.kindText, row.repository.detail, row.run.enabled], ['Upload', 'uploaded 2 days ago · 12 files', true], 'an uploaded repository runs like any other');
+  const edit = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] });
+  assert.deepEqual([edit.values.kind, edit.values.location, edit.uploaded, edit.upload], ['upload', 'ledger-main.zip', { name: 'ledger-main.zip', uploadedAt: UPLOADED_AT, files: 12 }, null]);
+  assert.deepEqual(formModel(edit, { now: NOW }).kinds.map((k) => k.kind), ['github', 'ado', 'path', 'upload'], 'a host without uploads still shows the kind a record has');
+  assert.deepEqual(formModel(edit, { uploads: true, now: NOW }).upload, { offered: true, state: 'kept', error: null, note: '', text: 'ledger-main.zip · uploaded 2 days ago · 12 files. Choose again to replace it.' });
+  assert.equal(formModel(edit, { now: NOW }).upload.offered, false, 'without uploads: the words, no buttons');
+  assert.equal(formModel(edit, { uploads: true, access: { canWrite: false }, now: NOW }).upload.offered, false, 'a reader who cannot save is offered nothing');
+});
+
+test('Upload\'s steps: a change of kind swaps the location (an upload\'s is its name, never an address); reading, staged with what was not read, a read that failed; what is missing; the save plan uploads last and never names the repository', () => {
+  const opened = formOpened([svcRow()], { endpoints: [EP] });
+  const blank = { ...opened, values: { ...opened.values, name: 'Shop', location: 'acme/shop' } };
+  const toUpload = formInput(blank, 'kind', 'upload');
+  assert.deepEqual([toUpload.values.kind, toUpload.values.location], ['upload', ''], 'the address is not an upload\'s name');
+  assert.deepEqual(formProblems(toUpload.values).location, 'Choose a folder or a .zip to upload.');
+  assert.deepEqual(formModel(toUpload, { uploads: true }).upload, { offered: true, state: 'empty', error: null, note: '', text: 'Choose the folder, or a .zip of it, from your machine.' });
+
+  const reading = uploadReading(toUpload, 'shop-main.zip');
+  assert.deepEqual([reading.upload, formModel(reading, { uploads: true }).upload.text], [{ reading: 'shop-main.zip' }, 'Reading shop-main.zip…']);
+  const staged = uploadStaged(reading, READ);
+  assert.deepEqual([staged.values.location, staged.upload.staged.count, staged.focus], ['shop-main', 2, 'upload']);
+  assert.deepEqual(formModel(staged, { uploads: true }).upload, {
+    offered: true, state: 'staged', error: null,
+    text: 'shop-main · 2 files · 2.5 MB — uploaded when you save.',
+    note: '1 not read: shop-main/logo.yaml (it is not UTF-8 text)',
+  });
+  assert.deepEqual(formProblems(staged.values), {}, 'staged: nothing missing');
+  assert.match(formModel(uploadStaged(reading, { ...READ, bytes: 3000 }), { uploads: true }).upload.text, / · 3 KB — /, 'a small upload in KB, never "0 MB"');
+  assert.equal(formModel(uploadStaged(reading, { ...READ, truncated: true, skipped: [] }), { uploads: true }).upload.note, 'it stops at 15 MB: upload only the folder the scan needs');
+  const empty = uploadStaged(reading, { name: 'docs', files: {} });
+  assert.deepEqual([empty.upload.error, formModel(empty, { uploads: true }).upload.state], ['Docs holds no file the scan reads — Prometheus rules, collector configs, dashboards, compose files, Helm values or metrics code.', 'failed']);
+  const failed = uploadFailed(reading, new Error('this .zip is a ZIP64 archive (over 4 GB or 65,535 entries), which is not read: zip only the folder the scan needs'));
+  assert.equal(formModel(failed, { uploads: true }).upload.error, 'This .zip is a ZIP64 archive (over 4 GB or 65,535 entries), which is not read: zip only the folder the scan needs.');
+  assert.equal(formInput(staged, 'kind', 'github').values.location, '', 'leaving Upload: its name is no address');
+  assert.equal(formInput(formInput(staged, 'kind', 'github'), 'kind', 'upload').values.location, 'shop-main', 'and back: the staged name again');
+  for (const step of [(f) => uploadReading(f, 'x'), (f) => uploadStaged(f, READ), (f) => uploadFailed(f, 'x')]) assert.equal(step(FORM_CLOSED), FORM_CLOSED);
+
+  const plan = savePlan(staged.values, { services: [svcRow()], upload: staged.upload.staged });
+  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files }], 'created with no repository; the upload points it at its copy');
+  const kept = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] });
+  const keptPlan = savePlan(kept.values, { services: [uploadRow()], serviceId: 5 });
+  assert.deepEqual([keptPlan.service, keptPlan.upload], [{ id: 5, patch: null }, null], 'nothing new chosen: nothing patched, nothing sent');
+  const moved = savePlan({ ...kept.values, kind: 'github', location: 'acme/ledger' }, { services: [uploadRow()], serviceId: 5 });
+  assert.deepEqual([moved.service.patch, moved.upload], [{ repository: { kind: 'github', location: 'acme/ledger' } }, null], 'pointed elsewhere: a PATCH, as before');
+});
+
+test('renderServiceList: Upload\'s block in place of the address — the two buttons and the drop words, the state as the model words it, the hooks proxied, still one primary; without the hooks offered, the words alone', () => {
+  const list = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const calls = [];
+  const host = { overview: { pickRepositoryFolder: () => calls.push('folder'), pickRepositoryZip: () => calls.push('zip'), dropRepository: () => calls.push('drop') } };
+  const staged = uploadStaged(uploadReading(formInput(formOpened([svcRow()], { endpoints: [EP] }), 'kind', 'upload'), 'shop-main.zip'), READ);
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(staged, { endpoints: [EP], uploads: true }), host);
+  const html = c.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'Save and run stays the one primary');
+  assert.ok(html.includes('<div class="ov-form__upload ov-form__upload--staged" data-upload-drop="on">'));
+  assert.ok(html.includes('data-ux-action="ov-form-upload-folder">Choose a folder</button>') && html.includes('data-ux-action="ov-form-upload-zip">Choose a .zip</button>'));
+  assert.ok(html.includes('>shop-main · 2 files · 2.5 MB — uploaded when you save.</span>'));
+  assert.ok(html.includes('<span class="ov-form__upload-note og-muted">1 not read: shop-main/logo.yaml (it is not UTF-8 text)</span>'));
+  assert.ok(!html.includes('data-field="location"') && !html.includes('data-field="ref"'), 'no address and no branch for an upload');
+  assert.ok(/data-kind="upload" aria-pressed="true">/.test(html), 'the Upload kind pressed');
+  c.click('ov-form-upload-folder');
+  c.click('ov-form-upload-zip');
+  assert.deepEqual(calls, ['folder', 'zip']);
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, formModel(uploadReading(staged, 'shop-main.zip'), { endpoints: [EP], uploads: true }), host);
+  assert.ok(c2.innerHTML.includes('role="status" data-field-focus="upload" tabindex="-1">Reading shop-main.zip…</span>'), 'reading: the status');
+  assert.ok(/data-ux-action="ov-form-upload-folder" disabled>/.test(c2.innerHTML), 'and no second pick while it reads');
+  const c3 = overviewContainer();
+  renderServiceList(c3, list, formModel(formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] }), { endpoints: [EP], now: NOW }), { overview: {} });
+  assert.ok(!c3.innerHTML.includes('Choose a folder') && c3.innerHTML.includes('data-upload-drop="off"') && c3.innerHTML.includes('ledger-main.zip · uploaded 2 days ago · 12 files.'), 'no uploads: the words alone, no drop target');
 });
 
 // ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------

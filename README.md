@@ -941,6 +941,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
 | `POST` | `/api/services/:id/run` | operator | `{ env? }` | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
+| `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
 | `GET` | `/api/repository-folders` | operator | `?path=` (a folder's full path; left out: the top) | the folders a `path` repository can be picked from (Overview's **Browse…**): `{ allowed, why, bounded, path, up, repository, folders, truncated, limit }` — `folders` the folders inside `path` by name (`{ name, path, repository }`, `repository` when it holds `.git`; never a file, `.git` or `node_modules`; at most `limit`, 500, then `truncated`), `up` the folder above (`{ path }`, `path` `null` for the top) or `null`. The rule is the save's: with `OBSERVOGRAM_REPO_ROOTS` listed (`bounded`) the top is those folders, `path` `null`, and nothing outside them is listed or opened, a link that leads out included; with none, the top is the home folder of a server answering a direct request on loopback without sign-in, and any other reader gets `allowed: false` with the rule's sentence in `why`. A refused folder is 400 with the save's sentence; one that is not there, 404 |
 | `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
 | `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
@@ -1130,6 +1131,7 @@ repository, the live endpoint) and **Run** on every row.
 | `github` | `https://github.com/<owner>/<repo>` or `<owner>/<repo>` (…`/tree/<ref>` names a branch) | the contents API with `GITHUB_TOKEN` on the server (a private repository); without one, `raw.githubusercontent.com` (a public one, outside the API's hourly quota) |
 | `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | `AZURE_DEVOPS_TOKEN` (a personal access token with Code (Read)); the token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
 | `path` | a folder's full path on the server, typed or picked with **Browse…** (`GET /api/repository-folders`, the same rule) | the server's own file system, under the org's part of the workspace; taken only under a folder listed in `OBSERVOGRAM_REPO_ROOTS` (comma-separated), or — none listed — from the server's own machine while it runs without sign-in on loopback |
+| `upload` | the folder's or the `.zip`'s name (set by `PUT /api/services/:id/repository-upload`, never named in POST or PATCH) | the copy the person uploaded from their own machine — no server-held token reads anything; each Run scans the copy again, so it is as current as its last upload |
 
 `ref` is a branch (the default branch when left out). `POST
 /api/services/:id/run` with `{ env }` (left out when the service has one
@@ -1334,8 +1336,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.6.2 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.6.2
+docker build -t observogram:0.7.0 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.7.0
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
