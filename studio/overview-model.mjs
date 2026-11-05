@@ -1044,10 +1044,13 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null };
 }
 
-// One field typed into: the state with that value (only known fields).
+// One field typed into: the state with that value (only known fields). A
+// change of kind closes the folder panel (Browse…: below).
 export function formInput(form, field, value) {
   if (!form?.open || !Object.hasOwn(form.values || {}, field)) return form;
-  return { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+  const next = { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+  if (field === 'kind' && next.browse) next.browse = null;
+  return next;
 }
 
 const trimmed = (v) => String(v ?? '').trim();
@@ -1069,9 +1072,11 @@ export function formProblems(values = {}) {
   return out;
 }
 
-// formModel(form, { endpoints, register, access }) → what the renderer draws:
+// formModel(form, { endpoints, register, access, folders }) → what the renderer draws:
 //   register  GET /api/mcp-endpoints' policy.register ({ allowed, why }) — may a new endpoint be registered here
-export function formModel(form, { endpoints = null, register = null, access = null } = {}) {
+//   folders   loadServiceListFacts' `folders` ({ allowed, why }) — may a folder be picked on the server
+//             (Browse…: below); without it the Folder answer is typed, as before
+export function formModel(form, { endpoints = null, register = null, access = null, folders = null } = {}) {
   if (!form?.open) return { open: false };
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
@@ -1084,10 +1089,118 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     values: { ...v },
     kinds: REPOSITORY_KINDS.map((k) => ({ ...k, selected: k.kind === v.kind })),
     kind: REPOSITORY_KINDS.find((k) => k.kind === v.kind) || REPOSITORY_KINDS[0],
+    browse: browseModel(form, v, folders, canWrite),
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
     problems: formProblems(v),
     canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
+}
+
+// ---------- Browse…: the folder picked on the server ----------
+//
+// The Folder answer can be picked instead of typed, from the folders the
+// server may read (GET /api/repository-folders, whose rule is the one a save
+// applies). A browser's own folder dialog cannot answer it: it never gives a
+// folder's full path, and every Run reads the folder on the server again.
+// Opt-in: a host that passes formModel no `folders` fact draws the form as
+// before. The panel's state rides on the form's (`form.browse`); these name
+// its steps, and the host fetches between them (overview-api.mjs
+// loadRepositoryFolders):
+//   Browse…          folderBrowseStart(form.values) → the path to list (null: the top),
+//                    folderBrowseOpening(form, path), the fetch
+//   the answer       folderBrowseListed(form, listing) | folderBrowseFailed(form, error)
+//   a folder in it   folderBrowseOpening(form, path), the fetch again (Up and
+//                    Start from the top too: path null is the top)
+//   Use this folder  folderBrowseChosen(form, path): the Folder answer, the panel closed
+//   Close            folderBrowseClosed(form) — Browse… again too
+
+const FULL_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/;
+
+// Where Browse… opens: the folder already typed when it is a full path, else the top.
+export function folderBrowseStart(values = {}) {
+  const typed = trimmed(values.location);
+  return values.kind === 'path' && FULL_PATH.test(typed) ? typed : null;
+}
+
+// A folder asked for: the panel open and reading, the last listing kept on screen meanwhile.
+export function folderBrowseOpening(form, path = null) {
+  if (!form?.open) return form;
+  return { ...form, browse: { loading: true, asked: trimmed(path) || null, listing: form.browse?.listing ?? null, error: null }, focus: null };
+}
+
+// The server's listing (a refusal at the top, allowed: false, is the failure it names).
+export function folderBrowseListed(form, listing) {
+  if (!form?.open || !form.browse) return form;
+  if (!listing || typeof listing !== 'object' || listing.allowed === false) {
+    return folderBrowseFailed(form, listing?.why || 'the server does not list folders here');
+  }
+  return { ...form, browse: { loading: false, asked: form.browse.asked, listing: listingOf(listing), error: null }, focus: 'folders' };
+}
+
+// The fetch refused (the server's sentence) or failed: the panel says so, the last listing kept.
+export function folderBrowseFailed(form, error) {
+  if (!form?.open || !form.browse) return form;
+  return { ...form, browse: { ...form.browse, loading: false, error: sentenceOf(error) }, focus: 'folders' };
+}
+
+// Use this folder: the Folder answer, the panel closed, the field focused.
+export function folderBrowseChosen(form, path) {
+  const p = trimmed(path);
+  if (!form?.open || !p) return form;
+  return { ...form, values: { ...form.values, kind: 'path', location: p }, browse: null, focus: 'location', error: null };
+}
+
+export function folderBrowseClosed(form) {
+  if (!form?.open || !form.browse) return form;
+  return { ...form, browse: null, focus: 'location' };
+}
+
+function listingOf(body) {
+  const folders = (Array.isArray(body.folders) ? body.folders : [])
+    .filter((f) => f && typeof f.path === 'string' && f.path)
+    .map((f) => ({ name: String(f.name || f.path), path: f.path, repository: f.repository === true }));
+  return {
+    path: typeof body.path === 'string' && body.path ? body.path : null,
+    up: body.up && typeof body.up === 'object' ? { path: typeof body.up.path === 'string' && body.up.path ? body.up.path : null } : null,
+    bounded: body.bounded === true, repository: body.repository === true, folders,
+    truncated: body.truncated === true, limit: Number.isFinite(body.limit) ? body.limit : null,
+  };
+}
+
+// A refusal as one sentence: the status a loader prefixes dropped, the first letter up, a full stop.
+function sentenceOf(e) {
+  const s = String(e?.message || e || 'the folder could not be read').replace(/^\d{3}: /, '').trim();
+  const up = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?…]$/.test(up) ? up : `${up}.`;
+}
+
+// formModel's `browse`: { offered, open, hint, panel }. `hint` replaces the
+// Folder hint when the server will not take a folder from this reader (its
+// sentence); `panel` is drawn while the panel is open.
+function browseModel(form, v, folders, canWrite) {
+  const none = { offered: false, open: false, hint: null, panel: null };
+  if (v.kind !== 'path' || !folders || typeof folders !== 'object') return none;
+  if (folders.allowed !== true) return { ...none, hint: folders.why ? sentenceOf(folders.why) : null };
+  if (!canWrite) return none;
+  const b = form.browse;
+  if (!b) return { ...none, offered: true };
+  const l = b.listing;
+  const loading = !!b.loading;
+  return {
+    offered: true, open: true, hint: null,
+    panel: {
+      loading, error: b.error || null,
+      title: !l ? 'Folders on the server' : (l.path ?? 'The folders this server reads repositories from'),
+      path: l?.path ?? null,
+      up: l?.up ? { path: l.up.path ?? '' } : null,                // '' — the top
+      folders: l ? l.folders.map((f) => ({ ...f })) : [],
+      empty: !!l && !loading && !b.error && l.folders.length === 0,
+      note: l?.truncated ? `Only the first ${l.limit ?? l.folders.length} folders are listed: type the rest of the path to go further.` : '',
+      here: l?.repository ? 'This folder is a repository.' : '',
+      choose: { enabled: !!l?.path && !loading, path: l?.path ?? '' },
+      restart: !!b.error && !loading && (b.asked !== null || !!l?.path),
+    },
   };
 }
 

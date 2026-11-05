@@ -73,12 +73,17 @@ export async function runServiceCheck(name, { fetchFn = requestJson } = {}) {
   });
 }
 
-// The service list's facts: the journeys listing (each row's last check) and
+// The service list's facts: the journeys listing (each row's last check),
 // the org's MCP endpoints with what may be registered here (the form's
-// fourth answer). Each failure is a sentence, never thrown:
-//   { journeys, journeysError, endpoints, endpointsError, register }
+// fourth answer), and whether a folder can be picked on the server (the
+// third answer's Browse…). Each failure is a sentence, never thrown:
+//   { journeys, journeysError, endpoints, endpointsError, register, folders }
+//   folders  { allowed, why } — may a folder be picked on the server, and if
+//            not, the server's reason — or null when the server has no folder
+//            listing (an older one) or this reader may not ask (a viewer):
+//            Browse… is then not drawn
 export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
-  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null };
+  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null };
   await Promise.all([
     fetchFn('/api/journeys')
       .then((body) => { out.journeys = Array.isArray(body?.journeys) ? body.journeys : []; })
@@ -89,6 +94,22 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
         out.register = body?.policy?.register ?? null;
       })
       .catch((e) => { out.endpointsError = sentence(e); }),
+    loadRepositoryFolders(null, { fetchFn })
+      .then((body) => {
+        if (!body || typeof body.allowed !== 'boolean') return;
+        out.folders = { allowed: body.allowed, why: body.why || null };
+      })
+      .catch(() => { /* no listing here, or not for this reader: no Browse… */ }),
   ]);
   return out;
+}
+
+// GET /api/repository-folders[?path=] — one folder on the server and the
+// folders inside it, names only (Overview's Browse…; the server's rule is
+// the one a save applies). `path` null is the top: the folders the server
+// reads repositories from, or the home folder on the person's own machine.
+// → { allowed, why, bounded, path, up, repository, folders, truncated, limit };
+// a folder the server refuses throws its sentence with its status.
+export async function loadRepositoryFolders(path = null, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/repository-folders${path ? `?path=${enc(path)}` : ''}`);
 }

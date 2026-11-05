@@ -171,11 +171,14 @@ function apiRoutes() {
 }
 
 // The catalogue and the stateless routes. (The live pack is per org since
-// STORE_PLAN slice 3: its two routes are org-scoped below.)
+// STORE_PLAN slice 3: its two routes are org-scoped below.) The repository
+// folders are the server's disk under OBSERVOGRAM_REPO_ROOTS, one list for
+// the deployment — the rule a folder repository's save applies in every org.
 const DEPLOYMENT_GLOBAL = new Set([
   'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/mcp-settings', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
+  'GET /api/repository-folders',
 ]);
 
 // The owner routes (STORE_PLAN slice 3b): the deployment's users, orgs and

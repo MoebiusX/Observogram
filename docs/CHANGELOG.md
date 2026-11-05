@@ -2,17 +2,22 @@
 
 ## Unreleased
 
-### Fixed: upstream's `npm test` passes whole inside an export copy — the six tests that cannot run there skip, saying why
-A downstream that runs the whole repository from an export (`npm run vendor-export`, docs/DOWNSTREAM_REFRESH.md) saw six tests fail in its copy. Three read `.github/workflows/ci.yml`, which `export-ignore` leaves out. The three of `tools/test-vendor-export.mjs` export the repository's own git checkout, and inside a copy git answers for the downstream's tree around it.
-- **`tools/vendor-export.mjs`**: `isExportCopy(root)` is true for a folder with `VENDOR-TREE.json` at its root and no `.git` of its own, which an upstream checkout never is. `EXPORT_COPY_SKIP.workflow` and `.checkout` are the two reasons, each starting `an export copy: `.
-- **The six skip there**, each printing `# SKIP an export copy: <why>`, and nowhere else:
-  - `tools/test-vendor-export.mjs`: all three tests.
-  - `tools/test-tap-summary.mjs`: S10, the workflow's wiring.
-  - `tools/test-bundle-compare.mjs`: C8's check that CI's workflow installs no Playwright is now its own test. C8 still holds the documents to the limit in a copy.
-  - `tools/test-validator.mjs`: the workflow's spec-version scan is now its own test; every other file is still scanned in a copy.
-- **`tools/tap-summary.mjs`**: `KNOWN_SKIPS` names the `an export copy: ` prefix with its probe, so a copy's run summarised by it is not refused for an unknown reason.
-- **Docs**: DOWNSTREAM_REFRESH.md step 5, VENDORING.md, README and DOWNSTREAM.md name the six skips.
-- **Tests**: the two split-out checks are new tests, and each still names a step that installs Playwright or a stale version. A copy exported from this commit runs the whole suite with exactly those six skips added. Suite total 1663 → 1665.
+### Added: Overview's Folder answer can be picked from the server's folders — Browse…
+A service's folder repository was typed as a full path. A browser's own folder dialog cannot fill it: it never gives a folder's full path, and every Run reads the folder on the server again, so the picker lists the server's folders instead.
+- **`GET /api/repository-folders`** (`server/repository-folders.mjs`, operator, the services router): one folder and the folders inside it by name, each `repository` when it holds `.git` (a folder, or a worktree's file); never a file, `.git` or `node_modules`; at most 500 names, then `truncated`; `up` the folder above.
+  - The rule is the one a save applies (`folderRefusal`). With `OBSERVOGRAM_REPO_ROOTS` listed, the top is those folders and nothing outside them is listed or opened, judged by the real path too, so a link inside that leads out is neither. With none listed, a direct request to a loopback server without sign-in starts in the home folder and may climb the whole disk; any other reader gets `allowed: false` and the rule's sentence.
+  - A refused folder is 400 with the save's own sentence, one that is not there 404. Answers are `Cache-Control: no-store`.
+- **The board unit** (opt-in, as the list is):
+  - `studio/overview-api.mjs`: `loadServiceListFacts` adds `folders` (`{ allowed, why }` from the top, `null` when the server has no listing or refuses the reader); `loadRepositoryFolders(path)` is new.
+  - `studio/overview-model.mjs`: `formModel(form, { …, folders })` adds `browse` (`{ offered, open, hint, panel }`); the panel's steps are `folderBrowseStart`, `folderBrowseOpening`, `folderBrowseListed`, `folderBrowseFailed`, `folderBrowseChosen`, `folderBrowseClosed`, and a change of kind closes it. Where the server will not take a folder, its reason replaces the Folder hint.
+  - `studio/overview-view.mjs` draws Browse… beside the Folder answer and the panel under it (Up, the folders with each repository marked, Use this folder, Start from the top after a refusal, Close, Escape) and proxies `browseFolders`, `openFolder`, `chooseFolder` and `closeFolders`; `studio/overview.css` styles it from the design tokens. A host that passes no `folders` fact draws the form it drew before.
+  - `studio/app.mjs` wires it; an answer that arrives after another folder was asked for, or after the panel closed, is dropped.
+- **Docs**: README (the route, and the `path` row), VENDORING.md (the fact, the steps and the four hooks), UX_SCREEN_GRAMMAR.md.
+- **Tests**:
+  - `server/test-repository-folders.mjs` (new, in `npm test`): a tree of its own with repositories, a worktree, a dot-folder, `node_modules` and links in and out — the top both ways, the order, Up, the cap, every refusal with its sentence, and the route in process.
+  - `tools/test-overview-model.mjs`: the fact, the steps, the panel's model and markup, the hooks, the loaders.
+  - `server/test-authz.mjs`: the route's class and probe.
+  - Suite total 1663 → 1675.
 
 ### Added: the taxonomy renames the label an artefact shows for its implementation (schema version 3)
 A downstream that writes its alert rules as Prometheus rules and deploys them through Grafana saw them labelled *Grafana alerting*. A metric known only from a query read *Prometheus promql-reference*. It carried two patches to `tools/lib/adapter.mjs` to change those words, and they failed three upstream tests in its copy at every refresh.
