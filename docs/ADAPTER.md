@@ -155,6 +155,12 @@ artefact that carries `defines`. The taxonomy file's schema version 2 adds a
 family?, aliases?, link? }`; README "Classify Typed Packs"); a glossary
 never changes a classification — `classifyArtefact` reads `types` and `ids`
 only, and a v1 file compiles exactly as before, to the empty glossary.
+Schema version 3 adds `toolLabels`, which rename the `tool` label the
+adapter writes (`Grafana alerting` → `PrometheusRule`, `Prometheus
+promql-reference` → `Prometheus metric`). `adapt()` applies the installed
+taxonomy's labels to every artefact it projects, or the ones a caller passes
+as `adapt(canonical, { toolLabels })` (`null` for none). A label is display
+only: classification, pairing and drift never read `tool`.
 
 The symbol an artefact is addressed by elsewhere — `slos.<id>` (the
 adapter's `defines`), `remediation[<i>]`, `alerting.rules[<j>]`,

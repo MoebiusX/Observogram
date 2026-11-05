@@ -47,6 +47,17 @@
 // under `version: 1` is an unknown key, so a downstream that keeps writing
 // `version: TAXONOMY_VERSION` (still 1) keeps emitting files its deployed
 // server accepts.
+//
+// Schema version 3 (TAXONOMY_VERSION_LATEST) adds a second optional section,
+// `toolLabels`: the label an artefact shows for its implementation, renamed.
+//   { "version": 3, …, "toolLabels": { "Grafana alerting": "PrometheusRule" } }
+// A key is a `tool` the adapter writes (`Grafana alerting`,
+// `Prometheus promql-reference` …), its value the label to show instead,
+// both one line within TOOL_LABEL_LIMITS. tools/lib/adapter.mjs applies it
+// to every artefact it projects. A label is display only: nothing that pairs,
+// grades or classifies reads `tool`, so a renamed label changes what a page
+// shows and nothing it decides. `glossary` stays valid under version 3, and
+// `toolLabels` under 1 or 2 is an unknown key.
 
 // ---------- the vocabulary ----------
 
@@ -161,10 +172,12 @@ export const ID_RULES = Object.freeze([
 
 export const TAXONOMY_VERSION = 1;
 // The versions compileTaxonomy accepts, and the latest one (the glossary
-// needs `version: 2`). TAXONOMY_VERSION keeps the value 1 on purpose: see
-// the header.
-export const TAXONOMY_VERSIONS = Object.freeze([1, 2]);
-export const TAXONOMY_VERSION_LATEST = 2;
+// needs `version: 2` or later, the tool labels `version: 3`). TAXONOMY_VERSION
+// keeps the value 1 on purpose: see the header.
+export const TAXONOMY_VERSIONS = Object.freeze([1, 2, 3]);
+export const TAXONOMY_VERSION_LATEST = 3;
+// The tool labels' bounds (schema v3): characters per label, entries per file.
+export const TOOL_LABEL_LIMITS = Object.freeze({ label: 80, entries: 64 });
 export const PATTERN_MAX_LENGTH = 200;
 // The glossary's bounds (schema v2): characters per field, entries per file.
 export const GLOSSARY_LIMITS = Object.freeze({ term: 80, definition: 600, alias: 80, link: 2000, entries: 500 });
@@ -253,6 +266,7 @@ const isLine = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.len
 const textKey = (text) => String(text).trim().replace(/\s+/g, ' ').toLowerCase();
 const EMPTY = Object.freeze([]);
 const EMPTY_GLOSSARY = Object.freeze({ entries: EMPTY, byFamily: new Map(), byText: new Map() });
+const EMPTY_TOOL_LABELS = new Map();
 
 // One entry — a family string or { family, label?, role? } — to { family, label?, role? }.
 function readTarget(value, where, errors) {
@@ -384,12 +398,32 @@ function compileGlossary(raw, errors) {
   return Object.freeze({ entries: Object.freeze(entries), byFamily, byText });
 }
 
-// { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }], glossary: { entries, byFamily, byText } } | null, errors: string[] }
+// The tool labels section → Map<the adapter's label, the label to show>, or null with the reasons pushed.
+function compileToolLabels(raw, errors) {
+  if (!isPlainObject(raw)) { errors.push('taxonomy: toolLabels must be an object of label → label'); return null; }
+  const entries = Object.entries(raw);
+  if (entries.length > TOOL_LABEL_LIMITS.entries) { errors.push(`taxonomy: toolLabels: more than ${TOOL_LABEL_LIMITS.entries} entries`); return null; }
+  const labels = new Map();
+  let ok = true;
+  for (const [from, to] of entries) {
+    const where = `toolLabels[${JSON.stringify(from)}]`;
+    if (!isLine(from, TOOL_LABEL_LIMITS.label) || from !== from.trim()) { errors.push(`taxonomy: ${where}: a label must be one line of 1–${TOOL_LABEL_LIMITS.label} characters, with no space at either end`); ok = false; continue; }
+    if (!isLine(to, TOOL_LABEL_LIMITS.label)) { errors.push(`taxonomy: ${where}: the new label must be one line of 1–${TOOL_LABEL_LIMITS.label} characters`); ok = false; continue; }
+    labels.set(from, to.trim());
+  }
+  return ok ? labels : null;
+}
+
+// `1`, `1 or 2`, `1, 2 or 3`: the versions, as a refusal names them.
+const versionList = (v) => (v.length < 2 ? String(v[0]) : `${v.slice(0, -1).join(', ')} or ${v[v.length - 1]}`);
+
+// { compiled: { types: Map<name, {family,label?,role?}>, ids: [{ re, pattern, flags, family, label?, role? }], glossary: { entries, byFamily, byText }, toolLabels: Map<string, string> } | null, errors: string[] }
 function compileAll(json, timed = true) {
   const errors = [];
   if (!isPlainObject(json)) return { compiled: null, errors: ['taxonomy: must be an object'] };
-  if (!TAXONOMY_VERSIONS.includes(json.version)) errors.push(`taxonomy: version must be ${TAXONOMY_VERSIONS.join(' or ')}`);
-  const allowed = json.version === 2 ? ['version', 'types', 'ids', 'glossary'] : ['version', 'types', 'ids'];
+  if (!TAXONOMY_VERSIONS.includes(json.version)) errors.push(`taxonomy: version must be ${versionList(TAXONOMY_VERSIONS)}`);
+  const allowed = json.version === 3 ? ['version', 'types', 'ids', 'glossary', 'toolLabels']
+    : json.version === 2 ? ['version', 'types', 'ids', 'glossary'] : ['version', 'types', 'ids'];
   for (const k of Object.keys(json)) if (!allowed.includes(k)) errors.push(`taxonomy: unknown key ${JSON.stringify(k)}`);
   const types = new Map();
   if (json.types !== undefined) {
@@ -408,9 +442,11 @@ function compileAll(json, timed = true) {
     else json.ids.forEach((rule, i) => { const c = compileRule(rule, i, errors, timed); if (c) ids.push(c); });
   }
   let glossary = EMPTY_GLOSSARY;
-  if (json.version === 2 && json.glossary !== undefined) glossary = compileGlossary(json.glossary, errors) || EMPTY_GLOSSARY;
+  if ((json.version === 2 || json.version === 3) && json.glossary !== undefined) glossary = compileGlossary(json.glossary, errors) || EMPTY_GLOSSARY;
+  let toolLabels = EMPTY_TOOL_LABELS;
+  if (json.version === 3 && json.toolLabels !== undefined) toolLabels = compileToolLabels(json.toolLabels, errors) || EMPTY_TOOL_LABELS;
   if (errors.length) return { compiled: null, errors };
-  return { compiled: Object.freeze({ types, ids: Object.freeze(ids), glossary }), errors };
+  return { compiled: Object.freeze({ types, ids: Object.freeze(ids), glossary, toolLabels }), errors };
 }
 
 /**
@@ -434,13 +470,14 @@ export function validateTaxonomy(json, { timed = true } = {}) {
   return compileAll(json, timed).errors;
 }
 
-/** `N types, M id rules[, G glossary terms]` — for the one log line an entrypoint prints (the glossary only when it has entries). */
+/** `N types, M id rules[, G glossary terms][, L tool labels]` — for the one log line an entrypoint prints (the glossary and the tool labels only when they have entries). */
 export function describeTaxonomy(compiled) {
   if (!compiled) return 'no override';
   const n = compiled.types.size;
   const m = compiled.ids.length;
   const g = compiled.glossary?.entries.length ?? 0;
-  return `${n} type${n === 1 ? '' : 's'}, ${m} id rule${m === 1 ? '' : 's'}${g ? `, ${g} glossary term${g === 1 ? '' : 's'}` : ''}`;
+  const l = compiled.toolLabels?.size ?? 0;
+  return `${n} type${n === 1 ? '' : 's'}, ${m} id rule${m === 1 ? '' : 's'}${g ? `, ${g} glossary term${g === 1 ? '' : 's'}` : ''}${l ? `, ${l} tool label${l === 1 ? '' : 's'}` : ''}`;
 }
 
 // ---------- the active override (module state, default none) ----------
@@ -480,6 +517,15 @@ export function glossaryByText(text, taxonomy = active) {
 /** Every entry, in file order (the frozen empty array when there is no glossary). */
 export function glossaryEntries(taxonomy = active) {
   return taxonomy?.glossary?.entries ?? EMPTY;
+}
+
+// ---------- the tool labels (schema v3) ----------
+// Guarded like the glossary: a compiled object from an older build (no
+// `toolLabels` key) reads as no labels.
+
+/** Map<the adapter's label, the label to show>; an empty Map when none are set. Read it, never change it. */
+export function toolLabels(taxonomy = active) {
+  return taxonomy?.toolLabels instanceof Map ? taxonomy.toolLabels : EMPTY_TOOL_LABELS;
 }
 
 // ---------- the classification ----------

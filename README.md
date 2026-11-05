@@ -1857,6 +1857,32 @@ static bundle bakes it like any other taxonomy file.
 `tools/fixtures/taxonomy/taxonomy.v2.json` is the worked v2 example beside
 the v1 `taxonomy.json`.
 
+**Schema version 3 adds tool labels.** With `"version": 3` the file may also
+carry `toolLabels`, which rename the label an artefact shows for its
+implementation. A key is a label the adapter writes, and its value the label
+to show instead:
+
+```json
+{
+  "version": 3,
+  "toolLabels": {
+    "Grafana alerting": "PrometheusRule",
+    "Prometheus promql-reference": "Prometheus metric"
+  }
+}
+```
+
+The adapter applies them to every artefact of every pack the server or the
+static bundle adapts: a repository scan, a live snapshot and an upload alike.
+A label is display only. Nothing that pairs, drifts, grades or classifies
+reads it, so a comparison reads the same with or without the section. The
+Build view's type bucket and the traceability view show the new label where
+they showed the old one. Each label is one line of 1–80 characters (a key has
+no space at either end), and a file holds at most 64. `glossary` stays valid
+under version 3, and `toolLabels` under version 1 or 2 is refused as an
+unknown key. The boot line counts them (`…, 1 tool label`). The CLI applies
+them only where it reads a taxonomy (`packc audit-report --taxonomy`).
+
 **The glossary marks.** Where the studio names something the glossary
 explains, a small `?` mark follows the label: on Discover, the kind of each
 row (its family's entry, else an entry whose term or alias is the label), the
