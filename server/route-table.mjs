@@ -190,6 +190,10 @@ export const ROUTES = Object.freeze({
   'POST /api/services': { class: 'operator', audit: ['service.create'] },
   'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
   'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
+  // The folders a service's repository can be picked from (Overview's
+  // Browse…, server/repository-folders.mjs): names only, under the rule a
+  // save applies; operator, as the save is.
+  'GET /api/repository-folders': { class: 'operator' },
   // A service's Run (server/index.mjs): its repository scanned and
   // registered as its pack, its check saved and run against the
   // environment's MCP endpoint — the live MCP API's posture, as every

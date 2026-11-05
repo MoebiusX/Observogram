@@ -27,8 +27,10 @@ import {
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
   START_IDLE, startChoose, startAdopted,
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formModel, savePlan,
+  folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
+import { loadServiceListFacts, loadRepositoryFolders } from '../studio/overview-api.mjs';
 
 // ---------- fixtures ----------
 
@@ -1353,6 +1355,156 @@ test('renderServiceList: the rows, one primary button (Add a service, or Save an
   assert.doesNotThrow(() => renderServiceList(c3, list, formModel(FORM_CLOSED), { overview: {} }));
   assert.ok(!c3.innerHTML.includes('compare two instead'));
   assert.doesNotThrow(() => renderServiceList(overviewContainer(), serviceListModel({ services: null, servicesStatus: { kind: 'loading' } }), formModel(FORM_CLOSED), {}));
+});
+
+// ---------- Browse…: the Folder answer picked on the server ----------
+
+const ROOT_LISTING = { ok: true, allowed: true, why: null, bounded: true, limit: 500, path: null, up: null, repository: false, folders: [{ name: '/srv/src', path: '/srv/src', repository: false }], truncated: false };
+const SRC_LISTING = {
+  ok: true, allowed: true, why: null, bounded: true, limit: 500, path: '/srv/src', up: { path: null }, repository: false, truncated: false,
+  folders: [{ name: 'checkout', path: '/srv/src/checkout', repository: true }, { name: 'docs<b>', path: '/srv/src/docs<b>', repository: false }],
+};
+const FOLDERS_OK = { allowed: true, why: null };
+const pathForm = (over = {}) => ({ ...formOpened([svcRow()], { endpoints: [EP] }), ...over, values: { ...formOpened([svcRow()], { endpoints: [EP] }).values, kind: 'path', ...(over.values || {}) } });
+
+test('Browse…: offered only on the Folder answer, with the `folders` fact, when the server takes a folder from this reader and the reader may save; the server\'s reason replaces the hint when it will not; a host that passes no fact draws the form as before', () => {
+  const none = { offered: false, open: false, hint: null, panel: null };
+  assert.deepEqual(formModel(pathForm()).browse, none, 'no fact: nothing changes');
+  assert.deepEqual(formModel(pathForm(), { folders: FOLDERS_OK }).browse, { ...none, offered: true });
+  assert.deepEqual(formModel(pathForm({ values: { kind: 'github' } }), { folders: FOLDERS_OK }).browse, none, 'GitHub and Azure DevOps are typed');
+  assert.deepEqual(formModel(pathForm(), { folders: FOLDERS_OK, access: { canWrite: false, reason: 'Operators save services.' } }).browse, none, 'a reader who cannot save is offered nothing');
+  const refused = formModel(pathForm(), { folders: { allowed: false, why: 'a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS' } }).browse;
+  assert.deepEqual(refused, { ...none, hint: 'A folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS.' });
+  assert.deepEqual(formModel(pathForm(), { folders: { allowed: false, why: null } }).browse, none);
+});
+
+test('Browse…: the steps every host takes — where it opens, a folder asked for (the last listing kept meanwhile), the answer, a refusal as one sentence, Use this folder, Close, a change of kind', () => {
+  assert.equal(folderBrowseStart({ kind: 'path', location: ' /srv/src/checkout ' }), '/srv/src/checkout');
+  assert.equal(folderBrowseStart({ kind: 'path', location: 'C:\\src\\shop' }), 'C:\\src\\shop');
+  assert.equal(folderBrowseStart({ kind: 'path', location: '\\\\fileserver\\src' }), '\\\\fileserver\\src');
+  assert.equal(folderBrowseStart({ kind: 'path', location: 'src/shop' }), null, 'not a full path: the top');
+  assert.equal(folderBrowseStart({ kind: 'github', location: '/srv/src' }), null);
+  assert.equal(folderBrowseStart({}), null);
+
+  const opening = folderBrowseOpening(pathForm({ focus: 'location' }), null);
+  assert.deepEqual([opening.browse, opening.focus], [{ loading: true, asked: null, listing: null, error: null }, null]);
+  const top = folderBrowseListed(opening, ROOT_LISTING);
+  assert.deepEqual(top.browse, { loading: false, asked: null, error: null, listing: { path: null, up: null, bounded: true, repository: false, folders: [{ name: '/srv/src', path: '/srv/src', repository: false }], truncated: false, limit: 500 } });
+  assert.equal(top.focus, 'folders');
+  const again = folderBrowseOpening(top, ' /srv/src ');
+  assert.deepEqual([again.browse.loading, again.browse.asked, again.browse.listing], [true, '/srv/src', top.browse.listing], 'the last listing stays on screen while the next is read');
+  const src = folderBrowseListed(again, SRC_LISTING);
+  assert.deepEqual(src.browse.listing.up, { path: null });
+
+  const failed = folderBrowseFailed(folderBrowseOpening(src, '/srv/src/nope'), new Error('404: there is no folder "/srv/src/nope" on the server'));
+  assert.deepEqual([failed.browse.loading, failed.browse.error, failed.browse.listing], [false, 'There is no folder "/srv/src/nope" on the server.', src.browse.listing]);
+  assert.equal(folderBrowseListed(opening, { ...ROOT_LISTING, allowed: false, why: 'a folder is read on the server' }).browse.error, 'A folder is read on the server.', 'a refusal at the top is a failure');
+  assert.equal(folderBrowseListed(opening, null).browse.error, 'The server does not list folders here.');
+
+  const chosen = folderBrowseChosen({ ...src, error: 'x' }, '/srv/src/checkout');
+  assert.deepEqual([chosen.values.kind, chosen.values.location, chosen.browse, chosen.focus, chosen.error], ['path', '/srv/src/checkout', null, 'location', null]);
+  assert.equal(folderBrowseChosen(src, '  '), src, 'no path: nothing chosen');
+  assert.deepEqual([folderBrowseClosed(src).browse, folderBrowseClosed(src).focus], [null, 'location']);
+  assert.equal(formInput(src, 'kind', 'github').browse, null, 'a change of kind closes the panel');
+  assert.equal(formInput(src, 'location', '/x').browse, src.browse, 'typing keeps it');
+  // A closed form is never changed; the answer of a closed panel is dropped.
+  for (const step of [(f) => folderBrowseOpening(f, '/x'), (f) => folderBrowseListed(f, SRC_LISTING), (f) => folderBrowseFailed(f, 'x'), (f) => folderBrowseChosen(f, '/x'), folderBrowseClosed]) {
+    assert.equal(step(FORM_CLOSED), FORM_CLOSED);
+  }
+  const closed = folderBrowseClosed(src);
+  assert.equal(folderBrowseListed(closed, SRC_LISTING), closed);
+});
+
+test('Browse…: the panel the model draws — the top of a bounded server, a folder with Up, the repositories, the cap, an empty folder, a refusal with a way back to the top', () => {
+  const model = (form) => formModel(form, { folders: FOLDERS_OK }).browse.panel;
+  const reading = model(folderBrowseOpening(pathForm(), null));
+  assert.deepEqual(reading, { loading: true, error: null, title: 'Folders on the server', path: null, up: null, folders: [], empty: false, note: '', here: '', choose: { enabled: false, path: '' }, restart: false });
+  const top = model(folderBrowseListed(folderBrowseOpening(pathForm(), null), ROOT_LISTING));
+  assert.deepEqual([top.title, top.up, top.choose, top.folders.length], ['The folders this server reads repositories from', null, { enabled: false, path: '' }, 1], 'the top of a bounded server: nothing to use, no Up');
+  const srcForm = folderBrowseListed(folderBrowseOpening(pathForm(), '/srv/src'), SRC_LISTING);
+  const src = model(srcForm);
+  assert.deepEqual([src.title, src.path, src.up, src.choose, src.here], ['/srv/src', '/srv/src', { path: '' }, { enabled: true, path: '/srv/src' }, ''], 'Up from a listed folder is the top (path \'\')');
+  assert.deepEqual(src.folders.map((f) => [f.name, f.repository]), [['checkout', true], ['docs<b>', false]]);
+  assert.equal(model(folderBrowseOpening(srcForm, '/srv/src/checkout')).choose.enabled, false, 'nothing to use while the next folder is read');
+  const repo = model(folderBrowseListed(folderBrowseOpening(srcForm, '/srv/src/checkout'), { ...SRC_LISTING, path: '/srv/src/checkout', up: { path: '/srv/src' }, repository: true, folders: [] }));
+  assert.deepEqual([repo.here, repo.empty, repo.up], ['This folder is a repository.', true, { path: '/srv/src' }]);
+  assert.equal(model(folderBrowseListed(srcForm, { ...SRC_LISTING, truncated: true, limit: 2 })).note, 'Only the first 2 folders are listed: type the rest of the path to go further.');
+  const failed = model(folderBrowseFailed(folderBrowseOpening(pathForm(), '/srv/gone'), '404: there is no folder "/srv/gone" on the server'));
+  assert.deepEqual([failed.error, failed.restart, failed.empty], ['There is no folder "/srv/gone" on the server.', true, false]);
+  assert.equal(model(folderBrowseFailed(folderBrowseOpening(pathForm(), null), 'no answer')).restart, false, 'the top failed: no top to go back to');
+});
+
+test('renderServiceList: Browse… beside the Folder answer and its panel — names escaped, the repositories marked, Up, Use this folder and Close proxied to host.overview, still one primary; nothing drawn without the fact', () => {
+  const list = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const calls = [];
+  const host = { overview: {
+    browseFolders: () => calls.push(['browse']), openFolder: (p) => calls.push(['open', p]),
+    chooseFolder: (p) => calls.push(['choose', p]), closeFolders: () => calls.push(['close']),
+  } };
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(pathForm(), { endpoints: [EP], folders: FOLDERS_OK }), host);
+  assert.ok(c.innerHTML.includes('<button type="button" class="og-btn ov-form__browse" data-ux-action="ov-form-browse" aria-expanded="false" aria-controls="ov-folders">Browse…</button>'));
+  assert.ok(c.innerHTML.includes('A folder the server can read: its full path on the server.'));
+  c.click('ov-form-browse');
+
+  const open = folderBrowseListed(folderBrowseOpening(pathForm(), '/srv/src'), SRC_LISTING);
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, formModel(open, { endpoints: [EP], folders: FOLDERS_OK }), host);
+  const html = c2.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'Save and run stays the one primary');
+  assert.ok(html.includes('aria-expanded="true"'));
+  assert.ok(html.includes('<div class="ov-folders" id="ov-folders" role="group" aria-label="Folders on the server">'));
+  assert.ok(html.includes('data-ux-action="ov-folders-open" data-path="" aria-label="Up one folder">'), 'Up to the top');
+  assert.ok(html.includes('<span class="ov-folders__path" title="/srv/src"><bdi>/srv/src</bdi></span>'));
+  assert.ok(html.includes('data-path="/srv/src/checkout" title="/srv/src/checkout">') && html.includes('<span class="ov-folders__name">checkout</span><span class="og-pill ov-folders__repo">repository</span>'));
+  assert.ok(html.includes('<span class="ov-folders__name">docs&lt;b&gt;</span>') && !html.includes('docs<b>'), 'a folder name is escaped');
+  assert.ok(html.includes('data-ux-action="ov-folders-choose" data-path="/srv/src">Use this folder</button>'));
+  assert.ok(!html.includes('Start from the top'));
+  c2.click('ov-folders-open', { path: '/srv/src/checkout' });
+  c2.click('ov-folders-open', { path: '' });
+  c2.click('ov-folders-choose', { path: '/srv/src' });
+  c2.click('ov-folders-close');
+  assert.deepEqual(calls, [['browse'], ['open', '/srv/src/checkout'], ['open', null], ['choose', '/srv/src'], ['close']]);
+
+  // Reading: aria-busy, the folders and Up disabled; a refusal: the sentence and a way back.
+  const c3 = overviewContainer();
+  renderServiceList(c3, list, formModel(folderBrowseOpening(open, '/srv/src/checkout'), { endpoints: [EP], folders: FOLDERS_OK }), host);
+  assert.ok(c3.innerHTML.includes('aria-busy="true"') && c3.innerHTML.includes('role="status">Reading the folder…</p>'));
+  assert.ok(c3.innerHTML.includes('aria-label="Up one folder" disabled>'));
+  const c4 = overviewContainer();
+  renderServiceList(c4, list, formModel(folderBrowseFailed(folderBrowseOpening(open, '/srv/gone'), '404: there is no folder "/srv/gone" on the server'), { endpoints: [EP], folders: FOLDERS_OK }), host);
+  assert.ok(c4.innerHTML.includes('<p class="ov-folders__error" role="alert">There is no folder &quot;/srv/gone&quot; on the server.</p>'));
+  assert.ok(c4.innerHTML.includes('data-ux-action="ov-folders-open" data-path="">Start from the top</button>'));
+
+  // The server will not take a folder here: no Browse…, its reason as the hint.
+  const c5 = overviewContainer();
+  renderServiceList(c5, list, formModel(pathForm(), { endpoints: [EP], folders: { allowed: false, why: 'list the folder in OBSERVOGRAM_REPO_ROOTS' } }), host);
+  assert.ok(!c5.innerHTML.includes('Browse…') && c5.innerHTML.includes('List the folder in OBSERVOGRAM_REPO_ROOTS.'));
+  // No fact, or a host without the hooks: the form as before, and nothing throws.
+  const c6 = overviewContainer();
+  renderServiceList(c6, list, formModel(pathForm(), { endpoints: [EP] }), host);
+  assert.ok(!c6.innerHTML.includes('Browse…') && !c6.innerHTML.includes('ov-folders'));
+  assert.doesNotThrow(() => { const c7 = overviewContainer(); renderServiceList(c7, list, formModel(open, { endpoints: [EP], folders: FOLDERS_OK }), { overview: {} }); c7.click('ov-folders-choose', { path: '/srv/src' }); });
+});
+
+test('loadServiceListFacts: `folders` from the top of GET /api/repository-folders — allowed and why, null when the server has no listing or refuses the reader; loadRepositoryFolders asks for a folder by ?path=', async () => {
+  const asked = [];
+  const fetchWith = (folders) => async (path) => {
+    asked.push(path);
+    if (path === '/api/journeys') return { journeys: [] };
+    if (path === '/api/mcp-endpoints') return { endpoints: [], policy: { register: { allowed: true } } };
+    if (path.startsWith('/api/repository-folders')) return folders();
+    throw new Error(`unexpected ${path}`);
+  };
+  assert.deepEqual((await loadServiceListFacts({ fetchFn: fetchWith(() => SRC_LISTING) })).folders, { allowed: true, why: null });
+  assert.deepEqual((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ...ROOT_LISTING, allowed: false, why: 'not here' })) })).folders, { allowed: false, why: 'not here' });
+  assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => { throw new Error('404: no answer'); }) })).folders, null, 'an older server');
+  assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ok: true })) })).folders, null, 'a body with no answer');
+  assert.ok(asked.includes('/api/repository-folders'));
+  const paths = [];
+  await loadRepositoryFolders('C:\\src\\shop', { fetchFn: async (p) => { paths.push(p); return {}; } });
+  await loadRepositoryFolders(null, { fetchFn: async (p) => { paths.push(p); return {}; } });
+  assert.deepEqual(paths, ['/api/repository-folders?path=C%3A%5Csrc%5Cshop', '/api/repository-folders']);
 });
 
 test('buildOverviewModel with listable: the service header links back to the list; without it, nothing changes', () => {
