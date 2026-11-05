@@ -54,10 +54,30 @@ into pack shape. The diff between declared and live is the operational truth.
 
 ## Overview — The Front Door
 
-The studio has two faces. **Overview** is the one most people see first: one
-service at a time, the machine drawn as three numbered stages — *1 Discover ·
-2 Diagnose · 3 Remediate*, the words Expert uses — over three columns, every
-number the engine's own —
+The studio has two faces. **Overview** is the one most people see first, and
+it starts from the services. A service is checked in two places: where it is
+declared, its **repository**, and where it runs, read through its **live MCP
+endpoint**.
+
+**1. The services.** Overview opens on the list: one row per service and
+environment, with its repository (GitHub, Azure DevOps or a folder), its live
+endpoint and its last check — the grade letter and how much matches live.
+**Run** scans the repository and checks it against live, **Open** draws the
+service's board and **Change** edits where it is. Services a live draft has
+seen with no repository yet are counted under the list.
+
+![Overview's service list: two services, each with its GitHub repository, its live MCP endpoint and its last check](docs/img/overview-services.png)
+
+**2. Add a service.** Four numbered answers — the service, the environment,
+the repository and the live endpoint (one of the org's, or a new one) — then
+**Save and run**: the repository is scanned and checked against live, now and
+whenever the row is run again ([A Service's Run](#a-services-run)).
+
+![Add a service: the four numbered answers filled in, above the service list](docs/img/overview-add-service.png)
+
+**3. The board.** One service at a time, the machine drawn as three numbered
+stages — *1 Discover · 2 Diagnose · 3 Remediate*, the words Expert uses — over
+three columns, every number the engine's own —
 
 - **Discover — What is in place.** The stack top down — user experience,
   application, platform, infrastructure — each layer with ten cells, one per
@@ -77,6 +97,8 @@ number the engine's own —
   platform while you watch.
 - **Remediate — What to change.** *38 to add · 5 to update · 30 to review*,
   and one next step with one button.
+
+![The Overview board for one service: the layers it declares, its grade and its alignment with live, and the changes to apply](docs/img/overview-board.png)
 
 Each column opens its Expert view bound to the service. **Expert** is
 everything below — Discover · Diagnose · Remediate, Compare, Build, the
@@ -206,7 +228,7 @@ status mark), **Tiles** (the name with its kind, bound and status), **Cards** (t
 earlier card grid: ID, source, name, bound, summary, type and tags) or **Details**
 (the full row, the default). Selecting an artefact opens its full record in any of them.
 
-![Observogram Discover view showing the layered observability inventory](docs/img/xray-discover.png)
+![Expert's Discover view: the service's pack across the layered model, its SLIs, SLOs and telemetry pipeline](docs/img/expert-discover.png)
 
 ### 2. Diagnose - How reliable is this pack?
 
@@ -219,6 +241,8 @@ Load the declared repo pack as **Pack A** and the live production pack as
 - **Operability**: one informational check (Actionable — runbooks linked),
   displayed but never scored
 - **Verified**: whether a live MCP signal is present
+
+![Expert's Diagnose view: the Assessment of the repository pack against live, with its grade, the gaps that keep it below A and the evidence](docs/img/expert-diagnose.png)
 
 The score maps onto a metrology-style **instrument grade** — the rating users
 actually read; the full ladder renders on the grade card with the current rung
@@ -276,10 +300,10 @@ card's badge says which key paired it (`Paired by id: dashboard uid
 "ord-1"`), and so does its detail drawer. Chains, the Assessment and every
 action keep pairing by behaviour.
 
+![Expert's Compare view: the repository pack beside the live pack, with what is only in A, in both and only in B](docs/img/expert-compare.png)
+
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
-
-![Observogram Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
 
 ### 3. Remediate - Resolve gaps
 
@@ -308,7 +332,7 @@ automation, open the runbook. A trigger no alert answers to is listed as
 unresolved with name-based suggestions; nothing is inferred into a link. Pure
 pack data, no external call; a pack without remediations shows nothing.
 
-![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
+![Expert's Remediate view: the gaps between the repository and live, and the four ways to resolve them](docs/img/expert-remediate.png)
 
 ## Quickstart
 
