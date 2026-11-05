@@ -11,6 +11,9 @@ This document is the contract that makes that safe: which files are
 vendorable, what each one needs from the host, and which seams this repo
 promises to keep stable.
 
+A downstream that keeps the whole repository and runs it as its product
+follows [`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md) to refresh it.
+
 ## The manifest
 
 Since 2026-10 the `tools/lib` part of this contract is machine-readable:
@@ -437,8 +440,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
 
 ## Staying current
 
-A tree that vendors the whole repository follows [`DOWNSTREAM.md`](DOWNSTREAM.md) §4
-instead; if it still carries the eleven-patch hand-off, start with
+A tree that vendors the whole repository follows
+[`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md) instead. If it still carries the
+eleven-patch hand-off, its first refresh also reads
 [*Bumping past the eleven-patch hand-off*](#bumping-past-the-eleven-patch-hand-off).
 
 1. Record the Observogram commit you vendored from (e.g. in a
@@ -487,8 +491,8 @@ instead; if it still carries the eleven-patch hand-off, start with
 
 For the agent that keeps a whole-tree snapshot at `fe03de6` with the eleven theme
 patches of the hand-off applied. Every patch is now decided (2026-11-02). This section
-says what to do with each one. [`DOWNSTREAM.md`](DOWNSTREAM.md) §4 and §6 are the
-general workflow.
+says what to do with each one. [`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md) is the
+general workflow: this section says which patches its step 4 puts back.
 
 **Target.** `develop` at `f3f9266` or later. `main` does not have this work until the
 next promotion, so record a commit, not a tag. Node 22.23.4 or later.

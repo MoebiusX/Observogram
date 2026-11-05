@@ -2,22 +2,30 @@
 
 ## Unreleased
 
-### Added: the taxonomy renames the label an artefact shows for its implementation (schema version 3)
-A downstream that writes its alert rules as Prometheus rules and deploys them through Grafana saw them labelled *Grafana alerting*. A metric known only from a query read *Prometheus promql-reference*. It carried two patches to `tools/lib/adapter.mjs` to change those words, and they failed three upstream tests in its copy at every refresh.
-- **`tools/lib/artefact-classify.mjs`**: the taxonomy file's schema version 3 adds an optional `toolLabels` object, label → label, each one line of 1–80 characters, at most 64 (`TOOL_LABEL_LIMITS`).
-  - `TAXONOMY_VERSIONS` is `[1, 2, 3]` and `TAXONOMY_VERSION_LATEST` is 3.
-  - `toolLabels(taxonomy?)` reads the labels, and `describeTaxonomy` counts them.
-  - `glossary` stays valid under version 3, and `toolLabels` under 1 or 2 is an unknown key.
-  - A refused version now reads `version must be 1, 2 or 3`.
-- **`tools/lib/adapter.mjs`**: `adapt()` renames each artefact's `tool` by the installed taxonomy's labels, or by `opts.toolLabels` (a Map or an object; `null` for none). It now imports `artefact-classify.mjs`.
-- **Display only**: nothing that pairs, drifts, grades or classifies reads `tool`. Without the section every adapted pack is byte for byte what it was, and no golden moved.
-- **Where it applies**: the server and the static bundle, which both install the taxonomy, and `packc audit-report --taxonomy`.
-- **Docs**: README *Classify Typed Packs*, ADAPTER.md, DOWNSTREAM.md §9 and VENDORING.md. In VENDORING.md, *Bumping past the eleven-patch hand-off* now says to drop patches 04 and 05 and set the labels instead. `VENDOR-MANIFEST.json` is regenerated.
-- **Tests**:
-  - `tools/test-artefact-classify.mjs`: version 3 compiles, and every refusal has its exact text. The adapter renames `tool` and nothing else; with no labels a pack is byte-identical, and a comparison's summary is unchanged.
-  - `server/test-taxonomy.mjs`: a version 3 file boots and the log counts the labels. `POST /api/validate` adapts with them, and a server without the file does not.
-  - The version pins in `tools/test-studio-bundle.mjs` move to version 4.
-  - Suite total 1656 → 1660.
+### Added: a vendor export and a refresh runbook for a downstream that runs the whole repository
+A downstream that keeps the whole repository as a folder and runs it had one paragraph to go on (DOWNSTREAM.md §4). That paragraph offered two git methods that give *ours* and *theirs* opposite meanings. The downstream also had to delete upstream's CI and agent files from its copy at every refresh, and had to prove the copy by hashing files by hand.
+- **The boundary (`.gitattributes`):** `.github/`, `.claude/` and `AGENTS.md` are `export-ignore`. These are the repository's own operation, and its agent instructions would read as rules to an agent in a downstream. `git archive` and GitHub's source tarballs leave them out too.
+- **`tools/vendor-export.mjs`** (`npm run vendor-export`):
+  - It writes a commit's files minus `export-ignore`, byte for byte from the committed blobs, plus `VENDOR-TREE.json`: `{ format: 1, commit, date, version, excluded, files: [{ path, sha256, bytes }] }`, one file per line. Two exports of one commit are identical.
+  - `--tree` prints that list without writing anything.
+  - `--check <dir>` proves a copy against it. It names each file that is `changed`, a `local patch` (the `LOCAL DEVIATION` marker, or `--patch-marker`'s text), `line endings` only, `missing` or `extra`, never reads `node_modules/`, and exits 0 only on a match. It needs no git, so a copy proves itself with its own tool.
+- **`docs/DOWNSTREAM_REFRESH.md`**, the runbook for that shape:
+  - **Words:** upstream, downstream, the copy, the plugin layer, a local patch and *you*, each defined once. It never uses *ours* or *theirs* for a side, and a table says which side each word names for `cherry-pick`, `apply --3way` / `am -3` / `rebase`, and `merge` / `subtree pull`.
+  - **The method:** the copy is deleted, written again from the export, and proven with `--check`. Local patches are one commit, cherry-picked onto the next copy with the previous copy as the base.
+  - **Around it:**
+    - the store backup before a one-way upgrade;
+    - `--verify`, `--smoke` and `npm test` on the copy;
+    - a registry mirror given to npm for the install, never written into the lockfile;
+    - a check that every setting the downstream sets still appears in the target's code;
+    - the rollback, and `core.longpaths` on Windows;
+    - what upstream promises a copy, and what to send upstream.
+- **Pointers:** DOWNSTREAM.md (its introduction and §4), VENDORING.md (its introduction, *Staying current* and *Bumping past the eleven-patch hand-off*) and the README's documentation list point to the runbook.
+- **Tried on a scratch downstream** (Windows, `core.autocrlf=true`): a copy with one marked local patch, refreshed by following the runbook.
+  - The export wrote 795 files and left out the 7 boundary files, and `--check` matched all of them.
+  - The patch conflicted with the new code, with `--ours` the new copy and `--theirs` the patch, as the table says.
+  - After the patch, `--check` named it as a local patch, from the clone's tool and from the copy's own. A 1-byte change read as `changed`.
+  - The earlier v0.6.0 → v0.6.2 trial confirmed the cherry-pick, `--verify` / `--smoke`, upstream's suite inside the copy and the rollback.
+- **Tests:** `tools/test-vendor-export.mjs` (new, in `npm test`) checks three things. The export of HEAD is `git archive`'s files and bytes with the boundary left out. Two exports are identical. `--check` passes on an export, classifies every kind of difference, and exits 2 on usage errors. Suite total 1656 → 1659.
 
 ### Fixed: Expert opened from the board shows the comparison the board graded
 After a service's Run, the board said *B · Industrial grade, graded against live*. Its *Open in Discover / Diagnose / Remediate* opened Expert with the scan as Pack A and no Pack B, so Diagnose graded the repository alone and read *C · Field grade, 43%* beside it. Nothing had kept the live side the run read, so Expert had nothing to bind.

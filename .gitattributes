@@ -14,3 +14,14 @@ vendor/** text eol=lf
 *.md    text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
+
+# Repository operation, not part of what a downstream copies: `git archive`,
+# GitHub's source tarballs and `npm run vendor-export` leave these out
+# (docs/DOWNSTREAM_REFRESH.md). The directory line keeps `git archive` from
+# writing the folder at all; the `/**` line names its files for
+# `git check-attr`, which the export reads.
+/.github        export-ignore
+/.github/**     export-ignore
+/.claude        export-ignore
+/.claude/**     export-ignore
+/AGENTS.md      export-ignore
