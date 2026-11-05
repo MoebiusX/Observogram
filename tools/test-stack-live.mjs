@@ -70,7 +70,9 @@ const STRICT = process.argv.includes('--strict');
 const COMPOSE_FILE = join(ROOT, 'docker', 'stack.compose.yaml');
 const PROM_CONFIG = join(ROOT, 'docker', 'stack', 'prometheus.yml');
 const LEDGER_FILE = join(ROOT, '.tmp-stack-live-ledger.json');
-const GRAFANA_AUTH = 'Basic ' + Buffer.from('admin:admin').toString('base64');
+// The stack's Grafana login: admin, with the password the compose file reads
+// (OBSERVOGRAM_GF_ADMIN_CRED, default admin), so an override reaches both.
+const GRAFANA_AUTH = 'Basic ' + Buffer.from(`admin:${process.env.OBSERVOGRAM_GF_ADMIN_CRED || 'admin'}`).toString('base64');
 
 // Loopback ports from docker/stack.compose.yaml.
 const PROM = 'http://127.0.0.1:19090';

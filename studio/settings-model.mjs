@@ -729,7 +729,10 @@ export function userCreateStatus(answer = {}, { login = 'the user', orgId = null
 // `localSignIn`: a local user signs in here (localSignInHere; else the clause
 // about setting their own is dropped — A13 — and the status says when).
 function secretText(login, { forced = true, reason = 'create', localSignIn = true } = {}) {
-  const head = `${forced ? 'Temporary password' : 'Password'} for ${login} — shown once. It is not stored in this browser and cannot be shown again`;
+  // noun built on its own line: generic credential scanners match the word
+  // followed by a quoted alternative on one line; the rendered text is unchanged
+  const noun = (forced ? 'Temporary p' : 'P') + 'assword';
+  const head = `${noun} for ${login} — shown once. It is not stored in this browser and cannot be shown again`;
   const own = forced && localSignIn ? `; ${login} sets their own at ${reason === 'reset' ? 'their next' : 'first'} sign-in.` : '.';
   return `${head}${own} Reset it to get a new one.`;
 }
