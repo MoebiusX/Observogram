@@ -12,6 +12,10 @@ set (the verdict/diff engines, the design system) and the prose contracts
 upstream keeps stable; the `tools/lib` rows of its table are a subset of the
 manifest.
 
+A downstream that keeps the whole repository and runs it as its product
+refreshes it with [`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md). The
+manifest checks below are one of its steps.
+
 ## 1. What the manifest is
 
 `VENDOR-MANIFEST.json`, at the repository root, lists every module under
@@ -109,10 +113,12 @@ or send it upstream)` instead of bare drift, so a reviewer can tell a known
 patch from a copy that went wrong; markers that use other words are named
 with `--patch-marker <text>` (plain text, case-sensitive, never recorded
 here). A tree that vendors the whole repository
-rather than the listed modules bumps by three-way merge, not by re-copying:
-keep it as a git subtree (`git subtree pull`) or carry the patches as a
-`git format-patch` series applied with `git am -3`, and send upstream the
-patches that are engine concerns — a merged patch stops being drift.
+rather than the listed modules is refreshed by
+[`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md): the copy is replaced from
+`npm run vendor-export` (the commit's files minus `export-ignore`) and proven
+byte for byte with its `--check` against the `VENDOR-TREE.json` the export
+writes, and its local patches are one commit re-applied on top. Send upstream the patches that are engine concerns:
+a merged patch stops being drift.
 
 ## 5. Run module smoke tests
 
