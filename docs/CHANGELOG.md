@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added: a refresh runbook for a downstream that runs the whole repository
+A downstream that keeps the whole repository as a folder and runs it had one paragraph to go on (DOWNSTREAM.md §4), which offered two git methods that give *ours* and *theirs* opposite meanings. `docs/DOWNSTREAM_REFRESH.md` is the runbook for that shape:
+- **Words:** upstream, downstream, the copy, the plugin layer, a local patch and *you*, each defined once. The runbook never uses *ours* or *theirs* for a side, and a table says which side each word names for `cherry-pick`, `apply --3way` / `am -3` / `rebase`, and `merge` / `subtree pull`.
+- **The method:** the copy is deleted and rewritten from `git archive`, then proven against upstream's own tree with one hash (`git write-tree --prefix` against `<tag>^{tree}`). Local patches are one commit, cherry-picked onto the next copy with the previous copy as the base.
+- **Around it:** the store backup before a one-way upgrade, `--verify` / `--smoke` / `npm test` on the copy, a check that every setting the downstream sets still appears in the target's code, the rollback, `core.longpaths` on Windows (the copy's longest path is 149 characters under its root), and what to send upstream.
+- **Pointers:** DOWNSTREAM.md (its introduction and §4), VENDORING.md (its introduction, *Staying current* and *Bumping past the eleven-patch hand-off*) and the README's documentation list point to it.
+- **Tried on a scratch downstream** (Windows, `core.autocrlf=true`): a v0.6.0 copy with one marked local patch, refreshed to v0.6.2. The copy proved byte for byte. The patch conflicted with 0.6.2's new import, with `--ours` the new copy and `--theirs` the patch, as the table says. `--verify` named the patch and `--smoke` passed. Upstream's suite inside the copy failed only the manifest's in-sync check, which a patched listed module always fails, and the rollback restored the v0.6.0 copy exactly.
+- **Tests:** none added, and the suite total does not move.
+
 ### Fixed: Expert opened from the board shows the comparison the board graded
 After a service's Run, the board said *B · Industrial grade, graded against live*. Its *Open in Discover / Diagnose / Remediate* opened Expert with the scan as Pack A and no Pack B, so Diagnose graded the repository alone and read *C · Field grade, 43%* beside it. Nothing had kept the live side the run read, so Expert had nothing to bind.
 - **The engine** (`tools/lib/journey.mjs`, which the vendor manifest excludes, so the manifest is unchanged): `runJourney` takes `onPackB({ canonical, source, live, refreshedAt })`, called once the run is complete and its record is on disk, with the Pack B it graded. `live` is true only for an MCP read, never for a file. The CLI passes none.

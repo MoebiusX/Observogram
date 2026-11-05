@@ -3343,6 +3343,7 @@ deploy/k8s/
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
+- [`docs/DOWNSTREAM_REFRESH.md`](docs/DOWNSTREAM_REFRESH.md) - refreshing a downstream that runs the whole repository: replace the copy, prove it byte for byte, re-apply its local patches, check
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 - [`docs/DELIVERY-REBADGE-BATCH3.md`](docs/DELIVERY-REBADGE-BATCH3.md) - delivery report for rebadge batch 3 (live-fetch UX: a caller-supplied MCP URL is a privilege, the ping, the true snapshot and live jobs, comparison identity modes): what shipped per item, the measured test totals, what is deferred by name, what a plugin bridge still does
 - [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why
