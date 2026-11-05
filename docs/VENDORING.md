@@ -136,7 +136,7 @@ appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 and every score are unchanged, and no import was added.
 | [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
-| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
+| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
 | [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
 | [`studio/overview.css`](../studio/overview.css) | `design-tokens.css` + `design-kit.css` (CI-asserted: reads `--og-*` and its own `--ov-*` only) | the board's zone (`.ov-*`), with the three kit pieces the view emits styled from the tokens, scoped to `.ov-page` — load after `design-kit.css` |
 ## The design system
@@ -321,15 +321,15 @@ the board or the list is on screen) is the host's:
 ```js
 import { serviceListModel, formOpened, formInput, formProblems, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
 import { renderServiceList } from './overview-view.mjs';
-import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys + GET /api/mcp-endpoints, failures as sentences
+import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys, /api/mcp-endpoints, /api/repository-folders; failures as sentences
 import { createServiceRecord, patchService, runServiceRecord } from './services-api.mjs';
 
-const facts = await loadServiceListFacts();     // { journeys, journeysError, endpoints, endpointsError, register }
+const facts = await loadServiceListFacts();     // { journeys, journeysError, endpoints, endpointsError, register, folders }
 let form = FORM_CLOSED;
 const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
   journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
   access, now: Date.now(), running, results, showAll });         // running / results: { [rowKey(serviceId, env)]: true | { error } }
-renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access }), host);
+renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders }), host);
 
 host.overview = {
   ...host.overview,
@@ -350,6 +350,36 @@ host.overview = {
   compare() { /* optional: your way to packs already in hand; without it the line is not drawn */ },
 };
 ```
+
+**Browse…** picks the Folder answer from the folders on the server instead
+of typing it (a browser's own folder dialog cannot: it never gives a folder's
+full path, and every Run reads the folder on the server again). It is opt-in
+too: `formModel` draws it only with the `folders` fact — `{ allowed, why }`
+from the top of `GET /api/repository-folders`, `null` when the server has no
+such route or the reader may not ask — and only when `allowed`; when it is
+not, the server's reason replaces the Folder hint. The panel's state rides on
+the form (`form.browse`); the steps are the model's, the fetch is yours:
+
+```js
+import { folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed } from './overview-model.mjs';
+import { loadRepositoryFolders } from './overview-api.mjs';
+
+async function openFolder(path) {               // path null: the top
+  form = folderBrowseOpening(form, path); repaint();
+  try { form = folderBrowseListed(form, await loadRepositoryFolders(path)); }
+  catch (e) { form = folderBrowseFailed(form, e); }  // drop an answer that arrives after the panel closed
+  repaint();
+}
+host.overview.browseFolders = () => (form.browse ? host.overview.closeFolders() : openFolder(folderBrowseStart(form.values)));
+host.overview.openFolder = openFolder;          // a folder in the panel, Up, Start from the top
+host.overview.chooseFolder = (path) => { form = folderBrowseChosen(form, path); repaint(); };
+host.overview.closeFolders = () => { form = folderBrowseClosed(form); repaint(); };
+```
+
+The server's half is `GET /api/repository-folders` (README, the services
+API): names only, under the rule a save applies (`OBSERVOGRAM_REPO_ROOTS`, or
+the person's own machine). The studio's wiring is `listOpenFolder` and
+`listBrowseFolders` in `studio/app.mjs`.
 
 A row whose Run cannot start says why (`run.reason`: no environment, no
 repository, no endpoint, the reader's rank) and its button explains instead

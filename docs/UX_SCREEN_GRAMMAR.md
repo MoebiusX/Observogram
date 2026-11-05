@@ -212,8 +212,12 @@ actions:
 **Add a service** (the one primary button; with the form open, **Save and
 run**) is four numbered answers: *1 Service*, *2 Environment* (prod by
 default), *3 Repository — where it is declared* (GitHub · Azure DevOps ·
-Folder, the address, an optional branch), *4 Live — where it runs* (the org's
-endpoints, or a new one when this reader may register it). A missing answer
+Folder, the address, an optional branch; a folder typed or picked with
+*Browse…*, a panel under the answer that lists the server's folders by name —
+*Up*, the folders inside with each repository marked, *Use this folder*,
+*Close* — drawn only where the server would take a folder from this reader,
+whose reason replaces the hint where it would not), *4 Live — where it runs*
+(the org's endpoints, or a new one when this reader may register it). A missing answer
 is marked where it goes once a save was tried; the server's refusal is shown
 as its sentence; a name that keys an existing record completes it. Services a
 live draft discovered, with no repository and no pack of their own, are

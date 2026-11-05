@@ -1027,6 +1027,7 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/services': 'operator',
   'PATCH /api/services/:id': 'operator',
   'DELETE /api/services/:id': 'operator',
+  'GET /api/repository-folders': 'operator',
   'POST /api/services/:id/environments': 'operator',
   'POST /api/services/:id/run': 'operator',
   'PATCH /api/environments/:id': 'operator',
@@ -1531,6 +1532,9 @@ const PROBES = Object.freeze({
   'POST /api/services': ['POST', '/api/services'],
   'PATCH /api/services/:id': ['PATCH', '/api/services/999999'],
   'DELETE /api/services/:id': ['DELETE', '/api/services/999999'],
+  // The folders a repository can be picked from: the top — allowed: false
+  // where a folder may not be named, the home folder's names otherwise; nothing is written.
+  'GET /api/repository-folders': ['GET', '/api/repository-folders'],
   'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
   'POST /api/services/:id/run': ['POST', '/api/services/999999/run'],
   'PATCH /api/environments/:id': ['PATCH', '/api/environments/999999'],

@@ -1,8 +1,10 @@
 // server/routes/services.mjs — the services, environments and MCP
 // endpoints API (docs/STORE_PLAN.md slice 4, design §7): the request's
 // org's service records under /api/services, their environments under
-// /api/environments and its MCP endpoint records under /api/mcp-endpoints.
-// Every GET is `viewer`, every service and environment mutation `operator`,
+// /api/environments and its MCP endpoint records under /api/mcp-endpoints;
+// beside them, the folders a repository can be picked from.
+// Every GET is `viewer` but the folders' (`operator`, as the save it serves),
+// every service and environment mutation `operator`,
 // every MCP endpoint mutation `admin` (server/route-table.mjs). No path
 // names an org: the org is the one the org middleware resolved, so a
 // member never reaches another org's rows — another org's id is "no
@@ -44,7 +46,8 @@ import { getEnvironment, listEnvironments } from '../store/environments.mjs';
 import { listMcpEndpoints } from '../store/mcp-endpoints.mjs';
 import { getService } from '../store/services.mjs';
 import { mcpCallerOf, mcpTargetView } from '../mcp-target-policy.mjs';
-import { bodyOf, handler, pathId } from './util.mjs';
+import { FOLDER_WAYS, listRepositoryFolders } from '../repository-folders.mjs';
+import { bodyOf, handler, pathId, refused } from './util.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
 function pathService(req, res, db) {
@@ -111,6 +114,21 @@ export function servicesRoutes({ authorize }) {
     const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
     res.json({ ok: true, deleted: service, environments, packLinks, waivers });
   }));
+
+  // The folders a service's repository can be picked from (Overview's
+  // Browse…): one folder and the folders inside it, under the rule a save
+  // applies (server/repository-folders.mjs). Asynchronous (it reads the
+  // disk), so it answers its refusals itself; operator, as the save is.
+  router.get('/api/repository-folders', authorize('GET /api/repository-folders'), async (req, res, next) => {
+    try {
+      const path = req.query.path;
+      if (path !== undefined && typeof path !== 'string') return res.status(400).json({ ok: false, error: FOLDER_WAYS.pathParam });
+      const listing = await listRepositoryFolders(path, mcpCallerOf(req));
+      return res.set('Cache-Control', 'no-store').json(listing);
+    } catch (e) {
+      try { return refused(res, e); } catch (bug) { return next(bug); }
+    }
+  });
 
   // ---------- environments ----------
 

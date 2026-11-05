@@ -567,8 +567,11 @@ export function renderOverview(container, model, host = appHost) {
 // serviceListModel(...), `form` its formModel(...). The actions ride on
 // host.overview: addService(), editService(serviceId, env), runService(key),
 // openService(serviceId, env), formInput(field, value), saveService({ run }),
-// closeForm(), showAll(), compare(). One primary button: Add a service, or —
-// with the form open — Save and run.
+// closeForm(), showAll(), compare(); and the Folder answer's panel when the
+// model offers Browse…: browseFolders() (Browse…, which closes an open
+// panel), openFolder(path) (a folder, Up, Start from the top — null is the
+// top), chooseFolder(path), closeFolders(). One primary button: Add a
+// service, or — with the form open — Save and run.
 
 const SVC_ICONS = {
   github: 'M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21',
@@ -630,6 +633,42 @@ function svcRowHtml(r) {
 
 const fieldErr = (f, key, shown) => (shown && f.problems[key] ? `<span class="ov-form__err">${escapeHtml(f.problems[key])}</span>` : '');
 
+// Browse… beside the Folder answer — drawn only when the model offers it
+// (the host passed the `folders` fact and the server takes a folder here).
+function browseBtnHtml(f) {
+  if (!f.browse?.offered) return '';
+  return `<button type="button" class="og-btn ov-form__browse" data-ux-action="ov-form-browse" aria-expanded="${f.browse.open ? 'true' : 'false'}" aria-controls="ov-folders"${f.saving ? ' disabled' : ''}>Browse…</button>`;
+}
+
+const UP_ICON = '<svg class="ov-ic ov-folders__up-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>';
+
+// The folders on the server: Up, where the panel is, the folders inside (a
+// click opens one; a repository is marked), Use this folder, Close.
+function folderPanelHtml(p) {
+  const off = p.loading ? ' disabled' : '';
+  const items = p.folders.map((x) => `
+                <li><button type="button" class="ov-folders__item" data-ux-action="ov-folders-open" data-path="${attr(x.path)}" title="${attr(x.path)}"${off}>${svcIcon('path')}<span class="ov-folders__name">${escapeHtml(x.name)}</span>${x.repository ? '<span class="og-pill ov-folders__repo">repository</span>' : ''}</button></li>`).join('');
+  return `
+            <div class="ov-folders" id="ov-folders" role="group" aria-label="Folders on the server"${p.loading ? ' aria-busy="true"' : ''}>
+              <div class="ov-folders__bar">
+                <button type="button" class="og-btn og-btn--text ov-folders__up" data-ux-action="ov-folders-open" data-path="${attr(p.up?.path ?? '')}" aria-label="Up one folder"${p.up && !p.loading ? '' : ' disabled'}>${UP_ICON}Up</button>
+                <span class="ov-folders__path" title="${attr(p.path || p.title)}"><bdi>${escapeHtml(p.title)}</bdi></span>
+              </div>${p.loading ? `
+              <p class="ov-folders__status og-muted" role="status">Reading the folder…</p>` : ''}${p.error ? `
+              <p class="ov-folders__error" role="alert">${escapeHtml(p.error)}</p>` : ''}${items ? `
+              <ul class="ov-folders__list" aria-label="Folders inside">${items}
+              </ul>` : ''}${p.empty ? `
+              <p class="ov-folders__status og-muted">No folder inside.</p>` : ''}${p.note ? `
+              <p class="ov-folders__note og-muted">${escapeHtml(p.note)}</p>` : ''}
+              <div class="ov-folders__acts">
+                <button type="button" class="og-btn" data-ux-action="ov-folders-choose" data-path="${attr(p.choose.path)}"${p.choose.enabled ? '' : ' disabled'}>Use this folder</button>${p.restart ? `
+                <button type="button" class="og-btn og-btn--text" data-ux-action="ov-folders-open" data-path="">Start from the top</button>` : ''}
+                <button type="button" class="og-btn og-btn--text" data-ux-action="ov-folders-close">Close</button>${p.here ? `
+                <span class="ov-folders__here og-muted">${escapeHtml(p.here)}</span>` : ''}
+              </div>
+            </div>`;
+}
+
 function svcFormHtml(f) {
   const v = f.values;
   const shown = !!f.error;   // the field notes appear once a save was tried
@@ -665,9 +704,9 @@ function svcFormHtml(f) {
             <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>
             <div class="ov-form__pair">
               <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
-              ${f.kind.kind === 'path' ? '' : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
-            </div>
-            <span class="ov-form__hint og-muted">${escapeHtml(f.kind.hint)}</span>${fieldErr(f, 'location', shown)}
+              ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
+            </div>${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
+            <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'location', shown)}
           </div>
         </li>
         <li class="ov-form__step">
@@ -745,6 +784,10 @@ export function renderServiceList(container, list, form, host = appHost) {
     'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.({ run: true }); },
     'ov-form-save': () => ov.saveService?.({ run: false }),
     'ov-form-close': () => ov.closeForm?.(),
+    'ov-form-browse': () => ov.browseFolders?.(),
+    'ov-folders-open': (ev, el) => ov.openFolder?.(el.dataset.path ? el.dataset.path : null),
+    'ov-folders-choose': (ev, el) => ov.chooseFolder?.(el.dataset.path),
+    'ov-folders-close': () => ov.closeFolders?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });
@@ -756,8 +799,14 @@ export function renderServiceList(container, list, form, host = appHost) {
       const event = input.tagName === 'SELECT' ? 'change' : 'input';
       input.addEventListener(event, () => ov.formInput?.(input.dataset.field, input.value, { redraw: input.tagName === 'SELECT' }));
     });
-    // The field the host asks for (the form just opened, the kind or the endpoint just changed).
-    const want = form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
+    // Escape closes the folder panel, not the form.
+    const panel = formEl.querySelector('.ov-folders');
+    panel?.addEventListener?.('keydown', (ev) => { if (ev.key === 'Escape') { ev.preventDefault?.(); ov.closeFolders?.(); } });
+    // The field the host asks for (the form just opened, the kind or the endpoint just changed);
+    // 'folders' is the panel's first folder, else its first live button (a listing just drawn).
+    const want = form?.focus === 'folders'
+      ? (formEl.querySelector('.ov-folders__item:not([disabled])') || formEl.querySelector('.ov-folders button:not([disabled])'))
+      : form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
     if (want) { want.focus({ preventScroll: true }); if (want.value && typeof want.select === 'function') want.select(); }
   }
 }

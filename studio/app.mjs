@@ -114,8 +114,9 @@ import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from 
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
-  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
-import { loadOverviewFacts, loadServiceListFacts, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
+  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
+  folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed } from './overview-model.mjs';
+import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
@@ -1959,7 +1960,7 @@ function renderOverviewHost(view) {
 // the form), the form, the rows whose Run is under way — and carries out
 // the form's save plan (savePlan) and a row's Run (POST /api/services/:id/run).
 let overviewScreen = 'list';
-let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, loaded: false };
+let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, loaded: false };
 let listForm = FORM_CLOSED;
 let listRunning = {};
 let listResults = {};
@@ -1980,7 +1981,41 @@ function serviceListModelNow() {
 }
 
 function serviceFormModelNow() {
-  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access });
+  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders });
+}
+
+// The Folder answer's Browse… (overview-model.mjs folderBrowse*): the panel
+// rides on the form; each folder asked for is read from the server
+// (GET /api/repository-folders), and an answer that arrives after another
+// was asked for, or after the panel or the form closed, is dropped.
+let folderGeneration = 0;
+
+async function listOpenFolder(path) {
+  if (!listForm.open) return;
+  const gen = ++folderGeneration;
+  listForm = folderBrowseOpening(listForm, path);
+  renderMainView();
+  let next;
+  try {
+    const listing = await loadRepositoryFolders(path);
+    next = (form) => folderBrowseListed(form, listing);
+  } catch (e) {
+    next = (form) => folderBrowseFailed(form, e);
+  }
+  if (gen !== folderGeneration || !listForm.open || !listForm.browse) return;
+  listForm = next(listForm);
+  renderMainView();
+}
+
+function listBrowseFolders() {
+  if (listForm.browse) { listFolderClose(); return; }
+  listOpenFolder(folderBrowseStart(listForm.values));
+}
+
+function listFolderClose() {
+  folderGeneration++;
+  listForm = folderBrowseClosed(listForm);
+  renderMainView();
 }
 
 async function refreshListFacts() {
@@ -2258,7 +2293,11 @@ const overviewActions = {
   editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
   formInput: listFormInput,
   saveService: saveListForm,
-  closeForm: () => { listForm = FORM_CLOSED; renderMainView(); },
+  closeForm: () => { folderGeneration++; listForm = FORM_CLOSED; renderMainView(); },
+  browseFolders: listBrowseFolders,
+  openFolder: (path) => { listOpenFolder(path); },
+  chooseFolder: (path) => { folderGeneration++; listForm = folderBrowseChosen(listForm, path); renderMainView(); },
+  closeFolders: listFolderClose,
   runService: runListRow,
   openService: openListService,
   showAll: () => { listShowAll = true; renderMainView(); },
