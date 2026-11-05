@@ -633,7 +633,8 @@ Mark every changed line of a kept patch `// LOCAL DEVIATION (<org> <TAG>): <why>
 line endings differ is a checkout setting, not a patch. `npm run sync-spec:check` should
 be clean, since the schema is no longer patched.
 
-Run upstream's `npm test` on the tree. With nothing patched, it passes whole. While 04 and 05
+Run upstream's `npm test` on the tree. With nothing patched, it passes whole; inside an export
+copy six tests skip, saying why (`# SKIP an export copy: …`, DOWNSTREAM_REFRESH.md step 5). While 04 and 05
 were patches, they failed exactly four tests: `tools/test-adapt.mjs`,
 `tools/test-crawl-alerting-rules.mjs`, `tools/test-golden-diff.mjs` (15 goldens and the check
 that repeats one of them) and the manifest's in-sync check. Any other failure is real. Your

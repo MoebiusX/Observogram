@@ -202,7 +202,10 @@ node vendor/observogram-app/tools/gen-vendor-manifest.mjs --smoke vendor/observo
   the downstream root's `.npmrc` for the copy, which has its own
   `package.json`.
 - **`npm test`** runs upstream's own suite on your copy. With no local patch it
-  passes, as it did upstream. With one, the only failures should be the tests
+  passes, as it did upstream. Six tests skip inside a copy, each printing
+  `# SKIP an export copy: <why>`: three read upstream's CI workflow, which the
+  export leaves out, and the three of `tools/test-vendor-export.mjs` export a
+  git checkout of the repository, which a copy is not. Upstream runs all six. With one, the only failures should be the tests
   its commit message lists. A patch to a module the manifest lists always
   fails one more, `tools/test-vendor-manifest.mjs`, because the file no longer
   matches its recorded hash.

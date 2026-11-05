@@ -820,7 +820,10 @@ not. There are 15 skip sites — `server/test-store.mjs` (8),
 `tools/test-journey.mjs` (1) — and **a Windows run prints
 19 `SKIP win32:` lines**, plus the PID 1 namespace test's
 `# SKIP unshare --pid is unavailable here` and the browser suites' Playwright
-skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. When the leg first went green
+skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. Inside an export copy six more
+skip, each `# SKIP an export copy: <why>`: the three tests that read the CI
+workflow, which the export leaves out, and the three that export a git
+checkout ([`DOWNSTREAM_REFRESH.md`](DOWNSTREAM_REFRESH.md) step 5). When the leg first went green
 its summary printed Windows 10.0.26100 on 4 CPUs, Node v22.16.0 and v22.23.3
 (the latest 22), the checkout on `D:` and `TEMP` an 8.3 short name on `C:`
 (`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the

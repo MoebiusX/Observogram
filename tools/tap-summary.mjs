@@ -54,6 +54,7 @@ export const KNOWN_SKIPS = Object.freeze([
   Object.freeze({ pattern: /^chromium\.launch failed: /, probe: 'the same browser suites with Playwright but no browser' }),
   Object.freeze({ pattern: 'unshare --pid is unavailable here', probe: 'server/test-store.mjs, the PID 1 test: off Linux, or where user namespaces are refused' }),
   Object.freeze({ pattern: /^cannot run .+ as an unprivileged user on this checkout: /, probe: 'server/test-store-import.mjs, the unreadable-file case: Linux as root only' }),
+  Object.freeze({ pattern: /^an export copy: /, probe: 'inside a copy tools/vendor-export.mjs wrote (VENDOR-TREE.json at its root, no .git of its own): the three tests that read .github/workflows/ci.yml and the three of tools/test-vendor-export.mjs' }),
 ]);
 const PID1_REASON = 'unshare --pid is unavailable here';
 

@@ -37,6 +37,21 @@ export const DEFAULT_MARKER = 'LOCAL DEVIATION';
 const NEVER_READ = new Set(['node_modules', '.git']);
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+// A copy this tool wrote, run where it was put: VENDOR-TREE.json at its root
+// and no `.git` of its own. The repository's own operation (.github/,
+// .claude/, AGENTS.md) is not there, and git answers for the tree around it,
+// so the few tests that read the workflow or export this checkout skip there,
+// each saying why (EXPORT_COPY_SKIP; tools/tap-summary.mjs KNOWN_SKIPS
+// expects the prefix). An upstream checkout is never one.
+export function isExportCopy(root = REPO) {
+  return existsSync(join(root, VENDOR_TREE_FILE)) && !existsSync(join(root, '.git'));
+}
+export const EXPORT_COPY_PREFIX = 'an export copy: ';
+export const EXPORT_COPY_SKIP = Object.freeze({
+  workflow: `${EXPORT_COPY_PREFIX}.github/workflows/ci.yml is the repository's own operation, which export-ignore leaves out`,
+  checkout: `${EXPORT_COPY_PREFIX}an export is written from this repository's own git checkout, and a copy has none (git answers for the tree around it)`,
+});
+
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const byCodePoint = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 

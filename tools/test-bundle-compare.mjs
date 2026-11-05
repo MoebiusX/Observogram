@@ -193,6 +193,7 @@ import * as diffLib from './lib/diff.mjs';
 import * as identityLib from './lib/identity-modes.mjs';
 import { comparePackBranches } from './lib/traceability-graph.mjs';
 import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
+import { EXPORT_COPY_SKIP, isExportCopy } from './vendor-export.mjs';
 
 const { diffPacks } = diffLib;
 
@@ -1272,11 +1273,15 @@ function chromiumLimitProblems(readDoc = read) {
     const sentence = claim.slice(at, end < 0 ? undefined : end + 1);
     if (!sentence.includes(CHROMIUM_LIMIT)) problems.push(`${doc}: "…${sentence}" does not say the check runs ${CHROMIUM_LIMIT}`);
   }
+  return problems;
+}
+// The limit's other half, that CI's jobs install no Playwright, is the workflow's (its own test, before C8): an
+// export copy has no workflow, so that half skips there while C8 still holds the documents to the limit.
+function workflowPlaywrightProblems(readDoc = read) {
   // The workflow's steps, not its comments: the Windows leg's comment says the browser tests skip there as on every
   // leg, which is the documents' claim; a step that installs Playwright or sets OBSERVOGRAM_PLAYWRIGHT is what they rule out.
-  const workflow = read('.github/workflows/ci.yml').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  if (/playwright/i.test(workflow)) problems.push('.github/workflows/ci.yml names Playwright outside a comment: the documents say CI\'s jobs do not install it');
-  return problems;
+  const workflow = readDoc('.github/workflows/ci.yml').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  return /playwright/i.test(workflow) ? ['.github/workflows/ci.yml names Playwright outside a comment: the documents say CI\'s jobs do not install it'] : [];
 }
 // What docs/CHANGELOG.md's entry for Deploy in the static bundle says of the deploy controls Remediate draws with no
 // Pack B (`drawn`, each by its label, the reason aside), which are what a bundle without a comparison reaches: its count
@@ -1304,6 +1309,13 @@ function reachProblems(drawn, readDoc = read) {
   }
   return problems;
 }
+
+test('C8\'s limit holds: CI\'s workflow installs no Playwright (a step, not a comment), as the documents say', { skip: isExportCopy(ROOT) && EXPORT_COPY_SKIP.workflow }, () => {
+  assert.deepEqual(workflowPlaywrightProblems(), []);
+  const installs = workflowPlaywrightProblems(() => 'jobs:\n  e2e:\n    steps:\n      - run: npx playwright install chromium\n');
+  assert.equal(installs.length, 1, 'a step that installs it is named');
+  assert.deepEqual(workflowPlaywrightProblems(() => 'jobs:\n  # the browser suites skip without Playwright\n'), [], 'a comment is not a step');
+});
 
 test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s under en-US, cs-CZ and et-EE; Compare and Pair by on the compare-modes pair; the drift drill\'s deploy drawn unavailable and explained, its retrofeed downloading the server\'s updated pack; Remediate\'s deploy controls; the static texts and no server action rendered; the audit report downloaded and fetched as the server\'s; the notice; no page error, nothing off the loopback', async (t) => {
   // The documents' limit first, so it holds where the rest skips — CI's jobs among them.
