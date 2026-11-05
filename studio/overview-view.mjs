@@ -3,7 +3,8 @@
 // render(container, model, host) (docs/UI_CONVENTIONS.md §3): the model is
 // studio/overview-model.mjs buildOverviewModel(...) — pure, already worded —
 // and the actions ride on host.overview: selectService(id), selectEnv(name),
-// checkNow(), openDiscover(), openDiagnose(), openRemediate(), openNeuron(),
+// checkNow(), openDiscover(compare), openDiagnose(compare), openRemediate(compare)
+// (compare: the model's — the live pack the board's check graded, or null), openNeuron(),
 // expert(), retry(), backToList() (a host with the service list), and with no
 // service yet scan(), live(), upload(slot), resetStart(), explain(reason). The
 // service list (renderServiceList, at the end) has its own. A headless host ({ overview: {} }) never throws. The
@@ -535,9 +536,12 @@ export function renderOverview(container, model, host = appHost) {
   wireUxActions(container, {
     'ov-env': (ev, el) => ov.selectEnv?.(el.dataset.env),
     'ov-check': () => ov.checkNow?.(),
-    'ov-open-discover': () => ov.openDiscover?.(),
-    'ov-next-diagnose': () => ov.openDiagnose?.(),
-    'ov-open-remediate': () => ov.openRemediate?.(),
+    // Each carries the comparison the board graded (model.compare: the
+    // live pack its check read, or null) — a host that ignores it opens
+    // Expert on the repository alone, as before.
+    'ov-open-discover': () => ov.openDiscover?.(model.compare || null),
+    'ov-next-diagnose': () => ov.openDiagnose?.(model.compare || null),
+    'ov-open-remediate': () => ov.openRemediate?.(model.compare || null),
     'ov-next-neuron': () => ov.openNeuron?.(),
     'ov-expert': () => ov.expert?.(),
     'ov-retry': () => ov.retry?.(),

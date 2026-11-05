@@ -301,6 +301,33 @@ test('POST /api/services/:id/run: the folder scanned and registered as the servi
   assert.equal(auditRows('journey.run').length, 2);
 });
 
+test("a live run keeps the Pack B it graded as the journey's live pack — the listing names it with the read's time; the next Run and a Check now each replace it", async () => {
+  const livePacks = async () => (await call('GET', '/api/packs')).json.packs.filter((p) => p.label === 'Shop API · prod · live');
+  const listed = async () => (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === 'shop-api.prod');
+  const r = await call('POST', `/api/services/${ids.shop}/run`, {});
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.livePack?.label, 'Shop API · prod · live', 'the Run answers with the live pack it kept');
+  assert.ok(r.json.record.packB.refreshedAt, 'the record names its read time');
+  assert.deepEqual((await listed()).livePack, { id: r.json.livePack.id, label: 'Shop API · prod · live', refreshedAt: r.json.record.packB.refreshedAt },
+    'the listing names the kept pack and the read it is, the one the record graded');
+  assert.deepEqual((await livePacks()).map((p) => p.id), [r.json.livePack.id], 'it is in the catalogue, once');
+  // A live pack is never the service's own: the scan stays its one primary, and its environments stay as written.
+  const svc = (await call('GET', `/api/services/${ids.shop}`)).json.service;
+  assert.deepEqual(svc.packs.filter((p) => p.role === 'primary').map((p) => p.id), [r.json.pack.id]);
+  assert.deepEqual(svc.environments.map((e) => e.name), ['prod']);
+  // The next Run replaces it.
+  const again = await call('POST', `/api/services/${ids.shop}/run`, {});
+  assert.equal(again.status, 200, again.text);
+  assert.deepEqual((await livePacks()).map((p) => p.id), [again.json.livePack.id], 'one live pack per journey after a second Run');
+  assert.equal((await listed()).livePack.refreshedAt, again.json.record.packB.refreshedAt);
+  // So does Check now (POST /api/journeys/:name/run), under the same label.
+  const check = await call('POST', '/api/journeys/shop-api.prod/run', {});
+  assert.equal(check.status, 200, check.text);
+  assert.deepEqual(check.json.livePack, { id: (await listed()).livePack.id, label: 'Shop API · prod · live' });
+  assert.deepEqual((await livePacks()).map((p) => p.id), [check.json.livePack.id], 'and after a Check now');
+  assert.equal((await listed()).livePack.refreshedAt, check.json.record.packB.refreshedAt, 'the listing follows the last run');
+});
+
 test('the folder rule holds at run time: a folder outside OBSERVOGRAM_REPO_ROOTS, listed after the record was written, is refused before it is read', async () => {
   mkdirSync(join(WORKSPACE, 'repos'), { recursive: true });
   process.env.OBSERVOGRAM_REPO_ROOTS = join(WORKSPACE, 'repos');

@@ -2175,17 +2175,20 @@ function enterExpert() {
 
 // The board's columns open Expert's own views, bound to this service and
 // environment: Discover (the layer inventory), Diagnose ("See what to fix",
-// the compliance report), Remediate (compile and deploy the delta).
-function openOverviewView(view) {
+// the compliance report), Remediate (compile and deploy the delta) — with
+// the comparison the board graded (`compare`, overview-model.mjs
+// boardComparison): the live pack its check read as Pack B, so Expert shows
+// the grade the board shows, not the repository's alone.
+function openOverviewView(view, compare = null) {
   const id = state.overviewServiceId;
   const env = state.overviewEnv;
   setUiMode('expert');
-  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn(view, { serviceId: id, env }); return; }
+  if (Number.isInteger(id) && findServiceRecord(id)) { openServiceIn(view, { serviceId: id, env, compare, fromBoard: true }); return; }
   goHome();
 }
-const openOverviewDiscover = () => openOverviewView('layers');
-const openOverviewDiagnose = () => openOverviewView('compare');
-const openOverviewRemediate = () => openOverviewView('compile');
+const openOverviewDiscover = (compare) => openOverviewView('layers', compare);
+const openOverviewDiagnose = (compare) => openOverviewView('compare', compare);
+const openOverviewRemediate = (compare) => openOverviewView('compile', compare);
 
 // "See the differences": Expert's Neuron on this service's journey — the
 // run whose numbers Overview showed, one click away.
@@ -2218,6 +2221,9 @@ async function runOverviewCheck() {
     return;
   }
   overviewFacts = { ...overviewFacts, running: false };
+  // The check kept the live side it read as a pack (it replaced the last
+  // one): the catalogue is read again, so the columns' "Open in …" find it.
+  await refreshCatalogue().catch((e) => { console.error('[overview] the catalogue could not be read again', e); });
   await refreshOverviewFacts();
   announce('Check finished.');
   // The repaint replaced the button the user pressed: keyboard focus goes
@@ -2674,7 +2680,7 @@ function selectServiceEnv(name) {
 // packForService) and the environment; the user never picks a file. Without
 // a pack the workspace opens empty, and Discover's empty state says, for the
 // rank that reads it, how one is registered.
-function openServiceIn(view, { serviceId, env = null } = {}) {
+function openServiceIn(view, { serviceId, env = null, compare = null, fromBoard = false } = {}) {
   const service = findServiceRecord(serviceId);
   if (!service) { toast(`Service ${serviceId} is not in the table here — reload the page.`, 'error'); return; }
   const names = (service.environments || []).map(e => e.name);
@@ -2685,11 +2691,21 @@ function openServiceIn(view, { serviceId, env = null } = {}) {
   state.view = view;
   state.activeCardKey = null;
   if (pack) {
+    // Pack B first, so the picker drawn with Pack A already names it. From
+    // the board it is the board's comparison or none: never a Pack B left
+    // from an earlier visit, which would grade what the board did not.
+    const packBId = compare?.packBId && compare.packBId !== pack.id && (state.catalog || []).some((p) => p.id === compare.packBId) ? compare.packBId : null;
+    if (packBId || fromBoard) clearPackBState();
+    if (packBId) {
+      state.compareBId = packBId;
+      state.compareBEnv = compare.envB ?? null;
+    }
     enterAnalyzeMode(pack.id, envName || defaultEnvFor(pack.id));
     state.selectedService = service.slug;
     state.activeLayer = ({ compile: 'COMPILE', compare: 'COMPARE' })[view] || 'L1';
     paintObservaActiveTab();
     renderTabs();
+    if (packBId) loadComparedPackB();
     return;
   }
   state.mode = 'single';
@@ -2710,6 +2726,21 @@ function openServiceIn(view, { serviceId, env = null } = {}) {
   renderEnvSelect();
   renderMeta();
   paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+}
+
+// Pack B, already named in state.compareBId, loaded and compared with Pack A
+// — unless the user went somewhere else meanwhile.
+async function loadComparedPackB() {
+  const gen = navGeneration;
+  try { await loadPackB(); }
+  catch (e) { toast(`Pack B could not be loaded: ${e.message}`, 'error'); return; }
+  if (gen !== navGeneration) return;
+  await refreshDiff();
+  applyModeChrome();
+  renderPackBSelect();
+  renderEnvBSelect();
   renderTabs();
   renderMainView();
 }

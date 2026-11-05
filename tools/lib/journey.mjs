@@ -1163,7 +1163,13 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // the target over as notifyTargetOf builds it, so the engine reads no
 // variable a definition names. null for the CLI: resolveNotifyTarget reads
 // the names from the invoker's environment.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null } = {}) {
+// onPackB: `({ canonical, source, live, refreshedAt }) → void`, called once
+// the run is complete and its record is on disk, with the Pack B the run
+// graded — `live` when it was read from an MCP target this run, never for a
+// file. The server keeps that read as the journey's live pack, so a reader
+// can open the comparison the record graded; the CLI passes none. A throw
+// is the caller's: the record is already written.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1399,6 +1405,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     record.notify = await deliverNotification(def, notifyTarget, record, previousRun, notifier);
     writeRunRecord(def.name, startedAt, record);
   }
+  if (typeof onPackB === 'function') onPackB({ canonical: b.canonical, source: b.source, live: !!liveTarget, refreshedAt: liveRefreshedAt });
   return record;
 }
 
