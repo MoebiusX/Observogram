@@ -1780,6 +1780,50 @@ test('DEFINE substep handlers: a substep button moves (focus on its heading), a 
   assert.equal(calls.length, 0, 'a toggle that changes nothing writes nothing');
 });
 
+test('DEFINE: what is still needed follows the name as typed — without a library entry no instantiation re-renders the step, so the column and the footer repaint in place', async () => {
+  const bm = await import('../studio/build-model.mjs');
+  // The line, spelled once in the model: what the definition lacks for the name as typed and the entries picked.
+  assert.equal(bm.stillNeededLine('', 0), 'Still needed: a service name and at least one library entry.');
+  assert.equal(bm.stillNeededLine('kx-exchange', 0), 'Still needed: at least one library entry.');
+  assert.equal(bm.stillNeededLine('---', 0), 'Still needed: a service name that slugs (‘---’ → ‘’ is not one) and at least one library entry.');
+  assert.equal(bm.stillNeededLine('kx-exchange', 2), '', 'nothing is needed: the instantiation that follows re-renders the step');
+  const empty = draft({ name: '', owners: '', entries: [], result: null, seeded: false, defineSub: 'service' });
+  const m = buildDefineModel({ build: empty, library: LIBRARY, requirements: REQUIREMENTS });
+  assert.deepEqual([m.entryCount, m.stillNeeded], [0, 'Still needed: a service name and at least one library entry.']);
+  // Both lines carry the marker the repaint finds: the step's footer and the column's progress.
+  const step = stubContainer();
+  renderBuildDefine(step, m, { build: { update() {} } });
+  assert.ok(step.innerHTML.includes('<span class="build-step-status" data-still-needed>Still needed: a service name and at least one library entry.</span>'), 'the footer');
+  const col = stubContainer();
+  const dm = buildDefinitionModel({ build: empty, library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(dm.stillNeeded, m.stillNeeded, 'the column reads the same line');
+  renderBuildDefinition(col, dm, { build: {} });
+  assert.ok(col.innerHTML.includes('<div class="build-def-needed" data-still-needed>Still needed: a service name and at least one library entry.</div>'), 'the column');
+  // A valid definition prints no line to repaint: the footer says what seeding does, the column says nothing.
+  const valid = stubContainer();
+  renderBuildDefine(valid, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  assert.ok(!valid.innerHTML.includes('data-still-needed') && valid.innerHTML.includes('<span class="build-step-status">Seeded — 2 entries;'));
+  // Typing the name repaints every marked line from the field (the service line too), before any re-render; the owners
+  // and the environment leave it as the name has it.
+  const calls = [];
+  const lines = [{ textContent: m.stillNeeded }, { textContent: m.stillNeeded }];
+  const val = { textContent: '' };
+  const name = { ...fakeEl({}), value: '' }, owners = { ...fakeEl({}), value: '' };
+  const doc = { querySelectorAll: (sel) => (sel === '[data-still-needed]' ? lines : sel === '[data-progress-val="service"]' ? [val] : []) };
+  wireBuildDefinition({ ...fakeContainer({ '#build-name': [name], '#build-owners': [owners] }), ownerDocument: doc }, m, { build: { update: (p) => calls.push(p) } });
+  name.value = 'kx-exchange';
+  name.fire('input', { target: name });
+  assert.deepEqual(lines.map(l => l.textContent), ['Still needed: at least one library entry.', 'Still needed: at least one library entry.'], 'the service name is no longer listed');
+  assert.equal(val.textContent, 'kx-exchange · prod');
+  owners.value = 'team-platform, sre-krystaline';
+  owners.fire('input', { target: owners });
+  assert.deepEqual([lines[0].textContent, val.textContent], ['Still needed: at least one library entry.', 'kx-exchange · team-platform, sre-krystaline · prod']);
+  name.value = '---';
+  name.fire('input', { target: name });
+  assert.equal(lines[1].textContent, 'Still needed: a service name that slugs (‘---’ → ‘’ is not one) and at least one library entry.', 'a name that does not slug is said as typed');
+  assert.deepEqual(calls, [{ name: 'kx-exchange' }, { owners: 'team-platform, sre-krystaline' }, { name: '---' }], 'the draft still gets every keystroke');
+});
+
 test('buildDefinitionModel: the fields, the tier segments with their counts, the entries as chips, the summary — and what is still needed', () => {
   const m = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(m.name, 'orders-api');

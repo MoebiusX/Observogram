@@ -579,7 +579,7 @@ export function buildDefineModel({ build, library, requirements = {}, origin = n
     // todo, so `flagged` overstates it and is only shown before the first result.
     placeholders: { flagged: params.filter(p => p.placeholder && p.atDefault).length, remaining: r ? placeholdersRemaining(r) : null },
     libraryErrors: library?.errors || [],
-    valid: errors.length === 0, errors,
+    valid: errors.length === 0, errors, entryCount: selected.size, stillNeeded: stillNeededLine(name, selected.size),
     // The slug guard (slice 6a, design §6.4): the register links by the name's key, never by the record's id.
     origin: origin ? { id: origin.id ?? null, slug: origin.slug ?? null, name: origin.name ?? null } : null,
     originNote: buildDefineOriginNote({ origin, nameKey, originNameKey }),
@@ -1929,6 +1929,17 @@ function definitionErrors(name, selectedCount) {
 }
 
 /**
+ * What DEFINE still needs, as the one line the column's progress and the step's footer print ('Still needed: a
+ * service name and at least one library entry.'), or '' when nothing is. Both models carry it (`stillNeeded`); the
+ * view repaints it from the name as typed and the model's `entryCount`, since a keystroke re-renders nothing and,
+ * without an entry, no instantiation re-renders the step either.
+ */
+export function stillNeededLine(name, entryCount) {
+  const errors = definitionErrors(typeof name === 'string' ? name : '', entryCount);
+  return errors.length ? `Still needed: ${errors.join(' and ')}.` : '';
+}
+
+/**
  * buildDefinitionModel({ build, library, requirements, checklist }) → the left column
  * on every step: the service fields, the tier as a segmented control (each segment
  * with its MUST · SHOULD counts, the chosen one's blurb), the library entries as
@@ -2005,7 +2016,7 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
       ready, pending, stale,
     },
     libraryErrors: library?.errors || [],
-    valid, errors,
+    valid, errors, entryCount: selected.size, stillNeeded: stillNeededLine(name, selected.size),
     error: build?.error ? splitBuildErrors(build.error) : null, stale,
   };
 }
