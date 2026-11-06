@@ -3,9 +3,11 @@
 // fetchRepositoryFiles(repository, { crawlScope }) reads what the crawler
 // looks at from where the service record says its declaration lives
 // (server/service-admin.mjs parseRepository's { kind, location, ref }):
-//   github  GitHub's tree and contents API (server/github-crawl.mjs; GITHUB_TOKEN
-//           when set, for private repositories and the rate limit)
-//   ado     Azure DevOps' items API (server/ado-crawl.mjs; AZURE_DEVOPS_TOKEN)
+//   github  GitHub's tree and contents API (server/github-crawl.mjs), with the
+//           `credential`'s token when there is one (a private repository)
+//   ado     Azure DevOps' items API (server/ado-crawl.mjs), with the same
+// `credential` is server/repo-auth.mjs repositoryCredential's answer: the
+// person's own token, the server's on a server without sign-in, or none.
 //   path    a folder on the server, walked under the org's crawl scope
 //           (tools/lib/journey.mjs walkRepoFiles — never another org's part
 //           of the workspace)
@@ -55,7 +57,8 @@ async function fetchAdoFiles(location, ref, opts = {}) {
 }
 
 // `fetchImpl` (Azure DevOps), `ghFetchFn` and `rawFn` (GitHub) are the test seams.
-export async function fetchRepositoryFiles(repository, { crawlScope = null, readUpload = null, fetchImpl, ghFetchFn, rawFn } = {}) {
+export async function fetchRepositoryFiles(repository, { crawlScope = null, readUpload = null, credential = null, fetchImpl, ghFetchFn, rawFn } = {}) {
+  const token = credential?.token || null;
   const kind = repository?.kind;
   if (kind === 'upload') {
     const copy = typeof readUpload === 'function' ? readUpload() : null;
@@ -66,11 +69,11 @@ export async function fetchRepositoryFiles(repository, { crawlScope = null, read
   if (kind === 'github') {
     const gh = parseGithubUrl(repository.location);
     if (!gh) { const err = new Error(`${repository.location} is not a GitHub repository`); err.status = 400; throw err; }
-    const seams = { ...(ghFetchFn ? { fetchFn: ghFetchFn } : {}), ...(rawFn !== undefined ? { rawFn } : {}) };
+    const seams = { token, ...(ghFetchFn ? { fetchFn: ghFetchFn } : {}), ...(rawFn !== undefined ? { rawFn } : {}) };
     const out = await fetchGithubFiles({ owner: gh.owner, repo: gh.repo, ref: repository.ref ?? gh.ref ?? null }, seams);
     return { files: out.files, ref: out.ref, candidates: out.candidates, skipped: out.skipped, source: `${gh.owner}/${gh.repo} on GitHub` };
   }
-  if (kind === 'ado') return fetchAdoFiles(repository.location, repository.ref ?? null, fetchImpl ? { fetchImpl } : {});
+  if (kind === 'ado') return fetchAdoFiles(repository.location, repository.ref ?? null, { ...(fetchImpl ? { fetchImpl } : {}), token, tokenSource: credential?.source || (token ? 'server' : 'none') });
   if (kind === 'path') {
     let isDir = false;
     try { isDir = statSync(repository.location).isDirectory(); } catch { /* not there */ }

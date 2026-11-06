@@ -87,6 +87,7 @@ import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
+import { REPO_AUTH_WAYS, RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repositoryCredential } from './repo-auth.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
 import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
@@ -1332,15 +1333,27 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   // 1. The targets, before anything is read or sent.
   const targets = journeyRunTargets(req, { ...def, name });
   if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
-  // 2. The scan.
+  // 2. The scan — a GitHub or Azure DevOps repository read as the person
+  // who asked (server/repo-auth.mjs): their own token, sent with this Run
+  // and used for this read only, else the server's own on a server without
+  // sign-in, else none (a public repository).
   const t0 = Date.now();
+  const remote = service.repository.kind === 'github' || service.repository.kind === 'ado';
+  let credential = null;
+  if (remote) {
+    try { credential = repositoryCredential(service.repository.kind, { repoAuth: parseRepoAuth(req.body?.repoAuth) }); }
+    catch (e) { if (e instanceof RepoAuthRefusal) return res.status(400).json({ ok: false, error: e.message }); throw e; }
+  }
   let read;
   try {
-    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() }, readUpload: () => readUpload(service.id) });
+    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() }, readUpload: () => readUpload(service.id), credential });
   } catch (e) {
     const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
-    process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${e.message})\n`);
-    return res.status(status).json({ ok: false, error: `the repository could not be read: ${e.message}` });
+    const message = redactToken(e.message, credential?.token);
+    process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${message})\n`);
+    const need = remote ? repoAuthNeed(service.repository.kind, credential, e.status === 401 ? 401 : status) : null;
+    const tail = need ? ` — ${need.refused ? REPO_AUTH_WAYS.refused(need.kind) : REPO_AUTH_WAYS.needed(need.kind)}` : '';
+    return res.status(status).json({ ok: false, error: `the repository could not be read: ${message}${tail}`, ...(need ? { repoAuth: need } : {}) });
   }
   const scan = { source: read.source, ref: read.ref, files: Object.keys(read.files).length, candidates: read.candidates, skipped: read.skipped.length };
   if (!scan.files) {
@@ -2097,10 +2110,13 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 //   url:         'https://github.com/owner/repo' | 'owner/repo',
 //   ref?:        'main' | 'develop' | <sha>,   // default: repo default branch
 //   environment?, criticality?, binding?, owners?  // same as /api/crawl
+//   repoAuth?:   the person's own GitHub token, for this read only
 // }
 //
-// Auth: respects GITHUB_TOKEN env var for higher rate limits + private
-// repos. Without it: public-only, 60 req/hr per IP.
+// Auth (server/repo-auth.mjs): the person's own token when they send one —
+// a private repository, the API's own quota; else the server's GITHUB_TOKEN,
+// only on a server without sign-in; else none: public-only, the contents
+// from raw.githubusercontent.com.
 //
 // Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
 // ----------------------------------------------------------------
@@ -2117,12 +2133,17 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
   }
   const { owner, repo } = parsed;
   const explicitRef = (typeof body.ref === 'string' && body.ref.trim()) ? body.ref.trim() : parsed.ref || null;
+  // Read as the person who asked (server/repo-auth.mjs): their own token
+  // (`repoAuth`), else the server's on a server without sign-in, else none.
+  let credential;
+  try { credential = repositoryCredential('github', { repoAuth: parseRepoAuth(body.repoAuth) }); }
+  catch (e) { if (e instanceof RepoAuthRefusal) return res.status(400).json({ ok: false, error: e.message }); throw e; }
   const t0 = Date.now();
 
   try {
     // 1–4. The default branch when no ref is given, the tree, the
     // crawler-relevant blobs downloaded (server/github-crawl.mjs fetchGithubFiles).
-    const { ref, candidates: candidateCount, files, skipped, truncated } = await fetchGithubFiles({ owner, repo, ref: explicitRef });
+    const { ref, candidates: candidateCount, files, skipped, truncated } = await fetchGithubFiles({ owner, repo, ref: explicitRef }, { token: credential.token });
     if (truncated) {
       process.stderr.write(`[crawl-github] tree truncated for ${owner}/${repo}@${ref}; some files may be missing\n`);
     }
@@ -2191,14 +2212,16 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       tookMs: Date.now() - t0,
     });
   } catch (e) {
-    process.stderr.write(`[crawl-github] error: ${e.message}\n`);
+    const message = redactToken(e.message, credential.token);
+    process.stderr.write(`[crawl-github] error: ${message}\n`);
     const status = e.status === 404 ? 404 : (e.status === 403 ? 403 : 500);
+    const need = repoAuthNeed('github', credential, e.status);
     res.status(status).json({
       ok: false,
-      error: e.message,
-      hint: e.status === 403
-        ? 'GitHub rate limit. Set GITHUB_TOKEN in the server env for higher quotas.'
-        : e.status === 404 ? 'Repo not found or private. Set GITHUB_TOKEN to access private repos.' : undefined,
+      error: message,
+      hint: need ? `${need.refused ? REPO_AUTH_WAYS.refused('github') : REPO_AUTH_WAYS.needed('github')}.`
+        : e.status === 403 ? 'GitHub rate limit, or the server\'s token was refused.' : undefined,
+      ...(need ? { repoAuth: need } : {}),
     });
   }
 });

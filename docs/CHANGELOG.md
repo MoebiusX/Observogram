@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-11-06
+
+**The your-own-access release.** A GitHub or Azure DevOps repository is read as the person who runs it, with their own token sent for that read only. The server's own token is used only on a server without sign-in, so once people sign in, nobody reads a repository with the server's access.
+
+### Changed: a GitHub or Azure DevOps repository is read with the person's own token, never the server's once sign-in is on
+Observogram serves several people, and one personal access token on the server gave every one of them its access. Now the server reads with the token the person sends with the read, and uses its own only where nobody signs in.
+- **Declared change** for a server with sign-in (local users, OIDC or a proxy) that set `GITHUB_TOKEN` or `AZURE_DEVOPS_TOKEN`: those are no longer sent. A public GitHub repository still reads. A private one, and every Azure DevOps one, asks each person for their own token at its first Run. A server without sign-in (`OBSERVOGRAM_AUTH=off`, the person's own machine) reads as before.
+- **`server/repo-auth.mjs`** (new):
+  - `repositoryCredential(kind, { repoAuth })` decides whose token reads a repository: the person's own (`request`), else the server's on a server without sign-in (`server`), else none.
+  - `parseRepoAuth` refuses a value that is no token, without quoting it.
+  - `repoAuthNeed` says when the person's token would change the answer. GitHub answers a private repository with 404 to a reader who cannot see it.
+  - `redactToken` masks the token in any text a log or an answer carries.
+- **`POST /api/services/:id/run`** takes `{ env, repoAuth? }` and **`POST /api/crawl-github`** takes `repoAuth`. The token is used for that read only and never stored, logged or sent back. A read that needs it answers with `repoAuth: { kind, label, refused }`, and its sentence says to run it with the person's own token, or that the one sent was refused.
+- **`server/github-crawl.mjs`** `ghFetch` and `fetchGithubFiles`, and **`server/ado-crawl.mjs`** `adoFetch`, take the token from their caller and no longer read the environment. An Azure DevOps refusal names whose token it was.
+- **Overview asks on the row.** A Run its host would not read draws a password field and *Run with it* on that row. The studio keeps the token in the tab's memory only, never in storage, and sends it with that host's next Runs. It drops the token when the host refuses it, and the list names each held token with *Forget it*. The GitHub and Azure DevOps hints say whose token reads them.
+  - The board unit stays copyable: `serviceListModel`'s `results[key].repoAuth` and `heldTokens`, the row's `auth`, the list's `tokens`, `runService(key, { repoAuth })`, `forgetRepoToken(kind)`, `runServiceRecord(id, env, { repoAuth })`, and `servicesRefusal` keeping `.repoAuth`.
+- **Expert's GitHub scan** has a field for the person's token, sent with that scan only.
+- **Schedules need no one's token.** A schedule and Check now check live against the last scan a person's Run made, and never read the repository.
+- **Docs**: README (*Whose access reads a repository*, the Run and the repository table), VENDORING.md.
+- **Tests**:
+  - `server/test-service-run.mjs`: two more, plus the Azure DevOps refusal's new sentences. They cover the rule in both postures, the refusals, and a private repository stubbed at GitHub's address. Without a token the answer asks for it; with one the scan reads; a wrong one is named; the server's token serves only a server without sign-in; and no token reaches a log line or an answer.
+  - `tools/test-overview-model.mjs`: three more, for the row's ask, the held tokens, the markup and the client.
+  - Suite total 1687 → 1692.
+
 ## 0.7.0 — 2026-11-06
 
 **The bring-your-own-repository release.** A service's repository can come from the person's own machine: Overview's Upload takes a folder or a .zip, and each Run scans the kept copy against live. On a server's own machine, Browse… picks a folder the server reads. A downstream that runs the whole repository refreshes from an export it can prove (`vendor-export`, `--check`, the refresh runbook), and upstream's whole suite passes inside that copy. The taxonomy can rename the label an artefact shows for its implementation (schema version 3). From this release on, every PR raises the minor version.

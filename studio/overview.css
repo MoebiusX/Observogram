@@ -414,6 +414,15 @@ html[data-theme="light"] .ov-page {
 .ov-svc__edit:hover { color: var(--og-text); }
 .ov-svc__error { grid-column: 1 / -1; margin: 2px 0 0; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--og-fail) 45%, transparent); border-radius: 8px; background: var(--og-fail-bg); color: var(--og-text); font: 400 13px/1.4 var(--og-font); }
 .ov-svc--incomplete .ov-svc__name { color: var(--og-text-2); }
+.ov-svc__auth { grid-column: 1 / -1; display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin: 2px 0 0; padding: 8px 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; background: var(--og-sunken); }
+.ov-svc__auth--refused { border-color: color-mix(in srgb, var(--og-fail) 45%, transparent); }
+.ov-svc__auth-f { display: grid; gap: 4px; min-width: 220px; flex: 0 1 320px; }
+.ov-svc__auth-l { font: 600 12px/1.2 var(--og-font); color: var(--og-text); }
+.ov-svc__auth .og-input { min-height: 32px; font-size: 13px; }
+.ov-svc__auth .og-btn { min-height: 32px; padding: 4px 12px; font-size: 12.5px; }
+.ov-svc__auth-note { flex: 1 1 260px; font: 400 12px/1.35 var(--og-font); }
+.ov-svcs__tokens { display: grid; gap: 4px; margin: 0 0 10px; }
+.ov-svcs__token { margin: 0; font: 400 12.5px/1.4 var(--og-font); }
 
 /* The form: four numbered answers, then Save and run. */
 .ov-form { display: grid; gap: 14px; padding: 18px 20px; }

@@ -1,10 +1,10 @@
 // server/github-crawl.mjs — helpers for the public-GitHub crawl route.
 //
-// Server-only (ghFetch reads GITHUB_TOKEN from the environment, which the
-// browser-safe tools/lib layer is not allowed to do). parseGithubUrl,
-// isCrawlerFile, isExporterCandidateFile and selectCrawlerFiles are pure;
-// ghFetch is the single authenticated wrapper
-// around the GitHub REST API.
+// Server-only. parseGithubUrl, isCrawlerFile, isExporterCandidateFile and
+// selectCrawlerFiles are pure; ghFetch is the single authenticated wrapper
+// around the GitHub REST API. It sends the token its caller names and no
+// other: whose token that is — the person's own, or the server's on a
+// server without sign-in — is server/repo-auth.mjs's rule, never read here.
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
 
@@ -86,7 +86,7 @@ export function selectCrawlerFiles(tree, { maxFiles = 200, fileCapBytes = Infini
     .slice(0, maxFiles);
 }
 
-export async function ghFetch(path, init = {}) {
+export async function ghFetch(path, init = {}, { token = null } = {}) {
   const headers = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
@@ -94,9 +94,7 @@ export async function ghFetch(path, init = {}) {
     'Accept-Encoding': 'identity',   // no decompression of a third party's bytes (the Brotli decoder, CVE-2026-111497)
     ...(init.headers || {}),
   };
-  if (process.env.GITHUB_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -125,14 +123,14 @@ export async function rawFetch(owner, repo, ref, path) {
  * The files a crawl of a GitHub repository reads, fetched: the default
  * branch when `ref` is null; selectCrawlerFiles' blobs (at most 200, 1 MB
  * each, 16 MB in all) downloaded in parallel — through the contents API
- * with GITHUB_TOKEN set (a private repository), else from
+ * with a `token` (a private repository; repo-auth.mjs says whose), else from
  * raw.githubusercontent.com (rawFetch: a public one, no quota spent). A file
  * that fails or does not fit is skipped and named, never fatal; a tree or
  * repository error throws (err.status is GitHub's).
  * → { ref, candidates, files, skipped, truncated } — the POST
  * /api/crawl-github route and a service's Run share it.
  */
-export async function fetchGithubFiles({ owner, repo, ref = null }, { fetchFn = ghFetch, rawFn = process.env.GITHUB_TOKEN ? null : rawFetch } = {}) {
+export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch } = {}) {
   let at = ref;
   if (!at) {
     const repoMeta = await fetchFn(`/repos/${owner}/${repo}`).then(r => r.json());

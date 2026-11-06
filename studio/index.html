@@ -475,11 +475,12 @@
     <div class="crawl-github-row">
       <label class="crawl-github-label" for="crawl-github-url">
         <span class="crawl-github-key">From a GitHub repo</span>
-        <span class="crawl-github-sub">Public repos work out of the box. Set <code>GITHUB_TOKEN</code> in the server env for private repos / higher rate limits.</span>
+        <span class="crawl-github-sub">Public repos work out of the box. For a private one, give your own GitHub token: it is sent with this scan only, never kept.</span>
       </label>
       <div class="crawl-github-inputs">
         <input id="crawl-github-url" type="text" placeholder="github.com/owner/repo or owner/repo" autocomplete="off" class="crawl-github-input">
         <input id="crawl-github-ref" type="text" placeholder="branch (default)" autocomplete="off" class="crawl-github-ref">
+        <input id="crawl-github-token" type="password" placeholder="your token (private)" autocomplete="off" spellcheck="false" class="crawl-github-ref" aria-label="Your GitHub token, for a private repository">
         <button id="crawl-github-go-btn" type="button" class="ctrl-btn crawl-github-go-btn" disabled>scan github</button>
       </div>
       <div id="crawl-github-status" class="crawl-github-status"></div>
@@ -570,7 +571,7 @@
 </div>
 
 <footer class="ftr">
-  <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.7.0</span></div>
+  <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.8.0</span></div>
   <div>
     <a href="https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.4</a>
     ·

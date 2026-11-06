@@ -1982,7 +1982,7 @@ function serviceListModelNow() {
   return serviceListModel({
     services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog, isLiveAggregatePack,
     journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
-    access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll,
+    access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll, heldTokens: [...repoTokens.keys()],
   });
 }
 
@@ -2188,21 +2188,33 @@ async function saveListForm({ run = false } = {}) {
 // (POST /api/services/:id/run), then the list read again — the new pack, the
 // new last check. A 502 has kept a record when the live side was lost; the
 // re-read shows it, and the row says what happened.
-async function runListRow(key) {
+// The person's own GitHub and Azure DevOps tokens, given on a row whose host
+// asked for one: kept in this tab's memory only (never in storage, never on
+// the server), sent with each Run of that host's repositories, dropped when
+// the host refuses it, when the person forgets it, or when the tab closes.
+const repoTokens = new Map();
+
+async function runListRow(key, { repoAuth = '' } = {}) {
   const row = listRow(key);
   if (!row || listRunning[key]) return;
   if (!row.run.enabled) { explainUnavailable(row.run.reason); return; }
+  const host = row.repository?.kind === 'github' || row.repository?.kind === 'ado' ? row.repository.kind : null;
+  if (host && repoAuth) repoTokens.set(host, repoAuth);
+  const token = host ? repoTokens.get(host) || null : null;
   listRunning = { ...listRunning, [key]: true };
   listResults = { ...listResults, [key]: null };
   renderMainView();
   announce(`Running ${row.name} · ${row.env}: scanning the repository, then checking live…`);
   let error = null;
+  let need = null;
   let out = null;
-  try { out = await runServiceRecord(row.serviceId, row.env); }
-  catch (e) { error = e?.message || String(e); }
+  try { out = await runServiceRecord(row.serviceId, row.env, { repoAuth: token }); }
+  catch (e) { error = e?.message || String(e); need = e?.repoAuth || null; }
+  // A token its host refused is no use for the next Run either.
+  if (host && need?.refused) repoTokens.delete(host);
   listRunning = { ...listRunning };
   delete listRunning[key];
-  if (error) listResults = { ...listResults, [key]: { error } };
+  if (error) listResults = { ...listResults, [key]: { error, repoAuth: need } };
   await refreshCatalogue();
   await refreshListFacts();
   if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
@@ -2369,7 +2381,8 @@ const overviewActions = {
   pickRepositoryFolder: listPickRepositoryFolder,
   pickRepositoryZip: () => listPickWithInput({ folder: false }),
   dropRepository: listDropRepository,
-  runService: runListRow,
+  runService: (key, opts) => runListRow(key, opts),
+  forgetRepoToken: (kind) => { repoTokens.delete(kind); renderMainView(); announce('The token is forgotten: the next Run of that host asks for it again.'); },
   openService: openListService,
   showAll: () => { listShowAll = true; renderMainView(); },
   // Packs already in hand: Expert's home — upload, scan, compare.
@@ -7416,6 +7429,9 @@ async function doCrawlFromGithub() {
   if (window._observogramQuickLabel) window._observogramQuickLabel = null;
   const crit = $('#crawl-criticality').value;
   if (crit) body.criticality = crit;
+  // The person's own GitHub token, for a private repository: sent with this scan only, never kept.
+  const repoAuth = $('#crawl-github-token')?.value?.trim();
+  if (repoAuth) body.repoAuth = repoAuth;
 
   const goBtn = $('#crawl-github-go-btn');
   goBtn.disabled = true;
