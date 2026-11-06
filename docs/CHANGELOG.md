@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.6.5 — 2026-11-06
+## 0.8.1 — 2026-11-06
 
 **The sign-in-to-your-host release.** A person runs a private GitHub or Azure DevOps repository by signing in to the host from the row that asks, instead of pasting a token. The host's answer stays sealed in their own browser, so the server still keeps nothing.
 
@@ -48,7 +48,7 @@ A person who runs a private repository no longer has to make and paste a token. 
   - `server/test-authz.mjs`: the three routes classified.
   - Suite total 1692 → 1702.
 
-## 0.6.4 — 2026-11-06
+## 0.8.0 — 2026-11-06
 
 **The your-own-access release.** A GitHub or Azure DevOps repository is read as the person who runs it, with their own token sent for that read only. The server's own token is used only on a server without sign-in, so once people sign in, nobody reads a repository with the server's access.
 
@@ -72,7 +72,7 @@ Observogram serves several people, and one personal access token on the server g
   - `tools/test-overview-model.mjs`: three more, for the row's ask, the held tokens, the markup and the client.
   - Suite total 1687 → 1692.
 
-## 0.6.3 — 2026-11-06
+## 0.7.0 — 2026-11-06
 
 **The bring-your-own-repository release.** A service's repository can come from the person's own machine: Overview's Upload takes a folder or a .zip, and each Run scans the kept copy against live. On a server's own machine, Browse… picks a folder the server reads. A downstream that runs the whole repository refreshes from an export it can prove (`vendor-export`, `--check`, the refresh runbook), and upstream's whole suite passes inside that copy. The taxonomy can rename the label an artefact shows for its implementation (schema version 3). From this release on, every PR raises the minor version.
 
