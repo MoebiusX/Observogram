@@ -3639,59 +3639,8 @@ a:hover { color: var(--ink); }
   color: var(--ink-4);
 }
 
-.compare-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1px;
-  background: var(--line);
-}
-.compare-col {
-  background: var(--card);
-  padding: 8px 0;
-}
-.compare-col.c-a    { border-top: 2px solid var(--cmp-a); }
-.compare-col.c-both { border-top: 2px solid var(--cmp-both); }
-.compare-col.c-b    { border-top: 2px solid var(--cmp-b); }
-.compare-col-head {
-  font: 12px/1 var(--mono);
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--ink-4);
-  padding: 4px 12px 8px;
-}
-.compare-col-head .muted { color: var(--ink-5); font-weight: 600; margin-left: 4px; }
-.compare-row {
-  display: flex; align-items: baseline; gap: 8px;
-  width: 100%;
-  padding: 5px 12px;
-  background: transparent; border: 0; text-align: left;
-  cursor: pointer;
-  color: var(--ink);
-  font: 13.5px/1.4 var(--mono);
-  border-radius: 0;
-}
-.compare-row:hover { background: var(--hover); }
-.compare-row-id {
-  font-weight: 600; color: var(--ink-3);
-  flex-shrink: 0;
-}
-.compare-row-title { color: var(--ink); word-break: break-word; }
-.compare-tag {
-  margin-left: auto;
-  font: 11.5px/1 var(--mono); font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--ink-4);
-  background: var(--line-2);
-  padding: 1px 4px; border-radius: 99px;
-}
-.compare-empty {
-  padding: 12px 12px 6px;
-  font: 13px/1 var(--mono);
-  color: var(--ink-5);
-}
-
 @media (max-width: 760px) {
   .compare-summary { grid-template-columns: 1fr 1fr; }
-  .compare-grid { grid-template-columns: 1fr; }
 }
 
 /* ============================================================
@@ -4939,104 +4888,6 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   .home-alt-buttons { grid-template-columns: 1fr; }
 }
 
-/* ===================== COMPARE — SIDE-BY-SIDE (legacy) ===================== */
-.compare-sxs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-top: 16px;
-}
-.compare-side {
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--card);
-  overflow: hidden;
-}
-.compare-side-a { border-top: 3px solid var(--cmp-a); }
-.compare-side-b { border-top: 3px solid var(--cmp-b); }
-
-.compare-side-head {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--paper);
-  display: grid; gap: 4px;
-}
-.compare-side-eyebrow {
-  font: 12px/1 var(--mono);
-  letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--ink-4);
-}
-.compare-side-a .compare-side-eyebrow { color: var(--cmp-a); }
-.compare-side-b .compare-side-eyebrow { color: var(--cmp-b); }
-.compare-side-name {
-  font: 500 16px/1.2 var(--serif);
-  font-style: italic;
-  color: var(--ink);
-}
-.compare-side-meta {
-  display: flex; gap: 6px; flex-wrap: wrap;
-  margin-top: 2px;
-}
-.compare-side-meta .meta-pill {
-  font: 12px/1.4 var(--mono);
-  letter-spacing: 0.04em;
-  padding: 2px 7px;
-  border-radius: 99px;
-  background: var(--hover);
-  color: var(--ink-3);
-  border: 1px solid var(--line);
-}
-.compare-side-meta .meta-pill[data-tier="tier-1"] { color: var(--crit-tier-1); border-color: var(--crit-tier-1); }
-.compare-side-meta .meta-pill[data-tier="tier-2"] { color: var(--crit-tier-2); border-color: var(--crit-tier-2); }
-.compare-side-meta .meta-pill[data-tier="tier-3"] { color: var(--crit-tier-3); border-color: var(--crit-tier-3); }
-
-.compare-side-layer {
-  border-bottom: 1px solid var(--line-2);
-}
-.compare-side-layer:last-child { border-bottom: 0; }
-.compare-side-layer-head {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: 8px 12px;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line-2);
-}
-.compare-side-layer[data-layer="L1"]  .compare-side-layer-head { background: var(--L1-tint);  }
-.compare-side-layer[data-layer="L2"]  .compare-side-layer-head { background: var(--L2-tint);  }
-.compare-side-layer[data-layer="L2X"] .compare-side-layer-head { background: var(--L2X-tint); }
-.compare-side-layer[data-layer="L3"]  .compare-side-layer-head { background: var(--L3-tint);  }
-.compare-side-layer[data-layer="L4"]  .compare-side-layer-head { background: var(--L4-tint);  }
-.compare-side-layer[data-layer="L5"]  .compare-side-layer-head { background: var(--L5-tint);  }
-.compare-side-layer[data-layer="GOV"] .compare-side-layer-head { background: var(--GOV-tint); }
-.compare-side-layer-head .section-num {
-  font: 700 13px/1 var(--mono);
-  letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--ink-3);
-}
-.compare-side-layer-head .section-name {
-  font: 500 14px/1 var(--serif);
-  font-style: italic;
-  color: var(--ink);
-}
-.compare-side-layer-head .section-count {
-  margin-left: auto;
-  font: 12px/1 var(--mono);
-  color: var(--ink-4);
-}
-
-.compare-side-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-}
-.compare-side-subhead {
-  padding: 6px 12px;
-  background: var(--paper);
-  font: 11.5px/1 var(--mono);
-  letter-spacing: 0.10em; text-transform: uppercase;
-  color: var(--ink-4);
-  border-top: 1px solid var(--line-2);
-}
-
 /* Override the default card grid styling for the compare context —
    these cards are single-column inside their narrow side panel. */
 .compare-side-card {
@@ -5050,8 +4901,6 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 .compare-side-card.is-only {
   /* differential — tinted by the side */
 }
-.compare-side-a .compare-side-card.is-only { background: linear-gradient(to right, rgba(46, 117, 182, 0.06), var(--card) 50%); }
-.compare-side-b .compare-side-card.is-only { background: linear-gradient(to left,  rgba(217, 119, 6, 0.06), var(--card) 50%); }
 
 .diff-chip {
   margin-left: auto;
@@ -5061,17 +4910,12 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 }
 .diff-chip.chip-both { background: var(--cmp-both-bg); color: var(--cmp-both); }
 .diff-chip.chip-only { background: var(--cmp-a-bg);    color: var(--cmp-a);    }
-.compare-side-b .diff-chip.chip-only { background: var(--cmp-b-bg); color: var(--cmp-b); }
 
 /* When both drawers are open, narrow the drawer width slightly so the
    user sees a sliver of context between them. */
 .drawer-a[aria-hidden="false"] + * .drawer-b[aria-hidden="false"],
 .drawer-b[aria-hidden="false"] {
   /* baseline width already capped at min(560px, 50vw); fine */
-}
-
-@media (max-width: 980px) {
-  .compare-sxs { grid-template-columns: 1fr; }
 }
 
 /* ===================== ATLAS VIEW ===================== */
