@@ -329,10 +329,11 @@ function dl(rows) {
   return dl;
 }
 
+// A code box in a drawer: wrapped inside its box and as tall as its text
+// (app.css, .drawer .json), so the drawer scrolls down and never sideways.
 function code(text) {
   const pre = document.createElement('pre');
   pre.className = 'json';
-  pre.style.maxHeight = '12rem';
   pre.textContent = String(text);
   return pre;
 }
@@ -673,7 +674,7 @@ function panelAlertRule(s) {
     ['severity', s.severity || '—'],
     ['for', s.for || '—'],
   ]));
-  if (s.expr) { const sec = subpanel('expr'); const pre = document.createElement('pre'); pre.textContent = s.expr; sec.appendChild(pre); p.appendChild(sec); }
+  if (s.expr) { const sec = subpanel('expr'); sec.appendChild(code(s.expr)); p.appendChild(sec); }
   if (s.labels && Object.keys(s.labels).length) { const sec = subpanel('labels'); sec.appendChild(dl(Object.entries(s.labels))); p.appendChild(sec); }
   if (s.annotations && Object.keys(s.annotations).length) { const sec = subpanel('annotations'); sec.appendChild(dl(Object.entries(s.annotations))); p.appendChild(sec); }
   if (s.source) p.appendChild(dl([['source', s.source]]));

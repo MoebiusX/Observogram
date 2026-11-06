@@ -126,3 +126,48 @@ test('a modal is stacked over the chrome and the context bar, never under them',
     assert.ok(all.some(r => r.selector.includes(`.${cls}`)), `.${cls} is styled`);
   }
 });
+
+// The second layout pass of the 0.8.7 walkthrough (screenshots/journey-defects.md, "Layout, as rendered at
+// 1440 × 900"): each fix is a rule a later edit could quietly undo, so each is read back here.
+test('the page is a column as tall as the window: the view takes what the chrome, the bar and the footer leave', () => {
+  const all = rules();
+  const body = all.filter(r => r.selector === 'body.chrome-observa').map(r => r.body).join(';');
+  assert.match(body, /display:\s*flex/, 'the chromed body is a flex box');
+  assert.match(body, /flex-direction:\s*column/, 'a column');
+  assert.match(body, /min-height:\s*100d?vh/, 'at least as tall as the window');
+  const view = all.filter(r => r.selector === 'body.chrome-observa #layer-view').map(r => r.body).join(';');
+  assert.match(view, /flex:\s*1 0 auto/, 'the view grows into the height left');
+  assert.ok(!/calc\(100vh\s*-\s*\d+px\)/.test(view), 'no fixed guess at the chrome\'s height (100vh - 96px left the footer 19 px under the edge)');
+});
+
+test('the Advanced menu opens under its toggle, two groups side by side where the window is wide', () => {
+  const app = fs.readFileSync(new URL('app.mjs', dir), 'utf8');
+  const fn = app.slice(app.indexOf('const positionAdv = () => {'), app.indexOf('advToggle?.addEventListener(\'click\''));
+  assert.match(fn, /const top = rect\.bottom \+ gap;/, 'its top is the toggle\'s bottom, never lifted over it');
+  assert.match(fn, /style\.maxHeight = /, 'what the window cannot hold scrolls inside the menu');
+  assert.match(fn, /classList\.toggle\('is-two-col', twoCols\)/, 'two columns where the window has the width');
+  assert.equal((app.match(/class="observa-adv-group" role="group"/g) || []).length, 2, 'the deep tools and the administration are two labelled groups');
+  const css = rules();
+  assert.ok(css.some(r => r.selector === '.observa-adv-menu.is-two-col[hidden]' && /display:\s*none/.test(r.body)), 'a closed two-column menu stays hidden');
+});
+
+test('nothing is cut to fit: the drawers\' code wraps, the review cards, the drift columns, the change rows and the Settings controls keep their shape', () => {
+  const css = rules();
+  const rule = (sel) => css.filter(r => r.selector === sel).map(r => r.body).join(';');
+  assert.match(rule('.drawer .json'), /white-space:\s*pre-wrap/, 'a drawer\'s code box wraps');
+  assert.match(rule('.drawer .json'), /max-height:\s*none/, 'and is as tall as its text');
+  const drawer = fs.readFileSync(new URL('drawer.mjs', dir), 'utf8');
+  assert.ok(!/createElement\('pre'\); pre\.textContent = s\.expr/.test(drawer), 'an alert\'s EXPR is a code box, not a bare <pre>');
+  assert.match(rule('.compare-missing-item'), /grid-template-areas:\s*"layer label open" "layer id open"/, 'a review card puts its id under its name');
+  assert.match(rule('.compare-missing-list'), /minmax\(min\(380px, 100%\), 1fr\)/, 'three cards a row at 1440 px');
+  assert.match(rule('.drift-table .drift-th'), /width:\s*20%/, 'the four outcome columns share the width');
+  assert.match(rule('.remediate-items'), /grid-template-columns:\s*\[box\]/, 'the change rows are one table per layer');
+  assert.match(rule('.remediate-item-row'), /grid-template-columns:\s*subgrid/, 'each row a subgrid of it');
+  assert.ok(!/margin-left:\s*auto/.test(rule('.remediate-item-delta')), 'the fields that differ keep their column, not an auto margin');
+  assert.match(rule('.set-editor-seg'), /display:\s*flex/, 'a segmented control shares its track among however many options it has');
+  assert.ok(!/repeat\(4/.test(rule('.set-editor-seg')), 'no fixed four columns');
+  assert.match(rule('.set-audit-filters'), /align-items:\s*start/, 'the audit filters start on one line');
+  const compile = fs.readFileSync(new URL('compile-view.mjs', dir), 'utf8');
+  assert.match(compile, /export const REMEDIATE_ROWS_SHOWN = 50;/, 'a layer lists its first 50 proposed changes');
+  assert.match(compile, /entries\.slice\(0, REMEDIATE_ROWS_SHOWN\)/, 'and offers the rest');
+});

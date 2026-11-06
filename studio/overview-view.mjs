@@ -203,7 +203,8 @@ function layerRowHtml(r) {
         <li class="ov-layer ov-layer--${escapeHtml(r.key)} ov-layer--${escapeHtml(r.tone)}">
           <div class="ov-layer__head">
             ${plateHtml(r.key)}
-            <span class="ov-layer__name">${escapeHtml(r.name)}<span class="ov-layer__hint" title="${escapeHtml(r.hint)}">${escapeHtml(r.hint)}</span></span>
+            <span class="ov-layer__name">${escapeHtml(r.name)}</span>
+            <span class="ov-layer__hint">${escapeHtml(r.hint)}</span>
             <span class="og-pill og-pill--${escapeHtml(r.tone)} ov-layer__n">${r.covered} of ${r.of} kinds</span>
             <span class="ov-layer__total" title="declared on this layer"><b>${r.total}</b><small>declared</small></span>
           </div>

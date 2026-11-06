@@ -91,7 +91,9 @@ body.chrome-observa :focus-visible { outline: 2px solid var(--og-accent); outlin
    3 · THE CHROME: brand, stepper, Advanced
    ============================================================ */
 .observa-hdr { background: var(--og-panel); border-bottom: 1px solid var(--og-line); backdrop-filter: none; }
-.observa-hdr-inner { gap: 32px; }
+/* 20px between the brand, the chips, the stepper and the actions, and 10px inside each step: at 32 and 14 the
+   three step titles lost their last words to an ellipsis at 1440 px as soon as the SERVICE chip was in the bar. */
+.observa-hdr-inner { gap: 20px; }
 .observa-wordmark {
   font: 650 19px/1 var(--og-font); letter-spacing: -0.03em; text-transform: lowercase; color: var(--og-text);
 }
@@ -107,9 +109,9 @@ body.chrome-observa :focus-visible { outline: 2px solid var(--og-accent); outlin
 .observa-logo svg circle { fill: var(--og-accent); }
 
 /* The stepper: plain steps, the current one in lime with a line under it. */
-.observa-tabs { gap: 8px; }
+.observa-tabs { gap: 4px; }
 .observa-tab {
-  grid-template-columns: 30px 1fr; gap: 10px; padding: 6px 14px; border-bottom: 2px solid transparent;
+  grid-template-columns: 30px 1fr; gap: 10px; padding: 6px 10px; border-bottom: 2px solid transparent;
   color: var(--og-muted);
 }
 .observa-tab + .observa-tab { border-left: 0; }

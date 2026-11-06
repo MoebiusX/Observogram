@@ -666,7 +666,12 @@ function goToDiagnose(sub) {
 }
 
 // Disclosure open-state survives re-renders (a checkbox toggle re-renders).
-const remediateUi = { changesOpen: null, patchOpen: false, diffWait: null };
+// layersShownAll: the layers whose Proposed changes the reader asked to see whole.
+const remediateUi = { changesOpen: null, patchOpen: false, diffWait: null, layersShownAll: new Set() };
+// A layer's Proposed changes list this many rows, then offers the rest: drawn
+// whole, every live metric under Update the repository from live was 2179 rows
+// (about 74,000 px), and every artefact with no live pack 742.
+export const REMEDIATE_ROWS_SHOWN = 50;
 
 // The last "Generate repository patch" outcome (runRetrofeed's rendered
 // result, or its failure) for the A/B pair and scope it was generated for.
@@ -899,7 +904,8 @@ function renderRemediationPlan(root) {
     `;
     const ul = document.createElement('ul');
     ul.className = 'remediate-items';
-    for (const e of entries) {
+    const shown = remediateUi.layersShownAll.has(L) ? entries : entries.slice(0, REMEDIATE_ROWS_SHOWN);
+    for (const e of shown) {
       const li = document.createElement('li');
       const checked = e.deployable && e.identity && !deselected.has(e.identity);
       li.className = `remediate-item is-${e.direction || 'deploy'}` + (e.deployable ? '' : ' is-author');
@@ -936,6 +942,18 @@ function renderRemediationPlan(root) {
       ul.appendChild(li);
     }
     layerEl.appendChild(ul);
+    if (shown.length < entries.length) {
+      // The rest keep their state (ticked or not) until shown, and every
+      // count on the page still counts them.
+      const more = document.createElement('p');
+      more.className = 'remediate-layer-more';
+      more.innerHTML = `${shown.length} of ${entries.length} shown · <button type="button" class="ux-link-btn" data-rm-show-all="${escapeHtml(L)}">Show all ${entries.length}</button>`;
+      more.querySelector('button').addEventListener('click', () => {
+        remediateUi.layersShownAll.add(L);
+        appHost.renderMainView();
+      });
+      layerEl.appendChild(more);
+    }
     list.appendChild(layerEl);
   }
   changes.querySelector('.ux-disclosure-body').appendChild(list);
