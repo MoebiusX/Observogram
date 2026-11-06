@@ -239,6 +239,21 @@ export function scenarioTablesIn(relPath, content) {
 
 // ---------- the control surface ----------
 
+/**
+ * Whether detectChaos reads anything from this file: a scenario table's
+ * chaos code path, a code file that names chaos (its control surface), or a
+ * Chaos Mesh / Litmus resource. These are the files the chaos pass reads
+ * beside the artefacts, which a door that sends only what the scan uses must
+ * still send (crawler.mjs scanUsesFile).
+ */
+export function chaosPassReads(relPath, content) {
+  if (typeof content !== 'string') return false;
+  const p = String(relPath ?? '').replace(/\\/g, '/');
+  if (isChaosCodePath(p)) return true;
+  if (CODE_EXT_RE.test(p) && /chaos/i.test(content)) return true;
+  return /\.ya?ml$/i.test(p) && /(chaos-mesh\.org|litmuschaos\.io)\//.test(content);
+}
+
 /** The chaos control surface a code file shows: routes, header, API-key variable. */
 export function chaosControlIn(relPath, content) {
   const out = { routes: [], header: false, keyVariable: false };

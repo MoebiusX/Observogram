@@ -70,6 +70,23 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
 - **`observogram.unobserved.chaos` stays**, with what the feed reported: the live side never holds an experiment's definition, and dropping the key would make the diff read every declared experiment as missing live.
 - **Exports**: `CHAOS_RUN_PROBES`, `chaosRunsFromAnswers`; and `sampleChaosRuns` from the fetcher.
 
+### Fixed: what the 0.8.7 walkthrough found on these screens
+- **The Expert folder scan sees chaos experiments** (`studio/app.mjs`; `tools/lib/crawler.mjs`, `tools/lib/chaos-detect.mjs`). The *Scan a repo* panel sent the server only the files the browser classified as artefacts, so a chaos controller, its middleware and a scenario script never reached the chaos pass. On krystaline it sent 121 of 535 files and found no experiment, while an Overview Run of the same folder found all five.
+  - `scanUsesFile(relPath, content, kind?)` in the crawler and `chaosPassReads(relPath, content)` in the detector name every file a scan reads: an artefact, or a file the chaos pass reads.
+  - The panel sends exactly those, and lists the extra files as `chaos-source`.
+- **Diagnose's Chaos-validated gap card follows the proof** (`studio/chaos-copy.mjs`, new; `studio/compare-view.mjs`). It read *No chaos experiment is declared* beside its own evidence, *5 chaos experiments declared, never recorded as run*. `chaosBlockerCopy` now words each state:
+  - none: on a scanned pack, what the scan looked for;
+  - declared, never run: *No chaos experiment has a recorded run*, the quarter it earns, and how to record a run (`last_result` in `.observability/pack.yaml`, or the live feed);
+  - stale: *The last chaos pass is too old*;
+  - failed: *A chaos experiment failed its last run*;
+  - partly proven: *Not every chaos experiment has a recent pass*.
+
+  The evidence row's expectation names the run and the window.
+- **A scanned experiment's references resolve** (`studio/symbol-refs.mjs`, new; the symbol table in `studio/app.mjs`, `studio/drawer.mjs`). latency-spike's `ref:slos.slo_latency_99` and `alert:HighLatencyP99` were listed as broken although the pack declares both. The symbol table knew `slos.x` and not the spec's own Ref form `ref:slos.x`, and it took only alert names that start lowercase.
+  - `refResolves` and `refSymbol` are now the one rule, and the drawer's links read it too.
+  - Any alert name resolves, except the scan's `unresolved:not-in-code` placeholder, which names no alert. The studio mirrors that name as `UNRESOLVED_ALERT_PLACEHOLDER`, and a test pins it to the detector's.
+  - On krystaline, latency-spike and error-burst show no unresolved reference. The three experiments whose code names no alert show one: their placeholder.
+
 ### Docs
 - `docs/CHAOS_EXPERIMENTS.md`: decided, built, and what the build changed.
 - `docs/MCP_INTEGRATION.md`: the feed and its two annotations.
@@ -79,7 +96,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
 
 ### Tests and goldens
 - **New suites.**
-  - `tools/test-chaos-detect.mjs` (15 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end.
+  - `tools/test-chaos-detect.mjs` (18 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end. Three of its tests cover the walkthrough's fixes: the Expert door's files, a scanned experiment's references, and the blocker copy state by state.
   - `tools/test-chaos-run-evidence.mjs` (5 tests) covers the feed, from the registry row to a proven grade.
 - **Updated suites.**
   - `tools/test-validator.mjs` pins 1.5 (one new test).
@@ -93,7 +110,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - Build fixture: its header.
   - Diff: eight whole-diff hashes. The vendored example records a run that a self-diff carries twice; a script confirmed the diff is otherwise identical.
   - Crawl: the `crawler.unobserved.chaos` line goes.
-- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1718 → 1740.
+- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1719 → 1744 (1718 → 1740 before the walkthrough fixes here and on #222).
 
 ## 0.8.6 — 2026-11-06
 
