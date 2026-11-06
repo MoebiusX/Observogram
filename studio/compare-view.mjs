@@ -11,13 +11,13 @@
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
-import { LAYER_DEFS, LAYER_NAMES, L4_SUBGROUPS } from './constants.mjs';
+import { LAYER_DEFS, LAYER_NAMES } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
 import { liveKindSuffix, liveChipText } from './live-model.mjs';
 import {
-  dynamicFamilyCount, familyMemberPatterns, compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
+  familyMemberPatterns, compareIdentityEngine, viewDiffFor, identitySwitchModel, identityAnnouncement, pairingModeOf, pairingTitle, unpairedHint,
   renderCompareIdentitySwitch, DEFAULT_PAIRING,
 } from './compare-identity.mjs';
 import { cardKey } from './layers-view.mjs';
@@ -3468,75 +3468,6 @@ function compareKeyOf(art) {
   return art?.defines || art?.id || '';
 }
 
-function renderComparePackSide(side, pack, sets) {
-  const col = document.createElement('div');
-  col.className = 'compare-side compare-side-' + side;
-
-  const head = document.createElement('div');
-  head.className = 'compare-side-head';
-  const tier = pack?.meta?.criticality || '?';
-  const env  = pack?.meta?.environment || '—';
-  head.innerHTML = `
-    <div class="compare-side-eyebrow">${side === 'a' ? 'PACK A' : 'PACK B'}</div>
-    <div class="compare-side-name">${escapeHtml(pack?.name || '?')}</div>
-    <div class="compare-side-meta">
-      <span class="meta-pill" data-tier="${escapeHtml(tier)}">${escapeHtml(tier)}</span>
-      <span class="meta-pill">env: ${escapeHtml(env)}</span>
-      <span class="meta-pill">v${escapeHtml(pack?.meta?.version || '?')}</span>
-    </div>
-  `;
-  col.appendChild(head);
-
-  // Render each layer as a stacked section.
-  for (const L of LAYERS_FOR_DIFF) {
-    if (L === 'L4') {
-      const L4 = pack?.layers?.L4 || { policy: [], alerting: [], healing: [] };
-      const total = (L4.policy?.length || 0) + (L4.alerting?.length || 0) + (L4.healing?.length || 0);
-      if (total === 0) continue;
-      const sec = renderCompareSideLayer({ id: 'L4', num: 'L4', name: LAYER_NAMES.L4 }, [], side, sets, true);
-      col.appendChild(sec);
-      // Sub-groups
-      const grid = sec.querySelector('.compare-side-grid');
-      for (const sg of L4_SUBGROUPS) {
-        const items = L4[sg.key] || [];
-        if (!items.length) continue;
-        const h = document.createElement('div');
-        h.className = 'compare-side-subhead';
-        h.textContent = `L4.${sg.key} · ${sg.label}`;
-        grid.appendChild(h);
-        for (const a of items) grid.appendChild(renderCompareCard(a, { id: 'L4' }, sg.key, side, sets));
-      }
-      continue;
-    }
-    const items = pack?.layers?.[L] || [];
-    if (!items.length) continue;
-    const def = { id: L, num: L, name: LAYER_NAMES[L] || L };
-    const sec = renderCompareSideLayer(def, items, side, sets, false);
-    col.appendChild(sec);
-  }
-
-  return col;
-}
-
-function renderCompareSideLayer(def, items, side, sets, isL4) {
-  const sec = document.createElement('section');
-  sec.className = 'compare-side-layer section';
-  sec.dataset.layer = def.id;
-  const head = document.createElement('div');
-  head.className = 'compare-side-layer-head';
-  head.innerHTML = `
-    <span class="section-num">${def.num}</span>
-    <span class="section-name">${escapeHtml(def.name)}</span>
-    <span class="section-count">${isL4 ? '' : items.length}</span>
-  `;
-  sec.appendChild(head);
-  const grid = document.createElement('div');
-  grid.className = 'compare-side-grid';
-  if (!isL4) for (const a of items) grid.appendChild(renderCompareCard(a, def, null, side, sets));
-  sec.appendChild(grid);
-  return sec;
-}
-
 function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const status = compareStatusFor(side, def.id, artefact, sets);
   const inBoth = status === 'both';
@@ -3609,19 +3540,6 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const pairingLine = pairedBy || (notPaired ? `Not paired by ${pairing.matchedBy}: ${notPaired}` : '');
   btn.onclick = () => openDrawer(artefact, def, sublayerKey, side, pairingLine ? { pairing: pairingLine } : {});
   return btn;
-}
-
-function renderCompareHead() {
-  const a = state.diff?.a;
-  const b = state.diff?.b;
-  const head = document.createElement('div');
-  head.className = 'section-head';
-  head.innerHTML = `
-    <span class="section-num">CMP</span>
-    <span class="section-name">${escapeHtml(a?.name || '?')} <em>vs</em> ${escapeHtml(b?.name || '?')}</span>
-    <span class="section-count">${state.diff ? `union ${state.diff.summary.union}${dynamicFamilyCount(state.diff.summary.dynamicFamilies)}` : '—'}</span>
-  `;
-  return head;
 }
 
 export function renderComparePicker() {
@@ -3718,61 +3636,6 @@ function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
   if (t.notObserved) wrap.classList.add('has-unchecked');
   if (t.declaredAhead) wrap.classList.add('has-ahead');
   return wrap;
-}
-
-// (The 3-column "only-in-A / both / only-in-B" layer renderer was
-// replaced by the side-by-side renderComparePackSide above. The diff
-// summary cells at the top of the view still surface the set arithmetic.)
-function renderCompareLayer_DEPRECATED(def, bucket) {
-  const section = document.createElement('section');
-  section.className = 'compare-layer';
-  section.dataset.layer = def.id;
-  section.innerHTML = `
-    <div class="compare-layer-head">
-      <span class="section-num">${def.id}</span>
-      <span class="section-name">${def.name}</span>
-      <span class="section-count">${bucket.onlyInA.length} / ${bucket.inBoth.length} / ${bucket.onlyInB.length}</span>
-    </div>
-  `;
-  const grid = document.createElement('div');
-  grid.className = 'compare-grid';
-
-  grid.appendChild(renderCompareColumn('only in A', 'c-a',    bucket.onlyInA.map(x => x.artefact), def));
-  grid.appendChild(renderCompareColumn('in both',   'c-both', bucket.inBoth.map(x => x.a), def, bucket.inBoth));
-  grid.appendChild(renderCompareColumn('only in B', 'c-b',    bucket.onlyInB.map(x => x.artefact), def));
-
-  section.appendChild(grid);
-  return section;
-}
-
-function renderCompareColumn(label, cls, items, def, inBothPairs = null) {
-  const col = document.createElement('div');
-  col.className = 'compare-col ' + cls;
-  col.innerHTML = `<div class="compare-col-head">${label} <span class="muted">${items.length}</span></div>`;
-  if (!items.length) {
-    const empty = document.createElement('div');
-    empty.className = 'compare-empty';
-    empty.textContent = '—';
-    col.appendChild(empty);
-    return col;
-  }
-  for (let i = 0; i < items.length; i++) {
-    const artefact = items[i];
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'compare-row';
-    const bPair = inBothPairs ? inBothPairs[i].b : null;
-    const annotation = bPair && bPair.source && bPair.source !== artefact.source
-      ? ` <span class="compare-tag">${escapeHtml(artefact.source)}/${escapeHtml(bPair.source)}</span>`
-      : '';
-    row.innerHTML = `
-      <span class="compare-row-id">${escapeHtml(artefact.id || '')}</span>
-      <span class="compare-row-title">${escapeHtml(artefact.title || '')}</span>${annotation}
-    `;
-    row.onclick = () => openDrawer(artefact, def, null);
-    col.appendChild(row);
-  }
-  return col;
 }
 
 // ============================================================

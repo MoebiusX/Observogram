@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.8.3 — 2026-11-06
+
+**The compare renderers nothing calls, removed.** Compare's code loses the two layouts it replaced in June, and their stylesheet rules. Nothing on screen changes.
+
+### Removed: the compare renderers nothing calls, and their CSS
+In June, `renderCompareLayerColumn` replaced the per-pack stacked view and the three-column only-in-A / both / only-in-B view, and said their renderers were "kept as dead code for now … will be cleaned up next". This is that cleanup.
+- **`studio/compare-view.mjs`**: the five functions nothing calls are gone:
+  - `renderComparePackSide`, `renderCompareSideLayer`: the stacked view;
+  - `renderCompareHead`: the "CMP A vs B · union N" band;
+  - `renderCompareLayer_DEPRECATED`, `renderCompareColumn`: the three-column view.
+
+  So are the `L4_SUBGROUPS` and `dynamicFamilyCount` imports only they used. `compareKeyOf` stays: a test uses its definition as a marker.
+- **`studio/app.css`**: the rules for classes only those renderers produced are gone:
+  - `.compare-grid`, `.compare-col` with `.c-a` / `.c-both` / `.c-b`, `.compare-col-head`, `.compare-row` (`-id`, `-title`), `.compare-tag` and `.compare-empty`;
+  - the legacy side-by-side block: `.compare-sxs`, `.compare-side` and its `-a` / `-b` / `-head` / `-eyebrow` / `-name` / `-meta` / `-layer` / `-layer-head` / `-grid` / `-subhead` rules;
+  - the three rules keyed under those dead parents: `.compare-side-a` / `-b .compare-side-card.is-only`, and `.compare-side-b .diff-chip.chip-only`.
+
+  The live `.compare-side-card` and `.diff-chip` rules stay.
+- **Tests**: no new test. Suite total 1702 → 1702.
+
 ## 0.8.2 — 2026-11-06
 
 **A lockfile lift and a steadier test.** `brace-expansion` moves to its latest, 5.0.12. The MCP jobs suite stops failing when its two drafts fall either side of a minute.
