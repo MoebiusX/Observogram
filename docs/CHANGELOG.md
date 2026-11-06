@@ -86,6 +86,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - `refResolves` and `refSymbol` are now the one rule, and the drawer's links read it too.
   - Any alert name resolves, except the scan's `unresolved:not-in-code` placeholder, which names no alert. The studio mirrors that name as `UNRESOLVED_ALERT_PLACEHOLDER`, and a test pins it to the detector's.
   - On krystaline, latency-spike and error-burst show no unresolved reference. The three experiments whose code names no alert show one: their placeholder.
+- **The static bundle's ceiling** (`tools/test-studio-bundle.mjs` T3) rises from 6,250,000 to 6,400,000 bytes. With the two new studio modules the two-pack bundle came to 6,255,083 bytes, all of it the studio's own code and no new dependency.
 
 ### Docs
 - `docs/CHAOS_EXPERIMENTS.md`: decided, built, and what the build changed.
