@@ -136,7 +136,7 @@ appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 and every score are unchanged, and no import was added.
 | [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
-| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders: `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
+| [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders (`services-api.mjs` adds `uploadServiceRepository(id, { name, files })` for Upload): `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
 | [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
 | [`studio/overview.css`](../studio/overview.css) | `design-tokens.css` + `design-kit.css` (CI-asserted: reads `--og-*` and its own `--ov-*` only) | the board's zone (`.ov-*`), with the three kit pieces the view emits styled from the tokens, scoped to `.ov-page` — load after `design-kit.css` |
 ## The design system
@@ -380,6 +380,35 @@ The server's half is `GET /api/repository-folders` (README, the services
 API): names only, under the rule a save applies (`OBSERVOGRAM_REPO_ROOTS`, or
 the person's own machine). The studio's wiring is `listOpenFolder` and
 `listBrowseFolders` in `studio/app.mjs`.
+
+**Upload** takes the repository from the person's own machine: a folder or a
+`.zip` of it, read in their browser, kept on the server as the service's copy
+and scanned again by each Run. No server-held token reads anything, which is
+the point in a deployment with several users. Opt-in like Browse…: `formModel`
+offers the kind only with `uploads: true`. The reading is yours (the studio's
+is `studio/repository-files.mjs`, the crawler's file rule and
+`tools/lib/unzip.mjs`); the steps and the save are the model's:
+
+```js
+import { uploadReading, uploadStaged, uploadFailed } from './overview-model.mjs';
+import { uploadServiceRepository } from './services-api.mjs';
+
+async function readRepository(name, read) {      // read: () => Promise<{ name, files, bytes, skipped, ignored, truncated }>
+  form = uploadReading(form, name); repaint();
+  try { form = uploadStaged(form, await read()); } catch (e) { form = uploadFailed(form, e); }
+  repaint();
+}
+host.overview.pickRepositoryFolder = () => { /* your folder picker → readRepository */ };
+host.overview.pickRepositoryZip = () => { /* your .zip picker → readRepository */ };
+host.overview.dropRepository = (dataTransfer) => { /* a dropped folder or .zip → readRepository */ };
+// Save: savePlan(form.values, { …, upload: form.upload?.staged }) — plan.upload, last:
+// await uploadServiceRepository(serviceId, plan.upload);
+renderServiceList(container, list, formModel(form, { …, uploads: true }), host);
+```
+
+The server's half is `PUT /api/services/:id/repository-upload` (README, the
+services API). The studio's wiring is `listReadRepository`,
+`listPickRepositoryFolder` and `listDropRepository` in `studio/app.mjs`.
 
 A row whose Run cannot start says why (`run.reason`: no environment, no
 repository, no endpoint, the reader's rank) and its button explains instead

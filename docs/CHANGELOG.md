@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-11-06
+
+**The bring-your-own-repository release.** A service's repository can come from the person's own machine: Overview's Upload takes a folder or a .zip, and each Run scans the kept copy against live. On a server's own machine, Browse… picks a folder the server reads. A downstream that runs the whole repository refreshes from an export it can prove (`vendor-export`, `--check`, the refresh runbook), and upstream's whole suite passes inside that copy. The taxonomy can rename the label an artefact shows for its implementation (schema version 3). From this release on, every PR raises the minor version.
+
+### Added: a service's repository can be uploaded from the person's own machine — a folder or a .zip
+People analyse their own repositories, not what sits on the server, and in a deployment with several users the server must not read a repository for them with one token of its own. Upload sends the files from the person's machine instead: their own access already got them the files.
+- **Overview's form, step 3, gains Upload** beside GitHub, Azure DevOps and Folder. *Choose a folder*, *Choose a .zip* or a drop on the step: the browser reads the files a scan reads (the crawler's own rule, as Expert's scan applies it) and stages them, naming each one it does not read. Save sends them, and the row reads *Upload · ledger-main.zip · uploaded 2 days ago · 12 files*. Each Run scans the kept copy again and checks it against live; upload again when the repository changes.
+- **`PUT /api/services/:id/repository-upload`** (`server/repository-uploads.mjs`, operator):
+  - It takes `{ name, files: { <path inside the folder>: <text> } }`: the folder's or the `.zip`'s name and the text of the files a scan reads. Paths must stay inside the folder (no `..`, no absolute path or drive). At most 20,000 files, 5 MB each and 16 MB in all, as `/api/crawl`.
+  - It keeps one copy per service in the org's part of the workspace (`repository-uploads/<service id>.json`), replaced by the next upload.
+  - It points the record at it, writing one `service.update` row: `{ kind: 'upload', location, ref: null, uploadedAt, files, bytes }`.
+  - A service deleted, or pointed at another repository, takes its copy with it. POST and PATCH never name an upload.
+- **The Run** (`server/repo-sources.mjs`) reads an upload's copy as the repository, `the upload <name>`; the scan registers as `repository:upload`. A copy that is gone is a 404 that says to upload again.
+- **`tools/lib/unzip.mjs`** (new, vendorable, no dependency): `readZip(bytes, { accept, maxEntries, maxFileBytes, maxTotalBytes })` reads STORE and DEFLATE entries through the platform's `DecompressionStream`, in the browser and in Node.
+  - It never writes a file.
+  - It skips and names an entry whose name leaves the folder, an encrypted one, another method, one past its cap, one that inflates past the size its header gives, or one with a bad checksum.
+  - It refuses ZIP64, split and damaged archives whole (`ZipRefusal`), and inflates an entry only up to its cap.
+  - `safeEntryPath` and `UNZIP_LIMITS` are exported too.
+- **`studio/repository-files.mjs`** (new) reads a folder handle, a folder input's files, a drop's entries or a `.zip` by the scan's rule. **Expert's scan takes a `.zip` too**, picked or dropped ("Drop a folder or a .zip here").
+- **The board unit** (opt-in, as Browse… is):
+  - `formModel(…, { uploads, now })` offers the kind and adds `upload`.
+  - `uploadReading`, `uploadStaged` and `uploadFailed` are the steps, and `savePlan(…, { upload })` sends the staged files last.
+  - The view draws the block and proxies `pickRepositoryFolder`, `pickRepositoryZip` and `dropRepository`.
+  - `services-api.mjs` gains `uploadServiceRepository`. A host that passes no `uploads` draws the form as before.
+- **Docs**: README (the route, and the `upload` row), VENDORING.md, UX_SCREEN_GRAMMAR.md.
+- **Tests**:
+  - `tools/test-unzip.mjs` (new, in `npm test`, 5): forged archives for every refusal, and `tools/lib/zip.mjs`'s own archives read back.
+  - `server/test-service-run.mjs`: two more tests, for the route and its refusals, and a Run of the copy with its cleanup.
+  - `tools/test-overview-model.mjs`: three more, for the kinds, the steps, the save plan and the markup.
+  - `server/test-authz.mjs` and `server/test-tenancy.mjs` carry the route.
+  - Suite total 1677 → 1687.
+
+### Fixed: upstream's `npm test` passes whole inside an export copy — the six tests that cannot run there skip, saying why
+A downstream that runs the whole repository from an export (`npm run vendor-export`, docs/DOWNSTREAM_REFRESH.md) saw six tests fail in its copy. Three read `.github/workflows/ci.yml`, which `export-ignore` leaves out. The three of `tools/test-vendor-export.mjs` export the repository's own git checkout, and inside a copy git answers for the downstream's tree around it.
+- **`tools/vendor-export.mjs`**: `isExportCopy(root)` is true for a folder with `VENDOR-TREE.json` at its root and no `.git` of its own, which an upstream checkout never is. `EXPORT_COPY_SKIP.workflow` and `.checkout` are the two reasons, each starting `an export copy: `.
+- **The six skip there**, each printing `# SKIP an export copy: <why>`, and nowhere else:
+  - `tools/test-vendor-export.mjs`: all three tests.
+  - `tools/test-tap-summary.mjs`: S10, the workflow's wiring.
+  - `tools/test-bundle-compare.mjs`: C8's check that CI's workflow installs no Playwright is now its own test. C8 still holds the documents to the limit in a copy.
+  - `tools/test-validator.mjs`: the workflow's spec-version scan is now its own test; every other file is still scanned in a copy.
+- **`tools/tap-summary.mjs`**: `KNOWN_SKIPS` names the `an export copy: ` prefix with its probe, so a copy's run summarised by it is not refused for an unknown reason.
+- **Docs**: DOWNSTREAM_REFRESH.md step 5, VENDORING.md, README and DOWNSTREAM.md name the six skips.
+- **Tests**: the two split-out checks are new tests, and each still names a step that installs Playwright or a stale version. A copy exported from this commit runs the whole suite with exactly those six skips added. Suite total 1675 → 1677 (written as 1663 → 1665 on its branch; chained after Browse…'s 1663 → 1675, the order the two merged in).
+
 ### Added: Overview's Folder answer can be picked from the server's folders — Browse…
 A service's folder repository was typed as a full path. A browser's own folder dialog cannot fill it: it never gives a folder's full path, and every Run reads the folder on the server again, so the picker lists the server's folders instead.
 - **`GET /api/repository-folders`** (`server/repository-folders.mjs`, operator, the services router): one folder and the folders inside it by name, each `repository` when it holds `.git` (a folder, or a worktree's file); never a file, `.git` or `node_modules`; at most 500 names, then `truncated`; `up` the folder above.

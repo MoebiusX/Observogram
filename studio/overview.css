@@ -443,6 +443,17 @@ html[data-theme="light"] .ov-page {
 .ov-form__browse { min-height: 34px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
 .ov-form__browse[aria-expanded="true"] { background: var(--og-accent-bg); border-color: var(--og-accent-line); color: var(--og-text); }
 
+/* Upload: a folder or a .zip from the person's own machine, under the kinds. */
+.ov-form__upload { display: grid; gap: 6px; padding: 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; background: var(--og-sunken); }
+.ov-form__upload.is-dragover { border-style: solid; border-color: var(--og-accent-line); background: var(--og-accent-bg); }
+.ov-form__upload-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ov-form__upload-acts .og-btn { min-height: 30px; padding: 4px 12px; font-size: 12.5px; }
+.ov-form__upload-drop { font: 400 12px/1.3 var(--og-font); }
+.ov-form__upload-state { font: 500 12.5px/1.4 var(--og-font); color: var(--og-text); overflow-wrap: anywhere; }
+.ov-form__upload-state:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-form__upload--empty .ov-form__upload-state { font-weight: 400; color: var(--og-muted); }
+.ov-form__upload-note { font: 400 12px/1.35 var(--og-font); overflow-wrap: anywhere; }
+
 /* Browse…: the folders on the server, under the Folder answer. */
 .ov-folders { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--og-line-strong); border-radius: 8px; background: var(--og-sunken); }
 .ov-folders__bar { display: flex; align-items: center; gap: 8px; min-width: 0; }

@@ -194,6 +194,9 @@ export const ROUTES = Object.freeze({
   // Browse…, server/repository-folders.mjs): names only, under the rule a
   // save applies; operator, as the save is.
   'GET /api/repository-folders': { class: 'operator' },
+  // A service's repository uploaded from the person's own machine
+  // (server/repository-uploads.mjs): the copy kept, the record pointed at it.
+  'PUT /api/services/:id/repository-upload': { class: 'operator', audit: ['service.update'] },
   // A service's Run (server/index.mjs): its repository scanned and
   // registered as its pack, its check saved and run against the
   // environment's MCP endpoint — the live MCP API's posture, as every

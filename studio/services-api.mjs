@@ -139,6 +139,12 @@ export async function createServiceRecord(body, { fetchFn = requestJson } = {}) 
   return doc?.service ?? null;
 }
 
+// PUT /api/services/:id/repository-upload { name, files } → { service, upload } — the files the
+// person's browser read from a folder or a .zip, kept as the service's repository (operator).
+export async function uploadServiceRepository(id, { name, files }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(id)}/repository-upload`, jsonBody('PUT', { name, files }));
+}
+
 // POST /api/services/:id/run { env } → { record, pack, journey, scan } — the repository scanned
 // and checked against live. A 502 (the repository or the live side did not answer) throws its
 // sentence with `.status`; the live side's loss has kept a record, which the next read shows.

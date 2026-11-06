@@ -475,6 +475,8 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'POST /api/services': ['/api/services', {}, (r) => assert(r.status === 400, `${who}: POST /api/services {} → 400`, r.status, 400)],
     'PATCH /api/services/:id': [`/api/services/${serviceId}`, { tier: 'tier-1' }, is404('PATCH /api/services/:id')],
     'DELETE /api/services/:id': [`/api/services/${serviceId}`, undefined, is404('DELETE /api/services/:id')],
+    // An upload to the other org's service: unknown here, and nothing is kept in either org.
+    'PUT /api/services/:id/repository-upload': [`/api/services/${serviceId}/repository-upload`, { name: 'shop.zip', files: { 'rules.yaml': 'groups: []' } }, is404('PUT /api/services/:id/repository-upload')],
     'POST /api/services/:id/environments': [`/api/services/${serviceId}/environments`, { name: 'staging' }, is404('POST /api/services/:id/environments')],
     // A service's Run: the other org's service is unknown here — no repository read, no MCP call (the sweep counts the fake's calls).
     'POST /api/services/:id/run': [`/api/services/${serviceId}/run`, { env: 'prod' }, is404('POST /api/services/:id/run')],

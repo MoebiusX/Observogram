@@ -47,6 +47,7 @@ import { listMcpEndpoints } from '../store/mcp-endpoints.mjs';
 import { getService } from '../store/services.mjs';
 import { mcpCallerOf, mcpTargetView } from '../mcp-target-policy.mjs';
 import { FOLDER_WAYS, listRepositoryFolders } from '../repository-folders.mjs';
+import { deleteUpload, parseUpload, saveUpload, setUploadedRepository } from '../repository-uploads.mjs';
 import { bodyOf, handler, pathId, refused } from './util.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
@@ -102,7 +103,10 @@ export function servicesRoutes({ authorize }) {
   router.patch('/api/services/:id', authorize('PATCH /api/services/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
+    const before = getService(db, id);
     const { service, changed } = updateServiceFromApi(db, actor, id, bodyOf(req), { caller: mcpCallerOf(req) });
+    // Pointed away from its upload: the copy goes with it.
+    if (changed.includes('repository') && before?.repository?.kind === 'upload') deleteUpload(id);
     res.json({ ok: true, service: serviceViewOf(db, service), changed });
   }));
 
@@ -112,7 +116,22 @@ export function servicesRoutes({ authorize }) {
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
     const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
+    deleteUpload(id);   // its uploaded repository, if it had one
     res.json({ ok: true, deleted: service, environments, packLinks, waivers });
+  }));
+
+  // The repository uploaded from the person's own machine (Overview's
+  // Upload, server/repository-uploads.mjs): { name, files } — the folder's or
+  // the .zip's name and the text of the files a scan reads, as their browser
+  // read them. The copy replaces the service's last one, and the record
+  // points at it: { kind: 'upload', location: name, uploadedAt, files, bytes }.
+  router.put('/api/services/:id/repository-upload', authorize('PUT /api/services/:id/repository-upload'), handler((req, res, { db, actor }) => {
+    const current = pathService(req, res, db);
+    if (!current) return;
+    const upload = parseUpload(bodyOf(req));
+    const repository = saveUpload(current.id, upload);
+    const { service } = setUploadedRepository(db, actor, current.id, repository);
+    res.json({ ok: true, service: serviceViewOf(db, service), upload: repository });
   }));
 
   // The folders a service's repository can be picked from (Overview's

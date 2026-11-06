@@ -53,7 +53,8 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord, uploadServiceRepository } from './services-api.mjs';
+import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, isZipName } from './repository-files.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
   pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
@@ -115,7 +116,8 @@ import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
-  folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed } from './overview-model.mjs';
+  folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
+  uploadReading, uploadStaged, uploadFailed } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList } from './overview-view.mjs';
 
@@ -1219,9 +1221,12 @@ function setupUpload() {
 
   let dragDepth = 0;
   const overlay = $('#drop-overlay');
+  // Overview's Upload target reads the drop itself: the overlay steps aside over it.
+  const onUploadTarget = (e) => !!e.target?.closest?.('[data-upload-drop="on"]');
   document.addEventListener('dragenter', (e) => {
     if (!e.dataTransfer?.types?.includes('Files')) return;
     dragDepth++;
+    if (onUploadTarget(e)) { overlay.hidden = true; document.body.classList.remove('is-dragging'); return; }
     overlay.hidden = false;
     document.body.classList.add('is-dragging');
   });
@@ -1238,6 +1243,7 @@ function setupUpload() {
     e.preventDefault();
     dragDepth = 0; overlay.hidden = true;
     document.body.classList.remove('is-dragging');
+    if (onUploadTarget(e)) return;   // the repository's files, not a pack
     // Overview's start on screen: a file dropped anywhere is the next step's
     // pack (Pack A, or Pack B once A is in), as its Upload card would make it.
     if (state.mode === 'overview' && !overviewStart.slot && overviewModel().start) overviewStart = startChoose(overviewStart, overviewStart.a ? 'b' : 'a');
@@ -1981,7 +1987,64 @@ function serviceListModelNow() {
 }
 
 function serviceFormModelNow() {
-  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders });
+  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now() });
+}
+
+// Upload (overview-model.mjs uploadReading / uploadStaged / uploadFailed):
+// the files the person picks or drops — a folder or a .zip — read here in the
+// browser by the scan's own rule (studio/repository-files.mjs), staged on the
+// form and sent with Save (PUT /api/services/:id/repository-upload). A read
+// that finishes after another pick, or after the form closed, is dropped.
+let uploadGeneration = 0;
+
+async function listReadRepository(name, read) {
+  if (!listForm.open) return;
+  const gen = ++uploadGeneration;
+  listForm = uploadReading(listForm, name);
+  renderMainView();
+  let next;
+  try {
+    const files = await read();
+    next = (form) => uploadStaged(form, files);
+  } catch (e) {
+    next = (form) => uploadFailed(form, e);
+  }
+  if (gen !== uploadGeneration || !listForm.open) return;
+  listForm = next(listForm);
+  renderMainView();
+}
+
+// A hidden input for the browsers without showDirectoryPicker, and for a .zip.
+function listPickWithInput({ folder }) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.hidden = true;
+  if (folder) { input.webkitdirectory = true; input.multiple = true; } else input.accept = '.zip,application/zip';
+  input.addEventListener('change', () => {
+    const files = input.files ? [...input.files] : [];
+    input.remove();
+    if (!files.length) return;
+    if (folder) listReadRepository(files[0].webkitRelativePath?.split('/')[0] || 'the folder', () => filesFromFileList(files));
+    else listReadRepository(files[0].name, () => filesFromZip(files[0]));
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
+function listPickRepositoryFolder() {
+  if (typeof window.showDirectoryPicker !== 'function') { listPickWithInput({ folder: true }); return; }
+  window.showDirectoryPicker({ id: 'observogram-upload', mode: 'read' }).then(
+    (dir) => listReadRepository(dir.name, () => filesFromFolderHandle(dir)),
+    // AbortError: the dialog was closed; anything else, the API is refused here: the input still works.
+    (e) => { if (e?.name !== 'AbortError') listPickWithInput({ folder: true }); },
+  );
+}
+
+function listDropRepository(dt) {
+  const entries = dt?.items ? [...dt.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean) : [];
+  const zip = [...(dt?.files || [])].find((f) => isZipName(f.name));
+  if (zip && !entries.some((e) => e.isDirectory)) { listReadRepository(zip.name, () => filesFromZip(zip)); return; }
+  if (entries.length) listReadRepository(entries.find((e) => e.isDirectory)?.name || entries[0].name, () => filesFromEntries(entries));
 }
 
 // The Folder answer's Browse… (overview-model.mjs folderBrowse*): the panel
@@ -2087,7 +2150,7 @@ async function saveListForm({ run = false } = {}) {
   }
   listForm = { ...listForm, saving: true, error: null };
   renderMainView();
-  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId });
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null });
   let serviceId = plan.service.id ?? null;
   try {
     let endpointId = plan.endpoint.id;
@@ -2100,6 +2163,11 @@ async function saveListForm({ run = false } = {}) {
     else if (plan.service.patch) await patchService(serviceId, plan.service.patch);
     if (plan.env.create) await createEnvironment(serviceId, { name: plan.envName, mcpEndpointId: endpointId });
     else if (plan.env.bind) await patchEnvironment(plan.env.id, { mcpEndpointId: endpointId });
+    // Upload last: the record exists, and the copy points it at the files.
+    if (plan.upload) {
+      await uploadServiceRepository(serviceId, plan.upload);
+      listForm = { ...listForm, upload: null };
+    }
   } catch (e) {
     // What did land (a new endpoint, the record) is read back, so a retry finds it.
     await refreshServices();
@@ -2298,6 +2366,9 @@ const overviewActions = {
   openFolder: (path) => { listOpenFolder(path); },
   chooseFolder: (path) => { folderGeneration++; listForm = folderBrowseChosen(listForm, path); renderMainView(); },
   closeFolders: listFolderClose,
+  pickRepositoryFolder: listPickRepositoryFolder,
+  pickRepositoryZip: () => listPickWithInput({ folder: false }),
+  dropRepository: listDropRepository,
   runService: runListRow,
   openService: openListService,
   showAll: () => { listShowAll = true; renderMainView(); },
@@ -6985,7 +7056,7 @@ function setupCrawlPanel() {
       multiInput = document.createElement('input');
       multiInput.type = 'file';
       multiInput.multiple = true;
-      multiInput.accept = '.yaml,.yml,.json,.cjs,.mjs,.js,.jsx,.ts,.tsx,.py,.go,.java,.kt,.rs,.cs';
+      multiInput.accept = '.yaml,.yml,.json,.cjs,.mjs,.js,.jsx,.ts,.tsx,.py,.go,.java,.kt,.rs,.cs,.zip';
       multiInput.style.display = 'none';
       multiInput.addEventListener('change', () => {
         if (multiInput.files?.length) stageFileList(multiInput.files, null);
@@ -7055,6 +7126,10 @@ function setupCrawlPanel() {
 // it the scan rule decides.
 async function readEntry(entry, prefix, lib) {
   if (!entry) return;
+  if (entry.isFile && isZipName(entry.name)) {
+    await stageZip(await new Promise((res, rej) => entry.file(res, rej)));
+    return;
+  }
   if (entry.isFile) {
     if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
     const file = await new Promise((res, rej) => entry.file(res, rej));
@@ -7129,6 +7204,7 @@ async function stageFileList(fileList, _rootHint) {
     // via webkitdirectory; its first segment is the picked folder's name.
     const rel = f.webkitRelativePath || f.name;
     if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
+    if (!f.webkitRelativePath && isZipName(f.name)) { await stageZip(f); continue; }
     if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
       if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
       continue;
@@ -7140,6 +7216,21 @@ async function stageFileList(fileList, _rootHint) {
     }
   }
   finalizeStaging();
+}
+
+// A .zip picked or dropped: its files the scan reads (studio/repository-files.mjs,
+// tools/lib/unzip.mjs), staged as a folder's would be; a refused archive says why.
+async function stageZip(file) {
+  const list = $('#crawl-staged-files');
+  if (list) list.innerHTML = `<span class="crawl-staged-empty">reading ${escapeHtml(file.name)}…</span>`;
+  try {
+    const read = await filesFromZip(file);
+    for (const [path, text] of Object.entries(read.files)) crawlState.files.set(path, text);
+    if (!crawlState.rootName) crawlState.rootName = read.name || null;
+    if (read.skipped.length) toast(`${file.name}: ${read.skipped.length} file${read.skipped.length === 1 ? '' : 's'} not read (${read.skipped[0].path}: ${read.skipped[0].why}${read.skipped.length > 1 ? '; …' : ''})`);
+  } catch (e) {
+    toast(`${file.name}: ${e.message}`, 'error');
+  }
 }
 
 async function finalizeStaging() {

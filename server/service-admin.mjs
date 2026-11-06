@@ -91,6 +91,7 @@ export const WAYS = Object.freeze({
   typedUserinfo: 'a typed MCP URL may not carry user:password — send the token as mcpAuth',
   repository: 'a repository is { kind, location, ref } — kind github, ado or path — or null',
   repositoryKind: (x) => `a repository's kind is github, ado or path, not ${JSON.stringify(x)}`,
+  repositoryUploadNamed: 'an uploaded repository is set by uploading its files (PUT /api/services/:id/repository-upload), not named here',
   repositoryGithub: (x) => `${JSON.stringify(x)} is not a GitHub repository — https://github.com/<owner>/<repo>, or <owner>/<repo>`,
   repositoryAdo: (x) => `${JSON.stringify(x)} is not an Azure DevOps repository — https://dev.azure.com/<org>/<project>/_git/<repo>`,
   repositoryPath: (x) => `${JSON.stringify(x)} is not a folder path on the server — give its full path (C:\\src\\shop, /srv/src/shop)`,
@@ -228,6 +229,7 @@ export function parseRepository(value, { caller = null } = {}) {
   if (value === null) return null;
   if (!isPlainObject(value) || Object.keys(value).some((k) => !['kind', 'location', 'ref'].includes(k))) invalid(WAYS.repository);
   const { kind } = value;
+  if (kind === 'upload') invalid(WAYS.repositoryUploadNamed);
   if (!REPOSITORY_KINDS.includes(kind)) invalid(WAYS.repositoryKind(kind));
   const location = typeof value.location === 'string' ? value.location.trim() : '';
   if (!location || location.length > URL_MAX) {
