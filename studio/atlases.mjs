@@ -35,23 +35,29 @@ const CBG = {
 const SRC_MISSING = '#DC2626';
 const SRC_ADDED   = '#16A34A';
 
+// `needsB`: the renderer draws nothing without a Pack B (its `!a || !b`
+// guard below), so the Atlas header says so instead of "single pack".
 export const ATLAS_META = {
   strata: {
     title: 'Stratigraphy of the platform',
+    needsB: true,
     lede: 'Read the layers like rock. Where the silhouette is jagged, something is missing. The right column shows the layer-stack the architecture is meant to be — clean parallelograms floating on dashed datum, after Cuvier and Lyell.',
   },
   periodic: {
     title: 'A periodic table of observability',
+    needsB: true,
     lede: 'Every artefact gets a cell. Dashed cells are gaps — Mendeleev predicted gallium from a hole in his 1869 table; we do the same with missing recording rules and chaos coverage. Stripes encode the source.',
   },
   // The four below are intentionally not exported via VARIANTS yet —
   // they'll come back as their faithful ports land.
   constellation: {
     title: 'The night sky of the platform',
+    needsB: true,
     lede: 'A celestial chart of the observability domain. Bright stars are present; dashed ghosts are gaps. Asterism lines connect symbols within the same layer. Drag the slider to see the sky fill in — every gap closed is a star reignited. After Cellarius (1660) and Hevelius (1690).',
   },
   skyline: {
     title: 'The maturity skyline',
+    needsB: true,
     lede: 'A Tufte slopegraph: one line per layer, from A on the left to B on the right. The steeper the line, the larger the delta — and the louder that layer needs to be in your project plan. Labels are auto-displaced with leader lines so nothing collides.',
   },
   transit: {
@@ -284,14 +290,19 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
     // TARGET — clean isometric ribbon
     const skew = 12;
     const tPath = targetPath(RIGHT_X, yTop, COL_W, BAND_H, skew);
+    // The ribbon's right edge slants in by `skew` from top to bottom: a
+    // right-anchored note sits 8 in from that edge at its own baseline, or
+    // its tail runs off the plate (white type on the paper, unreadable).
+    const rightEdgeAt = (y) => RIGHT_X + COL_W - skew * (y - yTop) / BAND_H;
+    const noteY = yTop + BAND_H - 8;
     svg += `
       <g class="strata-band target" data-layer="${L}" data-side="target" filter="url(#softShadow)">
         <path d="${tPath}" fill="url(#tg-${L})" stroke="${C[L]}" stroke-width="1.2" stroke-linejoin="miter"/>
         <text x="${RIGHT_X + 18}" y="${yTop + 16}" style="font-family:'Newsreader', serif; font-style:italic; font-size:13px; fill:#fff; font-weight:500;">${L} · ${LAYER_NAMES[L]}</text>
-        <text x="${RIGHT_X + COL_W - 8}" y="${yTop + 16}" text-anchor="end"
+        <text x="${rightEdgeAt(yTop + 16) - 8}" y="${yTop + 16}" text-anchor="end"
           style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#fff; opacity:0.92;">${sb.count} artefacts</text>
         ${addedHere > 0 ? `
-          <text x="${RIGHT_X + COL_W - 8}" y="${yTop + BAND_H - 8}" text-anchor="end"
+          <text x="${rightEdgeAt(noteY) - 8}" y="${noteY}" text-anchor="end"
             style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#ECFCEF; font-weight:600;">+${addedHere} new</text>` : ''}
       </g>
     `;
@@ -553,9 +564,16 @@ function renderConstellation(host, { a, b, diff }, opts = {}) {
     return Array.from(map.values());
   }
 
-  const VB = 900, CX = VB / 2, CY = VB / 2;
   const R_INNER = 90, R_OUTER = 360;
   const govR = R_OUTER + 30;
+  // Sector names run along an arc just outside the GOV ring and its
+  // markers (govR + 8), so they never cross the stars, and whatever their
+  // length they reach only one line of type past R_LABEL. The viewBox is
+  // sized to the outermost of those labels and the caption below the ring.
+  const LABEL_FS = 11, R_LABEL = govR + 16;
+  const CAPTION_DY = govR + 50;
+  const VB = 2 * Math.ceil(Math.max(R_LABEL + LABEL_FS, CAPTION_DY + 4) + 6);
+  const CX = VB / 2, CY = VB / 2;
   const N = CONST_LAYERS.length;
 
   // ----- defs -----
@@ -619,16 +637,22 @@ function renderConstellation(host, { a, b, diff }, opts = {}) {
     </g>
   </g>`;
 
-  // ----- sector labels at the rim -----
+  // ----- sector labels along the rim -----
+  // Each label follows an arc centred on its sector. The lower half runs
+  // counter-clockwise so its type stays upright; there the caps hang
+  // inward from the baseline, so the baseline sits a cap height further
+  // out and both halves fill the same band, R_LABEL to R_LABEL + LABEL_FS.
   CONST_LAYERS.forEach((L, i) => {
-    const angle = (-Math.PI / 2) + (i + 0.5) * (2 * Math.PI / N);
-    const lx = CX + Math.cos(angle) * (R_OUTER + 22);
-    const ly = CY + Math.sin(angle) * (R_OUTER + 22);
-    const angleDeg = (angle * 180 / Math.PI);
-    const rotate = (Math.cos(angle) < 0) ? angleDeg + 180 : angleDeg;
-    svg += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle"
-      transform="rotate(${rotate} ${lx} ${ly})"
-      style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.10em; fill:rgba(232,220,196,0.75);">${L} · ${LAYER_NAMES[L].toUpperCase()}</text>`;
+    const mid = (-Math.PI / 2) + (i + 0.5) * (2 * Math.PI / N);
+    const half = 0.9 * Math.PI / N;
+    const lower = Math.sin(mid) > 1e-9;
+    const r = lower ? R_LABEL + 0.75 * LABEL_FS : R_LABEL;
+    const at = (t) => `${(CX + Math.cos(t) * r).toFixed(2)} ${(CY + Math.sin(t) * r).toFixed(2)}`;
+    const d = lower
+      ? `M ${at(mid + half)} A ${r} ${r} 0 0 0 ${at(mid - half)}`
+      : `M ${at(mid - half)} A ${r} ${r} 0 0 1 ${at(mid + half)}`;
+    svg += `<defs><path id="const-rim-${L}" d="${d}"/></defs>
+      <text style="font-family:'IBM Plex Mono', monospace; font-size:${LABEL_FS}px; letter-spacing:0.10em; fill:rgba(232,220,196,0.75);"><textPath href="#const-rim-${L}" startOffset="50%" text-anchor="middle">${L} · ${LAYER_NAMES[L].toUpperCase()}</textPath></text>`;
   });
 
   // ----- stars per sector, with asterism lines -----
@@ -701,7 +725,7 @@ function renderConstellation(host, { a, b, diff }, opts = {}) {
       <title>${escapeHtml(item.id + ' · ' + (item.title || ''))}</title>
     </g>`;
   });
-  svg += `<text x="${CX}" y="${CY + govR + 50}" text-anchor="middle"
+  svg += `<text x="${CX}" y="${CY + CAPTION_DY}" text-anchor="middle"
     style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:0.12em; fill:rgba(232,220,196,0.65);">GOVERNANCE · constellation of evidence</text>`;
 
   svg += `</svg>`;
@@ -767,19 +791,54 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
     return { present, total, pct: total ? present / total : 1 };
   }
 
+  // Type from the studio's tokens (studio/design-tokens.css). Every label is
+  // set in the monospace, whose advance is at most 0.6em, so its extent is
+  // known before it is drawn: the gutters are sized to the longest label.
+  const MONO = "var(--og-font-code, 'IBM Plex Mono', monospace)";
+  const SANS = 'var(--og-font, system-ui, sans-serif)';
+  const FS_NAME = 11, FS_STAT = 10, FS_TICK = 9.5, DELTA_DX = 6;
+  const monoW = (s, fs) => String(s).length * 0.6 * fs;
+
+  // ----- per-layer entries -----
+  const entries = SKYLINE_LAYERS.map(L => {
+    const cA = coverage(A, L), cB = coverage(B, L);
+    const delta = cB.pct - cA.pct;
+    return {
+      L, cA, cB, delta,
+      name: `${L} · ${LAYER_NAMES[L]}`,
+      statA: `${Math.round(cA.pct * 100)}% · ${cA.present}/${cA.total}`,
+      statB: `${Math.round(cB.pct * 100)}% · ${cB.present}/${cB.total}`,
+      deltaStr: (delta >= 0 ? '+' : '') + Math.round(delta * 100) + '%',
+      color: C[L] || cssVar('--ink-3', '#3B3B3B'),
+    };
+  });
+
+  // Left gutter, outside in: margin · labels · gap · the percentage ticks ·
+  // gap · the A axis. The labels clear the ticks, so a layer at 100% or 75%
+  // no longer prints over "100%" / "75%". Right gutter: gap · labels · margin.
+  const EDGE = 12, TICK_GAP = 8, LABEL_GAP = 10, RIGHT_GAP = 14;
+  const TICK_W = monoW('100%', FS_TICK);
+  const leftW = Math.max(...entries.map(e => Math.max(monoW(e.name, FS_NAME), monoW(e.statA, FS_STAT))));
+  const rightW = Math.max(...entries.map(e => Math.max(monoW(e.name, FS_NAME), monoW(e.statB, FS_STAT) + DELTA_DX + monoW(e.deltaStr, FS_STAT))));
   const VB_W = 1100, VB_H = 560;
-  // The gutters hold the longest layer label ('L3 · Dashboards/Recording Rules').
-  const PAD_L = 240, PAD_R = 230, PAD_T = 40, PAD_B = 50;
-  const plotW = VB_W - PAD_L - PAD_R, plotH = VB_H - PAD_T - PAD_B;
+  const PAD_L = Math.ceil(EDGE + leftW + LABEL_GAP + TICK_W + TICK_GAP);
+  const PAD_R = Math.ceil(RIGHT_GAP + rightW + EDGE);
+  const PAD_T = 40, PAD_B = 50;
+  const plotH = VB_H - PAD_T - PAD_B;
+  const labelXL = EDGE + leftW;   // the left labels' right (end) edge
+  for (const e of entries) {
+    e.yA = PAD_T + (1 - e.cA.pct) * plotH;
+    e.yB = PAD_T + (1 - e.cB.pct) * plotH;
+  }
 
   let svg = `<svg viewBox="0 0 ${VB_W} ${VB_H}" class="skyline-svg atlas-svg" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui">`;
 
   // ----- "Now / Target" column headers -----
   svg += `
     <text x="${PAD_L}" y="${PAD_T - 16}"
-      style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; fill:${cssVar('--ink-4', '#6B6B6B')};">A · ${escapeHtml(A.name || 'pack A')}</text>
+      style="font-family:${MONO}; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; fill:${cssVar('--ink-4', '#6B6B6B')};">A · ${escapeHtml(A.name || 'pack A')}</text>
     <text x="${VB_W - PAD_R}" y="${PAD_T - 16}" text-anchor="end"
-      style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; fill:${cssVar('--ink-4', '#6B6B6B')};">B · ${escapeHtml(B.name || 'pack B')}</text>
+      style="font-family:${MONO}; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; fill:${cssVar('--ink-4', '#6B6B6B')};">B · ${escapeHtml(B.name || 'pack B')}</text>
   `;
 
   // ----- percentage gridlines -----
@@ -789,21 +848,10 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
     svg += `
       <line x1="${PAD_L}" y1="${y}" x2="${VB_W - PAD_R}" y2="${y}"
         stroke="${cssVar('--line-2', '#E5E8EC')}" stroke-width="0.6" stroke-dasharray="${dash}"/>
-      <text x="${PAD_L - 8}" y="${y + 3}" text-anchor="end"
-        style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; fill:${cssVar('--ink-5', '#9BA3AD')};">${p}%</text>
+      <text x="${PAD_L - TICK_GAP}" y="${y + 3}" text-anchor="end"
+        style="font-family:${MONO}; font-size:${FS_TICK}px; fill:${cssVar('--ink-5', '#9BA3AD')};">${p}%</text>
     `;
   }
-
-  // ----- per-layer entries -----
-  const entries = SKYLINE_LAYERS.map(L => {
-    const cA = coverage(A, L), cB = coverage(B, L);
-    return {
-      L, cA, cB,
-      yA: PAD_T + (1 - cA.pct) * plotH,
-      yB: PAD_T + (1 - cB.pct) * plotH,
-      color: C[L] || cssVar('--ink-3', '#3B3B3B'),
-    };
-  });
 
   // ----- displace labels so they don't collide -----
   const minSpacing = 30;
@@ -817,7 +865,7 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
   // ----- lines + endpoints + leader lines + labels -----
   const xA = PAD_L, xB = VB_W - PAD_R;
   for (const e of entries) {
-    const delta = e.cB.pct - e.cA.pct;
+    const { delta, deltaStr } = e;
     const isFlat = Math.abs(delta) < 0.01;
     svg += `<line x1="${xA}" y1="${e.yA}" x2="${xB}" y2="${e.yB}"
       stroke="${e.color}" stroke-width="${isFlat ? 1.5 : 2.3}" opacity="${isFlat ? 0.55 : 0.95}" stroke-linecap="round"/>`;
@@ -825,33 +873,32 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
     svg += `<circle cx="${xB}" cy="${e.yB}" r="6" fill="${e.color}" stroke="${cssVar('--card', '#fff')}" stroke-width="1.8"/>`;
 
     if (Math.abs(e.labelYL - e.yA) > 1) {
-      svg += `<line x1="${xA - 6}" y1="${e.yA}" x2="${xA - 10}" y2="${e.labelYL}" stroke="${e.color}" stroke-width="0.7" stroke-dasharray="1.5 2" opacity="0.6"/>`;
+      svg += `<line x1="${xA - 6}" y1="${e.yA}" x2="${labelXL + 4}" y2="${e.labelYL}" stroke="${e.color}" stroke-width="0.7" stroke-dasharray="1.5 2" opacity="0.6"/>`;
     }
     if (Math.abs(e.labelYR - e.yB) > 1) {
       svg += `<line x1="${xB + 6}" y1="${e.yB}" x2="${xB + 10}" y2="${e.labelYR}" stroke="${e.color}" stroke-width="0.7" stroke-dasharray="1.5 2" opacity="0.6"/>`;
     }
 
     svg += `<g class="slope-left" data-layer="${e.L}" data-side="a" style="cursor:pointer">
-      <rect x="${PAD_L - 230}" y="${e.labelYL - 13}" width="220" height="26" fill="transparent"/>
-      <text x="${PAD_L - 14}" y="${e.labelYL - 2}" text-anchor="end"
-        style="font-family:'IBM Plex Mono', monospace; font-size:11px; font-weight:600; fill:${e.color};">${e.L} · ${LAYER_NAMES[e.L]}</text>
-      <text x="${PAD_L - 14}" y="${e.labelYL + 11}" text-anchor="end"
-        style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:${cssVar('--ink-4', '#6B6B6B')};">${Math.round(e.cA.pct * 100)}% · ${e.cA.present}/${e.cA.total}</text>
+      <rect x="${labelXL - leftW}" y="${e.labelYL - 13}" width="${leftW}" height="26" fill="transparent"/>
+      <text x="${labelXL}" y="${e.labelYL - 2}" text-anchor="end"
+        style="font-family:${MONO}; font-size:${FS_NAME}px; font-weight:600; fill:${e.color};">${e.name}</text>
+      <text x="${labelXL}" y="${e.labelYL + 11}" text-anchor="end"
+        style="font-family:${MONO}; font-size:${FS_STAT}px; fill:${cssVar('--ink-4', '#6B6B6B')};">${e.statA}</text>
     </g>`;
 
-    const deltaStr = (delta >= 0 ? '+' : '') + Math.round(delta * 100) + '%';
     const deltaColor = delta > 0.05 ? '#16A34A' : (delta < -0.05 ? '#DC2626' : '#9BA3AD');
     svg += `<g class="slope-right" data-layer="${e.L}" data-side="b" style="cursor:pointer">
-      <text x="${VB_W - PAD_R + 14}" y="${e.labelYR - 2}"
-        style="font-family:'Newsreader', serif; font-style:italic; font-size:14px; fill:${e.color};">${e.L} · ${LAYER_NAMES[e.L]}</text>
-      <text x="${VB_W - PAD_R + 14}" y="${e.labelYR + 13}"
-        style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:${cssVar('--ink-4', '#6B6B6B')};">${Math.round(e.cB.pct * 100)}% · ${e.cB.present}/${e.cB.total}<tspan dx="6" style="fill:${deltaColor}; font-weight:600;">${deltaStr}</tspan></text>
+      <text x="${xB + RIGHT_GAP}" y="${e.labelYR - 2}"
+        style="font-family:${MONO}; font-size:${FS_NAME}px; font-weight:600; fill:${e.color};">${e.name}</text>
+      <text x="${xB + RIGHT_GAP}" y="${e.labelYR + 11}"
+        style="font-family:${MONO}; font-size:${FS_STAT}px; fill:${cssVar('--ink-4', '#6B6B6B')};">${e.statB}<tspan dx="${DELTA_DX}" style="fill:${deltaColor}; font-weight:600;">${deltaStr}</tspan></text>
     </g>`;
   }
 
   // ----- caption -----
   svg += `<text x="${VB_W/2}" y="${VB_H - 14}" text-anchor="middle"
-    style="font-family:'Newsreader', serif; font-style:italic; font-size:12px; fill:${cssVar('--ink-4', '#6B6B6B')};">
+    style="font-family:${SANS}; font-style:italic; font-size:12px; fill:${cssVar('--ink-4', '#6B6B6B')};">
     Each line is a layer. The steeper the slope, the larger the delta — and the louder that layer needs to be in the project plan.
   </text>`;
 

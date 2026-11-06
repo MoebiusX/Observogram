@@ -163,3 +163,48 @@ test('services order by when they were opened, then by name, whatever the key', 
   assert.deepEqual(services.map(s => s.key), ['constructor', 'web', 'api'], 'input left as it was');
 });
 
+
+test('wireSectionNav: a jump lights its own link and holds it until the scroll ends (a short page never brings its last sections into the band); the band is rebuilt on resize; a replaced index lets go', async () => {
+  const { wireSectionNav } = await import('../studio/ux-kit.mjs');
+  const navListeners = {};
+  const winListeners = {};
+  const classList = () => { const s = new Set(); return { toggle: (c, on) => { if (on) s.add(c); else s.delete(c); }, contains: (c) => s.has(c) }; };
+  const ids = ['summary', 'gaps', 'evidence'];
+  const links = ids.map((id) => ({ dataset: { uxSection: id }, classList: classList() }));
+  const targets = Object.fromEntries(ids.map((id) => [id, { id, scrollIntoView() {}, focus() {} }]));
+  const lit = () => links.filter((l) => l.classList.contains('is-current')).map((l) => l.dataset.uxSection);
+  const ios = [];
+  const prevIO = globalThis.IntersectionObserver;
+  globalThis.IntersectionObserver = class { constructor(cb, opts) { this.cb = cb; this.opts = opts; this.off = false; ios.push(this); } observe() {} disconnect() { this.off = true; } };
+  const view = {
+    addEventListener: (n, f) => { (winListeners[n] ||= []).push(f); },
+    removeEventListener: (n, f) => { winListeners[n] = (winListeners[n] || []).filter((x) => x !== f); },
+    setTimeout: () => 0,
+    getComputedStyle: () => ({ position: 'static', scrollMarginTop: '200px' }),
+  };
+  const doc = { defaultView: view, getElementById: (id) => targets[id], documentElement: { clientHeight: 900 } };
+  const nav = { isConnected: true, parentElement: null, addEventListener: (n, f) => { navListeners[n] = f; }, querySelectorAll: () => links };
+  const root = { ownerDocument: doc, querySelector: () => nav, style: { setProperty() {} } };
+  try {
+    wireSectionNav(root);
+    assert.equal(ios.length, 1);
+    assert.equal(ios[0].opts.rootMargin, '-200px 0px -676px 0px', 'a 24px band just below the sticky stack');
+    navListeners.click({ target: { closest: () => links[2] }, preventDefault() {} });
+    assert.deepEqual(lit(), ['evidence'], 'the jump lights its own link at once');
+    ios[0].cb([{ isIntersecting: true, target: targets.gaps }]);
+    assert.deepEqual(lit(), ['evidence'], 'a section passed on the way does not take over');
+    for (const f of winListeners.scrollend || []) f();
+    ios[0].cb([{ isIntersecting: true, target: targets.gaps }]);
+    assert.deepEqual(lit(), ['gaps'], 'after the scroll ends, the band rules again');
+    winListeners.resize[0]();
+    assert.equal(ios.length, 2, 'a resize rebuilds the band');
+    assert.ok(ios[0].off && !ios[1].off);
+    nav.isConnected = false;
+    winListeners.resize[0]();
+    assert.ok(ios[1].off, 'a replaced index disconnects');
+    assert.equal(ios.length, 2);
+    assert.equal((winListeners.resize || []).length, 0, 'and stops listening to resizes');
+  } finally {
+    globalThis.IntersectionObserver = prevIO;
+  }
+});
