@@ -178,6 +178,8 @@ Same seven criteria, same weights. Scores can fall, never rise, on the same pack
 
 ### Changed: the synthetic-probe clause skips the crawler's invented canary (`tools/lib/conformance.mjs`)
 `L5.MUST.synthetic_probe` passed on the `https://<repo>.example.com/health` check the crawler writes when a repository has none. A check marked `crawler.scaffold.` or `mcp.scaffold.` now satisfies no clause; the weekly-production-chaos clause's instrumented probe reads the same way. A library placeholder (`library.todo.*`) still passes: the pack represents the requirement, and the server lists it under `onPlaceholder`.
+- **`scannerInvented(annotations, symbol)`** is exported, the one rule for "a scanner invented this value".
+- **The Conformance view** (`studio/conformance-view.mjs`) says so. Its Scoring rules read *Template values count as passes, with one exception*, the invented synthetic check. A failing synthetic clause names the check it left out (*The synthetic check `krystaline-health-canary` is a placeholder the scan wrote…*). Before, the text said every placeholder passes, beside a clause that failed on one.
 
 ### Added: what the scan and the live check could not look at
 - **`tools/lib/crawler.mjs`** stamps `crawler.unobserved.chaos: the repository scan has no chaos-experiment detector` on every crawled pack. The key goes when the scan learns to detect chaos experiments.
@@ -198,7 +200,7 @@ Same seven criteria, same weights. Scores can fall, never rise, on the same pack
 ### Known limit
 A chaos experiment's layer still comes from words, but from its target's words now. A target the layer patterns do not know (`deployment/orders-api`) falls back to the steady-state SLO. Stating the layer outright needs the `annotations.layer.<id>` override, or a spec field the specification does not have.
 
-- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. The crawl golden gains the stamp; the compile goldens are byte-identical. Suite total 1702 → 1704.
+- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. `tools/test-library.mjs` renders the Conformance view over an invented and a library canary (one test). The crawl golden gains the stamp, and the conformance-view capture gains the new Scoring rules sentence (that bullet only); the compile goldens are byte-identical. Suite total 1702 → 1705.
 
 ## 0.8.3 — 2026-11-06
 
