@@ -44,7 +44,37 @@ Same seven criteria, same weights. Scores can fall, never rise, on the same pack
 ### Known limit
 A chaos experiment's layer still comes from words, but from its target's words now. A target the layer patterns do not know (`deployment/orders-api`) falls back to the steady-state SLO. Stating the layer outright needs the `annotations.layer.<id>` override, or a spec field the specification does not have.
 
-- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. `tools/test-library.mjs` renders the Conformance view over an invented and a library canary (one test). The crawl golden gains the stamp, and the conformance-view capture gains the new Scoring rules sentence (that bullet only); the compile goldens are byte-identical. Suite total 1702 → 1705.
+- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. `tools/test-library.mjs` renders the Conformance view over an invented and a library canary (one test). The crawl golden gains the stamp, and the conformance-view capture gains the new Scoring rules sentence (that bullet only); the compile goldens are byte-identical. Suite total 1704 → 1707.
+
+## 0.8.4 — 2026-11-06
+
+**Layout fixes from the studio walkthrough.** A screenshot pass over every page of the studio, on krystaline's real data, found eight rendering defects. Each is fixed at its source and checked at 1440 px and at phone width.
+
+### Fixed: the rendering defects the walkthrough found
+- **Overview, Add a service.**
+  - **The Upload icon.** The Upload repository kind draws a tray-and-arrow icon in the same outline style as GitHub, Azure DevOps and Folder (`SVC_ICONS.upload` in `studio/overview-view.mjs`). Before, it drew an empty slot, and so did an uploaded service's repository cell on the list.
+  - **The Branch field.** It keeps room for its placeholder. The address and the branch share a wrapping row (`studio/overview.css`), so "branch (default)" is never cut off, and the branch moves under the address where the form is narrow. The Folder kind's address and Browse… row is unchanged.
+- **Expert toolbar.**
+  - **The Upload menu.** It stays inside the window. Where the toolbar wraps its button near the right edge (at 1440 px, and on a phone), the menu hangs from the button's right edge instead of its left (`placePopover` in `studio/app.mjs`, `.upload-popover[data-align="end"]`).
+  - **The MCP panel.** It no longer starts past the left edge on a phone.
+- **Advanced → References.** The "Benchmark vs …" labels wrap inside their dashed frames instead of running past them and under the next card.
+- **Advanced → Schema.**
+  - **Identity.** Each value keeps its own cell and wraps; long values no longer run over the next label.
+  - **The schema link.** In the Validation banner it has contrast in both themes.
+- **Advanced → OTLP Coverage.** The SDK contract and Receiver values wrap, and the per-signal matrix fits a phone, so the page no longer scrolls sideways. Before, it was 1468 px wide in a 1440 px window.
+- **Advanced → Atlas.**
+  - **Constellation.** The sector labels follow the rim and stay inside the drawing.
+  - **Skyline.** The labels clear the percentage ticks and use the studio's mono face; the gutters are sized to the longest label.
+  - **Strata.** The "+N new" ribbon notes are no longer clipped.
+  - **The headers.** Strata, Periodic and Skyline say "· needs Pack B" when there is none, since they draw only with one (`ATLAS_META` `needsB` in `studio/atlases.mjs`). Arbor works on a single pack.
+- **Diagnose.**
+  - **The section index.** A jump lands its heading just below the sticky header and index, at any width. The index's height is measured (`--ux-section-nav-h`, `wireSectionNav` in `studio/ux-kit.mjs`). A jump lights its own link and holds it until the scroll ends, so a short page such as Conformance lights the section clicked, and the highlight band is rebuilt when the window is resized.
+  - **The Coverage breakdown popover.** It opens on whole rows: its table is bounded, so the 480 px cap that cut a row in half is gone.
+- **Build → Define.** "Still needed" follows what you type in Name, Owners and Environment (`stillNeededLine` in `studio/build-model.mjs`). Before, it kept listing a field you had just filled until something else redrew the step.
+- **Tests**:
+  - `tools/test-build-model.mjs` gains one, for "Still needed" as typed (it fails without the fix).
+  - `tools/test-ux-kit.mjs` gains one, for the section index: a jump's highlight held until the scroll ends, the band rebuilt on resize, and a replaced index letting go.
+  - Suite total 1702 → 1704.
 
 ## 0.8.3 — 2026-11-06
 
