@@ -153,7 +153,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   assert(result.overall.audit.status === 'PASS', 'high traceability integrity plus fresh live evidence should pass', result.overall);
   assert(result.overall.verdict.word === 'Diagnostic-grade', 'passing verdict should be diagnostic-grade', result.overall.verdict);
-  assert(result.gradeSchema === 2, 'grade schema 2: Actionable is informational operability', result.gradeSchema);
+  assert(result.gradeSchema === 3, 'grade schema 3 (schema 2 made Actionable informational operability)', result.gradeSchema);
   assert(result.coverage.passed === 4 && result.coverage.total === 4, 'all four coverage clauses should pass (schema 2)', result.coverage);
   assert(result.overall.total === 7, 'overall total is 7 scored criteria (4 coverage + 3 trust)', result.overall);
   assert(closeTo(result.trust.passed, 2.9), 'trust score should include fractional drift fidelity', result.trust);
@@ -534,6 +534,114 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   ]) assert(got(id) === want, `${id}: ${why}`, { got: got(id), want });
   const { cells } = computePostureMatrix(pack, null);
   assert(cells['infra:dashboard']?.some((a) => a.id === 'PANEL-A') && cells['app:alert']?.some((a) => a.id === 'POL-01') && cells['unknown:metric']?.some((a) => a.id === 'METRIC-02'), 'the matrix places by the resolved layer', cells);
+}
+
+// ---------- grade schema 3: scaffolds earn nothing (2026-11-06) ----------
+// An audit of krystaline · prod (B at 69.8%) found two passes nobody earned:
+// Calibrated on the MTTD/MTTR baselines the repository scan always writes
+// (crawler.scaffold.baselines), and Chaos-validated on a library experiment
+// still on its generic fault. Each scaffold now earns nothing, and the
+// chaos sentences say what each side could see, never that recovery is
+// unproven or proven.
+{
+  const { computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const grade = (packA, packB = livePack({ 'mcp.refreshedAt': '2026-06-09T11:00:00Z' })) =>
+    computeDiagnosticGrade(packA, packB, fullPosture(), 'production-live', traceabilityDiff(0.9), { nowMs });
+  const withL5 = (L5, annotations = {}) => { const p = baseRepoPack(); p.layers.L5 = L5; p.meta.annotations = annotations; return p; };
+  const REAL_BASE = { id: 'BASE-latency', title: 'MTTD/MTTR baseline' };
+  const SCAFFOLD_BASE = { id: 'BASE-01', title: 'MTTD / MTTR baselines', source: 'Scaffold' };
+  const REAL_CHAOS = { id: 'CHAOS-01', title: 'pod-kill', spec: { target: 'deployment/orders' } };
+  const SCAFFOLD_CHAOS = { id: 'CHAOS-02', title: 'generic-latency', source: 'Scaffold', spec: { target: 'orders' } };
+
+  // 1. Calibrated: a scaffold baseline is no baseline.
+  const scaffoldOnly = grade(withL5([SCAFFOLD_BASE, REAL_CHAOS]));
+  const cal = criterion(scaffoldOnly, 'calibrated');
+  assert(scaffoldOnly.gradeSchema === 3, 'grade schema 3: scaffolds earn nothing', scaffoldOnly.gradeSchema);
+  assert(cal.pass === false, 'the scan\'s default baselines (a scaffold) do not make a pack Calibrated', cal);
+  assert(cal.detail === 'no MTTD/MTTR baselines declared - the one present is a scaffold (defaults, never measured)', 'Calibrated says the baselines present are a scaffold', cal.detail);
+  assert(JSON.stringify(cal.baselines) === JSON.stringify({ declared: 0, scaffolds: 1 }), 'Calibrated counts the scaffold apart', cal.baselines);
+  const realBase = criterion(grade(withL5([REAL_BASE, SCAFFOLD_BASE, REAL_CHAOS])), 'calibrated');
+  assert(realBase.pass === true && /^MTTD\/MTTR baselines \+ 1 SLO with explicit objective$/.test(realBase.detail), 'a declared baseline still passes beside a scaffold', realBase);
+  assert(criterion(grade(withL5([REAL_CHAOS])), 'calibrated').detail === 'no MTTD/MTTR baselines declared', 'no baseline at all: the detail is as before');
+  // The score moves by exactly one criterion: 6.9 → 5.9 of 7, A+ → B+.
+  const before = grade(withL5([REAL_BASE, REAL_CHAOS]));
+  assert(closeTo(before.overall.passed - scaffoldOnly.overall.passed, 1), 'scaffold baselines cost exactly the Calibrated point', [before.overall.passed, scaffoldOnly.overall.passed]);
+  assert(computePostureMatrix(withL5([SCAFFOLD_BASE]), null).platformWide.baselines === false && computePostureMatrix(withL5([REAL_BASE]), null).platformWide.baselines === true,
+    'the posture\'s pack-level baselines row ignores the scaffold too');
+
+  // 2. Chaos-validated: a scaffold experiment is no experiment.
+  const scaffoldChaos = criterion(grade(withL5([REAL_BASE, SCAFFOLD_CHAOS])), 'chaos-validated');
+  assert(scaffoldChaos.pass === false && scaffoldChaos.declared === 0 && scaffoldChaos.scaffolds === 1, 'a library.todo chaos experiment does not make a pack Chaos-validated', scaffoldChaos);
+  assert(scaffoldChaos.detail === 'no chaos experiment declared in this pack; 1 scaffold excluded', 'the scaffold is named as excluded', scaffoldChaos.detail);
+  assert(scaffoldChaos.sub === 'fault-injection experiments declared', 'the criterion says what it reads: a declaration, not a proof', scaffoldChaos.sub);
+  const oneChaos = criterion(grade(withL5([REAL_BASE, REAL_CHAOS, SCAFFOLD_CHAOS])), 'chaos-validated');
+  assert(oneChaos.pass === true && oneChaos.detail === '1 chaos experiment declared; none has a recorded result; 1 scaffold excluded', 'a pass says declared, and that no result is recorded (the spec has no results field)', oneChaos.detail);
+  const twoChaos = criterion(grade(withL5([REAL_BASE, REAL_CHAOS, { ...REAL_CHAOS, id: 'CHAOS-03' }])), 'chaos-validated');
+  assert(twoChaos.detail === '2 chaos experiments declared; none has a recorded result', 'the plural, no scaffold note', twoChaos.detail);
+
+  // 3. The failure says what each side could see, from the two stamps.
+  const fromScan = { 'crawler.discoveredAt': '2026-11-06T00:00:00Z', 'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector' };
+  const liveBlind = livePack({ 'mcp.refreshedAt': '2026-06-09T11:00:00Z', 'mcp.url': 'https://mcp.example/mcp', 'observogram.unobserved.chaos': 'no MCP tool exposes chaos experiments' });
+  const both = criterion(grade(withL5([REAL_BASE], fromScan), liveBlind), 'chaos-validated');
+  assert(both.detail === 'no chaos experiment declared - the repository scan cannot detect chaos tooling and the live side cannot observe it', 'both stamps: both sides named', both.detail);
+  assert(both.unobserved.repository === 'the repository scan has no chaos-experiment detector' && both.unobserved.live === 'no MCP tool exposes chaos experiments' && both.fromScan === true, 'the reasons ride on the criterion', both);
+  assert(criterion(grade(withL5([REAL_BASE], fromScan)), 'chaos-validated').detail === 'no chaos experiment declared - the repository scan cannot detect chaos tooling', 'repository stamp only');
+  const liveOnly = criterion(grade(withL5([REAL_BASE]), liveBlind), 'chaos-validated');
+  assert(liveOnly.detail === 'no chaos experiment declared - the live side cannot observe it' && liveOnly.fromScan === false, 'live stamp only; a pack the scan did not write', liveOnly);
+  const livePackAlone = criterion(grade(withL5([REAL_BASE], { 'observogram.unobserved.chaos': 'no MCP tool exposes chaos experiments' }), null), 'chaos-validated');
+  assert(livePackAlone.detail === 'no chaos experiment declared - the live side cannot observe it', 'a live pack graded alone carries the live stamp on its own meta', livePackAlone.detail);
+  for (const c of [both, liveOnly, scaffoldChaos, oneChaos]) {
+    assert(!/proven|theoretical|never been/i.test(`${c.sub} ${c.detail}`), 'no chaos sentence claims recovery was, or was not, proven', c);
+  }
+}
+
+// ---------- Comprehensive: a chaos experiment's layer is its target's ----------
+// The chaos row of the posture matrix took its layer from the experiment's
+// id and title, so four experiments named after the four layers lit chaos
+// on every layer, whatever they injected into: Comprehensive (and with it
+// the letter) moved on names alone. The layer is now the target's, else the
+// steady-state hypothesis' SLO's, else none.
+{
+  const { computePostureMatrix, resolveArtefactLayers, classifyArtefactLayer } = await import('../studio/diagnostic-grade.mjs');
+  const chaos = (id, title, spec) => ({ id, title, spec });
+  const pack = {
+    meta: { annotations: { 'layer.CHAOS-06': 'ux' } },
+    layers: {
+      L1: [{ id: 'SLO-01', title: 'kx_wallet_availability', defines: 'slos.wallet' }],
+      L5: [
+        // Named after the four layers, all faulting one application deployment.
+        chaos('CHAOS-01', 'k8s-node-disk-pressure', { target: 'deployment/orders-api', steady_state_hypothesis: 'slos.wallet' }),
+        chaos('CHAOS-02', 'kafka-broker-loss', { target: 'deployment/orders-api', steady_state_hypothesis: 'slos.wallet' }),
+        chaos('CHAOS-03', 'http-latency', { target: 'deployment/orders-api', steady_state_hypothesis: 'slos.wallet' }),
+        chaos('CHAOS-04', 'journey-checkout-fault', { target: 'deployment/orders-api', steady_state_hypothesis: 'slos.wallet' }),
+        // The target names the layer.
+        chaos('CHAOS-05', 'broker-kill', { target: 'statefulset/kafka', steady_state_hypothesis: 'slos.wallet' }),
+        // The annotation override still wins.
+        chaos('CHAOS-06', 'node-drain', { target: 'deployment/orders-api' }),
+        // Neither a target word nor a resolvable SLO: unplaced, never guessed from the name.
+        chaos('CHAOS-07', 'k8s-node-reboot', { target: 'orders', steady_state_hypothesis: 'nope' }),
+        // A bare hypothesis id names an SLO too.
+        chaos('CHAOS-08', 'redis-flush', { target: 'orders', steady_state_hypothesis: 'wallet' }),
+      ],
+    },
+  };
+  const r = resolveArtefactLayers(pack);
+  const got = (id) => `${r.get(id)?.layer ?? null}/${r.get(id)?.how ?? null}`;
+  for (const [id, want, why] of [
+    ['CHAOS-01', 'app/parent', 'named node-…, faults an app deployment: its SLO\'s layer (no target word)'],
+    ['CHAOS-02', 'app/parent', 'named kafka-…: not platform'],
+    ['CHAOS-03', 'app/parent', 'named http-…'],
+    ['CHAOS-04', 'app/parent', 'named journey-…: not ux'],
+    ['CHAOS-05', 'platform/name', 'its target names the layer (kafka)'],
+    ['CHAOS-06', 'ux/name', 'the annotation override wins'],
+    ['CHAOS-07', 'null/null', 'no target word, no SLO: unplaced, whatever its name says'],
+    ['CHAOS-08', 'app/parent', 'a bare hypothesis id resolves to slos.<id>'],
+  ]) assert(got(id) === want, `${id}: ${why}`, { got: got(id), want });
+  assert(classifyArtefactLayer({ id: 'CHAOS-09', title: 'node kafka http journey' }, pack) === null, 'the classifier never reads a chaos experiment\'s name');
+  const { cells } = computePostureMatrix(pack, null);
+  const chaosLayers = ['infra', 'platform', 'app', 'ux'].filter((l) => cells[`${l}:chaos`]?.length);
+  assert(JSON.stringify(chaosLayers) === JSON.stringify(['platform', 'app', 'ux']), 'four experiments named after the layers light one row, not four', { chaosLayers, cells: Object.keys(cells) });
+  assert(!cells['infra:chaos'], 'no experiment faults infrastructure, so infra has no chaos', cells['infra:chaos']);
 }
 
 // ---------- the vendoring seam (docs/VENDORING.md) ----------

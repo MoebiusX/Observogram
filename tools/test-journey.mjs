@@ -89,7 +89,8 @@ try {
   assert(rec.scope.env === 'prod', 'record carries the env scope');
   assert(typeof rec.grade.score === 'number' && typeof rec.grade.pass === 'boolean', 'record carries grade score + pass');
   assert(rec.grade.threshold === 85, 'record states the pass threshold');
-  assert(rec.grade.schema === 2, 'record names the grade schema so score-history steps are explainable', rec.grade);
+  assert(rec.grade.schema === 3, 'record names the grade schema so score-history steps are explainable', rec.grade);
+  assert(Array.isArray(rec.packB.unobserved) && rec.packB.unobserved.length === 0, 'a pack file that states no blind family records packB.unobserved as []', rec.packB);
   assert(typeof rec.grade.letter === 'string' && rec.grade.letter.length >= 1, 'record carries the instrument-grade letter', rec.grade);
   assert(typeof rec.conformance.scorePercent === 'number' && rec.conformance.declaredTier === 'tier-1',
          'record carries the conformance verdict');
@@ -391,6 +392,22 @@ try {
   assert(liveRec.probes.failed.join() === 'dashboards' && liveRec.probes.unsupported.join() === 'scrape_configs' && liveRec.probes.empty.join() === 'metric_names',
          'run record carries the probe families per outcome', liveRec.probes);
   assert(liveRec.vantage === 'partial' && liveRec.toolsExposedCount === 12, 'run record carries vantage and toolsExposedCount', { v: liveRec.vantage, t: liveRec.toolsExposedCount });
+  {
+    // packB.unobserved: the families Pack B says it could not look at, so the Overview can say
+    // "the live side cannot observe it" from the record alone (studio/overview-model.mjs gradeWhy).
+    const blindB = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...liveB.metadata.annotations, 'observogram.unobserved.synthetic': 'no MCP tool exposes synthetic checks', 'observogram.unobserved.chaos': 'no MCP tool exposes chaos experiments' } } };
+    const BLIND_B = join(TMP, 'blind-b.pack.json');
+    writeFileSync(BLIND_B, JSON.stringify(blindB, null, 2));
+    writeFileSync(join(TMP, 'journeys', 'live-blind.journey.yaml'), [
+      'name: live-blind',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { file: ${BLIND_B.replaceAll('\\', '/')} }`,
+      'env: prod',
+    ].join('\n'));
+    const blindRec = await runJourney(loadJourneyDef('live-blind'));
+    const expected = Object.keys(blindB.metadata.annotations).filter((k) => k.startsWith('observogram.unobserved.')).map((k) => k.slice('observogram.unobserved.'.length)).sort();
+    assert(JSON.stringify(blindRec.packB.unobserved) === JSON.stringify(expected) && expected.includes('chaos'), 'run record lists the families Pack B could not observe, sorted', blindRec.packB.unobserved);
+  }
   assert(liveRec.scrapeJobsDown === 1 && liveRec.unhealthyRules === 3, 'run record counts down jobs and unhealthy rules (recording + alerting)', { d: liveRec.scrapeJobsDown, u: liveRec.unhealthyRules });
   assert(liveRec.probeErrors?.dashboards === 'HTTP 502 Bad Gateway', 'run record keeps the probe error text', liveRec.probeErrors);
   assert(liveRec.stack && liveRec.stack.status === 'sampled' && liveRec.stack.sampled === 12 && liveRec.stack.empty === 3 && liveRec.stack.failed === 0,
@@ -1379,7 +1396,7 @@ try {
         const keys = Object.keys(n1);
         assert(keys.slice(keys.indexOf('traceability'), keys.indexOf('traceability') + 6).join() === 'traceability,branches,chains,versions,transition,livePack' && keys[keys.length - 1] === 'notify' && keys.indexOf('notify') > keys.indexOf('causes'),
                'notify is the last key, after causes — the pinned key run is untouched', keys);
-        assert(n1.grade.schema === 2, 'grade.schema stays 2 with notify: present');
+        assert(n1.grade.schema === 3, 'grade.schema stays 3 with notify: present');
         const persisted = readJourneyRuns('notified').find(r => r.startedAt === n1.startedAt);
         assert(persisted && JSON.stringify(persisted.notify) === JSON.stringify(n1.notify) && Object.keys(persisted).slice(-2).join() === 'causes,notify', 'the on-disk record carries the same notify (second write), as its last key', persisted && { disk: persisted.notify, mem: n1.notify });
       }
@@ -1394,7 +1411,7 @@ try {
         const sched = await runJourney(loadJourneyDef('sched-twin'));
         const scored = (r) => JSON.stringify({ grade: r.grade, traceability: r.traceability, branches: r.branches, chains: r.chains, drift: r.drift, conformance: r.conformance, outcome: r.outcome, breaches: r.gate.breaches });
         assert(scored(twin) === scored(n1) && scored(sched) === scored(n1), 'grade, traceability, branches, chains, drift, conformance and outcome are identical with and without notify:/schedule:/stackBudget:', { twin: scored(twin).length, n1: scored(n1).length });
-        assert(JSON.stringify(sched.branches) === JSON.stringify(n1.branches) && sched.grade.schema === 2, 'identical inputs record identical branches whatever the delivery keys say');
+        assert(JSON.stringify(sched.branches) === JSON.stringify(n1.branches) && sched.grade.schema === 3, 'identical inputs record identical branches whatever the delivery keys say');
         assert(sched.notify.status === 'sent' && hits.length === 1 && JSON.parse(hits[0].body).journey === 'sched-twin' && !('schedule' in JSON.parse(hits[0].body)), 'on: always posts the first run; the payload carries no definition keys');
         hits.length = 0;
       }

@@ -88,19 +88,22 @@ Re-run live scan and compare again
 ## Diagnostic Grade Contract
 
 The Diagnostic Grade is the top-level answer. It is scored from seven
-criteria (grade schema 2), plus one informational operability check:
+criteria (grade schema 3), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
 1. **Multi-modal** - metrics, logs, traces, or profiles cover the service.
 2. **Correlated** - telemetry can be joined through trace context or log
    correlation.
-3. **Calibrated** - SLOs have numeric objectives and baselines exist.
+3. **Calibrated** - SLOs have numeric objectives and baselines are declared
+   (the scan's default baselines, a scaffold, do not count).
 4. **Comprehensive** - coverage spans the major service layers.
 
 ### Trust - Can We Trust What The Signals Show?
 
-5. **Chaos-validated** - recovery has fault-injection evidence.
+5. **Chaos-validated** - at least one chaos experiment is declared (a
+   scaffold does not count). The specification holds no result for an
+   experiment, so this is a declaration, not proof that recovery works.
 6. **Drift-free** - declared artifacts match live state.
 7. **Fresh** - the live signal was verified recently.
 
