@@ -6,6 +6,10 @@
 // no sign-in — the person's own machine, or a server run without identity —
 // so once sign-in is on, nobody reads a repository with the server's access.
 //
+// Between the two, the person's sign-in to the host (server/repo-sign-in.mjs):
+// their own token again, which their browser holds sealed and sends with each
+// request, so nobody pastes it.
+//
 // A schedule or Check now never reads the repository: it checks live against
 // the last scan, which a person's Run made (README, A service's Run).
 
@@ -21,7 +25,23 @@ export const REPO_AUTH_WAYS = Object.freeze({
     ? 'it needs your own Azure DevOps token (a personal access token with Code (Read)), sent with this Run and never kept'
     : 'if it is private, run it with your own GitHub token (read access to its contents), sent with this Run and never kept'),
   refused: (kind) => `your ${HOST_LABEL[kind] || 'repository host'} token was refused or cannot read it — check that it can read this repository`,
+  // The person is signed in to the host, and that account was refused or cannot see it.
+  signedInRefused: (kind, account, { expired = false } = {}) => (expired
+    ? `your ${HOST_LABEL[kind]} sign-in has ended — sign in to ${HOST_LABEL[kind]} again`
+    : `you are signed in to ${HOST_LABEL[kind]}${account ? ` as ${account}` : ''}, and that account cannot read this repository — sign in as one that can, or run it with a token that can`),
+  // The host offers sign-in here: the way to the fix that needs no token.
+  signIn: (kind) => (kind === 'ado'
+    ? 'sign in to Azure DevOps to read it as you, or run it with your own Azure DevOps token (Code (Read))'
+    : 'if it is private, sign in to GitHub to read it as you, or run it with your own GitHub token'),
 });
+
+// The sentence a refused read ends with, from repoAuthNeed's answer.
+export function repoAuthTail(need) {
+  if (!need) return '';
+  if (need.via === 'sign-in') return REPO_AUTH_WAYS.signedInRefused(need.kind, need.account, { expired: need.expired === true });
+  if (need.refused) return REPO_AUTH_WAYS.refused(need.kind);
+  return need.signIn ? REPO_AUTH_WAYS.signIn(need.kind) : REPO_AUTH_WAYS.needed(need.kind);
+}
 
 export class RepoAuthRefusal extends Error {
   constructor(message) { super(message); this.name = 'RepoAuthRefusal'; this.status = 400; }
@@ -42,13 +62,16 @@ export function signInOn() {
   try { return authEnabled(); } catch { return true; }
 }
 
-// repositoryCredential(kind, { repoAuth, signIn, env }) → { token, source }
+// repositoryCredential(kind, { repoAuth, link, signIn, env }) → { token, source }
 //   source  'request' — the person's own token, for this read only
+//           'link'    — the person's sign-in to the host (server/repo-sign-in.mjs
+//                       readRepoLink), with `account`
 //           'server'  — the server's own token, only on a server without sign-in
 //           'none'    — no token: a public repository reads; a private one asks for the person's
 //   serverHeld  (with 'none') the server holds a token it does not use because sign-in is on
-export function repositoryCredential(kind, { repoAuth = null, signIn = signInOn(), env = process.env } = {}) {
+export function repositoryCredential(kind, { repoAuth = null, link = null, signIn = signInOn(), env = process.env } = {}) {
   if (repoAuth) return { token: repoAuth, source: 'request' };
+  if (link?.token) return { token: link.token, source: 'link', account: link.account ?? null };
   const name = SERVER_TOKEN_VAR[kind];
   const server = name ? String(env[name] ?? '').trim() : '';
   if (server && !signIn) return { token: server, source: 'server' };
@@ -60,10 +83,20 @@ export function repositoryCredential(kind, { repoAuth = null, signIn = signInOn(
 // their token would not change the answer (the server's own token was
 // refused: its operator's fix; a host error that is no access question).
 // GitHub answers a private repository with 404 to a reader who cannot see it.
-export function repoAuthNeed(kind, credential, status) {
+//   signIn    the host offers sign-in here: `signIn: true` in the answer
+//   via       'sign-in' — the person's sign-in was the one refused, with its
+//             `account`, and `expired` when the host no longer takes it (GitHub's 401)
+export function repoAuthNeed(kind, credential, status, { signIn = false } = {}) {
   if (!HOST_LABEL[kind] || ![401, 403, 404].includes(status)) return null;
   if (credential?.source === 'server') return null;
-  return { kind, label: `${HOST_LABEL[kind]} token`, refused: credential?.source === 'request' };
+  const need = { kind, label: `${HOST_LABEL[kind]} token`, refused: credential?.source === 'request' || credential?.source === 'link' };
+  if (signIn) need.signIn = true;
+  if (credential?.source === 'link') {
+    need.via = 'sign-in';
+    need.account = credential.account ?? null;
+    if (kind === 'github' && status === 401) need.expired = true;
+  }
+  return need;
 }
 
 // Every occurrence of the token in a text a person or a log will read, masked.

@@ -1161,6 +1161,14 @@ read as the person who runs it (`server/repo-auth.mjs`):
   host would not show the repository without it, and keeps it in the tab's
   memory for that host's next Runs until the tab closes or the person
   forgets it; Expert's GitHub scan has a field for it.
+- **Their sign-in to the host** — where the server is set up for it
+  ([below](#signing-in-to-github-or-azure-devops)), *Sign in to GitHub* or
+  *Sign in to Azure DevOps* on the row that asks (and beside Expert's scan
+  error). The host's own sign-in page, and its token comes back sealed in an
+  HttpOnly cookie of the person's browser: never on the server, never
+  readable by the page. Every Run of that host's repositories then reads as
+  that account, until the person signs out, the session ends or the host's
+  token does. A token typed on the row still wins over it.
 - **The server's own** `GITHUB_TOKEN` / `AZURE_DEVOPS_TOKEN` — only on a
   server without sign-in (the person's own machine, `OBSERVOGRAM_AUTH=off`,
   or a server with no user, OIDC or proxy). Once sign-in is on, it is never
@@ -1169,11 +1177,63 @@ read as the person who runs it (`server/repo-auth.mjs`):
   A private one answers 404 to a reader who cannot see it (GitHub hides it),
   Azure DevOps 401; the answer then carries `repoAuth: { kind, label,
   refused }`, and its sentence says to run it with the person's own token
-  (or that the one sent was refused).
+  (or that the one sent was refused). Where the host offers sign-in it adds
+  `signIn: true` and says to sign in first; when the person's sign-in was the
+  one refused it adds `via: 'sign-in'` and the `account` (and `expired: true`
+  when GitHub no longer takes it, which also drops it from the browser).
 
 A schedule and **Check now** never read the repository: they check live
 against the last scan a person's Run made, so a scheduled check needs no one's
 token. An upload needs none either: its files came from the person's machine.
+
+##### Signing in to GitHub or Azure DevOps
+
+`server/repo-sign-in.mjs` runs each host's own web sign-in (OAuth 2.0
+authorization code with PKCE) from the person's browser. A host is offered
+only when its app registration is configured:
+
+| Host | Register | Callback URL | Variables |
+|---|---|---|---|
+| GitHub | a **GitHub App** (recommended: its user tokens read only the repositories it is installed on, with the permissions you gave it — Repository *Contents* and *Metadata*, read-only), or an **OAuth App** (scope `repo`, GitHub's only OAuth scope that reads private repositories; Observogram only reads with it) | `<studio>/auth/repo/github/callback` | `OBSERVOGRAM_GITHUB_CLIENT_ID`, `OBSERVOGRAM_GITHUB_CLIENT_SECRET`; `OBSERVOGRAM_GITHUB_SCOPE` replaces `repo` for an OAuth App (a GitHub App ignores it) |
+| Azure DevOps | a **Microsoft Entra ID** app registration with the Azure DevOps delegated permission *Code (read)* (`vso.code`) and a client secret | `<studio>/auth/repo/ado/callback` (a *Web* redirect URI) | `OBSERVOGRAM_ADO_CLIENT_ID`, `OBSERVOGRAM_ADO_CLIENT_SECRET` (leave it out for a public client), `OBSERVOGRAM_ADO_TENANT` (default `organizations`: any work or school account) |
+
+- **An Entra ID sign-in lends its registration.** When Observogram's own
+  sign-in is Entra ID (`OBSERVOGRAM_OIDC_ISSUER` is
+  `https://login.microsoftonline.com/<tenant>/v2.0`) and the `ADO_` variables
+  are unset, that registration and tenant are used: add the Azure DevOps
+  permission and the callback URL to it.
+- **Azure DevOps Services only.** The Entra ID token is sent to
+  `dev.azure.com` and `<org>.visualstudio.com`, never to an Azure DevOps
+  Server listed in `OBSERVOGRAM_ADO_ORIGINS`, which takes a personal access
+  token.
+- **`<studio>`** is `OBSERVOGRAM_PUBLIC_URL` (the address people use, such as
+  `https://observogram.example.com`), else the origin of
+  `OBSERVOGRAM_OIDC_REDIRECT_URL`, else the request's own address. Behind a
+  TLS proxy set `OBSERVOGRAM_PUBLIC_URL` (and `OBSERVOGRAM_OIDC_SECURE_COOKIES=1`).
+- **Nothing is kept on the server.** The cookie (`observogram_repo_<kind>`,
+  split over up to four when the token is long, as Entra ID's are) is sealed
+  with AES-256-GCM under a key derived from the session secret, and bound to
+  the person's login and session epoch: in another login's browser it is no
+  one's, and a password change, a disable or *Sign out my other sessions*
+  ends it. It lasts until the host's token expires (an Entra ID token, about
+  an hour) or the session ends, whichever is first; no refresh token is asked
+  for, so the person signs in again then.
+- **Signing out.** *Sign out of GitHub* (or *of Azure DevOps*) on the
+  services list ends it, and revokes GitHub's grant; signing out of
+  Observogram ends every one. `/auth/me` names the hosts on offer and the
+  account each is signed in as (`repoSignIn: { github: { available,
+  signedIn, account, expiresAt }, ado: … }`), never the token.
+- **Every sign-in mode.** Local users, OIDC and a reverse proxy alike; not
+  without sign-in (`OBSERVOGRAM_AUTH=off`), where the server's own token
+  reads instead.
+
+The three routes are the caller's own (`self`): `GET
+/auth/repo/:kind/start?return=<path>&popup=<id>` (to the host; `return` is a
+path on this server; `popup`, the studio's id for this sign-in, answers with
+a page that tells the studio and closes once the tab that started it answers
+for that id, and otherwise goes back to `return`), `GET /auth/repo/:kind/callback` (the host's answer: refused unless
+it is the flow this person started, by a signed flow cookie and the state the
+host echoes) and `POST /auth/repo/:kind/sign-out` (the CSRF header).
 
 The answer is `{ ok, record, pack: { id, label }, journey, scan: { source,
 ref, files, candidates, skipped } }`. A service or environment that is not
@@ -1361,8 +1421,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.0 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.0
+docker build -t observogram:0.8.1 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.1
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -3159,7 +3219,8 @@ of it may be needed again.
 Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
 Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
-`/auth/signout-others` is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
+`/auth/signout-others` and the repository sign-in routes (`/auth/repo/:kind/start`,
+`/auth/repo/:kind/callback`, `/auth/repo/:kind/sign-out`) are `self`; `/api/org` and every `/api/org/…` route are `admin`, every
 `/api/admin/…` route `owner` (see [The Identity API](#the-identity-api)),
 and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
 record is where the server will send the org's read token: its changes take
@@ -3271,6 +3332,9 @@ unsupported charset or content encoding. The body is not logged.
 | `DELETE` | `/api/org/members/:userId` | Remove a member |
 | `GET` | `/api/audit?scope=&actor=&action=&kind=&targetKind=&targetId=&since=&until=&limit=&before=` | The org's audit rows, newest first (admins; an owner reads every org's and the deployment's with `scope=all` or `scope=deployment`); `next` pages. Closed in the open, exposed posture ([The Audit](#the-audit)). |
 | `POST` | `/auth/signout-others` | Sign out my other sessions: this browser's cookie is re-issued, every other one refused |
+| `GET` | `/auth/repo/:kind/start?return=&popup=` | Sign in to GitHub (`github`) or Azure DevOps (`ado`): to the host's own sign-in ([Signing in to GitHub or Azure DevOps](#signing-in-to-github-or-azure-devops)) |
+| `GET` | `/auth/repo/:kind/callback` | The host's answer: the token sealed in this browser's cookie, back to `return` |
+| `POST` | `/auth/repo/:kind/sign-out` | Sign out of that host in this browser (GitHub's grant revoked) |
 
 ## Repository Map
 

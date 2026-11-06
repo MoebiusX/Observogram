@@ -1706,6 +1706,7 @@ async function boot() {
   // /api/packs answers from the active org's workspace, so the org
   // header has to be resolved before the catalog loads.
   await loadIdentity();
+  listenForRepoSignIn();
   resolveActiveOrg();
   // The persisted snapshot is this login's in this org (state.mjs): scoped
   // here, after the org is known and before the rehydrate reads it.
@@ -1983,6 +1984,7 @@ function serviceListModelNow() {
     services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog, isLiveAggregatePack,
     journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
     access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll, heldTokens: [...repoTokens.keys()],
+    repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
   });
 }
 
@@ -2224,6 +2226,64 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   toast(`${row.name} · ${row.env} checked: ${out?.scan?.files ?? '?'} files from ${out?.scan?.source || 'the repository'}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, 'ok');
 }
 
+// Signing in to a repository host (server/repo-sign-in.mjs): a window of the
+// studio goes through the host's own sign-in and tells this tab over a
+// same-origin BroadcastChannel when it is done; the host's token stays
+// sealed in this browser's cookie, never in the page. A row that asked
+// runs again once the person is signed in. Each sign-in carries an id of its
+// own (`popup`): the window closes only when the tab that started it answers
+// for that id, and otherwise goes back to the page, so a browser that opened
+// it in this very tab keeps the studio. A blocked window: this tab goes
+// through the sign-in itself and comes back to this page.
+const REPO_HOST = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
+let repoSignInPending = null;
+let repoSignInChannel = null;
+function signInRepoHost(kind, key = null) {
+  if (!REPO_HOST[kind]) return;
+  const start = `/auth/repo/${kind}/start`;
+  const rid = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const back = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
+  repoSignInPending = { kind, key: key || null, rid };
+  const win = window.open(`${start}?popup=${rid}&return=${back}`, 'observogram-repo-sign-in', 'popup,width=640,height=760');
+  if (!win) { location.assign(`${start}?return=${back}`); return; }
+  announce(`Signing in to ${REPO_HOST[kind]} in a new window…`);
+}
+
+async function onRepoSignedIn(note) {
+  if (!note || note.type !== 'observogram-repo-sign-in' || !REPO_HOST[note.kind]) return;
+  const pending = repoSignInPending?.kind === note.kind && repoSignInPending.rid === note.rid ? repoSignInPending : null;
+  if (pending) {
+    repoSignInPending = null;
+    // This tab started it: the window may close.
+    try { repoSignInChannel?.postMessage({ type: 'observogram-repo-sign-in-ack', rid: note.rid }); } catch { /* it stays open and says so */ }
+  }
+  await loadIdentity();
+  if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+  if (!note.ok) { if (pending) announce(`The ${REPO_HOST[note.kind]} sign-in did not finish.`); return; }
+  const account = state.identity?.repoSignIn?.[note.kind]?.account;
+  toast(`Signed in to ${REPO_HOST[note.kind]}${account ? ` as ${account}` : ''}.`, 'ok');
+  if (pending?.key) runListRow(pending.key);
+}
+
+function listenForRepoSignIn() {
+  try {
+    repoSignInChannel = new BroadcastChannel('observogram-repo-sign-in');
+    repoSignInChannel.onmessage = (ev) => { onRepoSignedIn(ev.data); };
+  } catch { /* no channel: the window's opener message below */ }
+  window.addEventListener('message', (ev) => { if (ev.origin === location.origin) onRepoSignedIn(ev.data); });
+}
+
+async function signOutRepoHost(kind) {
+  if (!REPO_HOST[kind]) return;
+  try {
+    const r = await fetch(`/auth/repo/${kind}/sign-out`, { method: 'POST', headers: { Accept: 'application/json', ...authHeaders() } });
+    if (!r.ok) throw new Error(`${r.status}`);
+  } catch (e) { toast(`Could not sign out of ${REPO_HOST[kind]} (${e.message}).`, 'error'); return; }
+  await loadIdentity();
+  renderMainView();
+  announce(`Signed out of ${REPO_HOST[kind]}: the next Run of a private ${REPO_HOST[kind]} repository asks again.`);
+}
+
 function openListService(serviceId, env) {
   overviewScreen = 'board';
   enterOverview(Number.isInteger(serviceId) ? serviceId : null, env || null);
@@ -2383,6 +2443,8 @@ const overviewActions = {
   dropRepository: listDropRepository,
   runService: (key, opts) => runListRow(key, opts),
   forgetRepoToken: (kind) => { repoTokens.delete(kind); renderMainView(); announce('The token is forgotten: the next Run of that host asks for it again.'); },
+  signInRepoHost,
+  signOutRepoHost,
   openService: openListService,
   showAll: () => { listShowAll = true; renderMainView(); },
   // Packs already in hand: Expert's home — upload, scan, compare.
@@ -7452,6 +7514,15 @@ async function doCrawlFromGithub() {
     if (!out.ok) {
       const hint = out.hint ? ` · ${out.hint}` : '';
       setGhStatus(`error: ${out.error || 'unknown'}${hint}`, 'error');
+      // GitHub offers sign-in here: the way in, beside the message (scan again once signed in).
+      if (out.repoAuth?.signIn && ghStatus) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ctrl-btn';
+        btn.textContent = 'Sign in to GitHub';
+        btn.addEventListener('click', () => signInRepoHost('github'));
+        ghStatus.append(' ', btn);
+      }
       return;
     }
     if (!out.canonical) {

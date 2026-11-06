@@ -963,6 +963,9 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /auth/change-password': 'self',
   'POST /auth/change-password/skip': 'self',
   'POST /auth/signout-others': 'self',
+  'GET /auth/repo/:kind/start': 'self',
+  'GET /auth/repo/:kind/callback': 'self',
+  'POST /auth/repo/:kind/sign-out': 'self',
   'GET /api/orgs': 'viewer',
   'GET /api/packs': 'viewer',
   'GET /api/examples': 'viewer',
@@ -1100,7 +1103,7 @@ const CLOSED_AS = Object.freeze({
 // changes, the live MCP API's requests).
 const EXPECTED_DIRECT = Object.freeze([...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES, ...EXPECTED_AUDIT_API, ...EXPECTED_LIVE_MCP, ...EXPECTED_MCP_SETTINGS]);
 const EXPECTED_CSRF_ALWAYS = Object.freeze([
-  ...EXPECTED_IDENTITY_API.filter((k) => !k.startsWith('GET ')), 'POST /auth/signout-others', ...EXPECTED_MCP_ENDPOINT_CHANGES,
+  ...EXPECTED_IDENTITY_API.filter((k) => !k.startsWith('GET ')), 'POST /auth/signout-others', 'POST /auth/repo/:kind/sign-out', ...EXPECTED_MCP_ENDPOINT_CHANGES,
   ...EXPECTED_LIVE_MCP.filter((k) => !k.startsWith('GET ')), ...EXPECTED_MCP_SETTINGS,
 ]);
 
@@ -1221,7 +1224,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
   assert.ok(rows.length >= 20, `read the table (${rows.length} rows)`);
   const paths = (text) => [...(text ?? '').matchAll(/`([^`]+)`/g)].map(([, path]) => path);
   const publicNamed = paths(intro.match(/Below, (.+?) are `public`/)?.[1]);
-  const selfNamed = paths(intro.match(/are `public` and (.+?) is `self`/)?.[1]);
+  const selfNamed = paths(intro.match(/are `public` and (.+?) (?:is|are) `self`/)?.[1]);
   assert.ok(publicNamed.length > 0, 'the intro names the public rows');
   assert.ok(selfNamed.length > 0, 'the intro names the self rows');
   assert.match(intro, /`\/api\/org` and every `\/api\/org\/…` route are `admin`/, 'the intro states the admin rows');

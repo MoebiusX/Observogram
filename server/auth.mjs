@@ -71,7 +71,7 @@
 //                                  headers (server/auth-proxy.mjs lists the
 //                                  PROXY_AUTH_* knobs and the ACK flag)
 
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as oidc from 'openid-client';
@@ -91,6 +91,8 @@ import {
 import { signOutEverywhere } from './identity-admin.mjs';
 // The reverse-proxy mode (the same kind of cycle: functions only).
 import { assertProxyAuthEnv, initProxyAuth, proxyAuthConfig, proxyAuthEnabled, resolveProxySession } from './auth-proxy.mjs';
+// Signing in to a repository host (the same kind of cycle: functions only).
+import { clearRepoLinks, initRepoSignIn, repoSignInStatus } from './repo-sign-in.mjs';
 
 const SESSION_COOKIE = 'observogram_session';
 // Sessions signed before the rebrand stay valid (same HMAC secret): read
@@ -252,6 +254,27 @@ function setCookie(res, name, value, maxAgeS) {
 function clearCookie(res, name) {
   res.append('Set-Cookie', `${name}=; ${cookieFlags(0)}`);
 }
+
+// ---------- for server/repo-sign-in.mjs: its flow cookie and its sealed cookie ----------
+//
+// A payload signed for another purpose than a session or the forced change:
+// every signed payload shares the key, so each says what it is for, and a
+// reader takes only its own (resolveSession refuses every other purpose).
+const RESERVED_PURPOSES = new Set(['session', 'pwchange']);
+export function signPurpose(purpose, payloadObj) {
+  if (typeof purpose !== 'string' || !purpose || RESERVED_PURPOSES.has(purpose)) throw new TypeError(`signPurpose: '${purpose}' is not a purpose another module may sign`);
+  return sign({ ...payloadObj, purpose });
+}
+export function verifyPurpose(purpose, value) {
+  const payload = verify(value);
+  return payload && payload.purpose === purpose ? payload : null;
+}
+// A 32-byte key of its own for `info`, derived from the session secret
+// (HKDF-SHA256): the secret itself never leaves this module.
+export function derivedKey(info) {
+  return Buffer.from(hkdfSync('sha256', sessionSecret(), Buffer.alloc(0), String(info), 32));
+}
+export { parseCookies as requestCookies, setCookie as appendCookie, clearCookie as dropCookie };
 
 // ---------- sessions, resolved against the store ----------
 //
@@ -433,10 +456,13 @@ export function wantsJson(req) {
 }
 
 function registerShared(app, mode, authorize) {
+  initRepoSignIn(app, authorize);
   app.post('/auth/logout', authorize('POST /auth/logout'), (req, res) => {
     if (!authEnabled()) return identityOff(res);
     clearCookie(res, SESSION_COOKIE);
     clearCookie(res, LEGACY_SESSION_COOKIE);
+    // Signed out of Observogram here: out of every repository host here too.
+    clearRepoLinks(res);
     res.status(204).end();
   });
   app.get('/auth/me', authorize('GET /auth/me'), (req, res) => {
@@ -454,6 +480,9 @@ function registerShared(app, mode, authorize) {
       // Proxy mode: where the studio goes after sign-out (the proxy's own
       // session outlives this app's; null when none is configured).
       ...(mode === 'proxy' ? { logoutUrl: proxyAuthConfig()?.logoutUrl ?? null } : {}),
+      // The repository hosts this person may sign in to, and the ones they
+      // are signed in to in this browser (server/repo-sign-in.mjs).
+      repoSignIn: repoSignInStatus(req, s.user),
     });
   });
   // Not behind a reverse proxy: there is no session of this app's to end

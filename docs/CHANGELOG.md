@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## 0.8.1 — 2026-11-06
+
+**The sign-in-to-your-host release.** A person runs a private GitHub or Azure DevOps repository by signing in to the host from the row that asks, instead of pasting a token. The host's answer stays sealed in their own browser, so the server still keeps nothing.
+
+### Added: sign in to GitHub or Azure DevOps, so a repository reads as you without pasting a token
+A person who runs a private repository no longer has to make and paste a token. Where the server is set up for it, the row that asks offers *Sign in to GitHub* or *Sign in to Azure DevOps*. That is the host's own sign-in, and every Run of that host's repositories then reads as that account. The server still keeps nothing.
+- **`server/repo-sign-in.mjs`** (new): each host's web sign-in, OAuth 2.0 authorization code with PKCE.
+  - **The routes.** `GET /auth/repo/:kind/start` sends the person to the host. `GET /auth/repo/:kind/callback` takes the host's answer, which is refused unless it is the flow this person started (by a signed flow cookie and the state the host echoes). `POST /auth/repo/:kind/sign-out` takes the CSRF header and revokes GitHub's grant. All three are the caller's own (`self`), in every sign-in mode.
+  - **Where the token goes.** It comes back to the person's browser sealed with AES-256-GCM in an HttpOnly cookie that page script cannot read, split over up to four cookies when long, as Entra ID's are. The key is derived from the session secret, and the cookie is bound to the person's login and session epoch. It ends when the host's token or the session does, at sign-out of the host or of Observogram, and with a password change, a disable or *Sign out my other sessions*. No refresh token is asked for.
+  - **`/auth/me`** gains `repoSignIn`: per host, whether it is offered and the account the person is signed in as, never the token.
+- **Configured per host.**
+  - GitHub: a GitHub App (recommended: read-only Contents, only where it is installed) or an OAuth App (scope `repo`), with `OBSERVOGRAM_GITHUB_CLIENT_ID`, `OBSERVOGRAM_GITHUB_CLIENT_SECRET` and an optional `OBSERVOGRAM_GITHUB_SCOPE`.
+  - Azure DevOps: a Microsoft Entra ID app registration with the delegated *Code (read)* permission, with `OBSERVOGRAM_ADO_CLIENT_ID`, `OBSERVOGRAM_ADO_CLIENT_SECRET` and `OBSERVOGRAM_ADO_TENANT` (default `organizations`). When unset and Observogram's own sign-in is Entra ID, that sign-in's registration and tenant are used.
+  - The callback is `<studio>/auth/repo/<kind>/callback`, where `<studio>` is the new `OBSERVOGRAM_PUBLIC_URL`, else the origin of `OBSERVOGRAM_OIDC_REDIRECT_URL`, else the request's own address.
+- **`server/repo-auth.mjs`**:
+  - **The order.** `repositoryCredential` takes the sign-in (`link`, source `'link'`) after a typed token and before the server's own.
+  - **The ask.** `repoAuthNeed(kind, credential, status, { signIn })` adds `signIn: true` where the host offers it, and `via: 'sign-in'` with the `account` when the sign-in was the one refused (`expired` when GitHub no longer takes it, which drops it from the browser).
+  - **The sentence.** The new `repoAuthTail` gives the sentence a refused read ends with.
+- **Azure DevOps.** `server/ado-crawl.mjs` `adoFetch` sends an Entra ID sign-in as a Bearer token, and only to Azure DevOps Services (new `isAdoServices`): an Azure DevOps Server listed in `OBSERVOGRAM_ADO_ORIGINS` takes a personal access token.
+- **Overview.**
+  - **The row.** A row that asks draws *Sign in to GitHub* (or *Azure DevOps*) before the token field. It opens the host's sign-in in a window that reports back over a same-origin `BroadcastChannel`, and the row runs again. The window closes only when the tab that started it answers for its id; unanswered, it goes back to the studio page, so a browser that opened it in the studio's own tab keeps the studio. A blocked window goes through the sign-in in the tab and comes back.
+  - **The list.** It names each host the person is signed in to, with *Sign out of …*. Expert's GitHub scan error offers the same button.
+  - **The board unit stays copyable.** `serviceListModel`'s `repoSignIn` input, the row's `auth.signIn`, the list's `accounts`, and the hooks `signInRepoHost(kind, key)` and `signOutRepoHost(kind)`. A host that passes no `repoSignIn` draws neither button.
+- **`server/auth.mjs`**: new exports for that module:
+  - `signPurpose` / `verifyPurpose`: a signed payload of another purpose, never a session or the forced change;
+  - `derivedKey`: an HKDF key of its own; the secret never leaves the module;
+  - the cookie helpers.
+
+  Sign-out clears every host's cookie too.
+- **Docs**: README (*Signing in to GitHub or Azure DevOps*, the API Surface rows), VENDORING.md.
+- **Tests**:
+  - `server/test-repo-sign-in.mjs` (new, 8 tests, wired into npm test and test:auth). It runs on a server with sign-in, against GitHub, Entra ID and Azure DevOps stubbed at their own addresses, and covers:
+    - the configuration;
+    - the start with PKCE;
+    - every refused answer (another state, a host error, a refused exchange, another login's flow);
+    - the sealed cookie, unreadable;
+    - Expert's scan and a Run reading as the account;
+    - a tampered cookie, another login's, and one from before an epoch change, each reading as no one's;
+    - GitHub ending the token;
+    - sign-out with the revoke, and sign-out of Observogram;
+    - the split Entra ID token as Bearer, on Services only;
+    - no token in a log or an answer.
+  - `tools/test-overview-model.mjs`: two more, for the ask, the accounts and the markup.
+  - `server/test-authz.mjs`: the three routes classified.
+  - Suite total 1692 → 1702.
+
 ## 0.8.0 — 2026-11-06
 
 **The your-own-access release.** A GitHub or Azure DevOps repository is read as the person who runs it, with their own token sent for that read only. The server's own token is used only on a server without sign-in, so once people sign in, nobody reads a repository with the server's access.
