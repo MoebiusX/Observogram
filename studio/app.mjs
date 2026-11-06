@@ -588,8 +588,9 @@ function renderPackBSelect() {
     if (!newId) {
       // User cleared Pack B — back to single-pack focus.
       state.viewFocus = 'a';
-      // Atlas works in single-pack mode (Strata / Periodic / Skyline /
-      // Arbor), so it stays. Compare + Traceability are cross-pack only —
+      // Atlas stays: Arbor works on one pack, and Strata / Periodic /
+      // Skyline say they need a Pack B (their header, ATLAS_META needsB)
+      // and draw a placeholder. Compare + Traceability are cross-pack only —
       // fall back to Layers.
       if (state.view === 'compare' || state.view === 'traceability') {
         state.view = 'layers';
@@ -1040,9 +1041,11 @@ export async function loadPackB() {
   state.compileContentB = null;
 }
 
-// Variants that need both packs (animate / interchange between them).
-// Everything else works on a single pack — Arbor especially is a
-// dependency-discovery tool you don't need to compare to use.
+// Variants that need both packs (animate / interchange between them), left
+// when Pack B is cleared. Strata, Periodic and Skyline draw only with a Pack B
+// too (ATLAS_META needsB) but stay selectable, showing their placeholder;
+// Arbor works on a single pack — a dependency-discovery tool you don't need to
+// compare to use.
 export const CROSS_PACK_VARIANTS = new Set(['constellation', 'transit']);
 
 // The Atlas view now lives in studio/atlas-view.mjs.
@@ -1136,11 +1139,24 @@ function setupUpload() {
     popover.hidden = true;
     btn.setAttribute('aria-expanded', 'false');
   };
+  // The menu hangs from the button's left edge (app.css). Where the toolbar
+  // wraps the button near the window's right edge (it ends PACK B's row at
+  // 1440 px, and on a phone), that edge cut the items off: there, with the
+  // button in the window's right half, it hangs from the button's right edge.
+  const placePopover = () => {
+    delete popover.dataset.align;
+    const view = document.documentElement.clientWidth;
+    const b = btn.getBoundingClientRect();
+    const overflows = popover.getBoundingClientRect().right > view - 16;
+    if (overflows && (b.left + b.right) / 2 > view / 2) popover.dataset.align = 'end';
+  };
   const openPopover = () => {
     if (!popover) return;
     popover.hidden = false;
+    placePopover();
     btn.setAttribute('aria-expanded', 'true');
   };
+  window.addEventListener('resize', () => { if (popover && !popover.hidden) placePopover(); });
   btn.onclick = (ev) => {
     ev.stopPropagation();
     if (!popover) { fileInput.click(); return; }
