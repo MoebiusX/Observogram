@@ -264,13 +264,20 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 2):
+The checks are (grade schema 3):
 
 | Area | Criteria | Scored |
 |---|---|---|
 | Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
 | Trust | Chaos-validated, Drift-free, Fresh | yes |
 | Operability | Actionable | no — informational |
+
+A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
+platform defaults do not make a pack Calibrated, and a placeholder chaos
+experiment does not make it Chaos-validated. Chaos-validated means an
+experiment is declared; the specification holds no result for one, so the
+grade never says recovery was proven. A chaos experiment sits on the layer of
+its target (or of its steady-state SLO), never of the words in its name.
 
 Runbooks measure response readiness of the overall solution, not diagnostic
 capability — a perfectly diagnostic system tells you what is wrong even when

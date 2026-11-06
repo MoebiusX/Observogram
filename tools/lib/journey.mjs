@@ -1057,6 +1057,15 @@ export function liveVersions(canonicalB) {
   return Object.keys(out).length ? out : null;
 }
 
+// The families Pack B's producer had no way to observe, from its
+// `observogram.unobserved.<kind>` annotations (tools/fetch-live-pack.mjs),
+// sorted; [] when it states none (a file-sourced B usually).
+function unobservedKindsOf(canonicalB) {
+  const ann = canonicalB?.metadata?.annotations || {};
+  const prefix = 'observogram.unobserved.';
+  return Object.keys(ann).filter((k) => k.startsWith(prefix) && k.length > prefix.length).map((k) => k.slice(prefix.length)).sort();
+}
+
 // The snapshot decision for this run, before anything is written. Pure so
 // the policy is testable; `previousRun` is the newest record read before
 // this run's write (null on the first run). A previous record that carries
@@ -1287,7 +1296,11 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // Workstream D gate-contract fields. This is VERIFICATION evidence.
     // packA.scan only when a scan is known (above): what it read, skipped and set aside.
     packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(packAScan ? { scan: packAScan } : {}) },
-    packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt },
+    // packB.unobserved: the artefact families Pack B says it had no way to
+    // look at (its observogram.unobserved.<kind> annotations), sorted, so a
+    // reader of the record alone (the Overview's "Why this grade") can say
+    // "the live side cannot observe it" instead of "it does not exist".
+    packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt, unobserved: unobservedKindsOf(b.canonical) },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
     // schema identifies which scoring construct produced the score, so a
     // step in the gradeScore series is explainable as re-scoring vs reality

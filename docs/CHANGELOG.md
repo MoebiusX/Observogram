@@ -64,7 +64,51 @@
   - `packA.scan` kept, and carried by Check now;
   - the board's scan line and the toast's words.
 
-  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1704 → 1718.
+  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1707 → 1721.
+
+## 0.8.5 — 2026-11-06
+
+**Scaffolds earn nothing, and the chaos line says only what is known (grade schema 3).** The grade stops crediting values the scanner invented, and stops saying recovery was, or was never, proven by fault injection: nothing checked either. krystaline · prod, graded against its last live snapshot, goes from B at 69.8% to C at 55.5%, and its conformance from 77% to 71% (MUST 80% → 73%).
+
+### Changed: the diagnostic grade, schema 2 → 3 (`studio/diagnostic-grade.mjs`)
+Same seven criteria, same weights. Scores can fall, never rise, on the same packs. The run record's `grade.schema` says 3, so a step in a score history is explained as a re-scoring.
+- **Calibrated** counts only baselines someone declared. The MTTD/MTTR block the repository scan always writes (`crawler.scaffold.baselines`; the live fetcher's `mcp.scaffold.baselines` too) is a scaffold, and so earns no pass. The detail then reads `no MTTD/MTTR baselines declared - the one present is a scaffold (defaults, never measured)`. The posture's pack-level baselines row reads the same way.
+- **Chaos-validated** counts declared experiments and skips scaffolds (a library experiment still on its generic fault, `library.todo.*`).
+  - Its sub reads *fault-injection experiments declared* (was *recovery proven by fault injection*).
+  - A pass reads `N chaos experiment(s) declared; none has a recorded result`: the specification has no results field.
+  - A fail says what each side could see, never *recovery procedures are theoretical*:
+    - `no chaos experiment declared - the repository scan cannot detect chaos tooling and the live side cannot observe it`, from `crawler.unobserved.chaos` on Pack A and `observogram.unobserved.chaos` on Pack B;
+    - either clause alone when only one side is stamped;
+    - `… in this pack` when neither is.
+- **Comprehensive**: a chaos experiment's layer on the posture matrix is its `spec.target`'s, else its steady-state hypothesis' SLO's, else none. Before, it came from the experiment's id and title, so four experiments named after the four layers lit the chaos row of every layer, whatever they faulted.
+- **New optional keys** (vendored; docs/VENDORING.md): Calibrated's `baselines` (`{ declared, scaffolds }`); Chaos-validated's `declared`, `scaffolds`, `unobserved` (`{ repository, live }`) and `fromScan`.
+
+### Changed: the synthetic-probe clause skips the crawler's invented canary (`tools/lib/conformance.mjs`)
+`L5.MUST.synthetic_probe` passed on the `https://<repo>.example.com/health` check the crawler writes when a repository has none. A check marked `crawler.scaffold.` or `mcp.scaffold.` now satisfies no clause; the weekly-production-chaos clause's instrumented probe reads the same way. A library placeholder (`library.todo.*`) still passes: the pack represents the requirement, and the server lists it under `onPlaceholder`.
+- **`SCANNER_SCAFFOLD_PREFIXES`** is exported, the marks that make a value scanner-invented.
+- **The Conformance view** (`studio/conformance-view.mjs`) says so. Its Scoring rules read *Template values count as passes, with one exception*, the invented synthetic check. A failing synthetic clause names the check it left out (*The synthetic check `krystaline-health-canary` is a placeholder the scan wrote…*). Before, the text said every placeholder passes, beside a clause that failed on one.
+  - The view mirrors the prefixes as `SCANNER_INVENTED_PREFIXES`, and a test pins the two lists equal. The live server serves tools/lib at `/lib` only, so a static `../tools/lib/` import there loads the HTML shell and the studio does not start. `tools/test-studio-bundle.mjs` T1 now refuses such an import in any live studio module.
+
+### Added: what the scan and the live check could not look at
+- **`tools/lib/crawler.mjs`** stamps `crawler.unobserved.chaos: the repository scan has no chaos-experiment detector` on every crawled pack. The key goes when the scan learns to detect chaos experiments.
+- **`tools/lib/journey.mjs`**: the run record's `packB.unobserved` lists the families Pack B says it could not observe (its `observogram.unobserved.<kind>` keys, sorted; `[]` when none).
+
+### Changed: the chaos sentences on screen
+- **Overview** (`studio/overview-model.mjs`): *Why this grade* explains schema-3 runs only; a run recorded under schema 2 explains nothing until the next check.
+  - Chaos: `No chaos experiment is declared — the repository scan cannot detect chaos tooling and the live side cannot observe it.` (the live clause from the run's `packB.unobserved`), or `N chaos experiments are declared; none has a recorded result.` Never *Recovery has never been proven by fault injection.*
+  - Calibrated on scaffold baselines: `Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.`
+- **Diagnose** (`studio/compare-view.mjs`):
+  - The chaos blocker is titled *No chaos experiment is declared* (was *Recovery has never been tested*).
+  - On a pack the repository scan wrote, its fix no longer just says to declare an experiment in L5. It says a Run that scans the repository again rewrites the pack, so a hand edit lasts only until then, and, while the scan carries the stamp, that the scan cannot read chaos experiments from a repository yet.
+  - Calibrated on scaffold baselines says they are defaults.
+  - The briefing line no longer says recovery *hasn't been validated against actual fault injection*.
+- **Discover** (`studio/discover-board.mjs`): `boardGroupsHtml(layerId, entries, { annotations })` gives an empty chaos group the reason when a stamp says the producer could not look (*None declared — the repository scan cannot detect chaos tooling*). Without the third argument it says *None in this pack*, as before.
+- **Docs**: README, docs/USER_JOURNEY.md and docs/RELEASE_READINESS.md describe schema 3. The pending ladder-integrity proposal moves to grade schema 4. docs/OVERVIEW_DEMO.md quotes the demo's schema-3 reading: C at 55, 3.8 of 7 points, D for the repository alone. Its last snapshot read B at 69 under schema 2; the pack's only baselines are the scan's defaults.
+
+### Known limit
+A chaos experiment's layer still comes from words, but from its target's words now. A target the layer patterns do not know (`deployment/orders-api`) falls back to the steady-state SLO. Stating the layer outright needs the `annotations.layer.<id>` override, or a spec field the specification does not have.
+
+- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. `tools/test-library.mjs` renders the Conformance view over an invented and a library canary (one test). The crawl golden gains the stamp, and the conformance-view capture gains the new Scoring rules sentence (that bullet only); the compile goldens are byte-identical. Suite total 1704 → 1707.
 
 ## 0.8.4 — 2026-11-06
 

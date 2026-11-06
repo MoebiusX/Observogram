@@ -289,7 +289,7 @@ Turns "it exists in production" into "it is alive in production".
   for backends — and carried per branch (`ladderVerdict`,
   `ladderIntegrity`) and per journey run. It is **unscored**: the Fresh and
   Drift-free criteria are unchanged, pending the maintainer-reviewed
-  `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` (gradeSchema 3). Not yet
+  `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` (gradeSchema 4). Not yet
   evidenced: dashboard last rendered, alert route last exercised — no MCP
   tool exposes either, so a present panel, dashboard or route reads
   `exists` ("no liveness field on the wire for this kind"); a missing panel

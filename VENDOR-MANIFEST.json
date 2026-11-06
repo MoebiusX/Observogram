@@ -344,10 +344,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
-      "bytes": 18711,
+      "sha256": "515f6cbf5b9be6a0ba8633f29c22b4d3b1b6425e1e2dc12673e0f3fffacadde4",
+      "bytes": 19945,
       "exports": [
         "RUBRIC",
+        "SCANNER_SCAFFOLD_PREFIXES",
         "SUBJECT_CLAUSES",
         "TIER_RANK",
         "clauseSubjects",
@@ -409,8 +410,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "800a943bee7219e6abaffd58be0c072ac85924e86e8ce6b987418dc933755962",
-      "bytes": 149108,
+      "sha256": "1d70917c954d9f1812c93c8f5d689aae58ef4457194a45096dc681e0fe15b753",
+      "bytes": 149472,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",

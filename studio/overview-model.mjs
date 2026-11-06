@@ -227,7 +227,7 @@ export function runGradedPack(run, pack) {
 // ---------- why this grade ----------
 //
 // The seven criteria the engine scores (studio/diagnostic-grade.mjs, grade
-// schema 2: one point each, Drift-free fractional), each as one plain
+// schema 3: one point each, Drift-free fractional), each as one plain
 // sentence with a yes / partly / no mark, the yeses first. Five read the
 // repository alone and come from the pack-alone diagnostic's criteria; the
 // two that need the other side (Drift-free, Fresh) come from the run that
@@ -236,7 +236,7 @@ export function runGradedPack(run, pack) {
 // points of a hundred): a run of another schema, or a pack whose own
 // annotations already carry live evidence, explains nothing and shows nothing.
 const GRADE_POINTS = 7;
-const GRADE_SCHEMA = 2;
+const GRADE_SCHEMA = 3;
 const GRADE_BAR = 85;
 const WHY_RANK = { yes: 0, partly: 1, no: 2 };
 const criterionOf = (diagnostic, key) => [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].find((c) => c && c.key === key) || null;
@@ -244,8 +244,11 @@ const numbersIn = (s) => (String(s || '').match(/\d+(?:\.\d+)?/g) || []).map(Num
 const tenth = (n) => String(Math.round(n * 10) / 10);
 
 // The five criteria that read the repository alone, from the engine's
-// criteria (key, pass, detail) — the numbers are read back out of the detail.
-function repositoryGradeLines(diagnostic) {
+// criteria (key, pass, detail) — the numbers are read back out of the detail,
+// the counts the engine states (baselines, experiments) from their fields.
+// `liveUnobserved` lists the families the run's Pack B could not look at
+// (the record's packB.unobserved), [] without a run.
+function repositoryGradeLines(diagnostic, liveUnobserved = []) {
   const keys = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
   const c = Object.fromEntries(keys.map((k) => [k, criterionOf(diagnostic, k)]));
   if (keys.some((k) => !c[k])) return null;
@@ -253,7 +256,6 @@ function repositoryGradeLines(diagnostic) {
   const kinds = (String(c['multi-modal'].detail).match(/\(([^)]*)\)/) || [])[1] || '';
   const [objectives = 0] = numbersIn(c.calibrated.detail);
   const [coverage = 0] = numbersIn(c.comprehensive.detail);
-  const [experiments = 0] = numbersIn(c['chaos-validated'].detail);
   const line = (crit, yes, no) => ({ ok: crit.pass ? 'yes' : 'no', text: crit.pass ? yes : no });
   return [
     line(c['multi-modal'],
@@ -264,14 +266,34 @@ function repositoryGradeLines(diagnostic) {
       'Traces and logs cannot be joined, so a request cannot be followed end to end.'),
     line(c.calibrated,
       `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
-      /no .*baselines/i.test(c.calibrated.detail) ? 'Normal is not defined with numbers: no detection and repair baselines.' : 'Normal is not defined with numbers: no objective has a target.'),
+      calibratedNo(c.calibrated)),
     line(c.comprehensive,
       `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience.`,
       `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience.`),
-    line(c['chaos-validated'],
-      `Recovery has been proven by fault injection: ${experiments} experiment${experiments === 1 ? '' : 's'}.`,
-      'Recovery has never been proven by fault injection.'),
+    chaosLine(c['chaos-validated'], liveUnobserved),
   ];
+}
+
+// Calibrated's "no": the baselines are missing, or only placeholders the
+// scan wrote (the engine's `baselines.scaffolds`), or no objective has a target.
+function calibratedNo(crit) {
+  if (!/no .*baselines/i.test(crit.detail)) return 'Normal is not defined with numbers: no objective has a target.';
+  return crit.baselines?.scaffolds > 0
+    ? 'Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.'
+    : 'Normal is not defined with numbers: no detection and repair baselines.';
+}
+
+// Chaos-validated, as the engine knows it: experiments declared (the spec
+// holds no result for one, so nothing says recovery was proven), or none —
+// and then what each side could not see, never that recovery is unproven.
+function chaosLine(crit, liveUnobserved) {
+  const n = Number.isFinite(crit.declared) ? crit.declared : (numbersIn(crit.detail)[0] || 0);
+  if (crit.pass) return { ok: 'yes', text: `${n} chaos experiment${n === 1 ? ' is' : 's are'} declared; none has a recorded result.` };
+  const blind = [
+    crit.unobserved?.repository && 'the repository scan cannot detect chaos tooling',
+    (crit.unobserved?.live || liveUnobserved.includes('chaos')) && 'the live side cannot observe it',
+  ].filter(Boolean);
+  return { ok: 'no', text: blind.length ? `No chaos experiment is declared — ${blind.join(' and ')}.` : 'No chaos experiment is declared in this pack.' };
 }
 
 // The two criteria that need the other side, from the run that graded the
@@ -325,7 +347,7 @@ export function gradeWhy({ diagnostic = null, run = null, letter = '', score = n
   const none = { why: [], points: '' };
   if (run && run.grade?.schema != null && Number(run.grade.schema) !== GRADE_SCHEMA) return none;
   if (diagnostic?.gradeSchema != null && Number(diagnostic.gradeSchema) !== GRADE_SCHEMA) return none;
-  const fixed = repositoryGradeLines(diagnostic);
+  const fixed = repositoryGradeLines(diagnostic, Array.isArray(run?.packB?.unobserved) ? run.packB.unobserved : []);
   if (!fixed) return none;
   const live = run ? liveGradeLines(run, { against, where, now }) : [
     { ok: 'no', text: 'Nothing live has been checked, so no promise is confirmed live.' },

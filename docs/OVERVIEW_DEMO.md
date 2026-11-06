@@ -49,7 +49,7 @@ showed last time: 1 Discover · 2 Diagnose · 3 Remediate. Say: *"This is the re
 krystaline.io. Left, what the repository puts in place, layer by layer — 600
 things; the application layer has seven of the ten kinds of signal, the
 user-experience layer none, and that is where the 35 in 100 comes from.
-Middle, the grade — B, industrial grade — and whether what the repository
+Middle, the grade — C, field grade — and whether what the repository
 promises holds up in production right now. Right, what to change."*
 
 **0:20 — press Check again** (middle column, under the ring). The row reads
@@ -72,10 +72,10 @@ somewhere along that chain, and that is the one thing in this grade that
 moves with drift."*
 
 **1:05 — Why this grade** (open on a tall monitor; on a laptop, open it).
-Seven lines, each a yes, a partly or a no, and the sum: *4.8 of 7 points. B+
-starts at 5.3.* Say: *"Four things it has, one nearly, two it lacks. That is
+Seven lines, each a yes, a partly or a no, and the sum: *3.8 of 7 points. B
+starts at 4.4.* Say: *"Three things it has, one nearly, three it lacks. That is
 the whole grade; nobody has to take the letter on trust."* Beside the
-shield, the rules: *12 / 15 required rules met · tier 2.*
+shield, the rules: *11 / 15 required rules met · tier 2* (12 before the crawler's invented health canary stopped passing the synthetic-probe rule).
 
 **1:15 — press Open in Remediate** (bottom of the right column). Expert's
 Remediate, on this service. Say: *"Everything you saw last time is one click
@@ -128,28 +128,32 @@ either way.
 
 ## Questions that may come
 
-- **"Why a B when 43 things differ?"** Two measures. The 43 counts things
+- **"Why a C when 43 things differ?"** Two measures. The 43 counts things
   the repository declares that are not running live, or run differently.
   The grade is seven criteria at a point each, and only one of them moves
   with drift: *holds up live*, scored on the 18 declared commitment chains,
   where 84 in 100 holds up — 0.84 of a point, just under the bar of 85. The
-  other six (three kinds of signal, joined traces and logs, numbers for
-  normal, checked against live; coverage of the stack and fault injection
-  lacking) do not move with drift. *Why this grade* shows exactly this.
+  other six (three kinds of signal, joined traces and logs, checked against
+  live; numbers for normal, coverage of the stack and a declared chaos
+  experiment lacking) do not move with drift. *Why this grade* shows exactly
+  this. Numbers for normal is a no because the only baselines are the
+  defaults the scan writes (grade schema 3, 2026-11-06; the seed read B
+  under schema 2), and the chaos line says the scan cannot detect chaos
+  tooling and the live side cannot observe it — not that recovery is unproven.
 - **"The check found 43 differences and the grade went *up*?"** Yes. The
-  repository alone grades C (3 of 7): with nothing live checked, the two
+  repository alone grades D (2 of 7): with nothing live checked, the two
   live criteria score nothing. Checked against production it earns *checked
   against live* in full and 0.84 of *holds up live*. The grade says how well
   the service is observed *and verified*; a declaration nobody has checked
   cannot score on verification. The journey's own gate (85) still fails at
-  69, which Overview reads as *Changed*, never as *Check failed*.
+  55, which Overview reads as *Changed*, never as *Check failed*.
 - **"Why is the Grafana part partial?"** The Grafana behind the public MCP
   answers 401 to the dashboards probe, so the live picture is five probe
   families of six; the screen says *live evidence is partial* in Expert and
   the grade accounts for it. A token on the endpoint would complete it.
 - **"Why does Diagnose show a different letter?"** It does not when Pack B is
-  the live draft (the same B); with no Pack B loaded, Diagnose grades the
-  repository alone (C), which Overview says in its source line when that is
+  the live draft (the same C); with no Pack B loaded, Diagnose grades the
+  repository alone (D), which Overview says in its source line when that is
   the case. **See the differences** opens Neuron on the same journey, same
   numbers.
 - **"Does it run by itself?"** The journey has no schedule in the demo, so
