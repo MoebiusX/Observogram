@@ -1,6 +1,6 @@
 {
   "name": "observogram",
-  "version": "0.8.4",
+  "version": "0.8.9",
   "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.4 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
