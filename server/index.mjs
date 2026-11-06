@@ -38,7 +38,7 @@
 import express from 'express';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve, basename, dirname, extname, join } from 'node:path';
+import { resolve, basename, dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
@@ -226,6 +226,24 @@ function loadPackFile(relPath) {
 // anonymous principal has none and never reaches an operator route — a
 // missing one fails closed in the repository (requireActor), never defaults.
 const actorOf = (req) => req.observogramPrincipal?.actor;
+
+// A registered pack as a journey names it: its workspace file, relative to
+// the journeys/ directory beside it (a journey's relative paths resolve
+// there), so a workspace that is moved or copied checks its own copy — an
+// absolute path would keep reading the workspace the journey was saved in.
+function workspacePackSource(id) {
+  const { root, packs } = workspaceInfo();
+  return { file: relative(join(root, 'journeys'), join(packs, `${id}.pack.yaml`)).replaceAll('\\', '/') };
+}
+
+// The registered pack a journey's file source is, or null: { id, label } —
+// what the Neuron and the journeys list name it by, never a server path.
+// Read from the map alone (no lastUsedAt touch: a listing is not a use).
+function workspacePackRef(source) {
+  const m = typeof source?.file === 'string' ? /([^/\\]+)\.pack\.yaml$/.exec(source.file) : null;
+  const rec = m ? uploadsMap().get(m[1]) : null;
+  return rec ? { id: m[1], label: rec.label || rec.canonical?.metadata?.name || m[1] } : null;
+}
 
 function registerUploadedPack(req, canonical, source, label) {
   return registerPack(currentStore(), actorOf(req), { canonical, source, label });
@@ -505,11 +523,16 @@ app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
   const chains = packVersionChains();
   const headOf = new Map();
   for (const h of chains.heads) for (const e of h.earlier) headOf.set(e, h.id);
+  // `registeredAt` says when each was registered: the list's order is the
+  // registry's, which after a restart is the order the packs were last read,
+  // so the studio's "newest pack" (studio/services-model.mjs newestPack)
+  // reads the stamp, never the position.
   const uploads = [...uploadsMap().keys()].map(id => catalogEntryForUpload(id)).filter(Boolean).map((entry) => {
-    const previous = uploadsMap().get(entry.id)?.canonical?.metadata?.annotations?.['library.update.previous'] || null;
+    const rec = uploadsMap().get(entry.id);
+    const previous = rec?.canonical?.metadata?.annotations?.['library.update.previous'] || null;
     const head = headOf.get(entry.id) || null;
     // A pack with no lineage reads exactly as before (the static bundle's shim answers the same entry).
-    return { ...entry, ...(previous ? { previous } : {}), ...(head ? { superseded: true, head } : {}) };
+    return { ...entry, ...(rec?.registeredAt ? { registeredAt: rec.registeredAt } : {}), ...(previous ? { previous } : {}), ...(head ? { superseded: true, head } : {}) };
   });
   res.json({ packs: [...uploads, ...PACK_CATALOG.map(catalogEntry)] });
 });
@@ -956,6 +979,9 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         loadError,
         packA: def?.packA?.crawl ? `crawl: ${def.packA.crawl.path}` : (def?.packA?.file || null),
         packB: def?.packB?.mcp ? `mcp: ${def.packB.mcp.url}` : (def?.packB?.file || null),
+        // The registered pack a file source is ({ id, label }), else null.
+        packARef: def?.packA?.crawl ? null : workspacePackRef(def?.packA),
+        packBRef: def?.packB?.mcp ? null : workspacePackRef(def?.packB),
         gate: def?.gate || {},
         scope: { env: def?.env || null, service: def?.service || null, scopeMode: def?.scopeMode || null },
         // The live side the last live run graded, kept as a pack (keepLivePackOf):
@@ -1377,7 +1403,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
   process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source} → ${packId} in ${Date.now() - t0}ms\n`);
   // 3. The check, saved and run.
-  def.packA = { file: join(workspaceInfo().packs, `${packId}.pack.yaml`).replaceAll('\\', '/') };
+  def.packA = workspacePackSource(packId);
   let saved;
   try {
     saved = saveJourneyDef(name, def, {
@@ -1420,12 +1446,12 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   if (!metaB) return res.status(404).json({ ok: false, error: `unknown pack B: ${b.packBId}` });
 
   const sourceFor = (meta) => {
-    // Journey-relative paths resolve against the journeys/ dir, so the
-    // captured definition always stores absolute paths: catalog packs'
-    // repo-relative meta.path is absolutized, and uploaded packs point at
-    // their persisted workspace copy (10A).
+    // Journey-relative paths resolve against the journeys/ dir: catalog
+    // packs' repo-relative meta.path is absolutized (the repository is not
+    // the workspace), and uploaded packs point at their persisted workspace
+    // copy (10A), journey-relative, so the workspace can move.
     if (meta.path) return { file: resolve(meta.path).replaceAll('\\', '/') };
-    return { file: join(workspaceInfo().packs, `${meta.id}.pack.yaml`).replaceAll('\\', '/') };
+    return workspacePackSource(meta.id);
   };
   const packA = sourceFor(metaA);
   let packB;

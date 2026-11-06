@@ -781,8 +781,11 @@ test('T5 parity: the shim answers every ported route as a running server does â€
   const shimCatalog = (await shim(backend, '/api/packs')).body.packs;
   assert.deepEqual(shimCatalog[0], example, '/api/packs entry = the server /api/examples entry');
   // The registry's entry (tools/lib/service-keys.mjs catalogEntryOf) adds `source: 'uploaded'`; a disk pack has no source.
-  const { source: registrySource, ...ordersDiskEntry } = ordersEntry;
+  // GET /api/packs adds when the registry registered it (`registeredAt`); a bundle has no registry, so its
+  // catalogue keeps the list's order (services-model.mjs newestPack).
+  const { source: registrySource, registeredAt, ...ordersDiskEntry } = ordersEntry;
   assert.equal(registrySource, 'uploaded');
+  assert.ok(Number.isFinite(Date.parse(registeredAt)), `the server stamps its registration time: ${registeredAt}`);
   assert.deepEqual(shimCatalog[1], ordersDiskEntry, '/api/packs entry = the server catalogue entry for the registered pack, on the disk-entry fields');
 
   const envs = listEnvironments(paymentCanonical);

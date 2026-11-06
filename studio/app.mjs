@@ -1989,7 +1989,10 @@ function serviceListModelNow() {
 }
 
 function serviceFormModelNow() {
-  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now() });
+  return serviceFormModel(listForm, {
+    endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now(),
+    repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
+  });
 }
 
 // Upload (overview-model.mjs uploadReading / uploadStaged / uploadFailed):

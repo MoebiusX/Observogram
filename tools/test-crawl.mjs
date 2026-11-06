@@ -665,6 +665,32 @@ assert(helm.canonical.spec.dashboards.some(d => d.id === 'checkout-overview'),
   'grafana dashboard lifted from embedded ConfigMap JSON');
 assert(validateCanonical(helm.canonical, SCHEMA).length === 0, 'helm chart crawl validates against the vendored schema');
 
+// A string-literal action prints its string: {{ "{{" }} … {{ "}}" }} (and the
+// backtick form) is how a chart writes an alert's own {{ $value }}, and Helm
+// renders the two braces — the text live serves. One brace would read as
+// drift against live.
+{
+  const chart = {
+    'charts/checkout/Chart.yaml': 'apiVersion: v2\nname: checkout\nversion: 0.1.0\n',
+    'charts/checkout/templates/configmaps.yaml': [
+      '{{- if .Values.prometheus.enabled }}',
+      'apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "checkout.fullname" . }}-rules', 'data:',
+      '  recording-rules.yml: |', '    groups:', '      - name: checkout.slo', '        rules:',
+      '          - record: slo:http_requests:good_5m', '            expr: sum(rate(http_requests_total{code!~"5.."}[5m]))',
+      '          - record: slo:http_requests:total_5m', '            expr: sum(rate(http_requests_total[5m]))',
+      '  alerting-rules.yml: |', '    groups:', '      - name: checkout.alerts', '        rules:',
+      '          - alert: CheckoutDown', '            expr: up{job="checkout"} == 0', '            for: 2m',
+      '            labels:', '              severity: critical', '            annotations:',
+      '              summary: "down for {{ "{{" }} $value {{ "}}" }} checks"',
+      '              description: "{{ `{{ $labels.instance }}` }} is down"',
+      '{{- end }}',
+    ].join('\n'),
+  };
+  const rule = crawlFiles(chart, { repoName: 'checkout-helm', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.alerting?.rules?.find((r) => r.name === 'CheckoutDown');
+  assert(rule?.annotations?.summary === 'down for {{ $value }} checks', 'a Helm literal-brace escape keeps both braces, as Helm renders it', rule?.annotations);
+  assert(rule?.annotations?.description === '{{ $labels.instance }} is down', 'so does a backtick string literal', rule?.annotations);
+}
+
 // ---------- environment-scoped extraction ----------
 process.stdout.write('\n--- environment scoped extraction ---\n');
 const ENV_MIXED = {

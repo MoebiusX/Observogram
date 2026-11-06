@@ -1121,15 +1121,25 @@ function looksLikeHelm(content) {
 // ({{ .Values.x }}, {{ include "\u2026" . }}) collapse to a stable placeholder
 // token. We are not rendering the chart \u2014 only recovering enough shape to read
 // the embedded observability contracts back out.
+//
+// An action that is only a string literal — {{ "{{" }}, {{ `}}` }}, the way a
+// chart writes a Prometheus annotation's own {{ $value }} — renders as that
+// string, so it is kept as Helm prints it: `{{ "{{" }} $value {{ "}}" }}` is
+// `{{ $value }}`, the text live serves. Its braces are held aside while the
+// injections collapse, so they are never taken for one.
+const HELM_OPEN = '\u0000helm-open\u0000';
+const HELM_CLOSE = '\u0000helm-close\u0000';
+const helmLiteral = (text) => text.replaceAll('{{', HELM_OPEN).replaceAll('}}', HELM_CLOSE);
 function stripGoTemplate(content) {
   return content.split(/\r?\n/).map((line) => {
     const t = line.trim();
     if (/^\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}$/.test(t)) return null;            // comment
     if (/^\{\{-?\s*(if|else|end|range|with|define|block)\b.*?-?\}\}$/.test(t)) return null; // control flow
     return line
-      .replace(/\{\{-?\s*"\{\{"\s*-?\}\}/g, '{')   // Helm literal-open escape: {{ "{{" }} -> {
-      .replace(/\{\{-?\s*"\}\}"\s*-?\}\}/g, '}')   // Helm literal-close escape: {{ "}}" }} -> }
-      .replace(/\{\{-?[\s\S]*?-?\}\}/g, 'helmvalue'); // inline value injection
+      .replace(/\{\{-?\s*"((?:[^"\\]|\\.)*)"\s*-?\}\}/g, (_, s) => helmLiteral(s.replace(/\\(.)/g, '$1')))   // {{ "…" }} prints …
+      .replace(/\{\{-?\s*`([^`]*)`\s*-?\}\}/g, (_, s) => helmLiteral(s))                                      // {{ `…` }} prints …
+      .replace(/\{\{-?[\s\S]*?-?\}\}/g, 'helmvalue') // inline value injection
+      .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}');
   }).filter((l) => l !== null).join('\n');
 }
 
