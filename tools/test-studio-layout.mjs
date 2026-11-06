@@ -160,6 +160,8 @@ test('nothing is cut to fit: the drawers\' code wraps, the review cards, the dri
   assert.ok(!/createElement\('pre'\); pre\.textContent = s\.expr/.test(drawer), 'an alert\'s EXPR is a code box, not a bare <pre>');
   assert.match(rule('.compare-missing-item'), /grid-template-areas:\s*"layer label open" "layer id open"/, 'a review card puts its id under its name');
   assert.match(rule('.compare-missing-list'), /minmax\(min\(380px, 100%\), 1fr\)/, 'three cards a row at 1440 px');
+  const compare = fs.readFileSync(new URL('compare-view.mjs', dir), 'utf8');
+  assert.match(compare, /<span class="compare-missing-label">\$\{breakableName\(/, 'a card\'s name may break after its underscores, never mid-word');
   assert.match(rule('.drift-table .drift-th'), /width:\s*20%/, 'the four outcome columns share the width');
   assert.match(rule('.remediate-items'), /grid-template-columns:\s*\[box\]/, 'the change rows are one table per layer');
   assert.match(rule('.remediate-item-row'), /grid-template-columns:\s*subgrid/, 'each row a subgrid of it');
