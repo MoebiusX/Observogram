@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.8.5 — 2026-11-06
+## 0.8.6 — 2026-11-06
 
 **Every way into the scan reads by the crawler's own rule, and says what it left out.** The GitHub and Azure DevOps reads used to download only files with an observability-sounding name, and a Folder walk had its own extension list and caps. Both now take every file the crawler reads, and the name list only orders them under the 200-file cap. A Run now keeps what its scan saw: the files it did not read and why, the files past the cap, the files the environment's profile left out, the files it read and recognised as nothing, and its warnings. It answers with them and keeps them in the run record, and the Overview board and the Run's toast show them. Local scans (Folder, Upload, the CLI, Expert's folder, drop and .zip) honour the folder's `.gitignore` files. No door reads a YAML or JSON values file named `*secret*`; each names it instead.
 
@@ -64,7 +64,7 @@
   - `packA.scan` kept, and carried by Check now;
   - the board's scan line and the toast's words.
 
-  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.5, after #220's 0.8.4: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1702 → 1716.
+  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1702 → 1716.
 
 ## 0.8.3 — 2026-11-06
 
