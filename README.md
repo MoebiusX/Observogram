@@ -60,7 +60,8 @@ declared, its **repository**, and where it runs, read through its **live MCP
 endpoint**.
 
 **1. The services.** Overview opens on the list: one row per service and
-environment, with its repository (GitHub, Azure DevOps or a folder), its live
+environment, with its repository (GitHub, Azure DevOps, a folder or an
+upload), its live
 endpoint and its last check — the grade letter and how much matches live.
 **Run** scans the repository and checks it against live, **Open** draws the
 service's board and **Change** edits where it is. Services a live draft has
@@ -1445,8 +1446,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.7 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.7
+docker build -t observogram:0.8.8 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.8
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or

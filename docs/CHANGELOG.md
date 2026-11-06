@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.8.8 — 2026-11-06
+
+**docs/USER_JOURNEY.md describes the studio as it is.** It was last rewritten on 2026-10-07, before the Overview face, a service's Run, repository sign-in and grade schemas 3 and 4. Docs only; no code changes. This PR is stacked on #221 and cut after it.
+
+### Changed: `docs/USER_JOURNEY.md`
+- **Two faces over the same three steps.** Overview (`?mode=overview`: the Services list, then the board; `&layout=simple` as the fallback) and Expert (`?mode=expert`: the full studio). The switch, which face a first visit opens, and what Overview hides.
+- **A service is two places.** Its repository, and per environment the live MCP endpoint. The Run scans the repository as Pack A, reads live as Pack B, and saves the check as the journey `<slug>.<env>`. Repositories can declare about themselves in `.observability/*.yaml` (spec 1.5).
+- **The north-star flow** starts at the Services list and runs through the Run and the board into Expert, bound to the service. Expert's own doors stay for packs already in hand.
+- **The Diagnostic Grade at schema 4.** What each criterion needs, as the engine checks it. Chaos-validated's states and scores, with the windows by schedule and where a run comes from. Scaffolds earn nothing. How the repository alone grades. When Overview's *Why this grade* is offered.
+- **Fifteen invariants, up from ten.** New ones:
+  - a service is its repository plus a live endpoint;
+  - repository access is the person's;
+  - the scan says what it left out;
+  - the board never claims what nobody checked;
+  - Overview speaks plainly, with one primary button.
+
+  The old "DIAGNOSTIC GRADE plus PASS/FAIL" heading is replaced by the Assessment's decision header.
+- **What belongs in each step** gains:
+  - Overview's Services list, repository access and the board;
+  - Neuron;
+  - the Update half of *Build or update a pack*;
+  - Remediate's four strategies and export.
+- **The golden path** is the path a person takes today: Add a service, Run, the board, Diagnose, Remediate, Check again. The old one named pack files that are not in the repository. `DRY_RUN.md` is kept as the June 2026 runbook.
+- Every claim was checked against the code by two independent reviews; all 38 findings were applied.
+
+### Fixed: four stale lines in other docs
+- `docs/UPDATE_JOURNEY.md`'s status line said nothing in it was built. Slices 1 and 2 shipped in 0.6.2.
+- `README.md` (Overview's services) and `docs/UX_SCREEN_GRAMMAR.md` (the Repository column) now list Upload as a repository kind.
+- `docs/OVERVIEW_DEMO.md`'s 1:15 beat: **Overview** now returns to the Services list, and **Open →** draws the board.
+
+### Version
+- 0.8.8: package.json and its lock, the Dockerfile, the image tags under `deploy/` and the README, and the footer fallback. `VENDOR-MANIFEST.json` regenerated.
+- Suite total 1740 → 1740 (no test changes).
+
 ## 0.8.7 — 2026-11-06
 
 **Chaos experiments are seen, and declared is told apart from proven.** The scan used to drop every chaos source, the live side could not observe chaos at all, and spec 1.4 had nowhere to record a run. Spec 1.5 (RFC-0004, MoebiusX/otel-observability-pack#11) adds the engines `in-process` and `custom`, the schedules `on-demand` and `ci`, and `last_result`, the newest run. The scan now reads experiments from code, from Chaos Mesh and Litmus resources and from the repository's own `.observability/*.yaml`. A live check reads the certification run feed. The grade gives a declared experiment a quarter of the point, and the rest only for a recent passing run. A fresh scan of krystalinex-core declares its five in-process scenarios, and the Overview reads "5 chaos experiments declared, never recorded as run." The design and the owner's eight decisions are in `docs/CHAOS_EXPERIMENTS.md`. This PR is stacked on #222 and #223 and cut after them.

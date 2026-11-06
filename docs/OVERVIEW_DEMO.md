@@ -80,7 +80,8 @@ shield, the rules: *11 / 15 required rules met · tier 2* (12 before the crawler
 **1:15 — press Open in Remediate** (bottom of the right column). Expert's
 Remediate, on this service. Say: *"Everything you saw last time is one click
 behind each column: Discover, Diagnose, Remediate — the same words."* Press
-**Overview** to come back.
+**Overview** to come back to the Services list, and **Open →** on the row for
+the board.
 
 **1:30 — done.** Leave the board on screen.
 
