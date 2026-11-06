@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.8.9 — 2026-11-06
+## 0.8.10 — 2026-11-06
 
 **More layout fixes from the studio walkthrough.** The 0.8.7 walkthrough, 477 screenshots of krystaline's real data, logged these as rendered at 1440 × 900. Each is fixed at its source and checked the same way, in both themes and at 400 px, with real scrollbars.
 
