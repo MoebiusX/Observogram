@@ -88,7 +88,8 @@ import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
-import { crawlFiles } from './crawler.mjs';
+import { crawlFiles, scanReport } from './crawler.mjs';
+import { readRepoFolder } from './repo-folder.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
 import { safeMcpUrl } from './mcp-url-safety.mjs';
@@ -515,15 +516,15 @@ function loadPackFile(path, baseDir, scope = null) {
   return { canonical: pack, source: p };
 }
 
-// Minimal repo walk for the crawl source — mirrors tools/crawl-repo.mjs's
-// filters (that script runs main() on import, so it can't be imported).
-// walkRepoFiles(root, { scope }) → { <relative path>: text } is also a
-// service's Run on a folder repository (server/repo-sources.mjs), under the
-// same crawl scope.
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.observogram', '.tomograph', 'coverage', 'vendor']);
-const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt|prom|metrics)$/i;
-const MAX_FILE_BYTES = 1024 * 1024;
-const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+// The repo walk of a crawl source: tools/lib/repo-folder.mjs readRepoFolder,
+// the crawler's own rule (the CLI walker's and the studio's), the folder's
+// .gitignore files honoured, under the crawl scope below.
+// scanRepoFolder(root, { scope }) → { files, skipped, bytes, notEntered } is
+// also a service's Run on a folder repository (server/repo-sources.mjs);
+// walkRepoFiles(root, { scope }) → its { <relative path>: text } alone.
+// A walk stops reading at REPO_FOLDER_TOTAL_BYTES (the server's body cap)
+// and names every file after it.
+export const REPO_FOLDER_TOTAL_BYTES = 16 * 1024 * 1024;
 
 // The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
 // never reads what is not the requesting org's own part of the workspace.
@@ -630,53 +631,31 @@ function refuseOutOfScope(p, scope, what) {
   if (why) throw new Error(`${what} ${p} ${why}`);
 }
 
-export function walkRepoFiles(root, { scope = null } = {}) {
+export function scanRepoFolder(root, { scope = null } = {}) {
   const refusal = crawlScopeRefusal(scope);
   const why = refusal?.(root);
   if (why) throw new Error(`crawl source ${root} ${why}`);
-  const files = {};
-  let total = 0;
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop();
-    let entries = [];
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
-    for (const e of entries) {
-      if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
-          const sub = join(dir, e.name);
-          if (refusal?.(sub)) continue;   // never descended into
-          stack.push(sub);
-        }
-        continue;
-      }
-      if (!SCAN_EXT.test(e.name)) continue;
-      const full = join(dir, e.name);
-      if (refusal?.(full)) continue;      // a symlinked file included: skipped
-      let size = 0;
-      try { size = statSync(full).size; } catch (_) { continue; }
-      if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;
-      try {
-        files[full.slice(root.length + 1).replaceAll('\\', '/')] = readFileSync(full, 'utf8');
-        total += size;
-      } catch (_) {}
-    }
-  }
-  return files;
+  // A path in another org's part (a symlink out of the folder) is named, never read.
+  return readRepoFolder(root, { refuse: refusal, maxTotalBytes: REPO_FOLDER_TOTAL_BYTES });
+}
+
+export function walkRepoFiles(root, opts = {}) {
+  return scanRepoFolder(root, opts).files;
 }
 
 async function resolvePackA(def, baseDir, crawlScope = null) {
   if (def.packA.file) return loadPackFile(def.packA.file, baseDir, crawlScope);
   const c = def.packA.crawl;
   const root = resolve(baseDir || '.', c.path);
-  const files = walkRepoFiles(root, { scope: crawlScope });
-  if (!Object.keys(files).length) throw new Error(`crawl source ${root}: no scannable files found`);
-  const out = crawlFiles(files, {
+  const read = scanRepoFolder(root, { scope: crawlScope });
+  if (!Object.keys(read.files).length) throw new Error(`crawl source ${root}: no scannable files found`);
+  const out = crawlFiles(read.files, {
     repoName: c.name || undefined,
     environment: c.env || def.env || undefined,
     criticality: c.criticality || undefined,
   });
-  return { canonical: out.canonical, source: `crawl:${root}` };
+  const source = `crawl:${root}`;
+  return { canonical: out.canonical, source, scan: scanReport({ ...read, source: `the folder ${root}` }, out.summary) };
 }
 
 // packB.mcp.url as a run record may carry it: stripMcpUrl's rule, with a
@@ -1169,7 +1148,12 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // file. The server keeps that read as the journey's live pack, so a reader
 // can open the comparison the record graded; the CLI passes none. A throw
 // is the caller's: the record is already written.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null } = {}) {
+// `scan`: what the scan behind a file Pack A saw (crawler.mjs scanReport) —
+// a service's Run scans the repository, then runs its journey on the file;
+// recorded as packA.scan. A crawl: Pack A carries its own. A run that is
+// not told (Check now on the last scan) keeps the scan of the newest record
+// of the same Pack A file: the file is that scan's.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1196,7 +1180,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         tookMs: Date.now() - t0,
         outcome: 'vantage-lost',
         error: String(e.message || e),
-        packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
+        packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(a.scan || scan ? { scan: a.scan || scan } : {}) },
         packB: { source: `mcp:${liveTarget.safeUrl}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
@@ -1272,6 +1256,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const chains = chainSummary({ branches });
   const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
   const previousRun = recent[0] || null;
+  const packAScan = a.scan || scan
+    || recent.find((r) => r?.packA?.source === a.source && r.packA.scan && typeof r.packA.scan === 'object')?.packA.scan
+    || null;
   const baseline = recent.find(r => r && typeof r === 'object' && Array.isArray(r.branches)) || null;
   const skipped = (baseline ? recent.slice(0, recent.indexOf(baseline)) : recent)
     .slice(0, TRANSITION_SKIPPED_CAP)
@@ -1298,7 +1285,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     startedAt,
     tookMs: Date.now() - t0,
     // Workstream D gate-contract fields. This is VERIFICATION evidence.
-    packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
+    // packA.scan only when a scan is known (above): what it read, skipped and set aside.
+    packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(packAScan ? { scan: packAScan } : {}) },
     packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
     // schema identifies which scoring construct produced the score, so a

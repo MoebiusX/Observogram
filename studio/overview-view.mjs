@@ -235,14 +235,30 @@ function repoSummaryHtml(L) {
         </div>
       </details>`;
 }
-function discoverColHtml(L) {
+// What the last Run's scan read and left out (overview-model.mjs scanModel):
+// one line, and behind it each group of files left out with why.
+function scanHtml(S) {
+  if (!S) return '';
+  const rows = (g) => g.rows.length
+    ? `<ul class="ov-scan__files">${g.rows.map((r) => `<li><code>${escapeHtml(r.path)}</code>${r.why ? ` <span class="og-muted">${escapeHtml(r.why)}</span>` : ''}</li>`).join('')}${g.more ? `<li class="og-muted">… and ${g.more} more</li>` : ''}</ul>`
+    : '';
+  const groups = S.groups.map((g) => `<div class="ov-scan__group ov-scan__group--${escapeHtml(g.key)}"><p class="ov-scan__h">${g.count ? `<b>${g.count}</b> ` : ''}${escapeHtml(g.title)}</p>${rows(g)}</div>`).join('');
+  const warnings = S.warnings.length ? `<div class="ov-scan__group ov-scan__group--warnings"><p class="ov-scan__h"><b>${S.warnings.length}</b> warning${S.warnings.length === 1 ? '' : 's'} from the scan</p><ul class="ov-scan__files">${S.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>` : '';
+  const body = groups + warnings;
+  return body
+    ? `<details class="ov-scan ov-scan--${escapeHtml(S.tone)}"><summary class="ov-scan__sum">${escapeHtml(S.sentence)}</summary><div class="ov-scan__body">${body}</div></details>`
+    : `<p class="ov-scan ov-scan--${escapeHtml(S.tone)} ov-scan__sum">${escapeHtml(S.sentence)}</p>`;
+}
+
+function discoverColHtml(L, S = null) {
   const body = L
     ? `${repoSummaryHtml(L)}
       <dl class="ov-stats">
         <div class="ov-stat" title="${escapeHtml(L.lead)}"><dt>Declared</dt><dd>${L.declared}</dd></div>
         <div class="ov-stat" title="${escapeHtml(L.coverage)}"><dt>Coverage</dt><dd>${L.coveragePct}<small>%</small></dd></div>
         <div class="ov-stat" title="${escapeHtml(L.unplacedNote || 'Everything found its layer.')}"><dt>Unplaced</dt><dd>${L.unplaced}</dd></div>
-      </dl>`
+      </dl>
+      ${scanHtml(S)}`
     : reading('the repository');
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
@@ -407,7 +423,7 @@ function boardBodyHtml(model) {
   return `
     ${stagesHtml()}
     <div class="ov-board">
-      ${discoverColHtml(b.layers)}
+      ${discoverColHtml(b.layers, b.scan)}
       ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary)}
       ${remediateColHtml(b.changes, model.next, model.primary)}
     </div>`;

@@ -766,6 +766,56 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: failed };
 }
 
+// ---------- the board: what the scan read ----------
+//
+// A service's Run keeps what its scan saw in the run record (packA.scan,
+// tools/lib/crawler.mjs scanReport): the files read, and every file the scan
+// left out — the files the rule would read and the read did not (git ignores
+// them, a secrets file, too large, a download failed), those past a host
+// read's file cap, those the environment's deployment profile excludes, the
+// files read and recognised as nothing — with the crawl's warnings. The
+// board says it beside the layers, so a grade never rests on files nobody
+// was told were missing.
+
+// The losses of a scan, in a few words ("347 past the 200-file cap, 3 not
+// read, …"), or '' when it read everything it takes. The Run's toast says it.
+export function scanLossText(scan) {
+  if (!scan || typeof scan !== 'object') return '';
+  const n = (v) => Number(v) || 0;
+  const parts = [];
+  if (n(scan.capped)) parts.push(`${n(scan.capped)} past the file cap`);
+  if (n(scan.skipped)) parts.push(`${n(scan.skipped)} not read`);
+  if (scan.truncated) parts.push('the host cut its file list short');
+  if (n(scan.environment?.excluded)) parts.push(`${n(scan.environment.excluded)} left out by the ${scan.environment.profile || 'environment'} scope`);
+  if (n(scan.unclassified)) parts.push(`${n(scan.unclassified)} recognised as nothing`);
+  return parts.join(', ');
+}
+
+// scanModel({ run }) → null when the record carries no scan, else
+//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings }
+//   tone  'warn' when the scan lost files it takes (cap, not read, a cut
+//         list), else 'neutral'
+export function scanModel({ run = null } = {}) {
+  const scan = run?.packA?.scan;
+  if (!scan || typeof scan !== 'object') return null;
+  const n = (v) => Number(v) || 0;
+  const files = n(scan.files);
+  const candidates = n(scan.candidates);
+  const of = candidates > files ? ` of ${candidates}` : '';
+  const loss = scanLossText(scan);
+  const sentence = `Read ${files}${of} file${(candidates || files) === 1 ? '' : 's'}${scan.source ? ` from ${scan.source}` : ''}${loss ? ` — ${loss}` : ''}.`;
+  const rowsOf = (list, why = '') => (Array.isArray(list) ? list : []).map((x) => (typeof x === 'string' ? { path: x, why } : { path: String(x?.path || ''), why: String(x?.why || why) }));
+  const group = (key, title, count, rows) => ({ key, title, count, rows, more: Math.max(0, count - rows.length) });
+  const groups = [];
+  if (n(scan.skipped)) groups.push(group('skipped', 'Not read', n(scan.skipped), rowsOf(scan.skippedFiles)));
+  if (n(scan.capped)) groups.push(group('capped', `Past the file cap — the read takes the likely artefacts first and stops at its cap`, n(scan.capped), []));
+  if (scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
+  if (n(scan.environment?.excluded)) groups.push(group('excluded', `Left out by the ${scan.environment.profile || 'environment'} scope — files for other deployment surfaces`, n(scan.environment.excluded), rowsOf(scan.environment.excludedFiles)));
+  if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
+  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
+  return { sentence, tone: n(scan.capped) || n(scan.skipped) || scan.truncated ? 'warn' : 'neutral', groups, warnings };
+}
+
 // ---------- the board: what to change ----------
 
 // changesModel({ fidelity }) → { known, items, total, sentence }
@@ -882,6 +932,8 @@ export function buildOverviewModel(input = {}) {
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
+    // What the last Run's scan read and left out (null: no record says).
+    scan: graded && journey ? scanModel({ run }) : null,
     rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
     fidelity: graded ? fidelity : null,
     changes: graded ? changesModel({ fidelity }) : null,
@@ -1335,7 +1387,8 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 //   endpoint  { create: { name, url, readTokenEnv? } } | { id }
 //   service   { create: { name, repository } } | { id, patch: { repository } | null }
 //   env       { create: { name } } | { id, bind: boolean } — bind: point it at the endpoint
-//   upload    { name, files } | null — PUT /api/services/:id/repository-upload, last
+//   upload    { name, files, skipped } | null — PUT /api/services/:id/repository-upload, last;
+//             `skipped` what the browser did not read and why, kept with the copy so each Run names it
 // A name that keys an existing record (the catalogue's slug rule, `keyOf`,
 // injected: tools/lib/service-keys.mjs normalizeServiceKey) is that record —
 // the form completes it, never a second one. An Upload never names its
@@ -1359,7 +1412,7 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   return {
     endpoint, service,
     env: env ? { id: env.id, bind: !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
-    upload: uploading && upload?.files ? { name: upload.name, files: upload.files } : null,
+    upload: uploading && upload?.files ? { name: upload.name, files: upload.files, skipped: Array.isArray(upload.skipped) ? upload.skipped : [] } : null,
     envName, name,
   };
 }

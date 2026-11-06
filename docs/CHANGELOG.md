@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+## 0.8.5 — 2026-11-06
+
+**Every way into the scan reads by the crawler's own rule, and says what it left out.** The GitHub and Azure DevOps reads used to download only files with an observability-sounding name, and a Folder walk had its own extension list and caps. Both now take every file the crawler reads, and the name list only orders them under the 200-file cap. A Run now keeps what its scan saw: the files it did not read and why, the files past the cap, the files the environment's profile left out, the files it read and recognised as nothing, and its warnings. It answers with them and keeps them in the run record, and the Overview board and the Run's toast show them. Local scans (Folder, Upload, the CLI, Expert's folder, drop and .zip) honour the folder's `.gitignore` files. No door reads a YAML or JSON values file named `*secret*`; each names it instead.
+
+### Changed: the GitHub and Azure DevOps reads take every file the crawler reads
+- **`server/github-crawl.mjs`** has a new `planCrawlerFetch(tree, caps)`. A blob is read when `scanReadsPath` says so, the rule a folder, an upload and the CLI apply. `isCrawlerFile` and `isExporterCandidateFile` only order the files under the 200-file cap: the artefact names first, the exporter candidates next, then the rest, then tests, fixtures and lock files. Each group stays in tree order.
+  - It answers `{ selected, candidates, capped, skipped }`. `candidates` counts every blob the rule reads, taken before the cap, so a cap's loss is no longer hidden. `capped` is how many the cap left out. `skipped` names a file over 5 MB (the scan's `SCAN_MAX_FILE_BYTES`, up from 1 MB), a file past the 16 MB total, and a secrets file.
+  - `selectCrawlerFiles` is the plan's `selected`.
+  - On github.com/MoebiusX/KrystalineX the old filter fetched 120 of the 394 files the rule reads. `scripts/chaos-scenarios.js` and `server/middleware/chaos.ts` were among those never fetched.
+  - `chaos` joins the source names read first, so those two fall inside the cap there. The other 194 files still fall past it, and the Run now says so.
+- **`settleFetched`** (new) settles the downloads in the plan's order, then hands the files on in path order. Before, they reached `crawlFiles` in the order the downloads finished. A failed download is named with its error.
+- **`fetchGithubFiles`** answers `{ ref, candidates, capped, files, skipped: [{ path, why }], truncated }`. `skipped` used to be strings.
+  - `server/repo-sources.mjs` now passes GitHub's `truncated` and the cap on. Before, it dropped both.
+  - `POST /api/crawl-github` puts `candidates`, `capped`, `truncated` and a warning for each in its summary.
+- **Azure DevOps** (`server/repo-sources.mjs`) uses the same plan and the same settling.
+
+### Changed: a Run keeps what its scan saw
+- **`scanReport(read, summary)`** (`tools/lib/crawler.mjs`, new) is what a scan saw, with every list bounded (`SCAN_REPORT_SHOWN`, 50):
+  - `files`, `candidates`, `capped`, `truncated`;
+  - `skipped` and `skippedFiles` (`{ path, why }`);
+  - `classified` and `byKind`;
+  - `unclassified` and `unknownFiles`;
+  - `environment: { profile, excluded, excludedFiles }`;
+  - `warnings`.
+- **`POST /api/services/:id/run`** answers `scan` as that report. Before, it kept the source, the ref and two counts, and dropped the crawl's summary. `skipped` stays a count.
+  - On the krystaline scan, the old answer dropped the crawl's 5 warnings, its `byKind`, the 14 files the prod profile excludes and the 62 of 120 files recognised as nothing.
+- **The run record keeps it as `packA.scan`.** `runJourney` takes a `scan` option. A `crawl:` Pack A carries its own. A run told nothing (Check now on the last scan) keeps the scan of the newest record whose Pack A is the same file. Another file claims no scan.
+- **`crawlFiles`' summary** names the files it read and recognised as nothing: `files.unclassified` counts them all, `files.unknown` lists the first 200. Before, they were dropped without a word.
+- **The Overview board** shows the scan under the layers in Discover (`studio/overview-model.mjs`: `scanModel`, `scanLossText`; `board.scan`). One line says how many files were read, and of how many, with what was lost. Behind it, each group lists its files and why: not read, past the file cap, a cut file list, left out by the environment's profile, recognised as nothing, and the warnings. The line is amber when files the rule takes were lost.
+- **The Run's toast** adds the losses: *… checked: 200 of 396 files from … (196 past the file cap, 62 recognised as nothing), grade …*.
+
+### Changed: the Folder walk, the Upload and the CLI use the crawler's rule
+- **`tools/lib/repo-folder.mjs`** (new, Node-only, excluded from the vendorable set) has `readRepoFolder(root, { refuse, maxTotalBytes })`. It returns `{ files, skipped, bytes, notEntered }` and applies the crawler's rule (`scanSkipsName`, `SCAN_EXT`, `SCAN_MAX_FILE_BYTES`, `scanRefusesName`).
+  - Entries are read in name order, so a total cap falls on the same files every time.
+  - A file the rule would read and the walk did not is named: git ignores it, a secrets file, over 5 MB, past the total, unreadable, or refused by the caller's scope.
+- **`tools/lib/journey.mjs`** gains `scanRepoFolder(root, { scope })`, which is `readRepoFolder` under the crawl scope, with `REPO_FOLDER_TOTAL_BYTES` at 16 MB. `walkRepoFiles` is now its `files`.
+  - The walk's own rules are gone: no `.cjs` or `.jsx`, every dot-folder skipped (`.observability` too), 1 MB a file, and a silent `continue`.
+  - A Folder repository's Run now names what it skipped. Before, `skipped` was always `[]`.
+- **`tools/crawl-repo.mjs`** walks with `readRepoFolder`. Its summary prints `files not read` with each path and why, and `not recognised`. Before, it skipped a file over 5 MB without a word.
+- **The Upload**: `PUT /api/services/:id/repository-upload` takes `skipped` (what the browser did not read, at most 500 entries) and keeps it with the copy. It never keeps a secrets file and names it instead. `studio/services-api.mjs` and `savePlan` send `skipped`. The Run's `skipped` for an upload is the browser's list plus the server's. A copy kept before this release is filtered as it is read.
+
+### Added: local scans honour `.gitignore`; a secrets values file is never read
+- **`tools/lib/gitignore.mjs`** (new, browser-safe) has `parseGitignore` and `createGitignore()`, a matcher with `add(base, text)`, `ignores(path, { dir })` and `ignoredAt(path)`. It follows git's patterns: anchoring, `**`, folder-only patterns, `!`, character classes and escapes. A deeper `.gitignore` comes after its parents', and a file under an ignored folder stays ignored. Only the `.gitignore` files inside the scanned folder count.
+- **`tools/lib/crawler.mjs`** gains:
+  - `SCAN_SECRET_FILE` and `scanRefusesName(name)`: a YAML or JSON file whose name holds `secret`. `scanReadsPath` is now false for it.
+  - `scanRefusal(path, { skipRoot, gitignore })`: why a file the folder and extension rule takes is still left out, or null.
+  - `SCAN_WHY`: one wording for every door's skipped list.
+  - `scanHonoursGitignore` and `gitignoreOf(pairs, { skipRoot })`: the matcher for a flat list.
+  - `createGitignore`, re-exported.
+  - `walkScanFolder(dir, onFile, prefix, { onSkip })`: honours each folder's `.gitignore` and hands every file or folder it leaves out to `onSkip`.
+- **The studio's readers** (`studio/repository-files.mjs`) honour `.gitignore` and name each file they leave out: the folder handle, the folder input (`gitignoreOfFileList`), the drop (`walkDropped`) and the .zip. A secrets file in a .zip is never inflated. Expert's folder, drop and file-list staging go through the same readers, and its staged panel lists *N files not read, and why*.
+
+- **Tests**: `tools/test-scan-coverage.mjs` (new, 12 tests) covers:
+  - the matcher's patterns;
+  - the secrets rule and the handle walker;
+  - the crawl's unknown files and `scanReport`;
+  - the plan, the cap and the ordering on a tree shaped like KrystalineX's;
+  - path order whatever order the downloads finish in, and `truncated`;
+  - the folder read, its caps and the crawl scope;
+  - `packA.scan` kept, and carried by Check now;
+  - the board's scan line and the toast's words.
+
+  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.5, after #220's 0.8.4: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1702 → 1716.
+
 ## 0.8.3 — 2026-11-06
 
 **The compare renderers nothing calls, removed.** Compare's code loses the two layouts it replaced in June, and their stylesheet rules. Nothing on screen changes.
