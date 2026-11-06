@@ -27,11 +27,15 @@ export function renderAtlasView(view) {
   section.dataset.layer = 'ATLAS';
 
   const meta = ATLAS_META[state.atlasVariant] || { title: state.atlasVariant, lede: '' };
+  // Without Pack B the header says what the variant does: renders on one
+  // pack, or waits for a second (the renderer's own placeholder asks for it).
+  // A no-break space keeps "Pack B" on one line where the title wraps.
+  const packNote = hasB ? '' : (meta.needsB ? ' · needs Pack\u00a0B' : ' · single pack');
   const head = document.createElement('div');
   head.className = 'section-head';
   head.innerHTML = `
     <span class="section-num">ATL</span>
-    <span class="section-name">${escapeHtml(meta.title)}${hasB ? '' : ' · single pack'}</span>
+    <span class="section-name">${escapeHtml(meta.title)}${packNote}</span>
     <span class="section-count">${escapeHtml(state.atlasVariant)}</span>
   `;
   section.appendChild(head);

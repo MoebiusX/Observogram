@@ -31,14 +31,14 @@
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { serviceLine } from './build-model.mjs';
+import { serviceLine, stillNeededLine } from './build-model.mjs';
 import { clauseRowHtml, STATE_GLYPH } from './build-atoms.mjs';
 import { termHtml } from './ux-kit.mjs';
 
 /**
  * The progress summary (DEFINE): the four substeps in order, each a button to it with what it holds now and whether
- * it is done — the current one marked aria-current="step" — then what is still needed. The service line repaints
- * as the name is typed (data-progress-val), before any re-render.
+ * it is done — the current one marked aria-current="step" — then what is still needed. The service line and what is
+ * still needed repaint as the name is typed (data-progress-val, data-still-needed), before any re-render.
  */
 export function progressHtml(model) {
   const items = model.substeps || [];
@@ -56,7 +56,7 @@ export function progressHtml(model) {
             </button>
           </li>`).join('')}
         </ol>
-        ${!model.valid ? `<div class="build-def-needed">Still needed: ${model.errors.map(escapeHtml).join(' and ')}.</div>` : ''}
+        ${!model.valid ? `<div class="build-def-needed" data-still-needed>${escapeHtml(model.stillNeeded)}</div>` : ''}
       </nav>`;
 }
 
@@ -151,10 +151,15 @@ export function renderBuildDefinition(container, model, host = appHost) {
 export function wireBuildDefinition(container, model, host = appHost) {
   const act = host.build;
   const byId = (id) => container.querySelector(`#${id}`);
-  // The service line of the progress summary follows the fields as typed (a keystroke re-renders nothing).
+  // The service line of the progress summary follows the fields as typed (a keystroke re-renders nothing), and so does
+  // what is still needed — the column's line and the step's footer: without a library entry no instantiation
+  // re-renders the step, so they would keep naming the service until something else did.
   const paintService = () => {
-    const text = serviceLine({ name: byId('build-name')?.value ?? model?.name, owners: byId('build-owners')?.value ?? model?.owners, environment: byId('build-env')?.value ?? model?.environment });
+    const name = byId('build-name')?.value ?? model?.name;
+    const text = serviceLine({ name, owners: byId('build-owners')?.value ?? model?.owners, environment: byId('build-env')?.value ?? model?.environment });
     for (const el of container.ownerDocument?.querySelectorAll?.('[data-progress-val="service"]') || []) el.textContent = text;
+    const needed = stillNeededLine(name, model?.entryCount ?? 0);
+    for (const el of container.ownerDocument?.querySelectorAll?.('[data-still-needed]') || []) el.textContent = needed;
   };
   byId('build-name')?.addEventListener('input', (e) => { act.update({ name: e.target.value }); paintService(); });
   byId('build-owners')?.addEventListener('input', (e) => { act.update({ owners: e.target.value }); paintService(); });

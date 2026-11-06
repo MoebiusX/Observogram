@@ -284,26 +284,83 @@ export function sectionNavHtml(sections, { label = 'On this page' } = {}) {
 export function wireSectionNav(root) {
   const nav = root?.querySelector?.('.ux-section-nav');
   if (!nav) return;
+  trackSectionNavHeight(root, nav);
+  const doc = root.ownerDocument;
+  const view = doc.defaultView;
+  const links = [...nav.querySelectorAll('[data-ux-section]')];
+  const light = (id) => { for (const l of links) l.classList.toggle('is-current', l.dataset.uxSection === id); };
+  // A jump lights its own link and holds it until the scroll ends: the
+  // sections it passes on the way must not take over, and on a short page
+  // (Conformance) the last ones never reach the band below the sticky stack.
+  let pinned = null;
   nav.addEventListener('click', (ev) => {
     const a = ev.target.closest('[data-ux-section]');
     if (!a) return;
     ev.preventDefault();
-    const target = root.ownerDocument.getElementById(a.dataset.uxSection);
+    const target = doc.getElementById(a.dataset.uxSection);
+    pinned = a.dataset.uxSection;
+    light(pinned);
+    const release = () => { pinned = null; };
+    view?.addEventListener?.('scrollend', release, { once: true });
+    view?.setTimeout?.(release, 1500);   // where scrollend is missing, or nothing scrolls
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     target?.focus?.({ preventScroll: true });
   });
   if (typeof IntersectionObserver !== 'function') return;
-  const links = [...nav.querySelectorAll('[data-ux-section]')];
-  const io = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (!e.isIntersecting) continue;
-      for (const l of links) l.classList.toggle('is-current', l.dataset.uxSection === e.target.id);
-    }
-  }, { rootMargin: '-30% 0px -60% 0px' });
-  for (const l of links) {
-    const t = root.ownerDocument.getElementById(l.dataset.uxSection);
-    if (t) io.observe(t);
+  const targets = links.map((l) => doc.getElementById(l.dataset.uxSection)).filter(Boolean);
+  let io = null;
+  const observe = () => {
+    io?.disconnect();
+    io = new IntersectionObserver((entries) => {
+      if (pinned) return;
+      for (const e of entries) if (e.isIntersecting) light(e.target.id);
+    }, { rootMargin: currentBand(root, links) });
+    for (const t of targets) io.observe(t);
+  };
+  observe();
+  // The band follows the window (a resize, a rotated tablet); a re-render
+  // that replaced this index lets go of it.
+  const onResize = () => {
+    if (!nav.isConnected) { view.removeEventListener('resize', onResize); io?.disconnect(); return; }
+    observe();
+  };
+  view?.addEventListener?.('resize', onResize);
+}
+
+// A section the index jumps to lands just below the whole sticky stack: the
+// chrome and the context bar (app.mjs measures both) plus the strip that pins
+// this index — the nav itself, or a sticky wrapper around it (Diagnose's
+// .diag-sticky, which adds the grade line). The strip wraps onto more rows on
+// a narrow screen, so it is measured too: ux.css reads --ux-section-nav-h in
+// the targets' scroll-margin-top.
+function trackSectionNavHeight(root, nav) {
+  const view = root.ownerDocument?.defaultView;
+  if (!view || typeof view.ResizeObserver !== 'function') return;
+  let strip = nav;
+  for (let el = nav; el && el !== root; el = el.parentElement) {
+    if (view.getComputedStyle(el).position === 'sticky') { strip = el; break; }
   }
+  // A re-render replaces the strip: the observer lets go of a detached one.
+  const ro = new view.ResizeObserver(() => sync());
+  const sync = () => {
+    if (!strip.isConnected) { ro.disconnect(); return; }
+    root.style.setProperty('--ux-section-nav-h', `${Math.ceil(strip.getBoundingClientRect().height)}px`);
+  };
+  ro.observe(strip);
+  sync();
+}
+
+// The current section is the one in a 24px band just below the sticky stack,
+// where a jump lands it (the targets' scroll-margin-top). On a phone the stack
+// covers most of the window: a fixed band at 30% lay behind it and lit the
+// section above the one jumped to. The height is the viewport's without its
+// scrollbar, as the observer's root is.
+function currentBand(root, links) {
+  const doc = root.ownerDocument;
+  const target = links.map(l => doc.getElementById(l.dataset.uxSection)).find(Boolean);
+  const h = doc.documentElement?.clientHeight || 0;
+  const top = target && h > 24 ? Math.min(Math.round(parseFloat(doc.defaultView.getComputedStyle(target).scrollMarginTop) || 0), h - 24) : 0;
+  return top > 0 ? `-${top}px 0px -${h - top - 24}px 0px` : '-30% 0px -60% 0px';
 }
 
 // ---------- status announcements ----------

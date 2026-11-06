@@ -230,7 +230,12 @@ body { font-size: 15px; line-height: 1.5; }
   font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
   background: var(--ux-tone-bg, var(--ux-bg-2)); color: var(--ux-tone, var(--ux-ink-2));
 }
-[id].ux-section-target { scroll-margin-top: calc(var(--observa-chrome-h, 96px) + 120px); }
+/* A jump lands the section just below the whole sticky stack: the chrome, the
+   context bar and the strip that pins the index (--ux-section-nav-h, measured
+   by ux-kit.mjs wireSectionNav; 64px until measured) and a 12px gap. */
+[id].ux-section-target {
+  scroll-margin-top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px) + var(--ux-section-nav-h, 64px) + 12px);
+}
 
 /* ---------- collapsed reference material ---------- */
 .ux-disclosure {
