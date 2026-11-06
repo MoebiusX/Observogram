@@ -914,8 +914,8 @@ export function buildOverviewModel(input = {}) {
 // A host that does not opt in (`listable`) never draws it.
 
 export const REPOSITORY_KINDS = Object.freeze([
-  Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one when the server has a GitHub token.' }),
-  Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: "Read with the server's Azure DevOps token." }),
+  Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one read with your own GitHub token, asked for when you run it.' }),
+  Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: 'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.' }),
   Object.freeze({ kind: 'path', label: 'Folder', placeholder: 'C:\\src\\my-service  or  /srv/src/my-service', hint: 'A folder the server can read: its full path on the server.' }),
   // Offered only by a host that wires it (formModel's `uploads`): the files come from the person's own machine.
   Object.freeze({ kind: 'upload', label: 'Upload', placeholder: '', hint: 'A folder or a .zip from your machine. Its files are kept for this service and each Run scans them again; upload again when they change.' }),
@@ -972,20 +972,25 @@ function lastCheckOf(journey, now) {
 export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 
 // serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack, journeys, journeysError,
-//   endpoints, access, now, running, results, showAll })
+//   endpoints, access, now, running, results, showAll, heldTokens })
 //   running   { [rowKey]: true } — the rows whose Run is under way
-//   results   { [rowKey]: { error } } — the last Run's refusal, the server's sentence
+//   results   { [rowKey]: { error, repoAuth } } — the last Run's refusal, the server's sentence;
+//             repoAuth ({ kind, label, refused }) when its host wants the person's own token
 //   showAll   also list the services nobody gave a repository that have no pack of their own
 //             (the ones a live draft discovered): counted, not drawn, until asked
-// → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty }
+//   heldTokens  the hosts ('github' | 'ado') whose token the person gave in this tab (the host
+//             keeps it, in memory only, and sends it with each Run of that host's repositories)
+// → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty, tokens }
+//   a row's `auth` asks for the person's token: { kind, label, refused, text }
 export function serviceListModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], isLiveAggregatePack = () => false,
     journeys = null, journeysError = null, endpoints = null, access = null, now = Date.now(),
-    running = {}, results = {}, showAll = false,
+    running = {}, results = {}, showAll = false, heldTokens = [],
   } = input;
   const canWrite = access?.canWrite !== false;
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
+  const tokens = (Array.isArray(heldTokens) ? heldTokens : []).filter((k) => HOST_LABEL[k]).map((k) => ({ kind: k, label: `${HOST_LABEL[k]} token`, text: `Your ${HOST_LABEL[k]} token is sent with this tab's Runs of ${HOST_LABEL[k]} repositories; it is never kept on the server.` }));
   if (!Array.isArray(services)) {
     const failed = !!servicesStatus && !['ok', 'loading'].includes(servicesStatus.kind);
     return { kind: failed ? 'error' : 'loading', error: failed ? (servicesStatus.error || 'the services table could not be read') : null, rows: [], hidden: 0, canWrite, reason, empty: false };
@@ -1019,13 +1024,27 @@ export function serviceListModel(input = {}) {
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
+        auth: authAsk(results[key]?.repoAuth, canWrite),
         complete: !!(env && repository && live),
       });
     }
   }
   // The rows a person can run first, then the ones still missing a place; by name, then environment.
   listed.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)) || String(a.env || '').localeCompare(String(b.env || '')));
-  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0 };
+  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0, tokens };
+}
+
+// The repository hosts whose token a person gives as their own.
+const HOST_LABEL = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
+
+// A Run its host would not read without the person's own token: what to ask.
+function authAsk(need, canWrite) {
+  if (!canWrite || !need || typeof need !== 'object' || !HOST_LABEL[need.kind]) return null;
+  const host = HOST_LABEL[need.kind];
+  const text = need.refused
+    ? `That ${host} token was refused, or cannot read this repository. Give one that can.`
+    : `${host} reads this repository with your own token. It is sent with this tab's Runs only and never kept on the server.`;
+  return { kind: need.kind, label: `${host} token`, refused: need.refused === true, text };
 }
 
 // ---------- the Add a service form ----------

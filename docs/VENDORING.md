@@ -328,7 +328,7 @@ const facts = await loadServiceListFacts();     // { journeys, journeysError, en
 let form = FORM_CLOSED;
 const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
   journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
-  access, now: Date.now(), running, results, showAll });         // running / results: { [rowKey(serviceId, env)]: true | { error } }
+  access, now: Date.now(), running, results, showAll, heldTokens });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']
 renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders }), host);
 
 host.overview = {
@@ -343,7 +343,8 @@ host.overview = {
     // plan.env.bind → PATCH /api/environments/:id { mcpEndpointId }. Then re-read, and Run when asked.
   },
   closeForm() { form = FORM_CLOSED; repaint(); },
-  runService(key) { /* POST /api/services/:id/run { env } (runServiceRecord), then re-read the list's facts */ },
+  runService(key, { repoAuth } = {}) { /* POST /api/services/:id/run { env, repoAuth } (runServiceRecord(id, env, { repoAuth })), then re-read the list's facts */ },
+  forgetRepoToken(kind) { /* drop the person's token for that host from your memory */ },
   openService(serviceId, env) { /* draw the board for that row */ },
   backToList() { /* draw the list again */ },
   showAll() { /* list the services a live draft discovered too */ },
@@ -409,6 +410,18 @@ renderServiceList(container, list, formModel(form, { …, uploads: true }), host
 The server's half is `PUT /api/services/:id/repository-upload` (README, the
 services API). The studio's wiring is `listReadRepository`,
 `listPickRepositoryFolder` and `listDropRepository` in `studio/app.mjs`.
+
+**A repository read as the person who runs it.** A GitHub or Azure DevOps
+repository is read with the person's own token (README, *Whose access reads
+a repository*); the server's own only where it has no sign-in. A Run its host
+would not show without one fails with `.repoAuth` on the error
+(`runServiceRecord` throws `servicesRefusal`'s, `{ kind, label, refused }`):
+put it in `results[key].repoAuth` and the row draws a password field and *Run
+with it*, which calls `runService(key, { repoAuth })`. Keep the token in
+memory only — never in storage — send it with that host's next Runs, drop it
+when a Run says it was `refused`, and pass the hosts you hold as
+`heldTokens`: the list names each with *Forget it* (`forgetRepoToken`). The
+studio's wiring is `repoTokens` and `runListRow` in `studio/app.mjs`.
 
 A row whose Run cannot start says why (`run.reason`: no environment, no
 repository, no endpoint, the reader's rank) and its button explains instead

@@ -567,7 +567,9 @@ export function renderOverview(container, model, host = appHost) {
 // serviceListModel(...), `form` its formModel(...). The actions ride on
 // host.overview: addService(), editService(serviceId, env), runService(key),
 // openService(serviceId, env), formInput(field, value), saveService({ run }),
-// closeForm(), showAll(), compare(); and the Folder answer's panel when the
+// closeForm(), showAll(), compare(), runService(key, { repoAuth }) — a row's
+// Run with the person's own token (asked for on the row when its host wants
+// it) — and forgetRepoToken(kind); and the Folder answer's panel when the
 // model offers Browse…: browseFolders() (Browse…, which closes an open
 // panel), openFolder(path) (a folder, Up, Start from the top — null is the
 // top), chooseFolder(path), closeFolders(); and Upload's when the model
@@ -612,6 +614,19 @@ function svcLastCell(r) {
   return `${letter}<span class="ov-svc__last-text"><b>${escapeHtml(l.word)}</b>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>`;
 }
 
+// The person's own token for a repository its host would not show without it:
+// one field and Run with it, sent with this Run (the host keeps it in memory
+// for the tab's next Runs of that host).
+function svcAuthHtml(r) {
+  const id = `ov-auth-${String(r.key).replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  return `
+        <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">
+          <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="off" spellcheck="false" aria-describedby="${id}"></label>
+          <button type="button" class="og-btn" data-ux-action="ov-svc-auth-run" data-key="${attr(r.key)}">Run with it</button>
+          <span class="ov-svc__auth-note og-muted" id="${id}">${escapeHtml(r.auth.text)}</span>
+        </div>`;
+}
+
 function svcRowHtml(r) {
   const runBtn = r.run.enabled || r.run.running
     ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''}>${r.run.running ? 'Running…' : 'Run'}</button>`
@@ -629,7 +644,7 @@ function svcRowHtml(r) {
         <div class="ov-svc__cell" data-col="Live">${svcLiveCell(r)}</div>
         <div class="ov-svc__cell ov-svc__last" data-col="Last check">${svcLastCell(r)}</div>
         <div class="ov-svc__acts">${runBtn}${openBtn}${editBtn}</div>${r.error ? `
-        <p class="ov-svc__error" role="alert">${escapeHtml(r.error)}</p>` : ''}
+        <p class="ov-svc__error" role="alert">${escapeHtml(r.error)}</p>` : ''}${r.auth ? svcAuthHtml(r) : ''}
       </li>`;
 }
 
@@ -777,6 +792,10 @@ export function serviceListHtml(list, form, ov = {}) {
   }
   const more = list.hidden ? `
       <p class="ov-svcs__more og-muted">${list.hidden} more ${list.hidden === 1 ? 'service was' : 'services were'} seen live with no repository yet. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-all">Show ${list.hidden === 1 ? 'it' : 'them'}</button></p>` : '';
+  const tokens = Array.isArray(list.tokens) && list.tokens.length ? `
+      <div class="ov-svcs__tokens">${list.tokens.map((t) => `
+        <p class="ov-svcs__token og-muted">${escapeHtml(t.text)} <button type="button" class="ov-start__expert" data-ux-action="ov-svc-forget-token" data-kind="${attr(t.kind)}">Forget it</button></p>`).join('')}
+      </div>` : '';
   const compare = typeof ov.compare === 'function' ? `
       <p class="ov-svcs__foot og-muted">Already have the packs? <button type="button" class="ov-start__expert" data-ux-action="ov-svc-compare">Upload one or compare two instead</button></p>` : '';
   return `
@@ -787,7 +806,7 @@ export function serviceListHtml(list, form, ov = {}) {
           <p class="ov-svcs__lede og-muted">Each one is checked where it is declared — its repository — against where it runs, read through its live MCP endpoint.</p>
         </div>
         ${add}
-      </header>${f ? svcFormHtml(f) : ''}${body}${more}${compare}
+      </header>${tokens}${f ? svcFormHtml(f) : ''}${body}${more}${compare}
     </section>`;
 }
 
@@ -796,10 +815,15 @@ export function renderServiceList(container, list, form, host = appHost) {
   const ov = host?.overview || {};
   container.innerHTML = `<div class="ov-page ov-page--list">${serviceListHtml(list, form, ov)}</div>`;
   const svcEnv = (el) => (el.dataset.env ? el.dataset.env : null);
+  // The token typed on a row (read when Run with it is pressed, never kept by the view).
+  const authInput = (key) => container.querySelector?.(`[data-auth-input="${String(key).replace(/["\\]/g, '')}"]`) || null;
+  const authValue = (key) => String(authInput(key)?.value ?? '').trim();
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
     'ov-svc-edit': (ev, el) => ov.editService?.(Number(el.dataset.service), svcEnv(el)),
     'ov-svc-run': (ev, el) => ov.runService?.(el.dataset.key),
+    'ov-svc-auth-run': (ev, el) => ov.runService?.(el.dataset.key, { repoAuth: authValue(el.dataset.key) }),
+    'ov-svc-forget-token': (ev, el) => ov.forgetRepoToken?.(el.dataset.kind),
     'ov-svc-open': (ev, el) => ov.openService?.(Number(el.dataset.service), svcEnv(el)),
     'ov-svc-all': () => ov.showAll?.(),
     'ov-svc-compare': () => ov.compare?.(),
@@ -815,6 +839,14 @@ export function renderServiceList(container, list, form, host = appHost) {
     'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
+  });
+  // Enter in a row's token field runs it, as Run with it does.
+  container.querySelectorAll?.('[data-auth-input]').forEach((input) => {
+    input.addEventListener?.('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault?.();
+      ov.runService?.(input.dataset.authInput, { repoAuth: String(input.value ?? '').trim() });
+    });
   });
   const formEl = container.querySelector('.ov-form');
   if (formEl) {

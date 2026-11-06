@@ -1,15 +1,16 @@
 // server/ado-crawl.mjs — an Azure DevOps repository as a scan source, the
 // sibling of server/github-crawl.mjs.
 //
-// Server-only: adoFetch reads AZURE_DEVOPS_TOKEN (a personal access token
-// with Code (Read)) from the environment, as ghFetch reads GITHUB_TOKEN.
-// parseAdoUrl and adoHostRefusal are pure.
+// Server-only: adoFetch sends the token its caller names (a personal access
+// token with Code (Read)) and no other — the person's own, or the server's
+// AZURE_DEVOPS_TOKEN on a server without sign-in (server/repo-auth.mjs), as
+// ghFetch does for GitHub. parseAdoUrl and adoHostRefusal are pure.
 //
 // Where the token goes: only to Azure DevOps Services (dev.azure.com and
 // <org>.visualstudio.com) or to an Azure DevOps Server origin the server
 // lists in OBSERVOGRAM_ADO_ORIGINS (comma-separated https origins). Any other
 // host is refused before a request is made — a repository URL is typed by
-// a person, and the token is the server's.
+// a person, and the token is theirs or the server's.
 //
 // The REST calls (api-version 7.0, available on Services and on Server 2022):
 //   GET {base}/{project}/_apis/git/repositories/{repo}/items?recursionLevel=Full
@@ -84,7 +85,8 @@ export function parseAdoUrl(input) {
 // The one authenticated wrapper around the Azure DevOps REST API. A refused
 // host never reaches fetch. Azure DevOps answers an unauthenticated call
 // with 203 and a sign-in page, or 401: both read as "the token".
-export async function adoFetch(url, { fetchImpl = fetch, token = process.env.AZURE_DEVOPS_TOKEN } = {}) {
+// tokenSource ('request' | 'server' | 'none') words a refusal for whoever can fix it.
+export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSource = token ? 'server' : 'none' } = {}) {
   const why = adoHostRefusal(new URL(url).origin);
   if (why) { const err = new Error(`Azure DevOps: ${why}`); err.status = 400; throw err; }
   const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' };
@@ -92,7 +94,10 @@ export async function adoFetch(url, { fetchImpl = fetch, token = process.env.AZU
   const res = await fetchImpl(url, { headers, redirect: 'error' });
   const ct = res.headers.get('content-type') || '';
   if (res.status === 203 || res.status === 401 || (res.ok && !ct.includes('json'))) {
-    const err = new Error(`Azure DevOps ${res.status === 203 ? 401 : res.status}: ${token ? 'the token in AZURE_DEVOPS_TOKEN was refused' : 'sign-in needed — set AZURE_DEVOPS_TOKEN on the server (a personal access token with Code (Read))'}`);
+    const why = tokenSource === 'request' ? 'your Azure DevOps token was refused (it needs Code (Read) on this repository)'
+      : token ? 'the token in AZURE_DEVOPS_TOKEN was refused'
+        : 'sign-in needed — give your own Azure DevOps token (a personal access token with Code (Read)), or, on a server without sign-in, set AZURE_DEVOPS_TOKEN';
+    const err = new Error(`Azure DevOps ${res.status === 203 ? 401 : res.status}: ${why}`);
     err.status = 401;
     throw err;
   }

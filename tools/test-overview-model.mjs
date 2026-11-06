@@ -32,6 +32,7 @@ import {
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders } from '../studio/overview-api.mjs';
+import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 
 // ---------- fixtures ----------
 
@@ -1606,6 +1607,55 @@ test('renderServiceList: Upload\'s block in place of the address — the two but
   const c3 = overviewContainer();
   renderServiceList(c3, list, formModel(formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] }), { endpoints: [EP], now: NOW }), { overview: {} });
   assert.ok(!c3.innerHTML.includes('Choose a folder') && c3.innerHTML.includes('data-upload-drop="off"') && c3.innerHTML.includes('ledger-main.zip · uploaded 2 days ago · 12 files.'), 'no uploads: the words alone, no drop target');
+});
+
+// ---------- a repository read with the person's own token ----------
+
+test('a Run its host would not read without the person\'s own token asks for it on the row; a refused one says so; the tokens held in the tab are named with a way to forget them; a reader who cannot run is never asked', () => {
+  const services = [svcRow()];
+  const ask = { kind: 'github', label: 'GitHub token', refused: false };
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: '404: the repository could not be read: …', repoAuth: ask } } });
+  assert.deepEqual(list.rows[0].auth, { kind: 'github', label: 'GitHub token', refused: false, text: 'GitHub reads this repository with your own token. It is sent with this tab\'s Runs only and never kept on the server.' });
+  const refused = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true } } } });
+  assert.equal(refused.rows[0].auth.text, 'That GitHub token was refused, or cannot read this repository. Give one that can.');
+  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, access: { canWrite: false }, results: { '1:prod': { error: 'x', repoAuth: ask } } }).rows[0].auth, null);
+  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: 'x' } } }).rows[0].auth, null, 'an error that is no access question asks nothing');
+  const held = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['ado', 'nope'] });
+  assert.deepEqual(held.tokens, [{ kind: 'ado', label: 'Azure DevOps token', text: 'Your Azure DevOps token is sent with this tab\'s Runs of Azure DevOps repositories; it is never kept on the server.' }]);
+  assert.deepEqual(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).tokens, []);
+  assert.deepEqual(REPOSITORY_KINDS.slice(0, 2).map((k) => k.hint), [
+    'A public repository, or a private one read with your own GitHub token, asked for when you run it.',
+    'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.',
+  ], 'no hint says the server reads with its own token');
+});
+
+test('renderServiceList: the row\'s token field (a password input, Run with it) and the held-token line with Forget it; both proxied to host.overview; nothing typed is kept in the markup', () => {
+  const services = [svcRow()];
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['github'], results: { '1:prod': { error: '404: the repository could not be read', repoAuth: { kind: 'github', label: 'GitHub token', refused: false } } } });
+  const calls = [];
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { runService: (key, opts) => calls.push(['run', key, opts]), forgetRepoToken: (kind) => calls.push(['forget', kind]) } });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<div class="ov-svc__auth" role="group" aria-label="Your GitHub token for Checkout">'));
+  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" autocomplete="off" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
+  assert.ok(html.includes('data-ux-action="ov-svc-auth-run" data-key="1:prod">Run with it</button>'));
+  assert.ok(html.includes('Your GitHub token is sent with this tab&#39;s Runs of GitHub repositories; it is never kept on the server. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-forget-token" data-kind="github">Forget it</button>'));
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Add a service');
+  c.click('ov-svc-auth-run', { key: '1:prod' });
+  c.click('ov-svc-forget-token', { kind: 'github' });
+  assert.deepEqual(calls, [['run', '1:prod', { repoAuth: '' }], ['forget', 'github']], 'the view reads the field when pressed (the shim has none) and keeps nothing');
+});
+
+test('the services client: a Run sends the person\'s token only when given; a refusal keeps the host\'s ask', async () => {
+  const sent = [];
+  const fetchFn = async (path, init) => { sent.push([path, JSON.parse(init.body)]); return { ok: true }; };
+  await runServiceRecord(3, 'prod', { fetchFn });
+  await runServiceRecord(3, 'prod', { fetchFn, repoAuth: 'ghp_x1234' });
+  await runServiceRecord(3, null, { fetchFn });
+  assert.deepEqual(sent, [['/api/services/3/run', { env: 'prod' }], ['/api/services/3/run', { env: 'prod', repoAuth: 'ghp_x1234' }], ['/api/services/3/run', {}]]);
+  const e = servicesRefusal(404, { ok: false, error: 'the repository could not be read', repoAuth: { kind: 'ado', label: 'Azure DevOps token', refused: true } });
+  assert.deepEqual([e.message, e.status, e.repoAuth], ['404: the repository could not be read', 404, { kind: 'ado', label: 'Azure DevOps token', refused: true }]);
+  assert.equal(servicesRefusal(502, { ok: false, error: 'x' }).repoAuth, undefined);
 });
 
 // ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------

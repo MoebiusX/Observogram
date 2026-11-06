@@ -119,7 +119,10 @@ test('adoFetch: the token as Basic only to an allowed host; 203 and 401 read as 
   assert.equal(seen[0].auth, `Basic ${Buffer.from(':pat-SECRET').toString('base64')}`);
   assert.equal(seen[0].redirect, 'error', 'a redirect never carries the token elsewhere');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(203, '<html>sign in</html>', 'text/html'), token: '' }),
-    (e) => e.status === 401 && /sign-in needed — set AZURE_DEVOPS_TOKEN on the server/.test(e.message));
+    (e) => e.status === 401 && /sign-in needed — give your own Azure DevOps token \(a personal access token with Code \(Read\)\), or, on a server without sign-in, set AZURE_DEVOPS_TOKEN$/.test(e.message));
+  await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(401, ''), token: 'pat-MINE', tokenSource: 'request' }),
+    (e) => e.status === 401 && /your Azure DevOps token was refused \(it needs Code \(Read\) on this repository\)$/.test(e.message) && !e.message.includes('pat-MINE'));
+  assert.equal(seen.at(-1).auth, `Basic ${Buffer.from(':pat-MINE').toString('base64')}`, 'their own token, as Basic');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(401, ''), token: 'pat-SECRET' }),
     (e) => e.status === 401 && /the token in AZURE_DEVOPS_TOKEN was refused/.test(e.message) && !e.message.includes('pat-SECRET'));
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(404, { message: 'TF401019: The Git repository does not exist.' }), token: '' }),
@@ -428,4 +431,125 @@ test('a Run scans the upload as the repository and registers it as the service\'
   const deleted = await call('DELETE', `/api/services/${ids.uploaded}`);
   assert.equal(deleted.status, 200, deleted.text);
   assert.equal(existsSync(copyOf(ids.uploaded)), false, 'deleted: the copy goes');
+});
+
+// ---------- a repository read as the person who asked ----------
+//
+// server/repo-auth.mjs: a GitHub or Azure DevOps repository is read with the
+// token the person sends with that request, used for that read only; the
+// server's own token only on a server without sign-in; never in a log or an
+// answer.
+
+const { repositoryCredential, parseRepoAuth, repoAuthNeed, redactToken, signInOn, REPO_AUTH_WAYS, RepoAuthRefusal } = await import('./repo-auth.mjs');
+
+test('repositoryCredential: the person\'s own token wins; the server\'s only on a server without sign-in, never once sign-in is on; a value that is no token is refused without being quoted', () => {
+  const env = { GITHUB_TOKEN: 'srv-gh-00000', AZURE_DEVOPS_TOKEN: 'srv-ado-00000' };
+  assert.deepEqual(repositoryCredential('github', { repoAuth: 'mine-12345', signIn: true, env }), { token: 'mine-12345', source: 'request' });
+  assert.deepEqual(repositoryCredential('ado', { repoAuth: 'mine-12345', signIn: false, env }), { token: 'mine-12345', source: 'request' }, 'the person\'s own wins on the person\'s own machine too');
+  assert.deepEqual(repositoryCredential('github', { signIn: false, env }), { token: 'srv-gh-00000', source: 'server' });
+  assert.deepEqual(repositoryCredential('ado', { signIn: false, env }), { token: 'srv-ado-00000', source: 'server' });
+  assert.deepEqual(repositoryCredential('github', { signIn: true, env }), { token: null, source: 'none', serverHeld: true }, 'sign-in on: the server\'s token is never sent');
+  assert.deepEqual(repositoryCredential('ado', { signIn: true, env }), { token: null, source: 'none', serverHeld: true });
+  assert.deepEqual(repositoryCredential('github', { signIn: false, env: {} }), { token: null, source: 'none', serverHeld: false });
+  assert.equal(signInOn(), false, 'this suite runs with OBSERVOGRAM_AUTH=off: no sign-in');
+
+  for (const none of [undefined, null, '']) assert.equal(parseRepoAuth(none), null);
+  assert.equal(parseRepoAuth('ghp_abc123'), 'ghp_abc123');
+  for (const bad of [7, 'two words', `x${'y'.repeat(4096)}`, 'line\nbreak', { token: 'x' }]) {
+    assert.throws(() => parseRepoAuth(bad), (e) => e instanceof RepoAuthRefusal && e.message === REPO_AUTH_WAYS.shape && e.status === 400);
+  }
+
+  assert.deepEqual(repoAuthNeed('github', { source: 'none' }, 404), { kind: 'github', label: 'GitHub token', refused: false }, 'GitHub answers a private repository with 404');
+  assert.deepEqual(repoAuthNeed('ado', { source: 'none' }, 401), { kind: 'ado', label: 'Azure DevOps token', refused: false });
+  assert.deepEqual(repoAuthNeed('github', { source: 'request' }, 403), { kind: 'github', label: 'GitHub token', refused: true });
+  assert.equal(repoAuthNeed('github', { source: 'server' }, 404), null, 'the server\'s token refused: its operator\'s fix, not the person\'s');
+  assert.equal(repoAuthNeed('github', { source: 'none' }, 502), null);
+  assert.equal(repoAuthNeed('path', { source: 'none' }, 404), null);
+  assert.equal(redactToken('a mine-12345 b mine-12345', 'mine-12345'), 'a [your token] b [your token]');
+  assert.equal(redactToken('nothing here', null), 'nothing here');
+});
+
+test('a Run of a private GitHub repository sends the person\'s token for that read only: without it the answer asks for it, with it the scan reads, a wrong one is named; the server\'s token serves only a server without sign-in; no token reaches a log or an answer; Expert\'s GitHub scan follows the same rule', async () => {
+  const created = await call('POST', '/api/services', { name: 'Private Shop', repository: { kind: 'github', location: 'acme/private-shop' } });
+  assert.equal(created.status, 201, created.text);
+  ids.privateShop = created.json.service.id;
+  assert.equal((await call('POST', `/api/services/${ids.privateShop}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+
+  const MINE = 'ghp_PersonalToken0123456789';
+  const SERVER = 'ghp_ServerToken0123456789';
+  const RULES = readFileSync(join(REPO, 'prometheus', 'rules.yml'), 'utf8');
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  // GitHub, stubbed: the repository answers only to MINE, and 404s otherwise, as GitHub hides a private repository.
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
+    const auth = init.headers?.Authorization ?? null;
+    seen.push({ url: u, auth });
+    if (auth !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    if (u.endsWith('/repos/acme/private-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
+    if (u.includes('/repos/acme/private-shop/git/trees/main')) return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] }));
+    if (u.includes('/repos/acme/private-shop/contents/')) return new Response(RULES);
+    return new Response('', { status: 404 });
+  };
+  const logs = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => { logs.push(String(chunk)); return realWrite(chunk, ...rest); };
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const run = (body) => call('POST', `/api/services/${ids.privateShop}/run`, body);
+
+    const without = await run({});
+    assert.equal(without.status, 404, without.text);
+    assert.deepEqual(without.json.repoAuth, { kind: 'github', label: 'GitHub token', refused: false });
+    assert.ok(without.json.error.endsWith(` — ${REPO_AUTH_WAYS.needed('github')}`), without.json.error);
+    assert.ok(seen.length > 0 && seen.every((s) => s.auth === null), 'no token at all: none sent');
+
+    seen.length = 0;
+    const withMine = await run({ repoAuth: MINE });
+    assert.equal(withMine.status, 200, withMine.text);
+    assert.deepEqual([withMine.json.scan.source, withMine.json.scan.files], ['acme/private-shop on GitHub', 1]);
+    assert.ok(seen.length >= 3 && seen.every((s) => s.auth === `Bearer ${MINE}` && s.url.startsWith('https://api.github.com/')), 'the person\'s token on every call, through the API (not raw)');
+
+    seen.length = 0;
+    const again = await run({});
+    assert.equal(again.status, 404, 'the token was for that read only: the next Run without it has none');
+    assert.ok(seen.every((s) => s.auth === null));
+
+    const wrong = await run({ repoAuth: 'ghp_WrongToken000000000' });
+    assert.deepEqual([wrong.status, wrong.json.repoAuth], [404, { kind: 'github', label: 'GitHub token', refused: true }]);
+    assert.ok(wrong.json.error.endsWith(` — ${REPO_AUTH_WAYS.refused('github')}`));
+
+    const shape = await run({ repoAuth: 'two words' });
+    assert.deepEqual([shape.status, shape.json.error], [400, REPO_AUTH_WAYS.shape]);
+
+    // A server without sign-in (this suite's posture) may read with its own token; a refusal of it is the operator's to fix.
+    process.env.GITHUB_TOKEN = SERVER;
+    seen.length = 0;
+    const server = await run({});
+    assert.equal(server.status, 404);
+    assert.ok(seen.every((s) => s.auth === `Bearer ${SERVER}`), 'the server\'s token, on a server without sign-in');
+    assert.equal(server.json.repoAuth, undefined, 'the person is not asked: their token would not be the fix');
+    assert.equal((await run({ repoAuth: MINE })).status, 200, 'and the person\'s own still wins over it');
+
+    // Expert's GitHub scan: the same rule.
+    delete process.env.GITHUB_TOKEN;
+    const scanNone = await call('POST', '/api/crawl-github', { url: 'acme/private-shop' });
+    assert.deepEqual([scanNone.status, scanNone.json.repoAuth], [404, { kind: 'github', label: 'GitHub token', refused: false }]);
+    assert.equal(scanNone.json.hint, `${REPO_AUTH_WAYS.needed('github')}.`);
+    seen.length = 0;
+    const scanMine = await call('POST', '/api/crawl-github', { url: 'acme/private-shop', repoAuth: MINE });
+    assert.equal(scanMine.status, 200, scanMine.text);
+    assert.ok(seen.every((s) => s.auth === `Bearer ${MINE}`));
+    assert.deepEqual([(await call('POST', '/api/crawl-github', { url: 'acme/private-shop', repoAuth: 'a b' })).status], [400]);
+
+    for (const token of [MINE, SERVER, 'ghp_WrongToken000000000']) {
+      assert.ok(!logs.some((l) => l.includes(token)), `${token.slice(0, 8)}… never logged`);
+      for (const r of [without, withMine, again, wrong, shape, server, scanNone, scanMine]) assert.ok(!r.text.includes(token), `${token.slice(0, 8)}… never answered`);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    process.stderr.write = realWrite;
+    delete process.env.GITHUB_TOKEN;
+  }
 });

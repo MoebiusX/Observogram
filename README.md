@@ -939,7 +939,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
-| `POST` | `/api/services/:id/run` | operator | `{ env? }` | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
+| `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
 | `GET` | `/api/repository-folders` | operator | `?path=` (a folder's full path; left out: the top) | the folders a `path` repository can be picked from (Overview's **Browse…**): `{ allowed, why, bounded, path, up, repository, folders, truncated, limit }` — `folders` the folders inside `path` by name (`{ name, path, repository }`, `repository` when it holds `.git`; never a file, `.git` or `node_modules`; at most `limit`, 500, then `truncated`), `up` the folder above (`{ path }`, `path` `null` for the top) or `null`. The rule is the save's: with `OBSERVOGRAM_REPO_ROOTS` listed (`bounded`) the top is those folders, `path` `null`, and nothing outside them is listed or opened, a link that leads out included; with none, the top is the home folder of a server answering a direct request on loopback without sign-in, and any other reader gets `allowed: false` with the rule's sentence in `why`. A refused folder is 400 with the save's sentence; one that is not there, 404 |
@@ -1128,14 +1128,14 @@ repository, the live endpoint) and **Run** on every row.
 
 | `kind` | `location` | Read with |
 |---|---|---|
-| `github` | `https://github.com/<owner>/<repo>` or `<owner>/<repo>` (…`/tree/<ref>` names a branch) | the contents API with `GITHUB_TOKEN` on the server (a private repository); without one, `raw.githubusercontent.com` (a public one, outside the API's hourly quota) |
-| `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | `AZURE_DEVOPS_TOKEN` (a personal access token with Code (Read)); the token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
+| `github` | `https://github.com/<owner>/<repo>` or `<owner>/<repo>` (…`/tree/<ref>` names a branch) | as the person who runs it ([whose access](#whose-access-reads-a-repository)): the contents API with their own token (a private repository); without one, `raw.githubusercontent.com` (a public one, outside the API's hourly quota) |
+| `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | as the person who runs it ([whose access](#whose-access-reads-a-repository)): their own personal access token with Code (Read); a token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
 | `path` | a folder's full path on the server, typed or picked with **Browse…** (`GET /api/repository-folders`, the same rule) | the server's own file system, under the org's part of the workspace; taken only under a folder listed in `OBSERVOGRAM_REPO_ROOTS` (comma-separated), or — none listed — from the server's own machine while it runs without sign-in on loopback |
 | `upload` | the folder's or the `.zip`'s name (set by `PUT /api/services/:id/repository-upload`, never named in POST or PATCH) | the copy the person uploaded from their own machine — no server-held token reads anything; each Run scans the copy again, so it is as current as its last upload |
 
 `ref` is a branch (the default branch when left out). `POST
-/api/services/:id/run` with `{ env }` (left out when the service has one
-environment) does the whole check:
+/api/services/:id/run` with `{ env, repoAuth? }` (`env` left out when the
+service has one environment) does the whole check:
 
 1. **The targets** — the environment's endpoint, resolved as a journey's
    live Pack B is (a refusal reads nothing and sends nothing); a folder's
@@ -1149,6 +1149,31 @@ environment) does the whole check:
    and budget) and run, exactly as `POST /api/journeys/:name/run` runs it.
    **Check now** on the board re-checks live against the last scan; **Run**
    reads the repository again too.
+
+#### Whose access reads a repository
+
+Observogram serves several people, so a GitHub or Azure DevOps repository is
+read as the person who runs it (`server/repo-auth.mjs`):
+
+- **Their own token** — `repoAuth` on the Run (or on `POST /api/crawl-github`):
+  used for that one read, never stored, never logged, never sent back (an
+  error that quotes it is masked). Overview asks for it on the row when the
+  host would not show the repository without it, and keeps it in the tab's
+  memory for that host's next Runs until the tab closes or the person
+  forgets it; Expert's GitHub scan has a field for it.
+- **The server's own** `GITHUB_TOKEN` / `AZURE_DEVOPS_TOKEN` — only on a
+  server without sign-in (the person's own machine, `OBSERVOGRAM_AUTH=off`,
+  or a server with no user, OIDC or proxy). Once sign-in is on, it is never
+  sent: every person reads with their own access.
+- **None** — a public GitHub repository reads from `raw.githubusercontent.com`.
+  A private one answers 404 to a reader who cannot see it (GitHub hides it),
+  Azure DevOps 401; the answer then carries `repoAuth: { kind, label,
+  refused }`, and its sentence says to run it with the person's own token
+  (or that the one sent was refused).
+
+A schedule and **Check now** never read the repository: they check live
+against the last scan a person's Run made, so a scheduled check needs no one's
+token. An upload needs none either: its files came from the person's machine.
 
 The answer is `{ ok, record, pack: { id, label }, journey, scan: { source,
 ref, files, candidates, skipped } }`. A service or environment that is not
@@ -1336,8 +1361,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.7.0 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.7.0
+docker build -t observogram:0.8.0 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.0
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
