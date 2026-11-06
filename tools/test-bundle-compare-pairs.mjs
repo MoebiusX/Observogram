@@ -35,7 +35,7 @@ const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
 const packFile = (rel) => (rel.endsWith('.json') ? JSON.parse(read(rel)) : parseYaml(read(rel)));
 // The six packs a server serves by id, from the files it reads them from (server/index.mjs).
 const SERVER_PACKS = [
-  ['payment-service', 'vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml'],
+  ['payment-service', 'vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml'],
   ['target-advanced', 'examples/target-advanced.pack.yaml'],
   ['production-curated', 'examples/production-curated.pack.yaml'],
   ['kafka-reference', 'reference-packs/kafka.pack.yaml'],

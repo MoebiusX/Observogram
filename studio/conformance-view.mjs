@@ -1,6 +1,6 @@
 // studio/conformance-view.mjs
 //
-// The Conformance view — how MATURE is the focused pack against the v1.4
+// The Conformance view — how MATURE is the focused pack against the v1.5
 // maturity rubric (MUST/SHOULD per tier). Self-contained; returns the
 // rendered <section> for the caller to append.
 //
@@ -39,7 +39,7 @@ import {
   wireSectionNav, wireUxActions,
 } from './ux-kit.mjs';
 
-const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/docs/maturity-model.md';
+const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/docs/maturity-model.md';
 
 const DIMENSIONS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5'];
 

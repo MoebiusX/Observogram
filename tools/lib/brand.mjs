@@ -38,8 +38,8 @@ const UPSTREAM = Object.freeze({
 });
 
 export const SPEC_LINK = Object.freeze({
-  label: 'spec v1.4',
-  href: 'https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/spec/ObservabilityPack-Spec.md',
+  label: 'spec v1.5',
+  href: 'https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/spec/ObservabilityPack-Spec.md',
 });
 
 // The description's tail after "<name> — ".
@@ -221,7 +221,7 @@ export const SHELL_ANCHORS = Object.freeze({
   title: `<title>${d.title}</title>`,
   description: `<meta name="description" content="${d.description}">`,
   h1: `<h1>${d.wordmarkHtml('span', 'class="ital"')}</h1>`,
-  hdrSub: `<div class="hdr-sub">${d.tagline} · canonical spec v1.4</div>`,
+  hdrSub: `<div class="hdr-sub">${d.tagline} · canonical spec v1.5</div>`,
   footerText: `<footer class="ftr">\n  <div>${d.footerText} · <span id="build-label"`,
   footerLinks: `  <div>\n    ${d.footerLinksHtml}\n  </div>\n</footer>`,
   tokensLink: '<link rel="stylesheet" href="/design-tokens.css">',
@@ -252,7 +252,7 @@ export function brandShellHtml(html, b) {
   out = replaceOnce(out, SHELL_ANCHORS.title, `<title>${escapeHtml(c.title)}</title>`, 'title');
   out = replaceOnce(out, SHELL_ANCHORS.description, `<meta name="description" content="${escapeHtml(c.description)}">`, 'description');
   out = replaceOnce(out, SHELL_ANCHORS.h1, `<h1>${c.wordmarkHtml('span', 'class="ital"')}</h1>`, 'h1');
-  out = replaceOnce(out, SHELL_ANCHORS.hdrSub, `<div class="hdr-sub">${escapeHtml(c.tagline)} · canonical spec v1.4</div>`, 'hdr-sub');
+  out = replaceOnce(out, SHELL_ANCHORS.hdrSub, `<div class="hdr-sub">${escapeHtml(c.tagline)} · canonical spec v1.5</div>`, 'hdr-sub');
   out = replaceOnce(out, SHELL_ANCHORS.footerText, `<footer class="ftr">\n  <div>${escapeHtml(c.footerText)} · <span id="build-label"`, 'footer text');
   out = replaceOnce(out, SHELL_ANCHORS.footerLinks, `  <div>\n    ${c.footerLinksHtml}\n  </div>\n</footer>`, 'footer links');
   const tokensCss = brandTokensCss(b);

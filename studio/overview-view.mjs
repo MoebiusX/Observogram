@@ -435,11 +435,11 @@ const START_STEPS = [
 const START_CARDS = {
   a: [
     { action: 'ov-scan', glyph: '↻', label: 'Scan a repository', sub: 'walk Prom / OTel / Grafana / Alertmanager configs — local folder or a GitHub URL' },
-    { action: 'ov-upload-a', glyph: '▤', label: 'Upload a pack', sub: 'an existing canonical v1.4 YAML or JSON manifest, as Pack A' },
+    { action: 'ov-upload-a', glyph: '▤', label: 'Upload a pack', sub: 'an existing canonical v1.5 YAML or JSON manifest, as Pack A' },
   ],
   b: [
     { action: 'ov-live', glyph: '⟳', label: 'Generate live from MCP', sub: 'interrogate a live OpenTelemetry MCP server for backends, baselines and anomalies' },
-    { action: 'ov-upload-b', glyph: '▤', label: 'Upload a pack', sub: 'a live snapshot or another v1.4 manifest, as Pack B' },
+    { action: 'ov-upload-b', glyph: '▤', label: 'Upload a pack', sub: 'a live snapshot or another v1.5 manifest, as Pack B' },
   ],
 };
 // The hook each card calls (host.overview): a host that does not supply one

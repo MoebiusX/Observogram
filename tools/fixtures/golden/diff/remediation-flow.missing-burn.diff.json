@@ -2,8 +2,8 @@
   "case": "remediation-flow.missing-burn",
   "opts": null,
   "taxonomy": null,
-  "sha256": "991219134fc941ed44d6910d90b994a9ac6f1b9f8f9c79105477919ebddbd35f",
-  "bytes": 73484,
+  "sha256": "14bdd0f63a9f5a8e37689faf93ffaac4908a7d893fd757ba999db748819b350d",
+  "bytes": 73900,
   "keys": [
     "a",
     "b",

@@ -114,7 +114,7 @@ test('branded: the acme fixture leaves no Observogram in any chrome string, the 
   assert.doesNotMatch(html, LEAK);
   assert.ok(html.includes('<title>Acme Watch — the Reliability Console</title>'));
   assert.ok(html.includes('<h1>Acme<span class="ital">Watch</span></h1>'));
-  assert.ok(html.includes('<div class="hdr-sub">reliability, watched · canonical spec v1.4</div>'));
+  assert.ok(html.includes('<div class="hdr-sub">reliability, watched · canonical spec v1.5</div>'));
   assert.ok(html.includes('<link rel="icon" href="/assets/acme.ico">'));
   assert.ok(html.includes('<style id="brand-tokens">\n:root{--og-accent:#b3261e;--og-accent-solid:#f28b82;}\n[data-theme="dark"]{--og-accent:#f28b82;}\n</style>'));
   assert.ok(html.includes('<script type="application/json" id="brand-config">'));
@@ -183,7 +183,7 @@ test('escaping: every string is escaped where it lands; logo.svg is the one raw 
   const html = brandShellHtml(SHELL, b);
   assert.ok(html.includes('<title>A&amp;B &lt;Corp&gt; — the Observability Compiler</title>'));
   assert.ok(html.includes('<link rel="icon" href="/f.ico&quot;&gt;&lt;script&gt;">'));
-  assert.ok(html.includes('<div class="hdr-sub">say &quot;hi&quot; · canonical spec v1.4</div>'));
+  assert.ok(html.includes('<div class="hdr-sub">say &quot;hi&quot; · canonical spec v1.5</div>'));
   assert.equal(html.split('<script>').length, SHELL.split('<script>').length, 'nothing from the brand opens a script element (the shell\'s own theme script aside)');
   // The config JSON cannot close its own element.
   const script = brandConfigScript(normalizeBrand({ name: '</script><script>alert(1)</script>' }));

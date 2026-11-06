@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Spec version | 1.4 |
+| Spec version | 1.5 |
 | Status | Draft for review |
 | Author | Carlos Montero  |
 | First publication | 2026-05-08 |
-| Last updated | 2026-11-01 |
+| Last updated | 2026-11-06 |
 | Default binding | `otel-elastic-prometheus-grafana` |
 | Audience | Service owners, SREs, platform engineers, security & compliance, leadership |
 
@@ -36,9 +36,9 @@ This document defines the contract for an ObservabilityPack: its conceptual mode
 
 ### 1.3 Versioning
 
-This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.4**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor; **1.4** gives operational (non-SLO) alert rules a home (`alerting.rules`, §5.8), an additive minor; a 2026-11-01 revision of 1.4 relaxes the `recording_rules[].name` pattern to the Prometheus metric-name grammar and makes the three-segment form a SHOULD (§5.5) — a pure widening, so it stays within 1.4 rather than opening 1.5. Because the consolidation and the additions all preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
+This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.5**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor; **1.4** gives operational (non-SLO) alert rules a home (`alerting.rules`, §5.8), an additive minor; a 2026-11-01 revision of 1.4 relaxes the `recording_rules[].name` pattern to the Prometheus metric-name grammar and makes the three-segment form a SHOULD (§5.5) — a pure widening, so it stays within 1.4 rather than opening 1.5; **1.5** lets a chaos experiment say how it is run (`engine: in-process | custom`, `schedule: on-demand | ci`) and what its newest run showed (`last_result`, §5.11), an additive minor. Because the consolidation and the additions all preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
 
-- **Spec version** (`1.4`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
+- **Spec version** (`1.5`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
 - **`apiVersion: observability.platform/v1`** — the stable API surface for pack manifests, in the Kubernetes-style sense. A breaking change to the manifest shape would bump this to `v2`. Tracks the spec's major version but is not identical to it: an editorial spec patch does not move `apiVersion`.
 - **`metadata.version`** on each pack — SemVer per pack instance, owned by the service team. Bumped on every pack change. Unrelated to the spec.
 - **Binding name** (currently `otel-elastic-prometheus-grafana`) — the realisation contract for a specific stack. Future bindings live as separate documents under `bindings/` and do not bump the `apiVersion`.
@@ -370,10 +370,34 @@ validation:
       on_fail_severity: SEV2
 ```
 
+**How an experiment is run, and what its last run showed (since 1.5).** Not every service injects faults through an external engine. A service may carry its own fault injection — a middleware that adds latency or errors on chosen routes, switched on through a guarded control API — and other teams use a tool the enum does not name (toxiproxy, a cloud fault-injection service, a load-test script that breaks a dependency). `engine: in-process` declares the first, `engine: custom` the second. Not every experiment runs on a calendar either: `schedule: on-demand` declares one that a person starts, `schedule: ci` one a pipeline step runs. Neither satisfies a cadence clause by declaration (the tier rubrics count `daily`, `weekly` and `monthly`), because neither says how often it runs.
+
+Spec 1.4 asked for a failed experiment to be "recorded as failed" and gave it nowhere to be recorded. `last_result` is that record: the **newest** run of the experiment, as whatever ran it observed it.
+
+```yaml
+    - id: api-latency-spike
+      engine: in-process
+      target: payment-api
+      steady_state_hypothesis: ref:slos.checkout_latency_99_5_p99_300ms
+      fault: { kind: latency, duration: 180s, delay_ms: 5000 }
+      expected_alerts: [ checkout-latency-burn-fast ]
+      expected_mttd: 6m
+      schedule: on-demand
+      last_result:
+        at: "2026-10-28T09:40:00Z"      # when the run started (RFC 3339; quote it so YAML keeps it a string)
+        outcome: pass                    # pass | fail | aborted
+        environment: staging
+        observed_mttd: 4m12s             # injection to the first expected alert firing
+        alerts_fired: [ checkout-latency-burn-fast ]
+        evidence: https://ci.example/runs/8812   # a run id, a link or a file: never used for matching
+```
+
+`at` and `outcome` are required; everything else is optional. `pass` means every expected alert fired within `expected_mttd` and the steady state held or recovered as the hypothesis says; `fail` means one of them did not; `aborted` means the run stopped before it could tell (a guardrail tripped, someone stopped it). A pack keeps the newest run only: it is a manifest, not a ledger, and a history would grow with every run. The history stays with whatever measured it — a certification harness, a CI log, the chaos engine's own records — which `evidence` may point at. A `last_result` is a point-in-time observation: a reader that weighs it SHOULD weigh its age against the experiment's `schedule`.
+
 **Conformance:**
 - MUST: every tier-1 SLO covered by a chaos experiment running at least monthly.
 - MUST: every tier-1 service has a synthetic probe of the primary user journey.
-- MUST: a chaos experiment that fails to trigger the expected alert within `expected_mttd` is recorded as failed.
+- MUST: a chaos experiment that fails to trigger the expected alert within `expected_mttd` is recorded as failed (`last_result.outcome: fail`).
 - SHOULD (tier-1): chaos runs weekly in production with blast-radius controls.
 - SHOULD (tier-1): synthetic probes are OTel-instrumented (`otel_instrumentation: true`).
 
@@ -541,7 +565,7 @@ Exceptions are time-bounded (default 90 days), reviewed by the platform engineer
 | `alerting.rules` | Prometheus / Loki alerting rule group YAML, or Grafana-managed (provisioned) alert rules, per `engine` | Prometheus / Mimir ruler, Loki ruler, Grafana unified alerting |
 | `remediation` | Argo Events Sensor + WorkflowTemplate | Argo Workflows |
 | `baselines` | Derived MTTD/MTTR metrics | Platform observability service |
-| `validation.chaos` | Chaos Mesh Workflow/Schedule CRDs | Chaos Mesh |
+| `validation.chaos` | Chaos Mesh Workflow/Schedule CRDs (`engine: chaos-mesh`); the service's own injection code (`engine: in-process`) | Chaos Mesh |
 | `validation.synthetic` | Elastic Synthetics monitor (OTel-instrumented) | Elastic Synthetics |
 
 See `bindings/otel-elastic-prometheus-grafana.md` for full artefact examples.

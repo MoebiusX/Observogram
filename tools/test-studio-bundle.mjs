@@ -74,7 +74,7 @@ import { renderBoard, familiesOf, boardGroupCounts } from './test-golden-board.m
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
-const PAYMENT = 'vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml';
+const PAYMENT = 'vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml';
 const GOLDEN = 'tools/fixtures/golden-crawl.pack.json';
 const LIBRARY_BUILT = 'tools/fixtures/build/orders-api.tier-2.instantiate.json';
 // The seams' fixtures: the taxonomy override, the canonical pack with seven declared
