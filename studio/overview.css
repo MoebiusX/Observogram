@@ -445,6 +445,10 @@ html[data-theme="light"] .ov-page {
 .ov-form__kind[aria-pressed="true"] .ov-svc__ic { color: var(--og-accent); }
 .ov-form__pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, 0.35fr); gap: 6px; }
 .ov-form__pair:has(> :only-child) { grid-template-columns: 1fr; }
+/* The address and its branch share a line while both have room (128px holds the branch's placeholder); else the branch goes under. */
+.ov-form__pair:has(> .ov-form__ref) { display: flex; flex-wrap: wrap; }
+.ov-form__pair:has(> .ov-form__ref) > .ov-form__loc { flex: 999 1 180px; min-width: 0; }
+.ov-form__pair:has(> .ov-form__ref) > .ov-form__ref { flex: 1 1 128px; min-width: 0; }
 .ov-form__hint { font: 400 12px/1.35 var(--og-font); }
 .ov-form__err { font: 500 12px/1.35 var(--og-font); color: var(--og-fail); }
 .ov-form__sub { display: grid; gap: 8px; margin-top: 4px; padding: 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; }
