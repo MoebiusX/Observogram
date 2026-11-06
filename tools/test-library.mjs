@@ -1036,3 +1036,47 @@ test('the Conformance screen splits blocking, on-placeholder, passed and not-app
   assert.ok(b.groups.blocking.some(r => r.id === 'L5.MUST.synthetic_probe' && r.reason && r.action), 'a failing MUST blocks, with a reason and a fix');
   assert.ok(b.groups.blocking.every(r => r.severity === 'MUST') && b.groups.recommended.every(r => r.severity === 'SHOULD'));
 });
+
+// The 0.8.7 walkthrough (j2-67): Scoring rules said every template value passes, while the tier-1 MUST
+// "No synthetic check" failed on the canary the repository scan invents (crawler.scaffold.*). The rule is
+// the engine's (tools/lib/conformance.mjs scannerInvented); the text names the exception, and the failing
+// row names the check it left out. A library placeholder still passes, so it gets no such line.
+test('the Conformance screen on a scan-invented synthetic check: Scoring rules name the one exception, the failing synthetic clause names the invented check; a library placeholder passes with no such line', async () => {
+  const { readConformance, renderConformanceView } = await import('../studio/conformance-view.mjs');
+  const { state } = await import('../studio/state.mjs');
+  const { canonical } = build(byId.kafka, 'tier-2');
+  const canary = (mark) => {
+    const c = JSON.parse(JSON.stringify(canonical));
+    c.spec.validation.synthetic_checks = [{ ...c.spec.validation.synthetic_checks[0], id: 'kafka-health-canary' }];
+    c.metadata.annotations = Object.fromEntries(Object.entries(c.metadata.annotations || {}).filter(([k]) => !k.includes('synthetic_checks')));
+    c.metadata.annotations[`${mark}validation.synthetic_checks.kafka-health-canary`] = 'a placeholder';
+    return c;
+  };
+  const invented = canary('crawler.scaffold.');
+  const report = evaluateConformance(invented);
+  const model = readConformance(report, adapt(invented));
+  const probe = model.groups.blocking.find(r => r.id === 'L5.MUST.synthetic_probe');
+  assert.ok(probe, 'the clause fails and blocks: an invented canary is no synthetic check');
+  assert.deepEqual(probe.inventedChecks, ['kafka-health-canary']);
+  assert.ok([...model.groups.blocking, ...model.groups.recommended].filter(r => r.inventedChecks).every(r => ['L5.MUST.synthetic_probe', 'L5.MUST.tier1_weekly_prod_chaos'].includes(r.id)), 'only the two synthetic clauses name it');
+  // Rendered headless over a document stub (tools/test-waivers.mjs renderHeadless's).
+  const stub = () => ({ className: '', dataset: {}, innerHTML: '', addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; }, contains() { return false; } });
+  globalThis.document = { createElement: stub };
+  let html;
+  try {
+    state.pack = adapt(invented);
+    state.conformance = { environment: null, ...report, tier: { graded: report.declaredTier, pack: report.declaredTier, from: 'pack', service: null, environment: null, mismatch: false } };
+    html = renderConformanceView().innerHTML;
+  } finally {
+    delete globalThis.document;
+    state.pack = null;
+    state.conformance = null;
+  }
+  assert.match(html, /Template values count as passes, with one exception\.<\/strong>[^<]*synthetic check the repository scan or the live check had to invent/);
+  assert.doesNotMatch(html, /Template values count as passes\.<\/strong>/, 'the old, unqualified rule is gone');
+  assert.match(html, /The synthetic check <code>kafka-health-canary<\/code> is a placeholder the scan wrote because the schema needs one; nothing in the repository probes the service, so it does not count here\./);
+  const library = canary('library.todo.');
+  const lib = readConformance(evaluateConformance(library), adapt(library));
+  assert.ok([...lib.groups.passed, ...lib.groups.placeholder].some(r => r.id === 'L5.MUST.synthetic_probe'), 'a library placeholder still satisfies the clause');
+  assert.ok(![...lib.groups.blocking, ...lib.groups.recommended].some(r => r.inventedChecks));
+});
