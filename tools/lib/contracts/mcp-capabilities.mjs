@@ -225,6 +225,17 @@ export const CAPABILITIES = Object.freeze({
     // eligible alias, the instant-vector value read from the first series.
     candidates: [{ tool: 'metrics_query' }],
   },
+  // The chaos run feed (spec 1.5): what a certification harness published
+  // about the newest run of each experiment. Carrier for CHAOS_RUN_PROBES
+  // (tools/lib/contracts/chaos-run-evidence.mjs): one metrics_query per
+  // series family, every series read by its `experiment` label. Evidence
+  // for one criterion (the grade's Chaos-validated, through its window);
+  // never a Verified stamp.
+  chaos_run_evidence: {
+    kind: 'evidence',
+    responseShape: 'instant-vector',
+    candidates: [{ tool: 'metrics_query' }],
+  },
   alertmanager_status: {
     kind: 'evidence',
     responseShape: 'status-object',

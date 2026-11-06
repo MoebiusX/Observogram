@@ -388,9 +388,21 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/contracts/chaos-run-evidence.mjs": {
+      "sha256": "652d1ed5f5a1ad337278bc430640efa5b72e8f00131ee279746ba86c5a900033",
+      "bytes": 4531,
+      "exports": [
+        "CHAOS_RUN_PROBES",
+        "chaosRunsFromAnswers"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "fe84faaecf29d4da08baac7b51766edc71c89301c750bff766e9a8f93106e97e",
-      "bytes": 18338,
+      "sha256": "0a11a835cbb7260ae3410123cd6dd9976dec979dc0dcca53efd81b863db9f2ad",
+      "bytes": 18871,
       "exports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",

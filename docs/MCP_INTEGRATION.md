@@ -766,6 +766,8 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences, error?}` | written when `alertmanager_status` / `alertmanager_silences` was ADVERTISED; `error` carries the trimmed failure of an advertised tool that did not answer — a failure, not a tier limit |
 | `mcp.observed.grafana.datasources`, `mcp.observed.grafana.contact_points` | JSON `[{uid, name, type, health: ok\|error\|unknown, message}]`, `{count, names}` | `unknown` health means NOT CHECKED (health tool not exposed / errored / beyond the 10-uid cap), never "not unhealthy" |
 | `mcp.observed.grafana.error` | string | the trimmed failure of an advertised Grafana status tool that did not answer |
+| `mcp.chaos.feed` | `<feed id>:<outcome>` (`mq-cert:data`, `mq-cert:empty`, `mq-cert:failed`) | the chaos run feed was sampled (the `chaos_run_evidence` capability; not on a snapshot) |
+| `mcp.chaos.runs` | JSON `{ <experiment id>: { at, outcome, observed_mttd?, alerts_fired } }` | only when the feed named an experiment: the newest run of each, as the harness published it. The grade's Chaos-validated reads it as **measured** proof (studio/diagnostic-grade.mjs `chaosProof`) |
 | `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface (`alertmanager_status` + `alertmanager_silences`) |
 | `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health (`ok` \| `error` \| `unknown`, message trimmed to 200 chars) |
 | `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
@@ -982,6 +984,34 @@ model's kind (tools/lib/artefact-model.mjs).
 | `recording_rule`, `sli`, `slo` | no recorded series at all and the rules probe failed or is not offered | same |
 | `alert_route` | the `alerting_routes` probe gave no routes | its failure, or that the status carries no configuration |
 | `backend`, `profiling`, `network`, `policy_engine`, `mesh`, `collection` | nothing evidenced any backend | `no version probe, scrape target or product tool answered` |
+
+`chaos` is the exception: the live side never holds an experiment's
+definition, so the family stays unobserved even when the chaos run feed
+answers, and the reason says what the feed reported. Dropping the key would
+read every experiment the repository declares as missing live. The runs
+ride beside it in `mcp.chaos.runs`.
+
+### The chaos run feed (spec 1.5)
+
+The `chaos_run_evidence` capability (one row in
+`tools/lib/contracts/mcp-capabilities.mjs`, carried by the metrics query
+tool) samples the run records a certification harness publishes. The feeds
+are a table, `CHAOS_RUN_PROBES` in
+`tools/lib/contracts/chaos-run-evidence.mjs`; today it holds one, the MQ lab's
+`npm run certify` alert-sink:
+
+| Query | Read as |
+|---|---|
+| `mq_cert_experiment_pass` | one series per experiment (`experiment` = the pack's experiment id): `status` PASS → pass, FAIL → fail, anything else → aborted |
+| `max(mq_cert_run_timestamp_seconds)` | the run's finish time, the `at` of every experiment's run |
+| `mq_cert_mttd_seconds` | per experiment and `alertname`: the alerts that fired, the slowest as `observed_mttd` |
+
+A run record is sampled, point-in-time evidence for one criterion — the
+grade's Chaos-validated, which weighs its age against the experiment's
+schedule (docs/CHAOS_EXPERIMENTS.md). It never declares an experiment in the
+live pack and never stamps anything Verified. A service whose harness
+publishes nothing gets `mcp.chaos.feed: mq-cert:empty`, and its experiments
+can still be proven by a `last_result` recorded in the repository.
 
 A probe that ANSWERED — with data or with an honest zero — leaves its family
 observed. `diffPacks` reads these keys: an artefact the other pack holds in an
