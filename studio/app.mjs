@@ -54,7 +54,7 @@ import {
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord, uploadServiceRepository } from './services-api.mjs';
-import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, isZipName } from './repository-files.mjs';
+import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, gitignoreOfFileList, isZipName, walkDropped } from './repository-files.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
   pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
@@ -117,7 +117,7 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList } from './overview-view.mjs';
 
@@ -2223,7 +2223,12 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   if (error) { announce(`${row.name} · ${row.env}: the run did not finish.`); return; }
   const g = out?.record?.grade;
   const pct = out?.record?.drift?.alignmentPct;
-  toast(`${row.name} · ${row.env} checked: ${out?.scan?.files ?? '?'} files from ${out?.scan?.source || 'the repository'}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, 'ok');
+  // What the scan left out rides in the toast (and on the board, from the
+  // run record): never a grade over files nobody was told were missing.
+  const scan = out?.scan;
+  const of = Number(scan?.candidates) > Number(scan?.files) ? ` of ${scan.candidates}` : '';
+  const lost = scanLossText(scan);
+  toast(`${row.name} · ${row.env} checked: ${scan?.files ?? '?'}${of} files from ${scan?.source || 'the repository'}${lost ? ` (${lost})` : ''}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
 }
 
 // Signing in to a repository host (server/repo-sign-in.mjs): a window of the
@@ -7100,6 +7105,7 @@ const crawlState = {
   classified: new Map(),  // relPath → kind (only files that match an artefact)
   skipped: [],            // [{relPath, reason}] for the "what was skipped" disclosure
   ignored: 0,             // files under folders a scan never enters (node_modules, dist, dot-folders…): not read
+  notRead: new Map(),     // relPath → why: a file the rule would read and the staging did not (git ignores it, a secrets file, too large)
   rootName: null,
   lastResult: null,
 };
@@ -7196,32 +7202,27 @@ function setupCrawlPanel() {
   }
 }
 
-// Read a single FileSystemEntry recursively into the staged map. The dropped
-// folder itself (no prefix yet) is the user's choice whatever its name; below
-// it the scan rule decides.
+// Read a dropped FileSystemEntry into the staged map — a folder walked by
+// the shared drop walker (studio/repository-files.mjs walkDropped: the scan
+// rule on each entry, each folder's .gitignore honoured, a secrets file
+// never read), a .zip anywhere in the drop staged as one. The dropped folder
+// itself is the user's choice whatever its name.
 async function readEntry(entry, prefix, lib) {
   if (!entry) return;
   if (entry.isFile && isZipName(entry.name)) {
     await stageZip(await new Promise((res, rej) => entry.file(res, rej)));
     return;
   }
-  if (entry.isFile) {
-    if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
-    const file = await new Promise((res, rej) => entry.file(res, rej));
-    if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
-    const rel = (prefix ? `${prefix}/` : '') + entry.name;
-    const text = await file.text();
-    crawlState.files.set(rel, text);
-    if (!crawlState.rootName) crawlState.rootName = entry.fullPath?.split('/')[1] || null;
-  } else if (entry.isDirectory) {
-    if (prefix && lib.scanSkipsName(entry.name, { dir: true })) { crawlState.ignored++; return; }
-    const reader = entry.createReader();
-    let batch;
-    do {
-      batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
-    } while (batch.length > 0);
-  }
+  await walkDropped(entry, lib, {
+    onFile: async (rel, file) => {
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); return; }
+      crawlState.files.set(rel, await file.text());
+      if (!crawlState.rootName && rel.includes('/')) crawlState.rootName = rel.split('/')[0];
+    },
+    onSkip: (rel, why) => { crawlState.notRead.set(rel, why); },
+    onIgnored: (dir) => { if (dir) crawlState.ignored++; },
+    onZip: (file) => stageZip(file),
+  });
 }
 
 // "pick a folder". Where the browser can hand over the folder itself
@@ -7253,10 +7254,10 @@ async function stageFolderHandle(dir) {
   try {
     crawlState.ignored += await lib.walkScanFolder(dir, async (rel, handle) => {
       const file = await handle.getFile();
-      if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); return; }
       crawlState.files.set(rel, await file.text());
       if (++read % 25 === 0) say(read);
-    });
+    }, undefined, { onSkip: (rel, why) => { crawlState.notRead.set(rel, why); } });
   } catch (e) {
     // A file removed or locked mid-walk: what was read is still staged.
     toast(`Stopped reading the folder: ${e.message}`, 'error');
@@ -7272,6 +7273,8 @@ async function stageFileList(fileList, _rootHint) {
   const list = $('#crawl-staged-files');
   const total = files.length;
   let seen = 0;
+  // The folder's .gitignore files, read before any other file is.
+  const gitignore = await gitignoreOfFileList(files.filter((f) => !!f.webkitRelativePath), lib);
   for (const f of files) {
     // The folder picker lists every file under the folder — node_modules,
     // build output, agent worktrees — so the scan rule is applied to the
@@ -7280,11 +7283,13 @@ async function stageFileList(fileList, _rootHint) {
     const rel = f.webkitRelativePath || f.name;
     if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
     if (!f.webkitRelativePath && isZipName(f.name)) { await stageZip(f); continue; }
+    const why = lib.scanRefusal(rel, { skipRoot: !!f.webkitRelativePath, gitignore: f.webkitRelativePath ? gitignore : null });
+    if (why) { crawlState.notRead.set(rel, why); continue; }
     if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
       if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
       continue;
     }
-    if (f.size > lib.SCAN_MAX_FILE_BYTES) continue;
+    if (f.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); continue; }
     crawlState.files.set(rel, await f.text());
     if (!crawlState.rootName && f.webkitRelativePath) {
       crawlState.rootName = f.webkitRelativePath.split('/')[0];
@@ -7302,6 +7307,7 @@ async function stageZip(file) {
     const read = await filesFromZip(file);
     for (const [path, text] of Object.entries(read.files)) crawlState.files.set(path, text);
     if (!crawlState.rootName) crawlState.rootName = read.name || null;
+    for (const s of read.skipped) crawlState.notRead.set(s.path, s.why);
     if (read.skipped.length) toast(`${file.name}: ${read.skipped.length} file${read.skipped.length === 1 ? '' : 's'} not read (${read.skipped[0].path}: ${read.skipped[0].why}${read.skipped.length > 1 ? '; …' : ''})`);
   } catch (e) {
     toast(`${file.name}: ${e.message}`, 'error');
@@ -7381,6 +7387,15 @@ function renderStagedList(totalBytes) {
     </div>
     ${kindCounts ? `<div class="crawl-staged-kinds">${kindCounts}</div>` : ''}
     <div class="crawl-staged-sample">${sampleHtml}</div>
+    ${crawlState.notRead.size ? `
+      <details class="crawl-staged-skipped crawl-staged-notread">
+        <summary>${crawlState.notRead.size} file${crawlState.notRead.size === 1 ? '' : 's'} not read, and why</summary>
+        <div class="crawl-skipped-list">${
+          [...crawlState.notRead].slice(0, 40)
+            .map(([path, why]) => `<code title="${escapeHtml(why)}">${escapeHtml(path)}</code> <em>${escapeHtml(why)}</em>`).join('<br>')
+          + (crawlState.notRead.size > 40 ? `<br><em>… and ${crawlState.notRead.size - 40} more</em>` : '')
+        }</div>
+      </details>` : ''}
     ${crawlState.ignored ? `<div class="crawl-staged-ignored">${crawlState.ignored} ${crawlState.ignored === 1 ? 'entry' : 'entries'} under dependency, build or hidden folders (node_modules, dist, .git, .claude …) ${crawlState.ignored === 1 ? 'was' : 'were'} not read.</div>` : ''}
     ${skipped ? `
       <details class="crawl-staged-skipped">
@@ -7399,6 +7414,7 @@ function resetCrawlStaged() {
   crawlState.classified.clear();
   crawlState.skipped = [];
   crawlState.ignored = 0;
+  crawlState.notRead.clear();
   crawlState.rootName = null;
   crawlState.lastResult = null;
   finalizeStaging();
@@ -7575,6 +7591,8 @@ function renderCrawlResult(out) {
       <tr><td>environment scope</td><td>${escapeHtml(env.profile || 'none')}${env.scoped ? ` · ${f.excludedByEnvironment || 0} excluded` : ''}</td></tr>
       <tr><td>live scope</td><td>${escapeHtml(comparison.diffScopeMode || 'service')}</td></tr>
       <tr><td>files used</td><td>${f.included ?? f.scanned ?? 0} / ${f.scanned ?? 0}</td></tr>
+      ${Array.isArray(out.summary.skipped) && out.summary.skipped.length ? `<tr><td>not read</td><td>${out.summary.skipped.length}: ${out.summary.skipped.slice(0, 5).map((x) => `<code>${escapeHtml(x?.path ?? x)}</code>${x?.why ? ` (${escapeHtml(x.why)})` : ''}`).join(', ')}${out.summary.skipped.length > 5 ? ', …' : ''}</td></tr>` : ''}
+      ${f.unclassified ? `<tr><td>recognised as nothing</td><td>${f.unclassified}${Array.isArray(f.unknown) && f.unknown.length ? `: ${f.unknown.slice(0, 5).map((p) => `<code>${escapeHtml(p)}</code>`).join(', ')}${f.unclassified > 5 ? ', …' : ''}` : ''}</td></tr>` : ''}
       <tr><td>backends</td><td>${s.backends}</td></tr>
       <tr><td>metric definitions</td><td>${s.metricDefinitions || 0}</td></tr>
       <tr><td>telemetry sources</td><td>${s.scrapeJobs || 0}</td></tr>

@@ -1,12 +1,13 @@
 // server/github-crawl.mjs — helpers for the public-GitHub crawl route.
 //
-// Server-only. parseGithubUrl, isCrawlerFile, isExporterCandidateFile and
-// selectCrawlerFiles are pure; ghFetch is the single authenticated wrapper
+// Server-only. parseGithubUrl, isCrawlerFile, isExporterCandidateFile,
+// planCrawlerFetch, selectCrawlerFiles and settleFetched are pure; ghFetch is the single authenticated wrapper
 // around the GitHub REST API. It sends the token its caller names and no
 // other: whose token that is — the person's own, or the server's on a
 // server without sign-in — is server/repo-auth.mjs's rule, never read here.
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
+import { SCAN_MAX_FILE_BYTES, SCAN_WHY, scanReadsPath, scanRefusal } from '../tools/lib/crawler.mjs';
 
 export function parseGithubUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -20,8 +21,10 @@ export function parseGithubUrl(input) {
   return null;
 }
 
-// Files the crawler will actually look at — keep the network round
-// trips down by filtering BEFORE downloading.
+// The names an observability artefact usually has — a host read FETCHES
+// these first. They never decide what is read: that is the crawler's own
+// rule (scanReadsPath), the same for a folder, an upload and the CLI;
+// planCrawlerFetch only orders by them under its file cap.
 export function isCrawlerFile(path) {
   if (typeof path !== 'string') return false;
   const p = path.toLowerCase();
@@ -73,21 +76,90 @@ export function isExporterCandidateFile(path) {
     || /(^|\/)files\/.*\.ya?ml$/.test(p);
 }
 
+// Files a cap reaches last: tests and fixtures, lock files, type
+// declarations, tokenizer dumps — read when there is room, never before an
+// artefact.
+const LAST = /(\.test\.|\.spec\.|\.d\.ts$|package-lock\.json$|yarn\.lock$|pnpm-lock\.ya?ml$|tokenizer\.json$)/i;
+const tierOf = (path) => (isCrawlerFile(path) ? 0
+  : isExporterCandidateFile(path) ? 1
+    : isTestOrFixturePath(path) || LAST.test(path) ? 3 : 2);
+
 /**
- * The blobs of a GitHub tree a crawl downloads, at most `maxFiles` of at most
- * `fileCapBytes` each: every isCrawlerFile blob first, in tree order, then
- * the exporter candidates — so a monorepo's many `config.yaml` files never
- * push out a rule file, an Alertmanager config or a collector config.
+ * What a host read (a GitHub or an Azure DevOps tree) downloads: every blob
+ * the crawler's rule reads (scanReadsPath — the rule a folder, an upload and
+ * the CLI apply), at most `maxFiles` of them, ordered so the cap reaches the
+ * likely artefacts last: isCrawlerFile's names first, then
+ * isExporterCandidateFile's, then the rest, then tests, fixtures and lock
+ * files — each group in tree order — so a monorepo's many `config.yaml` files
+ * never push out a rule file, an Alertmanager config or a collector config.
+ * A secrets file, a blob the tree says is over `fileCapBytes` and a blob past
+ * `totalCapBytes` (by the tree's sizes, in that order) are skipped and named,
+ * never fetched.
+ * → { selected: [node], candidates, capped, skipped: [{ path, why }] }
+ *   candidates  how many blobs the rule reads in the whole tree
+ *   capped      how many of them the file cap left out
  */
-export function selectCrawlerFiles(tree, { maxFiles = 200, fileCapBytes = Infinity } = {}) {
+export function planCrawlerFetch(tree, { maxFiles = 200, fileCapBytes = SCAN_MAX_FILE_BYTES, totalCapBytes = Infinity } = {}) {
   const blobs = (Array.isArray(tree) ? tree : []).filter(node => node?.type === 'blob' && typeof node.path === 'string');
-  return [
-    ...blobs.filter(node => isCrawlerFile(node.path)),
-    ...blobs.filter(node => isExporterCandidateFile(node.path)),
-  ]
-    .filter(node => !node.size || node.size <= fileCapBytes)
-    .slice(0, maxFiles);
+  const skipped = [];
+  const takes = [];
+  for (const node of blobs) {
+    const why = scanRefusal(node.path);   // a secrets file (git keeps a .gitignore'd one out of the tree)
+    if (why) { skipped.push({ path: node.path, why }); continue; }
+    if (scanReadsPath(node.path)) takes.push(node);
+  }
+  const ordered = takes.map((node, i) => ({ node, i, tier: tierOf(node.path) }))
+    .sort((x, y) => x.tier - y.tier || x.i - y.i)
+    .map(x => x.node);
+  const selected = [];
+  let capped = 0;
+  let total = 0;
+  for (const node of ordered) {
+    const size = Number(node.size) || 0;
+    if (size > fileCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.tooLarge(fileCapBytes) }); continue; }
+    if (selected.length >= maxFiles) { capped++; continue; }
+    if (total + size > totalCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.totalCap(totalCapBytes) }); continue; }
+    total += size;
+    selected.push(node);
+  }
+  return { selected, candidates: takes.length, capped, skipped };
 }
+
+// planCrawlerFetch's blobs alone.
+export function selectCrawlerFiles(tree, opts = {}) {
+  return planCrawlerFetch(tree, opts).selected;
+}
+
+const byPath = (x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+
+/**
+ * The files a host read downloaded, settled in the plan's order (downloads
+ * finish in any order): a text over `fileCapBytes` (a tree with no sizes:
+ * Azure DevOps) or past `totalCapBytes` is skipped and named, as is a
+ * download that failed, with its error. `texts`: path → { text } | { error }.
+ * → { files, skipped } — files in path order, which is the order crawlFiles
+ * reads them in, whatever order they arrived in; skipped in path order, the
+ * plan's own skips with them (`planned`).
+ */
+export function settleFetched(selected, texts, { fileCapBytes = SCAN_MAX_FILE_BYTES, totalCapBytes = Infinity, planned = [] } = {}) {
+  const kept = [];
+  const skipped = [...planned];
+  let total = 0;
+  for (const node of selected) {
+    const got = texts.get(node.path);
+    if (!got) continue;
+    if (got.error) { skipped.push({ path: node.path, why: `it could not be downloaded (${got.error})` }); continue; }
+    if (got.text.length > fileCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.tooLarge(fileCapBytes) }); continue; }
+    if (total + got.text.length > totalCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.totalCap(totalCapBytes) }); continue; }
+    total += got.text.length;
+    kept.push({ path: node.path, text: got.text });
+  }
+  kept.sort(byPath);
+  return { files: Object.fromEntries(kept.map(k => [k.path, k.text])), skipped: skipped.sort(byPath) };
+}
+
+// A host read's caps: at most 200 files of the scan's 5 MB each, 16 MB in all.
+export const HOST_READ_CAPS = Object.freeze({ maxFiles: 200, fileCapBytes: SCAN_MAX_FILE_BYTES, totalCapBytes: 16 * 1024 * 1024 });
 
 export async function ghFetch(path, init = {}, { token = null } = {}) {
   const headers = {
@@ -124,14 +196,17 @@ export async function rawFetch(owner, repo, ref, path) {
 
 /**
  * The files a crawl of a GitHub repository reads, fetched: the default
- * branch when `ref` is null; selectCrawlerFiles' blobs (at most 200, 1 MB
- * each, 16 MB in all) downloaded in parallel — through the contents API
- * with a `token` (a private repository; repo-auth.mjs says whose), else from
- * raw.githubusercontent.com (rawFetch: a public one, no quota spent). A file
- * that fails or does not fit is skipped and named, never fatal; a tree or
- * repository error throws (err.status is GitHub's).
- * → { ref, candidates, files, skipped, truncated } — the POST
- * /api/crawl-github route and a service's Run share it.
+ * branch when `ref` is null; planCrawlerFetch's blobs (HOST_READ_CAPS: at
+ * most 200, 5 MB each, 16 MB in all) downloaded in parallel — through the
+ * contents API with a `token` (a private repository; repo-auth.mjs says
+ * whose), else from raw.githubusercontent.com (rawFetch: a public one, no
+ * quota spent). A file that fails or does not fit is skipped and named,
+ * never fatal; a tree or repository error throws (err.status is GitHub's).
+ * → { ref, candidates, capped, files, skipped: [{ path, why }], truncated }
+ * — candidates the blobs the crawler's rule reads, capped how many of them
+ * the 200-file cap left out, truncated GitHub's own flag (a tree too large
+ * to list whole: files may be missing that nothing here can name). The
+ * POST /api/crawl-github route and a service's Run share it.
  */
 export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch } = {}) {
   let at = ref;
@@ -140,29 +215,20 @@ export async function fetchGithubFiles({ owner, repo, ref = null }, { token = nu
     at = repoMeta.default_branch || 'main';
   }
   const treeResp = await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`).then(r => r.json());
-  const FILE_CAP_BYTES = 1 * 1024 * 1024;        // 1 MB / file
-  const TOTAL_CAP_BYTES = 16 * 1024 * 1024;      // 16 MB total
-  const MAX_FILES = 200;
-  // isCrawlerFile's blobs first, the exporter candidates after them.
-  const candidates = selectCrawlerFiles(treeResp.tree, { maxFiles: MAX_FILES, fileCapBytes: FILE_CAP_BYTES });
-  let totalBytes = 0;
-  const files = {};
-  const skipped = [];
-  await Promise.all(candidates.map(async (node) => {
+  const plan = planCrawlerFetch(treeResp.tree, HOST_READ_CAPS);
+  const texts = new Map();
+  await Promise.all(plan.selected.map(async (node) => {
     try {
       const contentRes = rawFn
         ? await rawFn(owner, repo, at, node.path)
         : await fetchFn(`/repos/${owner}/${repo}/contents/${encodeURIComponent(node.path).replace(/%2F/g, '/')}?ref=${encodeURIComponent(at)}`, {
           headers: { Accept: 'application/vnd.github.raw+json' },
         });
-      const text = await contentRes.text();
-      if (text.length > FILE_CAP_BYTES) { skipped.push(`${node.path} (size ${text.length})`); return; }
-      if (totalBytes + text.length > TOTAL_CAP_BYTES) { skipped.push(`${node.path} (total cap)`); return; }
-      files[node.path] = text;
-      totalBytes += text.length;
+      texts.set(node.path, { text: await contentRes.text() });
     } catch (e) {
-      skipped.push(`${node.path} (${e.message})`);
+      texts.set(node.path, { error: e.message });
     }
   }));
-  return { ref: at, candidates: candidates.length, files, skipped, truncated: !!treeResp.truncated };
+  const { files, skipped } = settleFetched(plan.selected, texts, { ...HOST_READ_CAPS, planned: plan.skipped });
+  return { ref: at, candidates: plan.candidates, capped: plan.capped, files, skipped, truncated: !!treeResp.truncated };
 }

@@ -142,10 +142,11 @@ export async function createServiceRecord(body, { fetchFn = requestJson } = {}) 
   return doc?.service ?? null;
 }
 
-// PUT /api/services/:id/repository-upload { name, files } → { service, upload } — the files the
-// person's browser read from a folder or a .zip, kept as the service's repository (operator).
-export async function uploadServiceRepository(id, { name, files }, { fetchFn = requestJson } = {}) {
-  return fetchFn(`/api/services/${enc(id)}/repository-upload`, jsonBody('PUT', { name, files }));
+// PUT /api/services/:id/repository-upload { name, files, skipped } → { service, upload } — the files
+// the person's browser read from a folder or a .zip, kept as the service's repository (operator),
+// and what it did not read and why ([{ path, why }]), which each Run names.
+export async function uploadServiceRepository(id, { name, files, skipped = [] }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(id)}/repository-upload`, jsonBody('PUT', { name, files, skipped }));
 }
 
 // POST /api/services/:id/run { env, repoAuth? } → { record, pack, journey, scan } — the repository

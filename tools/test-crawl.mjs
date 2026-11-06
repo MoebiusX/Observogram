@@ -1011,15 +1011,21 @@ assert(['yaml', 'yml', 'json', 'ts', 'py', 'go', 'java'].every(e => SCAN_EXT.tes
   'the extensions and the ignore list are the library\'s, shared');
 // The three ways in all use it: the CLI walker and both studio paths.
 const cliSrc = readFileSync(new URL('./crawl-repo.mjs', import.meta.url), 'utf8');
-assert(/scanSkipsName\(ent\.name, \{ dir: ent\.isDirectory\(\) \}\)/.test(cliSrc) && !/IGNORE_DIRS = new Set/.test(cliSrc),
-  'the CLI walker applies the shared rule and keeps no list of its own');
+assert(/readRepoFolder\(opts\.repoPath\)/.test(cliSrc) && !/IGNORE_DIRS = new Set|SCAN_EXT\.test/.test(cliSrc),
+  'the CLI walker is the shared folder read (tools/lib/repo-folder.mjs) and keeps no list of its own');
+const folderSrc = readFileSync(new URL('./lib/repo-folder.mjs', import.meta.url), 'utf8');
+assert(/scanSkipsName\(e\.name, \{ dir: true \}\)/.test(folderSrc) && /SCAN_EXT\.test\(e\.name\)/.test(folderSrc) && !/new Set\(\[/.test(folderSrc),
+  'and the shared folder read applies the crawler\'s rule');
 const studioSrc = readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
 const stage = studioSrc.slice(studioSrc.indexOf('async function stageFileList'), studioSrc.indexOf('async function finalizeStaging'));
 assert(/lib\.scanReadsPath\(rel, \{ skipRoot: !!f\.webkitRelativePath \}\)/.test(stage),
   'the folder picker applies the rule to each path');
 assert(stage.indexOf('scanReadsPath') < stage.indexOf('f.text()'), 'and before it reads the file, not after');
 const drop = studioSrc.slice(studioSrc.indexOf('async function readEntry'), studioSrc.indexOf('async function stageFileList'));
-assert(/lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(drop), 'the drop zone applies the same rule to each folder');
+const filesSrc = readFileSync(new URL('../studio/repository-files.mjs', import.meta.url), 'utf8');
+const dropped = filesSrc.slice(filesSrc.indexOf('export async function walkDropped'), filesSrc.indexOf('export async function filesFromEntries'));
+assert(/await walkDropped\(entry, lib,/.test(drop) && /lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(dropped),
+  'the drop zone walks with the shared drop walker, which applies the same rule to each folder');
 assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no list of its own');
 
 // ---------- the folder handed over as a handle: skipped folders are never listed ----------

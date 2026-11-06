@@ -40,6 +40,7 @@ import {
   DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
 } from './exporter-metrics.mjs';
+import { createGitignore } from './gitignore.mjs';
 
 // The spec's closed vocabularies, mirrored by hand (a browser-safe module
 // cannot read the schema file; tools/test-crawl-canonical.mjs pins the
@@ -87,13 +88,35 @@ export function scanSkipsName(name, { dir = false } = {}) {
 }
 
 /**
- * Whether the file at `relPath` (forward slashes) is read: a scannable
- * extension, and no skipped folder on the way to it. `skipRoot` leaves the
- * first segment out of the check — the picked folder's own name, which is
- * the user's choice whatever it is called.
+ * A YAML or JSON file whose name says it holds secrets — `values-secrets.yaml`,
+ * `secret.yaml`, `db-secrets.json` — is never read, through any door and
+ * whatever git says about it: a Helm secrets overlay or a Kubernetes Secret
+ * carries real keys and passwords, and no observability artefact lives in
+ * one. Every door names it in its skipped list (SCAN_WHY.secret).
  */
-export function scanReadsPath(relPath, { skipRoot = false } = {}) {
-  const parts = String(relPath ?? '').split('/').filter(Boolean);
+export const SCAN_SECRET_FILE = /^[^/]*secret[^/]*\.(ya?ml|json)$/i;
+export function scanRefusesName(name) {
+  return SCAN_SECRET_FILE.test(String(name ?? ''));
+}
+
+/**
+ * Why a door leaves out a file, in one wording for every door (the server's
+ * Folder walk and its GitHub and Azure DevOps reads, the CLI walker, the
+ * studio's folder, drop and .zip readers): each skipped list is
+ * [{ path, why }].
+ */
+const mbOf = (n) => `${Math.round((n / (1024 * 1024)) * 10) / 10} MB`;
+export const SCAN_WHY = Object.freeze({
+  secret: 'its name says it holds secrets, which a scan never reads',
+  gitignored: 'git ignores it (.gitignore)',
+  gitignoredFolder: 'git ignores this folder (.gitignore)',
+  tooLarge: (limit = SCAN_MAX_FILE_BYTES) => `it is larger than ${mbOf(limit)}`,
+  totalCap: (limit) => `the scan stops at ${mbOf(limit)} in all`,
+  notText: 'it is not UTF-8 text',
+});
+
+// The folder and extension rule alone (scanReadsPath without the refusals).
+function scanTakesParts(parts, skipRoot) {
   if (!parts.length) return false;
   const file = parts[parts.length - 1];
   if (parts.slice(skipRoot ? 1 : 0, -1).some(d => scanSkipsName(d, { dir: true }))) return false;
@@ -101,33 +124,117 @@ export function scanReadsPath(relPath, { skipRoot = false } = {}) {
 }
 
 /**
+ * Whether the file at `relPath` (forward slashes) is read: a scannable
+ * extension, no skipped folder on the way to it, and not a secrets file
+ * (scanRefusesName). `skipRoot` leaves the first segment out of the check —
+ * the picked folder's own name, which is the user's choice whatever it is
+ * called.
+ */
+export function scanReadsPath(relPath, { skipRoot = false } = {}) {
+  const parts = String(relPath ?? '').split('/').filter(Boolean);
+  return scanTakesParts(parts, skipRoot) && !scanRefusesName(parts[parts.length - 1]);
+}
+
+/**
+ * Why a scan leaves out a file its folder and extension rule would read —
+ * git ignores it or a folder on the way to it (`gitignore`: a
+ * tools/lib/gitignore.mjs createGitignore() matcher over the scanned
+ * folder's own .gitignore files, paths relative to that folder), or it is a
+ * secrets file — or null: it is read, or it is not a file a scan looks at in
+ * the first place (another extension, under node_modules …), which no
+ * skipped list names. `skipRoot` as scanReadsPath's.
+ */
+export function scanRefusal(relPath, { skipRoot = false, gitignore = null } = {}) {
+  const parts = String(relPath ?? '').split('/').filter(Boolean);
+  if (!scanTakesParts(parts, skipRoot)) return null;
+  const inner = (skipRoot ? parts.slice(1) : parts).join('/');
+  const at = gitignore ? gitignore.ignoredAt(inner) : null;
+  if (at) return at === inner ? SCAN_WHY.gitignored : `git ignores the folder ${at}/ (.gitignore)`;
+  return scanRefusesName(parts[parts.length - 1]) ? SCAN_WHY.secret : null;
+}
+
+// The matcher itself, for a host that walks a folder its own way (the
+// studio's drop zone).
+export { createGitignore };
+
+/**
+ * Whether a flat list's `relPath` (every file under a folder: a
+ * webkitdirectory FileList, a .zip's entries) is a .gitignore a scan honours
+ * — one in a folder the scan enters. `skipRoot` as scanReadsPath's.
+ */
+export function scanHonoursGitignore(relPath, { skipRoot = false } = {}) {
+  const parts = String(relPath ?? '').split('/').filter(Boolean);
+  if (parts[parts.length - 1] !== '.gitignore') return false;
+  return !parts.slice(skipRoot ? 1 : 0, -1).some(d => scanSkipsName(d, { dir: true }));
+}
+
+/**
+ * A gitignore matcher (tools/lib/gitignore.mjs) over a flat list's
+ * .gitignore files — `pairs` [{ path, text }], the paths as the list gives
+ * them — parents before their children, for scanRefusal's `gitignore`.
+ * `skipRoot` as scanReadsPath's: the picked folder's own name is no folder
+ * of the repository.
+ */
+export function gitignoreOf(pairs, { skipRoot = false } = {}) {
+  const gitignore = createGitignore();
+  const depth = (p) => p.split('/').length;
+  const honoured = (Array.isArray(pairs) ? pairs : [])
+    .filter((p) => p && typeof p.text === 'string' && scanHonoursGitignore(p.path, { skipRoot }))
+    .map((p) => ({ path: String(p.path).split('/').filter(Boolean).join('/'), text: p.text }))
+    .sort((x, y) => depth(x.path) - depth(y.path) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+  for (const { path, text } of honoured) {
+    const parts = path.split('/');
+    gitignore.add(parts.slice(skipRoot ? 1 : 0, -1).join('/'), text);
+  }
+  return gitignore;
+}
+
+/**
  * Walk a picked folder through its directory handle (the File System Access
  * API's FileSystemDirectoryHandle, or anything shaped like one: `name`,
- * `entries()` yielding `[name, handle]`, `handle.kind`). A folder a scan
- * never enters is not listed at all — where a `webkitdirectory` input hands
- * the page every file under the folder before the rule can apply (105,000
- * for a repository whose scan reads 630, most of them under node_modules).
+ * `entries()` yielding `[name, handle]`, `handle.kind`, a file handle's
+ * `getFile()`). A folder a scan never enters is not listed at all — where a
+ * `webkitdirectory` input hands the page every file under the folder before
+ * the rule can apply (105,000 for a repository whose scan reads 630, most of
+ * them under node_modules).
  *
  * `onFile(relPath, fileHandle)` is awaited for each file the rule reads, in
  * name order, `relPath` rooted at the picked folder's own name (as
  * `webkitRelativePath` is). The picked folder is the user's choice whatever
- * it is called. Answers how many folders were not entered.
+ * it is called. Its .gitignore files are honoured — a folder git ignores is
+ * not entered — and a file or folder the rule would read but git ignores, or
+ * a secrets file, goes to `onSkip(relPath, why)` instead (SCAN_WHY's words; a
+ * folder's path ends in `/`). Answers how many folders were not entered for
+ * being dependency, build or hidden folders.
  */
-export async function walkScanFolder(dir, onFile, prefix = String(dir?.name ?? '')) {
-  const entries = [];
-  for await (const [name, handle] of dir.entries()) entries.push([name, handle]);
-  entries.sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
-  let notEntered = 0;
-  for (const [name, handle] of entries) {
-    const rel = prefix ? `${prefix}/${name}` : name;
-    if (handle.kind === 'directory') {
-      if (scanSkipsName(name, { dir: true })) notEntered++;
-      else notEntered += await walkScanFolder(handle, onFile, rel);
-    } else if (!scanSkipsName(name) && SCAN_EXT.test(name)) {
-      await onFile(rel, handle);
+export async function walkScanFolder(dir, onFile, prefix = String(dir?.name ?? ''), { onSkip = null } = {}) {
+  const gitignore = createGitignore();
+  const root = prefix;
+  const inner = (p) => (root ? p.slice(root.length + 1) : p);
+  async function walk(d, pre) {
+    const entries = [];
+    for await (const [name, handle] of d.entries()) entries.push([name, handle]);
+    entries.sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+    const ignoreFile = entries.find(([name, handle]) => name === '.gitignore' && handle.kind !== 'directory');
+    if (ignoreFile) {
+      try { gitignore.add(inner(pre), await (await ignoreFile[1].getFile()).text()); } catch { /* unreadable: nothing to honour */ }
     }
+    let notEntered = 0;
+    for (const [name, handle] of entries) {
+      const rel = pre ? `${pre}/${name}` : name;
+      if (handle.kind === 'directory') {
+        if (scanSkipsName(name, { dir: true })) notEntered++;
+        else if (gitignore.ignores(inner(rel), { dir: true })) onSkip?.(`${rel}/`, SCAN_WHY.gitignoredFolder);
+        else notEntered += await walk(handle, rel);
+      } else if (!scanSkipsName(name) && SCAN_EXT.test(name)) {
+        if (gitignore.ignores(inner(rel))) onSkip?.(rel, SCAN_WHY.gitignored);
+        else if (scanRefusesName(name)) onSkip?.(rel, SCAN_WHY.secret);
+        else await onFile(rel, handle);
+      }
+    }
+    return notEntered;
   }
-  return notEntered;
+  return walk(dir, prefix);
 }
 
 // Parse a (possibly multi-document) YAML file into a list of non-null
@@ -493,6 +600,7 @@ function scopeFilesForEnvironment(files, environment) {
  *   built-in ones (tools/lib/exporter-catalogue.mjs)
  * @returns {{canonical: object, summary: object, evidence: Record<string,string>}}
  */
+const UNKNOWN_FILES_SHOWN = 200;
 export function crawlFiles(filesInput, opts = {}) {
   const rawFiles = filesInput instanceof Map
     ? filesInput
@@ -548,6 +656,11 @@ export function crawlFiles(filesInput, opts = {}) {
       excludedByEnvironment: envScope.excluded.length,
       classified: 0,
       byKind: {},
+      // The files read that no walker recognised (detectArtefactKind
+      // 'unknown'): never walked, named here so a scan says what it saw
+      // and set aside — the first UNKNOWN_FILES_SHOWN; `unclassified` counts all.
+      unclassified: 0,
+      unknown: [],
     },
     environment: {
       requested: envRaw,
@@ -628,7 +741,10 @@ export function crawlFiles(filesInput, opts = {}) {
   const classified = [];
   for (const [relPath, content] of files) {
     const kind = detectArtefactKind(relPath, content, { exporterCatalogue: catalogue });
-    if (kind === 'unknown') continue;
+    if (kind === 'unknown') {
+      if (summary.files.unclassified++ < UNKNOWN_FILES_SHOWN) summary.files.unknown.push(relPath);
+      continue;
+    }
     classified.push({ relPath, content, kind });
     summary.files.classified++;
     summary.files.byKind[kind] = (summary.files.byKind[kind] || 0) + 1;
@@ -1160,6 +1276,57 @@ export function crawlFiles(filesInput, opts = {}) {
 }
 
 /** Convenience — emit the canonical pack as YAML. */
+/**
+ * What a scan saw, for a Run's answer and its run record — the read
+ * (`read`: a door's { source, ref, files, candidates, capped, truncated,
+ * skipped: [{ path, why }] }) and crawlFiles' summary, every list bounded
+ * so a large repository never bloats either:
+ *   { source, ref,
+ *     files            how many files were read,
+ *     candidates       how many the scan's rule takes in the repository (a
+ *                      GitHub or Azure DevOps tree; a folder: those read),
+ *     capped           how many of those the host read's file cap left out,
+ *     truncated        the host cut its tree listing short (GitHub),
+ *     skipped, skippedFiles      the files the rule would read and the read
+ *                      did not, and why (the first SCAN_REPORT_SHOWN),
+ *     classified, byKind         what the crawler recognised, by kind,
+ *     unclassified, unknownFiles what it read and recognised as nothing,
+ *     environment: { profile, excluded, excludedFiles }  what the
+ *                      environment's deployment profile left out,
+ *     warnings }
+ * Without a summary (the scan read nothing) only the read's part is filled.
+ */
+export const SCAN_REPORT_SHOWN = 50;
+export function scanReport(read = {}, summary = null) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const fileCount = read.files && typeof read.files === 'object' ? Object.keys(read.files).length : n(read.files);
+  const skipped = Array.isArray(read.skipped) ? read.skipped : [];
+  const f = summary?.files || {};
+  const env = summary?.environment || {};
+  const excluded = Array.isArray(env.excluded) ? env.excluded : [];
+  const short = (s, max = 500) => { const t = String(s ?? ''); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
+  return {
+    source: read.source ?? null,
+    ref: read.ref ?? null,
+    files: fileCount,
+    candidates: read.candidates === undefined ? fileCount : n(read.candidates),
+    capped: n(read.capped),
+    truncated: read.truncated === true,
+    skipped: skipped.length,
+    skippedFiles: skipped.slice(0, SCAN_REPORT_SHOWN).map((s) => ({ path: short(s?.path, 300), why: short(s?.why, 200) })),
+    classified: n(f.classified),
+    byKind: f.byKind && typeof f.byKind === 'object' ? { ...f.byKind } : {},
+    unclassified: n(f.unclassified),
+    unknownFiles: (Array.isArray(f.unknown) ? f.unknown : []).slice(0, SCAN_REPORT_SHOWN).map((p) => short(p, 300)),
+    environment: {
+      profile: env.profile ?? null,
+      excluded: n(f.excludedByEnvironment),
+      excludedFiles: excluded.slice(0, SCAN_REPORT_SHOWN).map((p) => short(p, 300)),
+    },
+    warnings: (Array.isArray(summary?.warnings) ? summary.warnings : []).slice(0, 20).map((w) => short(w)),
+  };
+}
+
 export function crawlToYaml(filesInput, opts) {
   const { canonical, summary, evidence } = crawlFiles(filesInput, opts);
   const banner = [

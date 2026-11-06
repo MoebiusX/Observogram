@@ -37,7 +37,7 @@ const EXPECTED_MODULES = [
   'tools/lib/compile.mjs', 'tools/lib/conformance.mjs', 'tools/lib/contracts/mcp-capabilities.mjs',
   'tools/lib/contracts/response-shapes.mjs', 'tools/lib/contracts/stack-self-metrics.mjs', 'tools/lib/crawler.mjs',
   'tools/lib/dashboards/generic.mjs', 'tools/lib/dashboards/lib.mjs', 'tools/lib/diff.mjs', 'tools/lib/exporter-catalogue.mjs', 'tools/lib/exporter-metrics.mjs',
-  'tools/lib/good-when.mjs', 'tools/lib/identity-modes.mjs',
+  'tools/lib/gitignore.mjs', 'tools/lib/good-when.mjs', 'tools/lib/identity-modes.mjs',
   'tools/lib/inventory-coverage.mjs', 'tools/lib/journey-notify.mjs', 'tools/lib/l2x.mjs', 'tools/lib/legacy.mjs',
   'tools/lib/library.mjs', 'tools/lib/lifecycle.mjs', 'tools/lib/live-fetch.mjs', 'tools/lib/mcp-client.mjs', 'tools/lib/mcp-server-settings.mjs', 'tools/lib/mcp-url-safety.mjs', 'tools/lib/mini-yaml.mjs', 'tools/lib/neuron-model.mjs',
   'tools/lib/pack-conformance.mjs', 'tools/lib/pack-update.mjs', 'tools/lib/profiles.mjs', 'tools/lib/promql-canon.mjs', 'tools/lib/promql-lezer.mjs', 'tools/lib/promql.mjs',
@@ -47,7 +47,7 @@ const EXPECTED_MODULES = [
   'tools/lib/svg-charts.mjs', 'tools/lib/traceability-graph.mjs', 'tools/lib/traceability.mjs', 'tools/lib/unzip.mjs', 'tools/lib/validator.mjs',
   'tools/lib/waivers.mjs', 'tools/lib/zip.mjs',
 ];
-const EXPECTED_EXCLUDED = ['tools/lib/brand-env.mjs', 'tools/lib/grafana-mcp-bridge.mjs', 'tools/lib/harness.mjs', 'tools/lib/journey.mjs', 'tools/lib/retrofeed.mjs'];
+const EXPECTED_EXCLUDED = ['tools/lib/brand-env.mjs', 'tools/lib/grafana-mcp-bridge.mjs', 'tools/lib/harness.mjs', 'tools/lib/journey.mjs', 'tools/lib/repo-folder.mjs', 'tools/lib/retrofeed.mjs'];
 const EXPECTED_DATA = ['tools/lib/site/inventory.schema.json'];
 
 test('VENDOR-MANIFEST.json is in sync with tools/lib (built from the committed manifest as its own baseline)', () => {
