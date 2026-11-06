@@ -54,16 +54,19 @@ function baselines(c)     { return spec(c).baselines || {}; }
 // A value a scanner invented: the crawler and the live fetcher write a
 // schema-forced placeholder and mark it `crawler.scaffold.<symbol>` /
 // `mcp.scaffold.<symbol>` (the crawler's health canary on
-// https://<repo>.example.com, for one). It satisfies no clause. A library
-// placeholder (`library.todo.<symbol>`) still does: the pack represents the
-// requirement and the server lists it under onPlaceholder (server/index.mjs).
+// https://<repo>.example.com, for one). An invented synthetic check satisfies
+// neither synthetic-check clause below; every other template value still
+// counts as a pass. A library placeholder (`library.todo.<symbol>`) counts
+// too: the pack represents the requirement and the server lists it under
+// onPlaceholder (server/index.mjs). Exported for the Conformance view
+// (studio/conformance-view.mjs), which names the check a clause left out.
 const SCANNER_SCAFFOLD_PREFIXES = ['crawler.scaffold.', 'mcp.scaffold.'];
-function scannerInvented(c, symbol) {
-  const annotations = c?.metadata?.annotations || {};
-  return SCANNER_SCAFFOLD_PREFIXES.some(p => annotations[`${p}${symbol}`]);
+export function scannerInvented(annotations, symbol) {
+  return SCANNER_SCAFFOLD_PREFIXES.some(p => !!annotations?.[`${p}${symbol}`]);
 }
 function declaredSyntheticChecks(c) {
-  return syntheticChecks(c).filter(s => !scannerInvented(c, `validation.synthetic_checks.${s?.id}`));
+  const annotations = c?.metadata?.annotations || {};
+  return syntheticChecks(c).filter(s => !scannerInvented(annotations, `validation.synthetic_checks.${s?.id}`));
 }
 
 function extendedBackendRefs(c) {
