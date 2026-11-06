@@ -58,10 +58,12 @@ function baselines(c)     { return spec(c).baselines || {}; }
 // neither synthetic-check clause below; every other template value still
 // counts as a pass. A library placeholder (`library.todo.<symbol>`) counts
 // too: the pack represents the requirement and the server lists it under
-// onPlaceholder (server/index.mjs). Exported for the Conformance view
-// (studio/conformance-view.mjs), which names the check a clause left out.
-const SCANNER_SCAFFOLD_PREFIXES = ['crawler.scaffold.', 'mcp.scaffold.'];
-export function scannerInvented(annotations, symbol) {
+// onPlaceholder (server/index.mjs). The prefixes are exported: the
+// Conformance view (studio/conformance-view.mjs), which names the check a
+// clause left out, mirrors them (a live studio module never imports
+// tools/lib), and tools/test-library.mjs pins the two lists equal.
+export const SCANNER_SCAFFOLD_PREFIXES = Object.freeze(['crawler.scaffold.', 'mcp.scaffold.']);
+function scannerInvented(annotations, symbol) {
   return SCANNER_SCAFFOLD_PREFIXES.some(p => !!annotations?.[`${p}${symbol}`]);
 }
 function declaredSyntheticChecks(c) {

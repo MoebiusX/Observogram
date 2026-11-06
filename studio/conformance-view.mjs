@@ -34,7 +34,6 @@ import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { layerItemsFor } from './diagnostic-grade.mjs';
 import { clauseGhostLabel } from './build-model.mjs';
-import { scannerInvented } from '../tools/lib/conformance.mjs';
 import {
   decisionHeaderHtml, layerTitle, LAYER_PURPOSE, plural, sectionNavHtml, statusChipHtml, statusRecord, termHtml,
   wireSectionNav, wireUxActions,
@@ -119,14 +118,18 @@ function templateValues(pack) {
 }
 
 // The two clauses that leave out a synthetic check a scanner invented (the
-// crawler's health canary; tools/lib/conformance.mjs scannerInvented). When
-// one fails, its row names the checks it left out, so "No synthetic check"
-// never stands unexplained next to a check the pack shows.
+// crawler's health canary). When one fails, its row names the checks it left
+// out, so "No synthetic check" never stands unexplained next to a check the
+// pack shows. The prefixes mirror tools/lib/conformance.mjs
+// SCANNER_SCAFFOLD_PREFIXES: the live server serves tools/lib at /lib only,
+// so a view cannot import it, and tools/test-library.mjs pins the two equal.
+export const SCANNER_INVENTED_PREFIXES = Object.freeze(['crawler.scaffold.', 'mcp.scaffold.']);
 const SKIPS_INVENTED_SYNTHETIC = new Set(['L5.MUST.synthetic_probe', 'L5.MUST.tier1_weekly_prod_chaos']);
 function inventedSyntheticChecks(pack) {
   const ann = pack?.meta?.annotations || pack?.metadata?.annotations || {};
+  const invented = (symbol) => SCANNER_INVENTED_PREFIXES.some(p => !!ann[`${p}${symbol}`]);
   return layerItemsFor(pack, 'L5')
-    .filter(a => a?.tags?.includes('synthetic') && typeof a?.spec?.id === 'string' && scannerInvented(ann, `validation.synthetic_checks.${a.spec.id}`))
+    .filter(a => a?.tags?.includes('synthetic') && typeof a?.spec?.id === 'string' && invented(`validation.synthetic_checks.${a.spec.id}`))
     .map(a => a.spec.id);
 }
 
@@ -258,7 +261,7 @@ function inventedCaveatHtml(r) {
   if (!ids.length) return '';
   const one = ids.length === 1;
   const text = `${one ? 'is a placeholder' : 'are placeholders'} the scan wrote because the schema needs one; nothing in the repository probes the service, so ${one ? 'it does' : 'they do'} not count here.`;
-  return `<p class="conf-row-caveat">${statusChipHtml('completion', 'needsInput')} ${one ? 'The synthetic check' : 'The synthetic checks'} ${ids.map(id => `<code>${escapeHtml(id)}</code>`).join(', ')} ${escapeHtml(text)}</p>`;
+  return `<p class="conf-row-caveat">${statusChipHtml('completion', 'needsInput', { label: 'Template value' })} ${one ? 'The synthetic check' : 'The synthetic checks'} ${ids.map(id => `<code>${escapeHtml(id)}</code>`).join(', ')} ${escapeHtml(text)}</p>`;
 }
 
 function rowHtml(r, kind, model) {

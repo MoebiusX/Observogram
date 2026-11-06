@@ -16,7 +16,10 @@
  *   - the repository's own pack (.observability/*.yaml): merged by id, the declared entry winning,
  *     an invalid entry left out with a warning, never a failed scan;
  *   - the crawl end to end: a schema-valid pack, evidence paths, annotations, the tier, the
- *     GitHub / ADO file rule.
+ *     GitHub / ADO file rule;
+ *   - what the 0.8.7 walkthrough found: the Expert door sends every file the scan uses
+ *     (crawler.mjs scanUsesFile), a scanned experiment's references resolve in its own pack
+ *     (studio/symbol-refs.mjs), and Diagnose words its blocker from the proof (studio/chaos-copy.mjs).
  * Every fixture here is synthetic.
  *
  * Run: node --test tools/test-chaos-detect.mjs
@@ -32,12 +35,15 @@ import { validateCanonical, SPEC_SCHEMA_PATH, SPEC_DIR } from './lib/validator.m
 import {
   CHAOS_ENGINES, CHAOS_SCHEDULES, CHAOS_RUN_OUTCOMES, CHAOS_REQUIRED, CHAOS_PATTERNS, UNRESOLVED_EXPECTED_ALERT,
   chaosExperimentErrors, chaosRunErrors, durationSeconds, formatDuration, isChaosCodePath, scenarioTablesIn,
-  chaosControlIn, chaosToggleIn, chaosResourcesIn, scheduleOfCron, detectChaos, chaosExperimentsFrom, chaosControlSummary,
+  chaosControlIn, chaosToggleIn, chaosResourcesIn, scheduleOfCron, detectChaos, chaosExperimentsFrom, chaosControlSummary, chaosPassReads,
 } from './lib/chaos-detect.mjs';
 import { isRepoPackPath, readRepoPack } from './lib/repo-pack.mjs';
-import { crawlFiles, detectArtefactKind } from './lib/crawler.mjs';
+import { crawlFiles, detectArtefactKind, scanUsesFile } from './lib/crawler.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { isCrawlerFile, selectCrawlerFiles } from '../server/github-crawl.mjs';
+import { refResolves, refSymbol, UNRESOLVED_ALERT_PLACEHOLDER } from '../studio/symbol-refs.mjs';
+import { chaosBlockerCopy } from '../studio/chaos-copy.mjs';
+import { chaosProof } from '../studio/diagnostic-grade.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEMA = JSON.parse(readFileSync(resolve(ROOT, SPEC_SCHEMA_PATH), 'utf8'));
@@ -504,4 +510,90 @@ test('the GitHub / ADO file rule fetches chaos code and the repository pack', ()
   assert.equal(isCrawlerFile('src/chaos.test.ts'), false, 'tests stay out');
   const picked = selectCrawlerFiles([{ type: 'blob', path: '.observability/pack.yaml' }, { type: 'blob', path: 'server/middleware/chaos.ts' }, { type: 'blob', path: 'README.md' }]);
   assert.deepEqual(picked.map(n => n.path), ['.observability/pack.yaml', 'server/middleware/chaos.ts']);
+});
+
+// ---------------------------------------------------------------------------
+// the doors and the screens (the 0.8.7 walkthrough)
+// ---------------------------------------------------------------------------
+
+// j6-13: the Expert panel sent only the files the browser classified as artefacts, so the chaos
+// controller, its middleware and a scenario script never reached the chaos pass; an Overview Run of
+// the same folder found every experiment. The door now sends what crawler.mjs scanUsesFile names.
+test('scanUsesFile: a door that sends only the files the scan uses gets the whole folder\'s experiments; artefacts alone lose them', () => {
+  assert.equal(chaosPassReads('server/monitor/chaos-controller.ts', 'export const x = 1;'), true, 'a chaos code path');
+  assert.equal(chaosPassReads('server/routes.ts', "router.post('/api/chaos/start', start);"), true, 'code that serves the chaos API');
+  assert.equal(chaosPassReads('k8s/pod-kill.yaml', 'apiVersion: chaos-mesh.org/v1alpha1\nkind: PodChaos\n'), true, 'a Chaos Mesh resource');
+  assert.equal(chaosPassReads('docs/chaos.md', '# chaos'), false, 'not code, not a resource');
+  assert.equal(chaosPassReads('src/app.ts', 'export const x = 1;'), false);
+  assert.equal(chaosPassReads('src/chaos/faults.ts', null), false, 'no content, nothing read');
+  const files = repoFiles({
+    'k8s/chaos/mesh.yaml': MESH_YAML.split('---')[0],
+    'src/app.ts': 'export const port = 8080;\n',
+    'README.md': '# shop-api\nRun chaos with npm run chaos.\n',
+  });
+  const crawl = (subset) => crawlFiles(subset, { repoName: 'shop-api', environment: 'prod', now: '2026-11-06T00:00:00.000Z' }).canonical;
+  const sent = Object.fromEntries(Object.entries(files).filter(([p, c]) => scanUsesFile(p, c)));
+  assert.deepEqual(Object.keys(sent).sort(), Object.keys(files).filter(p => !['src/app.ts', 'README.md'].includes(p)).sort(), 'the controller and its routes go; plain code and docs stay');
+  const whole = crawl(files);
+  const chaosAnnotations = (c) => Object.fromEntries(Object.entries(c.metadata.annotations).filter(([k]) => /chaos/.test(k)));
+  assert.deepEqual(crawl(sent).spec.validation.chaos_experiments, whole.spec.validation.chaos_experiments);
+  assert.deepEqual(chaosAnnotations(crawl(sent)), chaosAnnotations(whole), 'the same marks, control and toggle notes');
+  const artefactsOnly = Object.fromEntries(Object.entries(files).filter(([p, c]) => detectArtefactKind(p, c) !== 'unknown'));
+  const lost = (crawl(artefactsOnly).spec.validation.chaos_experiments || []).map(e => e.id);
+  assert.ok(!lost.includes('slow-checkout') && !lost.includes('payment-errors'), 'the old filter lost the in-process scenarios');
+  assert.equal(scanUsesFile('src/chaos/faults.ts', SCENARIO_TS, 'unknown'), true, 'a caller\'s kind saves the second classification');
+});
+
+// j2-107: latency-spike's ref:slos.slo_latency_99 and alert:HighLatencyP99 were listed as broken
+// although the pack declares both. The rule (studio/symbol-refs.mjs) reads `ref:slos.x` as the
+// symbol `slos.x` and any alert name as resolved, CamelCase included; the scan's placeholder for
+// an alert the code never names stays unresolved, because it names none.
+test('a scanned experiment\'s references resolve in its own pack; only the "no alert named" placeholder stays unresolved', () => {
+  assert.equal(UNRESOLVED_ALERT_PLACEHOLDER, UNRESOLVED_EXPECTED_ALERT, 'the studio mirrors the scan\'s placeholder (a live studio module never imports tools/lib)');
+  assert.equal(refSymbol('ref:slos.a'), 'slos.a');
+  assert.equal(refSymbol('ref:platform/base'), 'ref:platform/base', 'an import keeps its form');
+  const defined = new Set(['slos.a', 'slis.a']);
+  for (const [ref, want] of [
+    ['ref:slos.a', true], ['slos.a', true], ['ref:slis.a', true], ['ref:slos.nope', false], ['slos.nope', false],
+    ['alert:HighLatencyP99', true], ['alert:checkout-latency', true], [`alert:${UNRESOLVED_EXPECTED_ALERT}`, false], ['alert:', false],
+    ['ref:platform/base-pack', true], ['', true], [null, true],
+  ]) assert.equal(refResolves(ref, defined), want, String(ref));
+  // The prod scope of a Helm repository reads Kubernetes paths only, so the rules sit under k8s/.
+  const { canonical } = crawlFiles(repoFiles({ 'k8s/monitoring/checkout.rules.yaml': RULES_YAML }), { repoName: 'shop-api', environment: 'prod', now: '2026-11-06T00:00:00.000Z' });
+  const pack = adapt(canonical);
+  const all = Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
+  const symbols = new Set(all.map(a => a.defines).filter(Boolean));
+  const unresolved = (card) => (card.refs || []).filter(r => !refResolves(r, symbols));
+  const cards = pack.layers.L5.filter(a => /^CHAOS-/.test(a.id));
+  const byTitle = Object.fromEntries(cards.map(c => [c.title, c]));
+  assert.deepEqual(Object.keys(byTitle).sort(), ['payment-errors', 'ramp-up', 'slow-checkout']);
+  assert.ok(byTitle['slow-checkout'].refs.some(r => /^ref:slos\./.test(r)) && byTitle['slow-checkout'].refs.includes('alert:CheckoutLatencyHigh'), 'the spec Ref form and a CamelCase alert', byTitle['slow-checkout'].refs);
+  assert.deepEqual(unresolved(byTitle['slow-checkout']), []);
+  assert.deepEqual(unresolved(byTitle['payment-errors']), []);
+  assert.deepEqual(unresolved(byTitle['ramp-up']), [`alert:${UNRESOLVED_EXPECTED_ALERT}`], 'the code names no alert for ramp-up');
+});
+
+// j3-72: Diagnose's gap card said "No chaos experiment is declared" beside its own evidence line
+// "5 chaos experiments declared, never recorded as run". The copy (studio/chaos-copy.mjs) follows
+// the engine's proof, state by state.
+test('the Diagnose blocker for Chaos-validated is worded from the proof: none, declared, stale, failed, part-proven', () => {
+  const nowMs = Date.parse('2026-11-06T12:00:00Z');
+  const ago = (days) => new Date(nowMs - days * 86400e3).toISOString();
+  const exp = (id, last_result) => ({ id, schedule: 'weekly', expected_alerts: ['HighLatencyP99'], expected_mttd: '6m', ...(last_result ? { last_result } : {}) });
+  const copyFor = (experiments, extra = {}) => chaosBlockerCopy({ proof: chaosProof(experiments, { nowMs }), declared: experiments.length, ...extra });
+  assert.deepEqual(copyFor([]), {}, 'none, on a pack nobody scanned: the generic "declare one" copy stands');
+  assert.match(copyFor([], { fromScan: true }).fix, /found no chaos experiment: no scenario table in code, no Chaos Mesh or Litmus resource, nothing in \.observability\/\*\.yaml/);
+  assert.match(copyFor([], { fromScan: true, unobserved: { repository: 'the repository scan has no chaos-experiment detector' } }).fix, /could not read chaos experiments\. Scan the repository again/);
+  const declared = copyFor([exp('latency-spike'), exp('error-burst')], { fromScan: true });
+  assert.equal(declared.title, 'No chaos experiment has a recorded run');
+  assert.doesNotMatch(`${declared.title} ${declared.why} ${declared.fix}`, /No chaos experiment is declared|only when the pack declares/);
+  assert.match(declared.why, /earns a quarter of this check/);
+  assert.match(declared.fix, /^Run the experiments, then record each run in the repository as the experiment’s last_result in \.observability\/pack\.yaml/);
+  assert.match(copyFor([exp('a')]).fix, /^Run the experiments, then record each run as the experiment’s last_result, or let the live check read the chaos run feed\.$/, 'a pack nobody scanned records it where it is');
+  assert.equal(copyFor([exp('a', { at: ago(20), outcome: 'pass' })]).title, 'The last chaos pass is too old');
+  assert.equal(copyFor([exp('a', { at: ago(1), outcome: 'fail', alerts_fired: [] })]).title, 'A chaos experiment failed its last run');
+  const part = copyFor([exp('a', { at: ago(1), outcome: 'pass' }), exp('b')]);
+  assert.equal(part.title, 'Not every chaos experiment has a recent pass');
+  assert.match(part.fix, /^Run the remaining experiments\. Record each run as/);
+  assert.equal(chaosBlockerCopy({ declared: 2 }).title, 'No chaos experiment has a recorded run', 'a criterion without proof (an older engine) reads its count');
 });

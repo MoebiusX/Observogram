@@ -34,7 +34,7 @@ import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
 import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
-import { detectChaos, chaosExperimentsFrom, chaosControlSummary } from './chaos-detect.mjs';
+import { detectChaos, chaosExperimentsFrom, chaosControlSummary, chaosPassReads } from './chaos-detect.mjs';
 import { isRepoPackPath, readRepoPack } from './repo-pack.mjs';
 import {
   DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
@@ -419,6 +419,19 @@ export function detectArtefactKind(relPath, content, opts) {
     return 'k8s-workload';
   }
   return 'unknown';
+}
+
+/**
+ * Whether a scan reads this file at all: it is an artefact
+ * (detectArtefactKind), or the chaos pass reads it beside the artefacts
+ * (chaos-detect.mjs chaosPassReads: a scenario table or chaos control in
+ * code, a Chaos Mesh / Litmus resource). A door that sends the server only
+ * what the scan uses (the Expert panel, studio/app.mjs finalizeStaging)
+ * sends exactly these, so its pack is the pack of the whole folder.
+ * `kind`, when the caller already classified the file, saves a second parse.
+ */
+export function scanUsesFile(relPath, content, kind = detectArtefactKind(relPath, content)) {
+  return kind !== 'unknown' || chaosPassReads(relPath, content);
 }
 
 function normalizeRepoPath(relPath) {

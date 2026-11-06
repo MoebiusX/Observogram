@@ -34,7 +34,7 @@
 
 ### Version
 - 0.8.8: package.json and its lock, the Dockerfile, the image tags under `deploy/` and the README, and the footer fallback. `VENDOR-MANIFEST.json` regenerated.
-- Suite total 1743 → 1743 (no test changes).
+- Suite total 1746 → 1746 (no test changes).
 
 ## 0.8.7 — 2026-11-06
 
@@ -104,6 +104,24 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
 - **`observogram.unobserved.chaos` stays**, with what the feed reported: the live side never holds an experiment's definition, and dropping the key would make the diff read every declared experiment as missing live.
 - **Exports**: `CHAOS_RUN_PROBES`, `chaosRunsFromAnswers`; and `sampleChaosRuns` from the fetcher.
 
+### Fixed: what the 0.8.7 walkthrough found on these screens
+- **The Expert folder scan sees chaos experiments** (`studio/app.mjs`; `tools/lib/crawler.mjs`, `tools/lib/chaos-detect.mjs`). The *Scan a repo* panel sent the server only the files the browser classified as artefacts, so a chaos controller, its middleware and a scenario script never reached the chaos pass. On krystaline it sent 121 of 535 files and found no experiment, while an Overview Run of the same folder found all five.
+  - `scanUsesFile(relPath, content, kind?)` in the crawler and `chaosPassReads(relPath, content)` in the detector name every file a scan reads: an artefact, or a file the chaos pass reads.
+  - The panel sends exactly those, and lists the extra files as `chaos-source`.
+- **Diagnose's Chaos-validated gap card follows the proof** (`studio/chaos-copy.mjs`, new; `studio/compare-view.mjs`). It read *No chaos experiment is declared* beside its own evidence, *5 chaos experiments declared, never recorded as run*. `chaosBlockerCopy` now words each state:
+  - none: on a scanned pack, what the scan looked for;
+  - declared, never run: *No chaos experiment has a recorded run*, the quarter it earns, and how to record a run (`last_result` in `.observability/pack.yaml`, or the live feed);
+  - stale: *The last chaos pass is too old*;
+  - failed: *A chaos experiment failed its last run*;
+  - partly proven: *Not every chaos experiment has a recent pass*.
+
+  The evidence row's expectation names the run and the window.
+- **A scanned experiment's references resolve** (`studio/symbol-refs.mjs`, new; the symbol table in `studio/app.mjs`, `studio/drawer.mjs`). latency-spike's `ref:slos.slo_latency_99` and `alert:HighLatencyP99` were listed as broken although the pack declares both. The symbol table knew `slos.x` and not the spec's own Ref form `ref:slos.x`, and it took only alert names that start lowercase.
+  - `refResolves` and `refSymbol` are now the one rule, and the drawer's links read it too.
+  - Any alert name resolves, except the scan's `unresolved:not-in-code` placeholder, which names no alert. The studio mirrors that name as `UNRESOLVED_ALERT_PLACEHOLDER`, and a test pins it to the detector's.
+  - On krystaline, latency-spike and error-burst show no unresolved reference. The three experiments whose code names no alert show one: their placeholder.
+- **The static bundle's ceiling** (`tools/test-studio-bundle.mjs` T3) rises from 6,250,000 to 6,400,000 bytes. With the two new studio modules the two-pack bundle came to 6,255,083 bytes, all of it the studio's own code and no new dependency.
+
 ### Docs
 - `docs/CHAOS_EXPERIMENTS.md`: decided, built, and what the build changed.
 - `docs/MCP_INTEGRATION.md`: the feed and its two annotations.
@@ -113,7 +131,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
 
 ### Tests and goldens
 - **New suites.**
-  - `tools/test-chaos-detect.mjs` (15 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end.
+  - `tools/test-chaos-detect.mjs` (18 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end. Three of its tests cover the walkthrough's fixes: the Expert door's files, a scanned experiment's references, and the blocker copy state by state.
   - `tools/test-chaos-run-evidence.mjs` (5 tests) covers the feed, from the registry row to a proven grade.
 - **Updated suites.**
   - `tools/test-validator.mjs` pins 1.5 (one new test).
@@ -127,7 +145,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - Build fixture: its header.
   - Diff: eight whole-diff hashes. The vendored example records a run that a self-diff carries twice; a script confirmed the diff is otherwise identical.
   - Crawl: the `crawler.unobserved.chaos` line goes.
-- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1721 → 1743.
+- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1721 → 1746.
 
 ## 0.8.6 — 2026-11-06
 
@@ -212,8 +230,9 @@ Same seven criteria, same weights. Scores can fall, never rise, on the same pack
 
 ### Changed: the synthetic-probe clause skips the crawler's invented canary (`tools/lib/conformance.mjs`)
 `L5.MUST.synthetic_probe` passed on the `https://<repo>.example.com/health` check the crawler writes when a repository has none. A check marked `crawler.scaffold.` or `mcp.scaffold.` now satisfies no clause; the weekly-production-chaos clause's instrumented probe reads the same way. A library placeholder (`library.todo.*`) still passes: the pack represents the requirement, and the server lists it under `onPlaceholder`.
-- **`scannerInvented(annotations, symbol)`** is exported, the one rule for "a scanner invented this value".
+- **`SCANNER_SCAFFOLD_PREFIXES`** is exported, the marks that make a value scanner-invented.
 - **The Conformance view** (`studio/conformance-view.mjs`) says so. Its Scoring rules read *Template values count as passes, with one exception*, the invented synthetic check. A failing synthetic clause names the check it left out (*The synthetic check `krystaline-health-canary` is a placeholder the scan wrote…*). Before, the text said every placeholder passes, beside a clause that failed on one.
+  - The view mirrors the prefixes as `SCANNER_INVENTED_PREFIXES`, and a test pins the two lists equal. The live server serves tools/lib at `/lib` only, so a static `../tools/lib/` import there loads the HTML shell and the studio does not start. `tools/test-studio-bundle.mjs` T1 now refuses such an import in any live studio module.
 
 ### Added: what the scan and the live check could not look at
 - **`tools/lib/crawler.mjs`** stamps `crawler.unobserved.chaos: the repository scan has no chaos-experiment detector` on every crawled pack. The key goes when the scan learns to detect chaos experiments.

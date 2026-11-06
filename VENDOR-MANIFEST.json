@@ -304,8 +304,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/chaos-detect.mjs": {
-      "sha256": "12e8d4b4e3a0fb1f2c5ce7ea81438001fd36eead2d708e75290922e8d2e0c287",
-      "bytes": 28696,
+      "sha256": "72029b34698e351f5a2e54f0e594dadf905f99f98c39b8d510a29a2f8cba4956",
+      "bytes": 29396,
       "exports": [
         "CHAOS_ENGINES",
         "CHAOS_PATTERNS",
@@ -317,6 +317,7 @@
         "chaosControlSummary",
         "chaosExperimentErrors",
         "chaosExperimentsFrom",
+        "chaosPassReads",
         "chaosResourcesIn",
         "chaosRunErrors",
         "chaosToggleIn",
@@ -374,15 +375,15 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "4deea5ff09a129f7f5f52407d083f5df65f5540f7e569d9b435f7da52dc031f2",
-      "bytes": 19796,
+      "sha256": "515f6cbf5b9be6a0ba8633f29c22b4d3b1b6425e1e2dc12673e0f3fffacadde4",
+      "bytes": 19945,
       "exports": [
         "RUBRIC",
+        "SCANNER_SCAFFOLD_PREFIXES",
         "SUBJECT_CLAUSES",
         "TIER_RANK",
         "clauseSubjects",
-        "evaluateConformance",
-        "scannerInvented"
+        "evaluateConformance"
       ],
       "imports": [],
       "npm": [],
@@ -451,8 +452,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "056a4173d3fe668d3a42e1d5b22bbae8c09b2822595b248556753c3148d3f185",
-      "bytes": 155058,
+      "sha256": "229f8d5db9eea476a476a2a5fdd343fd41a835f67989a1e08ee3d53649830bd2",
+      "bytes": 155747,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -472,6 +473,7 @@
         "scanRefusesName",
         "scanReport",
         "scanSkipsName",
+        "scanUsesFile",
         "walkScanFolder"
       ],
       "imports": [

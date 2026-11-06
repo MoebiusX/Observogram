@@ -8,6 +8,7 @@
 // (host.mjs); a couple of pack helpers are still imported back from app.mjs
 // and the card opener from drawer.mjs (safe call-time cycles).
 
+import { chaosBlockerCopy } from './chaos-copy.mjs';
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
@@ -1832,7 +1833,7 @@ export function renderPostureNarrative(posture) {
 //   2B — TRUST (signal integrity)
 //        "Can we trust what the signals show?"
 //        Three criteria evaluated on Pack A's live evidence:
-//          5. Chaos-validated — chaos experiments declared
+//          5. Chaos-validated — chaos experiments declared, and proven by a recent passing run
 //          6. Drift-free      — declared artefacts match live state
 //                               (MCP probe success / total ratio)
 //          7. Fresh           — mcp.refreshedAt within staleness window
@@ -1939,7 +1940,7 @@ function renderDiagnosticGradeVerdict(diagnostic) {
   evidenceRows.push(rowFor('calibrated', 'spec.slos[].objective + spec.baselines', '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared (a scaffold does not count)'));
   evidenceRows.push(rowFor('comprehensive', 'posture matrix · 4 layers × 10 mechanisms', 'average ≥ 50% observed'));
   evidenceRows.push(rowFor('actionable', 'spec.remediation[]', '≥ 1 remediation runbook declared (informational — not scored)', { informational: true }));
-  evidenceRows.push(rowFor('chaos-validated', 'spec.validation.chaos_experiments[]', '≥ 1 chaos experiment declared (a scaffold does not count)'));
+  evidenceRows.push(rowFor('chaos-validated', 'spec.validation.chaos_experiments[] · last_result / the live run feed', 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)'));
   evidenceRows.push(rowFor('drift-free', 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded'));
   evidenceRows.push(rowFor('fresh', 'metadata.annotations.mcp.refreshedAt', 'within last 24h'));
   const scoredRows = evidenceRows.filter(r => !r.informational);
@@ -3761,9 +3762,11 @@ const CRITERION_COPY = {
     why: 'Fewer than half of the expected mechanisms are observed across infrastructure, platform, application and user experience, so failures there go unseen.',
     fix: 'Start with the darkest layers in Layer scores.',
   },
+  // The copy for no experiment at all; chaosBlockerCopy words the other
+  // states of the engine's proof (declared, stale, failed, part-proven).
   'chaos-validated': {
     title: 'No chaos experiment is declared',
-    why: 'The grade credits a chaos experiment only when the pack declares one. Without one it cannot say whether alerts fire and recovery works under a fault; it says nothing about experiments run outside the pack.',
+    why: 'Without a chaos experiment the grade cannot say whether alerts fire and recovery works under a fault; it says nothing about experiments run outside the pack.',
     fix: `Declare at least one chaos experiment in L5 ${LAYER_NAMES.L5}.`,
   },
   'drift-free': {
@@ -3825,12 +3828,8 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
   } else if (c.key === 'comprehensive') {
     b.actionLabel = 'View layer scores';
     b.actionId = 'diag-goto:diag-layers';
-  } else if (c.key === 'chaos-validated' && c.fromScan) {
-    // Pack A is the repository scan's output: a Run that scans the
-    // repository again rewrites it, so "declare one in L5" is an edit that
-    // lasts only until then — and while the scan stamps that it has no
-    // chaos detector, the repository cannot carry one either.
-    b.fix = `This pack was written by the repository scan${c.unobserved?.repository ? ', which cannot read chaos experiments from a repository yet' : ''}. A Run that scans the repository again rewrites the pack, so an experiment declared here by hand lasts only until then.`;
+  } else if (c.key === 'chaos-validated') {
+    Object.assign(b, chaosBlockerCopy(c));
   } else if (c.key === 'calibrated' && c.baselines?.scaffolds > 0 && !c.baselines.declared) {
     // The only baselines are the scaffold every scan writes (platform
     // defaults): nothing measured them, and the next scan writes them again.
