@@ -13,7 +13,7 @@ in §5.
 | an aligned node earns full credit whether or not it is doing its job | a node that is present but `present_unhealthy` / `present_stale` earns 0.25 (the drift-credit floor); healthy / alive / exists keep 1 |
 | a declared node the vantage could not look for is `declared_only` and penalised as missing | an `unobserved` node (probe family failed or not exposed) leaves the denominator, exactly as `unverifiable` kinds do today |
 | a scrape job the fetcher observed down but withheld from Pack B is scored absent | it is scored present-but-unhealthy (0.25) — on the wire beats absent |
-| `gradeSchema: 3` | `gradeSchema: 4`, with the schema comment naming this switch and its date |
+| `gradeSchema: 4` | `gradeSchema: 5`, with the schema comment naming this switch and its date |
 
 Everything else — limb weights, drift credit, missing-role weights, the
 branch verdict labels, `rollup.integrityMean`, `intact / partial / broken /
@@ -63,8 +63,8 @@ that cannot show scrape configs loses 5 points it did nothing to earn.
 
 ## 4. Risks
 
-- **Score discontinuity on existing journeys.** Runs recorded under schema 3
-  and 4 are not comparable; the `gradeSchema` bump exists so the record can
+- **Score discontinuity on existing journeys.** Runs recorded under schema 4
+  and 5 are not comparable; the `gradeSchema` bump exists so the record can
   say so, and the journey transition logic should treat a schema change as a
   reason, not a regression. (Since slices 3–4 the run record carries
   `transition` and `causes` — `tools/lib/chain-history.mjs` — but neither

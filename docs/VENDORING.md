@@ -135,6 +135,18 @@ appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
 
+**Grade schema 4 (0.8.7): Chaos-validated tells declared from proven.**
+`computeDiagnosticGrade` returns `gradeSchema: 4`. A declared experiment earns
+`CHAOS_DECLARED_CREDIT` (0.25); the rest of the point needs a passing run inside
+`CHAOS_PROOF_WINDOW_DAYS` of its schedule, from the experiment's spec 1.5
+`last_result` or from `mcp.chaos.runs` on Pack B (the live run feed; it wins);
+a failed newest run earns 0. The new exports are pure and import nothing:
+`chaosProof(experiments, { nowMs, liveRuns })`, `liveChaosRuns(annotation)`,
+`CHAOS_PROOF_WINDOW_DAYS` and `CHAOS_DECLARED_CREDIT`. Chaos-validated gains
+`score` and `proof` (`{ state, score, pass, declared, fresh, provenAt, source,
+failed, stale, never }`). A host with no run anywhere sees a declared pack lose
+0.75 of a point against schema 3.
+
 **Grade schema 3 (0.8.5): scaffolds earn nothing.** `computeDiagnosticGrade`
 returns `gradeSchema: 3`; scores can fall, never rise, against schema 2 on the
 same packs. Calibrated and Chaos-validated skip artefacts whose `source` is

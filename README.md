@@ -264,7 +264,7 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 3):
+The checks are (grade schema 4):
 
 | Area | Criteria | Scored |
 |---|---|---|
@@ -274,9 +274,14 @@ The checks are (grade schema 3):
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated, and a placeholder chaos
-experiment does not make it Chaos-validated. Chaos-validated means an
-experiment is declared; the specification holds no result for one, so the
-grade never says recovery was proven. A chaos experiment sits on the layer of
+experiment does not make it Chaos-validated. Chaos-validated tells declared
+from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
+a quarter of the point, and the rest needs a recent passing run of every
+experiment — its `last_result` in the repository, or the live run feed — within
+the window its schedule sets (daily 2 days, weekly 8, monthly 35, on-demand
+and ci 90). A failed newest run earns nothing. The scan reads experiments from
+code, from Chaos Mesh and Litmus resources and from the repository's own
+`.observability/*.yaml`. A chaos experiment sits on the layer of
 its target (or of its steady-state SLO), never of the words in its name.
 
 Runbooks measure response readiness of the overall solution, not diagnostic
@@ -1440,8 +1445,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.6 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.6
+docker build -t observogram:0.8.7 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.7
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or

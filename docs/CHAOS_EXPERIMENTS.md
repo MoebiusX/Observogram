@@ -1,8 +1,24 @@
 # Chaos experiments: declared, and proven
 
-**Status: proposal, 2026-11-06. Nothing in this document is built.** It changes
-the pack spec, so it waits for the owner's answer to the eight decisions at the
-end. The build starts after that answer.
+**Status: decided 2026-11-06, built in 0.8.7.** The owner accepted all eight
+recommendations at the end. Spec 1.5 is RFC-0004 in
+MoebiusX/otel-observability-pack#11. Observogram vendors it from that branch's
+commit `adea3bf3` and moves the pin to `develop` once it merges. The build
+differs from the text below in four places:
+
+- **The live side keeps `observogram.unobserved.chaos`** (§5 said it goes when
+  the feed answers). The live side never holds an experiment's definition, and
+  without the key the diff would read every declared experiment as missing
+  live, which costs Drift-free. The reason now says what the feed reported, and
+  the runs ride in `mcp.chaos.runs`.
+- **The posture matrix's chaos column still counts presence** (§4 said it
+  follows the same rule). Since 0.8.5 it reads *declared*. Making it score
+  proof would move Comprehensive too, so proof lives in Chaos-validated alone.
+- **`.observability/*.yaml` is read in every environment scope.** A prod
+  scope of a Kubernetes repository kept only Kubernetes paths and dropped it.
+- **The tier rule** became: a tier-2 repository that holds an experiment
+  infers tier-1. krystaline now infers tier-1, so its conformance is held to
+  the tier-1 clauses.
 
 ## The problem
 
