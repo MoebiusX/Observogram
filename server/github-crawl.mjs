@@ -29,9 +29,12 @@ export function isCrawlerFile(path) {
   const sourceMetricCandidate =
     /\.(cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/.test(p) &&
     !/(\.test\.|\.spec\.|\.d\.ts$|package-lock|yarn\.lock|pnpm-lock|tokenizer\.json)/.test(p) &&
-    /(metrics?|prometheus|observability|telemetry|instrumentation|monitor|otel|mcp|bayesian|processor)/.test(p);
+    /(metrics?|prometheus|observability|telemetry|instrumentation|monitor|otel|mcp|bayesian|processor|chaos)/.test(p);
   return (
     sourceMetricCandidate ||
+    // The repository's own pack (tools/lib/repo-pack.mjs): its declared chaos
+    // experiments and their newest runs.
+    /(^|\/)\.observability\/[^/]+\.ya?ml$/.test(p) ||
     /(^|\/)(application|bootstrap)[\w.-]*\.ya?ml$/.test(p) ||
     // A prebuilt exporter's metrics manifest (named precisely; the broad
     // exporter patterns are isExporterCandidateFile's, fetched last).

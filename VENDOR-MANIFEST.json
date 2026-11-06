@@ -303,6 +303,37 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/chaos-detect.mjs": {
+      "sha256": "12e8d4b4e3a0fb1f2c5ce7ea81438001fd36eead2d708e75290922e8d2e0c287",
+      "bytes": 28696,
+      "exports": [
+        "CHAOS_ENGINES",
+        "CHAOS_PATTERNS",
+        "CHAOS_REQUIRED",
+        "CHAOS_RUN_OUTCOMES",
+        "CHAOS_SCHEDULES",
+        "UNRESOLVED_EXPECTED_ALERT",
+        "chaosControlIn",
+        "chaosControlSummary",
+        "chaosExperimentErrors",
+        "chaosExperimentsFrom",
+        "chaosResourcesIn",
+        "chaosRunErrors",
+        "chaosToggleIn",
+        "detectChaos",
+        "durationSeconds",
+        "formatDuration",
+        "isChaosCodePath",
+        "scenarioTablesIn",
+        "scheduleOfCron"
+      ],
+      "imports": [
+        "tools/lib/mini-yaml.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/compile.mjs": {
       "sha256": "4be1a0b282448a73d9026da45ff4c0bc43ad104d0bf860b52fe355c48157e67a",
       "bytes": 86839,
@@ -409,8 +440,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "08e156a1f1b582dbbec85059843066da32e3771a054c59b76c253e2ad795583d",
-      "bytes": 140651,
+      "sha256": "65fa3e319486f92d48044cc075aa50ac9f6aa564ffaba4d9e526650c160f35c7",
+      "bytes": 146344,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -426,11 +457,13 @@
       "imports": [
         "tools/lib/alert-routes.mjs",
         "tools/lib/backend-products.mjs",
+        "tools/lib/chaos-detect.mjs",
         "tools/lib/exporter-metrics.mjs",
         "tools/lib/l2x.mjs",
         "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
         "tools/lib/promql.mjs",
+        "tools/lib/repo-pack.mjs",
         "tools/lib/sli-inference.mjs",
         "tools/lib/slug.mjs"
       ],
@@ -1062,6 +1095,22 @@
       ],
       "npm": [],
       "changedSinceRelease": false
+    },
+    "tools/lib/repo-pack.mjs": {
+      "sha256": "2441bc9355a887239a5a4ec2bcf13ceb2f7442b5d64c0dbc2b87bb71038f5fe2",
+      "bytes": 3044,
+      "exports": [
+        "isRepoPackPath",
+        "readRepoPack",
+        "repoPackDocuments"
+      ],
+      "imports": [
+        "tools/lib/chaos-detect.mjs",
+        "tools/lib/mini-yaml.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
     },
     "tools/lib/schedule-snippets.mjs": {
       "sha256": "a7eac2632b83b511100d37b1c80801ff9cc68880a0458c212e2e54ed1dc6e4ce",
