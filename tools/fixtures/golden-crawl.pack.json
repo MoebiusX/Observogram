@@ -31,6 +31,7 @@
       "crawler.syntheticRecordingRulesSkipped": "1",
       "crawler.extendedSurfaces": "0",
       "crawler.scaffoldCount": "9",
+      "crawler.unobserved.chaos": "the repository scan has no chaos-experiment detector",
       "crawler.unresolvedChannelCount": "1",
       "crawler.unresolved.alerting": "SEV2:${GOLDEN_HOOK_URL} (alertmanager.yml)",
       "crawler.discovered.sdk_languages": "[\"node\"]",

@@ -124,7 +124,7 @@ export function renderBoard(pack, { env = '' } = {}) {
   });
   const groups = bands
     .filter(b => !(b.id === 'L2X' && !b.entries.length))   // optional in the spec: no band when empty
-    .map(b => `<!-- ${b.id} -->\n${boardGroupsHtml(b.id, b.entries)}`);
+    .map(b => `<!-- ${b.id} -->\n${boardGroupsHtml(b.id, b.entries, { annotations: pack.meta?.annotations })}`);
   return `${head}\n${groups.join('\n')}\n`;
 }
 

@@ -399,6 +399,29 @@ try {
   assert(conf.clauses.some(c => c.id === 'L2X.MUST.extended_backend_refs_resolve' && c.pass === true),
          'conformance checks L2X backend references');
 
+  // The krystaline audit (2026-11-06): L5.MUST.synthetic_probe passed on the
+  // health canary the crawler invents (https://<repo>.example.com/health,
+  // marked crawler.scaffold.validation.synthetic_checks.<id>). A value a
+  // scanner invented satisfies no clause; the same probe declared by
+  // someone does, and a library placeholder still does (onPlaceholder).
+  const probeClause = (pack) => evaluateConformance(pack).clauses.find(c => c.id === 'L5.MUST.synthetic_probe');
+  const [canary] = canonical.spec.validation.synthetic_checks;
+  const canaryMark = `crawler.scaffold.validation.synthetic_checks.${canary.id}`;
+  assert(/\.example\.com\/health$/.test(canary.target) && canonical.metadata.annotations[canaryMark],
+         'the crawler still writes its schema-forced canary, marked a scaffold');
+  assert(probeClause(canonical).pass === false, 'the invented canary is no synthetic probe (L5.MUST.synthetic_probe fails)');
+  const declaredProbe = structuredClone(canonical);
+  delete declaredProbe.metadata.annotations[canaryMark];
+  assert(probeClause(declaredProbe).pass === true, 'the same probe, declared by someone, passes');
+  const fetchedProbe = structuredClone(declaredProbe);
+  fetchedProbe.metadata.annotations[`mcp.scaffold.validation.synthetic_checks.${canary.id}`] = 'schema-forced';
+  assert(probeClause(fetchedProbe).pass === false, 'the live fetcher\'s placeholders are scanner-invented too');
+  const libraryProbe = structuredClone(declaredProbe);
+  libraryProbe.metadata.annotations[`library.todo.validation.synthetic_checks.${canary.id}`] = 'point it at the endpoint';
+  assert(probeClause(libraryProbe).pass === true, 'a library placeholder still represents the requirement');
+  assert(canonical.metadata.annotations['crawler.unobserved.chaos'] === 'the repository scan has no chaos-experiment detector',
+         'the scan says it cannot look for chaos experiments (crawler.unobserved.chaos)');
+
   const sameLive = structuredClone(canonical);
   const aligned = diffPacks(adapted, adapt(sameLive));
   assert(aligned.layers.L2X.inBoth.length >= 6 && aligned.layers.L2X.onlyInA.length === 0,

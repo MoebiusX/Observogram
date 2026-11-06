@@ -602,7 +602,7 @@ function layerItemHtml(L, open) {
           </button>
           ${narrowing ? `<span class="dv-match" title="${escapeHtml(matchTip)}">${matchN} match</span>` : ''}
         </div>
-        ${boardGroupsHtml(L.id, L.entries)}
+        ${boardGroupsHtml(L.id, L.entries, { annotations: state.pack?.meta?.annotations })}
       </div>
       <div class="dv-panel" id="dv-panel-${L.id}" role="region" aria-labelledby="dv-toggle-${L.id}"${open ? '' : ' hidden'}></div>
     </li>`;

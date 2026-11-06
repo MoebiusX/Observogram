@@ -111,7 +111,7 @@ degraded, broken, unobserved, integrityMean, integrityPct }`, appended last.
 are byte-identical with and without the annotations the ladder reads
 (pinned in `tools/test-traceability-graph.mjs`), and Drift-free still reads
 `rollup.integrityMean` — the switch to `rollup.ladder.integrityMean` is a
-proposal (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`, gradeSchema 3), not
+proposal (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`, gradeSchema 4), not
 applied. Keys are only ever added here, never renamed or removed.
 
 **Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
@@ -134,6 +134,23 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
+
+**Grade schema 3 (0.8.5): scaffolds earn nothing.** `computeDiagnosticGrade`
+returns `gradeSchema: 3`; scores can fall, never rise, against schema 2 on the
+same packs. Calibrated and Chaos-validated skip artefacts whose `source` is
+`Scaffold` (the scan's default baselines, a library chaos experiment still on
+its generic fault), and a chaos experiment's posture layer (Comprehensive)
+comes from its `spec.target`, else its steady-state hypothesis' SLO — never its
+id or title. Two criteria gain optional keys a host may ignore: Calibrated's
+`baselines` (`{ declared, scaffolds }`), Chaos-validated's `declared`,
+`scaffolds`, `unobserved` (`{ repository, live }`, each a reason or null) and
+`fromScan` (Pack A carries `crawler.discoveredAt`). `unobserved` reads two
+annotations: `crawler.unobserved.chaos` on Pack A (the repository scan has no
+chaos detector) and `observogram.unobserved.chaos` on Pack B or a live Pack A.
+A host whose own fetcher writes neither gets "no chaos experiment declared in
+this pack", which is true. `boardGroupsHtml(layerId, entries, { annotations })`
+(studio/discover-board.mjs) reads the same two keys for the empty chaos group;
+without the third argument it says "None in this pack" as before.
 | [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
 | [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders (`services-api.mjs` adds `uploadServiceRepository(id, { name, files })` for Upload): `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
