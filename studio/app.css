@@ -276,7 +276,9 @@ a:hover { color: var(--ink); }
 
 /* Upload button now opens a popover with the local-file path AND two
    quick-start cases (Krystaline live MCP / KrystalineX repo). The
-   wrap keeps the popover positioned beneath the button. */
+   wrap keeps the popover positioned beneath the button; near the
+   window's right edge app.mjs (setupUpload) sets data-align="end" and
+   it hangs from the button's right edge instead. */
 .upload-popover-wrap { position: relative; display: inline-block; }
 .upload-popover {
   position: absolute;
@@ -294,6 +296,7 @@ a:hover { color: var(--ink); }
   gap: 2px;
 }
 .upload-popover[hidden] { display: none; }
+.upload-popover[data-align="end"] { left: auto; right: 0; }
 .upload-popover-item {
   display: grid;
   grid-template-columns: 26px 1fr;
@@ -394,7 +397,8 @@ a:hover { color: var(--ink); }
 .mcp-panel {
   position: fixed;
   top: 78px; right: 28px;
-  width: 360px;
+  /* Never wider than the window less its 28px gutters (a phone: it started past the left edge). */
+  width: min(360px, calc(100vw - 56px));
   background: var(--card);
   border: 1px solid var(--ink);
   border-radius: var(--r-lg);
@@ -1501,7 +1505,11 @@ a:hover { color: var(--ink); }
   border: 1px dashed var(--accent);
   border-radius: 8px;
   cursor: pointer;
-  white-space: nowrap;
+  /* The label ("Benchmark vs <pack label> →") can be wider than its card (the
+     grid's tracks start at 280px): it wraps inside the dashed frame, balanced
+     over its lines, never past it. */
+  overflow-wrap: anywhere;
+  text-wrap: balance;
   transition: background .15s, color .15s, border-style .15s;
 }
 .refs-bench-btn:hover { background: var(--accent); color: var(--paper); border-style: solid; }
@@ -1731,11 +1739,13 @@ a:hover { color: var(--ink); }
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 6px 18px;
 }
+/* The label over its value, as a fact tile: the value gets the whole cell,
+   so a long one wraps inside it instead of running under the next label. */
 .schema-identity-row {
   display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 10px;
-  align-items: baseline;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  align-content: start;
   padding: 4px 0;
   border-bottom: 1px dotted var(--line-2);
   font-size: 14px;
@@ -1750,10 +1760,11 @@ a:hover { color: var(--ink); }
   margin: 0;
   font: 14px/1.4 var(--mono);
   color: var(--ink-1);
+  overflow-wrap: anywhere;
 }
 .schema-identity-row code {
   background: var(--ink-bg);
-  padding: 1px 5px;
+  padding: 1px 0;   /* flush with its label above it */
   border-radius: 3px;
 }
 .schema-identity-row em {
@@ -1779,8 +1790,10 @@ a:hover { color: var(--ink); }
   font: 600 18px/1 var(--mono);
   color: rgb(46, 110, 50);
 }
+/* The banner sits on the accent tint in both themes: the link is ink,
+   underlined, so it reads on that tint in light and dark alike. */
 .schema-validation-status a {
-  color: rgb(46, 110, 50);
+  color: var(--ink);
   text-decoration: underline;
 }
 .schema-validation-meta {
@@ -3214,6 +3227,7 @@ a:hover { color: var(--ink); }
   background: var(--ink-bg);
   padding: 1px 5px;
   border-radius: 3px;
+  overflow-wrap: anywhere;
 }
 .otlp-proto-chip {
   display: inline-block;
@@ -3267,6 +3281,7 @@ a:hover { color: var(--ink); }
 .otlp-cell {
   font: 14px/1.3 var(--mono);
   color: var(--ink-3);
+  overflow-wrap: anywhere;   /* prometheusremotewrite wraps, so the matrix fits a phone */
 }
 .otlp-cell.is-otlp {
   color: rgb(46, 110, 50);
@@ -3286,6 +3301,7 @@ a:hover { color: var(--ink); }
   background: var(--ink-bg);
   padding: 1px 5px;
   border-radius: 3px;
+  overflow-wrap: anywhere;
 }
 .otlp-e2e.is-pass { color: rgb(46, 110, 50); font-weight: 700; }
 .otlp-e2e.is-warn { color: var(--ink-4); }
@@ -3321,6 +3337,7 @@ a:hover { color: var(--ink); }
   margin: 0;
   font: 14px/1.4 var(--mono);
   color: var(--ink-1);
+  overflow-wrap: anywhere;   /* a long value (parentbased_traceidratio …) wraps in its column, not past the page */
 }
 .otlp-sdk-grid code {
   background: var(--ink-bg);
@@ -3805,6 +3822,11 @@ a:hover { color: var(--ink); }
   border-radius: var(--r-md);
   box-shadow: 0 16px 32px -8px rgba(15,27,45,0.18), 0 4px 12px rgba(15,27,45,0.10);
 }
+/* The coverage table is bounded (six layers, at most four sub-buckets each,
+   and the total), so it sizes to its content and opens showing every row with
+   its title in view: at the 480px cap its edge cut a row in half and the title
+   scrolled away. The maturity clause list can run long and keeps the cap. */
+.coverage-popover { max-height: none; }
 .mp-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 14px;

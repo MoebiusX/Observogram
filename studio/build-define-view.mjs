@@ -344,10 +344,10 @@ function reviewPanelHtml(model) {
 
 // ---------- the step ----------
 
-/** The step's footer status: what is still needed, or what seeding does. */
+/** The step's footer status: what is still needed (repainted as the name is typed, wireBuildDefinition), or what seeding does. */
 function statusText(model) {
   const entriesCount = model.selectedEntries.length;
-  if (!model.valid) return `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.`;
+  if (!model.valid) return escapeHtml(model.stillNeeded);
   if (model.error) return 'Selection complete, but the last compilation failed — see the error above.';
   if (model.seeded) return `Seeded — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; your edits are already in the pack — Compile shows its artefacts.`;
   return `Selection complete — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; seeding the pack opens Compile, where the artefacts are.`;
@@ -373,7 +373,7 @@ export function renderBuildDefine(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${statusText(model)}</span>
+        <span class="build-step-status"${model.valid ? '' : ' data-still-needed'}>${statusText(model)}</span>
         <button type="button" class="${last ? 'mcp-refresh-btn' : 'ctrl-btn'} build-next" id="build-next" ${model.valid ? '' : 'disabled'}>${escapeHtml(model.nextLabel)} <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
