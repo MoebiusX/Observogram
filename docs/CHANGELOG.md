@@ -93,7 +93,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - Build fixture: its header.
   - Diff: eight whole-diff hashes. The vendored example records a run that a self-diff carries twice; a script confirmed the diff is otherwise identical.
   - Crawl: the `crawler.unobserved.chaos` line goes.
-- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1718 → 1740.
+- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1720 → 1742.
 
 ## 0.8.6 — 2026-11-06
 
@@ -157,7 +157,7 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - `packA.scan` kept, and carried by Check now;
   - the board's scan line and the toast's words.
 
-  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1702 → 1716.
+  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1706 → 1720.
 
 ## 0.8.5 — 2026-11-06
 
