@@ -328,7 +328,7 @@ const facts = await loadServiceListFacts();     // { journeys, journeysError, en
 let form = FORM_CLOSED;
 const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
   journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
-  access, now: Date.now(), running, results, showAll, heldTokens });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']
+  access, now: Date.now(), running, results, showAll, heldTokens, repoSignIn });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']; repoSignIn: /auth/me's
 renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders }), host);
 
 host.overview = {
@@ -345,6 +345,8 @@ host.overview = {
   closeForm() { form = FORM_CLOSED; repaint(); },
   runService(key, { repoAuth } = {}) { /* POST /api/services/:id/run { env, repoAuth } (runServiceRecord(id, env, { repoAuth })), then re-read the list's facts */ },
   forgetRepoToken(kind) { /* drop the person's token for that host from your memory */ },
+  signInRepoHost(kind, key) { /* open /auth/repo/<kind>/start?popup=<id>&return=<this page>; when it reports back for <id>, answer, re-read /auth/me and Run `key` again */ },
+  signOutRepoHost(kind) { /* POST /auth/repo/<kind>/sign-out with the CSRF header, then re-read /auth/me */ },
   openService(serviceId, env) { /* draw the board for that row */ },
   backToList() { /* draw the list again */ },
   showAll() { /* list the services a live draft discovered too */ },
@@ -422,6 +424,24 @@ memory only — never in storage — send it with that host's next Runs, drop it
 when a Run says it was `refused`, and pass the hosts you hold as
 `heldTokens`: the list names each with *Forget it* (`forgetRepoToken`). The
 studio's wiring is `repoTokens` and `runListRow` in `studio/app.mjs`.
+
+**Signing in to the host instead.** Where the server is set up for it
+(README, *Signing in to GitHub or Azure DevOps*), pass `/auth/me`'s
+`repoSignIn` to `serviceListModel`: a row that asks then draws *Sign in to
+GitHub* (or *Azure DevOps*) before the token field, calling
+`signInRepoHost(kind, key)`, and the list names each host the person is
+signed in to (`accounts`) with *Sign out of …* (`signOutRepoHost(kind)`). A
+host that passes no `repoSignIn` draws neither. The host's token never
+reaches the page: it rides in an HttpOnly cookie the server sealed, so
+`signInRepoHost` only opens `/auth/repo/<kind>/start?popup=<id>&return=<this
+page>` with an id of its own for this sign-in (or, when the window is blocked,
+goes there with `return` alone), and the window reports back on the
+same-origin `BroadcastChannel('observogram-repo-sign-in')` with `{ type:
+'observogram-repo-sign-in', kind, ok, rid }`. Answer `{ type:
+'observogram-repo-sign-in-ack', rid }` on the same channel when `rid` is
+yours: only then does the window close. Unanswered, it goes back to
+`return`, so a browser that opened it in your own tab keeps your page. The studio's wiring is
+`signInRepoHost`, `onRepoSignedIn` and `signOutRepoHost` in `studio/app.mjs`.
 
 A row whose Run cannot start says why (`run.reason`: no environment, no
 repository, no endpoint, the reader's rank) and its button explains instead

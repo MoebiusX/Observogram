@@ -616,11 +616,15 @@ function svcLastCell(r) {
 
 // The person's own token for a repository its host would not show without it:
 // one field and Run with it, sent with this Run (the host keeps it in memory
-// for the tab's next Runs of that host).
+// for the tab's next Runs of that host) — after Sign in to …, when the host
+// offers sign-in here (the Run starts again once the person is signed in).
 function svcAuthHtml(r) {
   const id = `ov-auth-${String(r.key).replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  const signIn = r.auth.signIn ? `
+          <button type="button" class="og-btn" data-ux-action="ov-svc-sign-in" data-kind="${attr(r.auth.signIn.kind)}" data-key="${attr(r.key)}">${escapeHtml(r.auth.signIn.label)}</button>
+          <span class="ov-svc__auth-or og-muted">or</span>` : '';
   return `
-        <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">
+        <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">${signIn}
           <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="off" spellcheck="false" aria-describedby="${id}"></label>
           <button type="button" class="og-btn" data-ux-action="ov-svc-auth-run" data-key="${attr(r.key)}">Run with it</button>
           <span class="ov-svc__auth-note og-muted" id="${id}">${escapeHtml(r.auth.text)}</span>
@@ -792,9 +796,14 @@ export function serviceListHtml(list, form, ov = {}) {
   }
   const more = list.hidden ? `
       <p class="ov-svcs__more og-muted">${list.hidden} more ${list.hidden === 1 ? 'service was' : 'services were'} seen live with no repository yet. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-all">Show ${list.hidden === 1 ? 'it' : 'them'}</button></p>` : '';
-  const tokens = Array.isArray(list.tokens) && list.tokens.length ? `
-      <div class="ov-svcs__tokens">${list.tokens.map((t) => `
-        <p class="ov-svcs__token og-muted">${escapeHtml(t.text)} <button type="button" class="ov-start__expert" data-ux-action="ov-svc-forget-token" data-kind="${attr(t.kind)}">Forget it</button></p>`).join('')}
+  const held = [
+    ...(Array.isArray(list.tokens) ? list.tokens : []).map((t) => `
+        <p class="ov-svcs__token og-muted">${escapeHtml(t.text)} <button type="button" class="ov-start__expert" data-ux-action="ov-svc-forget-token" data-kind="${attr(t.kind)}">Forget it</button></p>`),
+    ...(Array.isArray(list.accounts) ? list.accounts : []).map((a) => `
+        <p class="ov-svcs__token og-muted">${escapeHtml(a.text)} <button type="button" class="ov-start__expert" data-ux-action="ov-svc-sign-out" data-kind="${attr(a.kind)}">Sign out of ${escapeHtml(a.host)}</button></p>`),
+  ];
+  const tokens = held.length ? `
+      <div class="ov-svcs__tokens">${held.join('')}
       </div>` : '';
   const compare = typeof ov.compare === 'function' ? `
       <p class="ov-svcs__foot og-muted">Already have the packs? <button type="button" class="ov-start__expert" data-ux-action="ov-svc-compare">Upload one or compare two instead</button></p>` : '';
@@ -824,6 +833,8 @@ export function renderServiceList(container, list, form, host = appHost) {
     'ov-svc-run': (ev, el) => ov.runService?.(el.dataset.key),
     'ov-svc-auth-run': (ev, el) => ov.runService?.(el.dataset.key, { repoAuth: authValue(el.dataset.key) }),
     'ov-svc-forget-token': (ev, el) => ov.forgetRepoToken?.(el.dataset.kind),
+    'ov-svc-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, el.dataset.key || null),
+    'ov-svc-sign-out': (ev, el) => ov.signOutRepoHost?.(el.dataset.kind),
     'ov-svc-open': (ev, el) => ov.openService?.(Number(el.dataset.service), svcEnv(el)),
     'ov-svc-all': () => ov.showAll?.(),
     'ov-svc-compare': () => ov.compare?.(),

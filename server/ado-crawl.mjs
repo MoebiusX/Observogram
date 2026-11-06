@@ -31,6 +31,13 @@ export function listedAdoOrigins(raw = process.env.OBSERVOGRAM_ADO_ORIGINS) {
   }).filter(Boolean);
 }
 
+// Whether a repository URL is on Azure DevOps Services, where the person's
+// Entra ID sign-in reads (server/repo-sign-in.mjs); an Azure DevOps Server
+// takes a personal access token only.
+export function isAdoServices(location) {
+  try { const u = new URL(location); return u.protocol === 'https:' && SERVICES_HOST.test(u.hostname); } catch { return false; }
+}
+
 // Why the server will not fetch from this origin, or '' when it will.
 export function adoHostRefusal(origin, { listed = listedAdoOrigins() } = {}) {
   let u;
@@ -85,16 +92,24 @@ export function parseAdoUrl(input) {
 // The one authenticated wrapper around the Azure DevOps REST API. A refused
 // host never reaches fetch. Azure DevOps answers an unauthenticated call
 // with 203 and a sign-in page, or 401: both read as "the token".
-// tokenSource ('request' | 'server' | 'none') words a refusal for whoever can fix it.
+// tokenSource ('request' | 'link' | 'server' | 'none') words a refusal for whoever can fix it.
+// A personal access token goes as Basic; the person's Entra ID sign-in
+// ('link', server/repo-sign-in.mjs) as a Bearer token.
 export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSource = token ? 'server' : 'none' } = {}) {
   const why = adoHostRefusal(new URL(url).origin);
   if (why) { const err = new Error(`Azure DevOps: ${why}`); err.status = 400; throw err; }
+  if (tokenSource === 'link' && !isAdoServices(url)) {
+    const err = new Error(`Azure DevOps: an Azure DevOps sign-in reads Azure DevOps Services only — ${new URL(url).origin} takes a personal access token`);
+    err.status = 400;
+    throw err;
+  }
   const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' };
-  if (token) headers.Authorization = `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
+  if (token) headers.Authorization = tokenSource === 'link' ? `Bearer ${token}` : `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
   const res = await fetchImpl(url, { headers, redirect: 'error' });
   const ct = res.headers.get('content-type') || '';
   if (res.status === 203 || res.status === 401 || (res.ok && !ct.includes('json'))) {
     const why = tokenSource === 'request' ? 'your Azure DevOps token was refused (it needs Code (Read) on this repository)'
+      : tokenSource === 'link' ? 'your Azure DevOps sign-in was refused (that account cannot read this repository\'s organization or project)'
       : token ? 'the token in AZURE_DEVOPS_TOKEN was refused'
         : 'sign-in needed — give your own Azure DevOps token (a personal access token with Code (Read)), or, on a server without sign-in, set AZURE_DEVOPS_TOKEN';
     const err = new Error(`Azure DevOps ${res.status === 203 ? 401 : res.status}: ${why}`);

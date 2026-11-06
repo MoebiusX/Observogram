@@ -1658,6 +1658,58 @@ test('the services client: a Run sends the person\'s token only when given; a re
   assert.equal(servicesRefusal(502, { ok: false, error: 'x' }).repoAuth, undefined);
 });
 
+// ---------- signing in to a repository host ----------
+
+test('a host that offers sign-in: the row asks to sign in first, then for a token; a refused sign-in names the account, an ended one says so; the signed-in hosts are named with a way to sign out; a page that passes no repoSignIn is offered none', () => {
+  const services = [svcRow()];
+  const offered = { github: { available: true, signedIn: false, account: null }, ado: { available: false, signedIn: false, account: null } };
+  const base = { services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW };
+  const ask = { kind: 'github', label: 'GitHub token', refused: false, signIn: true };
+  const asked = serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: ask } } });
+  assert.deepEqual(asked.rows[0].auth, {
+    kind: 'github', label: 'GitHub token', refused: false, signIn: { kind: 'github', label: 'Sign in to GitHub' },
+    text: 'GitHub shows this repository only to someone who can read it. Sign in to GitHub to run it as you, or give your own token: it is sent with this tab\'s Runs only and never kept on the server.',
+  });
+  assert.equal(serviceListModel({ ...base, results: { '1:prod': { error: 'x', repoAuth: ask } } }).rows[0].auth.signIn, undefined, 'no repoSignIn passed: no Sign in button, whatever the server offers');
+  assert.equal(serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, signIn: undefined } } } }).rows[0].auth.signIn.label, 'Sign in to GitHub', '/auth/me says GitHub offers it');
+  assert.equal(serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { kind: 'ado', label: 'Azure DevOps token', refused: false } } } }).rows[0].auth.signIn, undefined, 'Azure DevOps offers none here');
+
+  const cannot = serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true, via: 'sign-in', account: 'ada-gh' } } } });
+  assert.equal(cannot.rows[0].auth.text, 'You are signed in to GitHub as ada-gh, and that account cannot read this repository. Sign in as one that can, or give a token that can.');
+  const ended = serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true, via: 'sign-in', account: 'ada-gh', expired: true } } } });
+  assert.equal(ended.rows[0].auth.text, 'Your GitHub sign-in has ended. Sign in to GitHub again, or give your own token.');
+  assert.equal(serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true } } } }).rows[0].auth.text,
+    'That GitHub token was refused, or cannot read this repository. Give one that can. Or sign in to GitHub.');
+
+  const signedIn = serviceListModel({ ...base, repoSignIn: { github: { available: true, signedIn: true, account: 'ada-gh' }, ado: { available: true, signedIn: true, account: null } } });
+  assert.deepEqual(signedIn.accounts, [
+    { kind: 'github', host: 'GitHub', account: 'ada-gh', text: 'Signed in to GitHub as ada-gh: your Runs of GitHub repositories read as that account in this browser.' },
+    { kind: 'ado', host: 'Azure DevOps', account: null, text: 'Signed in to Azure DevOps: your Runs of Azure DevOps repositories read as that account in this browser.' },
+  ]);
+  assert.deepEqual(serviceListModel(base).accounts, []);
+  assert.deepEqual(serviceListModel({ ...base, services: null }).accounts, [], 'the loading list says the same');
+});
+
+test('renderServiceList: Sign in to … before the token field and Sign out of … beside the held tokens, both proxied to host.overview with the row and the host; still one primary', () => {
+  const list = serviceListModel({
+    services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['ado'],
+    repoSignIn: { github: { available: true, signedIn: true, account: 'ada-gh' }, ado: { available: false, signedIn: false, account: null } },
+    results: { '1:prod': { error: '404: the repository could not be read', repoAuth: { kind: 'github', label: 'GitHub token', refused: true, signIn: true, via: 'sign-in', account: 'ada-gh' } } },
+  });
+  const calls = [];
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { signInRepoHost: (kind, key) => calls.push(['in', kind, key]), signOutRepoHost: (kind) => calls.push(['out', kind]) } });
+  const html = c.innerHTML;
+  assert.ok(html.includes('aria-label="Your GitHub token for Checkout">\n          <button type="button" class="og-btn" data-ux-action="ov-svc-sign-in" data-kind="github" data-key="1:prod">Sign in to GitHub</button>\n          <span class="ov-svc__auth-or og-muted">or</span>\n          <label'), 'sign in first, then the token');
+  assert.ok(html.includes('Signed in to GitHub as ada-gh: your Runs of GitHub repositories read as that account in this browser. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-sign-out" data-kind="github">Sign out of GitHub</button>'));
+  assert.ok(html.includes('data-ux-action="ov-svc-forget-token" data-kind="ado">Forget it</button>'), 'a typed token\'s line beside it');
+  assert.equal(countOf(html, 'class="ov-svcs__tokens"'), 1, 'one block of held access');
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Add a service');
+  c.click('ov-svc-sign-in', { kind: 'github', key: '1:prod' });
+  c.click('ov-svc-sign-out', { kind: 'github' });
+  assert.deepEqual(calls, [['in', 'github', '1:prod'], ['out', 'github']]);
+});
+
 // ---------- the vendoring seam (docs/VENDORING.md, "The Overview board") ----------
 //
 // A downstream copies these files verbatim; an import creeping in from the

@@ -972,7 +972,7 @@ function lastCheckOf(journey, now) {
 export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 
 // serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack, journeys, journeysError,
-//   endpoints, access, now, running, results, showAll, heldTokens })
+//   endpoints, access, now, running, results, showAll, heldTokens, repoSignIn })
 //   running   { [rowKey]: true } — the rows whose Run is under way
 //   results   { [rowKey]: { error, repoAuth } } — the last Run's refusal, the server's sentence;
 //             repoAuth ({ kind, label, refused }) when its host wants the person's own token
@@ -980,20 +980,31 @@ export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 //             (the ones a live draft discovered): counted, not drawn, until asked
 //   heldTokens  the hosts ('github' | 'ado') whose token the person gave in this tab (the host
 //             keeps it, in memory only, and sends it with each Run of that host's repositories)
-// → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty, tokens }
-//   a row's `auth` asks for the person's token: { kind, label, refused, text }
+//   repoSignIn  /auth/me's `repoSignIn` ({ github: { available, signedIn, account }, ado: … }): the
+//             hosts this person may sign in to here and the ones they are signed in to. A host that
+//             passes it draws Sign in to … and Sign out of … (hooks signInRepoHost, signOutRepoHost);
+//             one that passes none draws neither
+// → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty, tokens, accounts }
+//   a row's `auth` asks for the person's token: { kind, label, refused, text }, and `signIn`
+//   ({ kind, label }) when the host offers sign-in here
+//   accounts  the hosts the person is signed in to: { kind, host, account, text }
 export function serviceListModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], isLiveAggregatePack = () => false,
     journeys = null, journeysError = null, endpoints = null, access = null, now = Date.now(),
-    running = {}, results = {}, showAll = false, heldTokens = [],
+    running = {}, results = {}, showAll = false, heldTokens = [], repoSignIn = null,
   } = input;
   const canWrite = access?.canWrite !== false;
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
   const tokens = (Array.isArray(heldTokens) ? heldTokens : []).filter((k) => HOST_LABEL[k]).map((k) => ({ kind: k, label: `${HOST_LABEL[k]} token`, text: `Your ${HOST_LABEL[k]} token is sent with this tab's Runs of ${HOST_LABEL[k]} repositories; it is never kept on the server.` }));
+  const signIn = repoSignIn && typeof repoSignIn === 'object' ? repoSignIn : null;
+  const accounts = signIn ? Object.keys(HOST_LABEL).filter((k) => signIn[k]?.signedIn === true).map((k) => {
+    const account = typeof signIn[k].account === 'string' && signIn[k].account ? signIn[k].account : null;
+    return { kind: k, host: HOST_LABEL[k], account, text: `Signed in to ${HOST_LABEL[k]}${account ? ` as ${account}` : ''}: your Runs of ${HOST_LABEL[k]} repositories read as that account in this browser.` };
+  }) : [];
   if (!Array.isArray(services)) {
     const failed = !!servicesStatus && !['ok', 'loading'].includes(servicesStatus.kind);
-    return { kind: failed ? 'error' : 'loading', error: failed ? (servicesStatus.error || 'the services table could not be read') : null, rows: [], hidden: 0, canWrite, reason, empty: false };
+    return { kind: failed ? 'error' : 'loading', error: failed ? (servicesStatus.error || 'the services table could not be read') : null, rows: [], hidden: 0, canWrite, reason, empty: false, tokens, accounts };
   }
   const endpointById = new Map((Array.isArray(endpoints) ? endpoints : []).map((e) => [e.id, e]));
   const listed = [];
@@ -1024,27 +1035,40 @@ export function serviceListModel(input = {}) {
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
-        auth: authAsk(results[key]?.repoAuth, canWrite),
+        auth: authAsk(results[key]?.repoAuth, canWrite, signIn),
         complete: !!(env && repository && live),
       });
     }
   }
   // The rows a person can run first, then the ones still missing a place; by name, then environment.
   listed.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)) || String(a.env || '').localeCompare(String(b.env || '')));
-  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0, tokens };
+  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0, tokens, accounts };
 }
 
 // The repository hosts whose token a person gives as their own.
 const HOST_LABEL = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
 
 // A Run its host would not read without the person's own token: what to ask.
-function authAsk(need, canWrite) {
+// Signing in to the host is offered when the host (the server's answer, or
+// /auth/me) offers it and the page passed `repoSignIn`.
+function authAsk(need, canWrite, repoSignIn = null) {
   if (!canWrite || !need || typeof need !== 'object' || !HOST_LABEL[need.kind]) return null;
   const host = HOST_LABEL[need.kind];
-  const text = need.refused
-    ? `That ${host} token was refused, or cannot read this repository. Give one that can.`
-    : `${host} reads this repository with your own token. It is sent with this tab's Runs only and never kept on the server.`;
-  return { kind: need.kind, label: `${host} token`, refused: need.refused === true, text };
+  const offered = !!repoSignIn && (need.signIn === true || repoSignIn[need.kind]?.available === true);
+  const signIn = offered ? { kind: need.kind, label: `Sign in to ${host}` } : null;
+  let text;
+  if (need.via === 'sign-in') {
+    text = need.expired
+      ? `Your ${host} sign-in has ended. Sign in to ${host} again, or give your own token.`
+      : `You are signed in to ${host}${need.account ? ` as ${need.account}` : ''}, and that account cannot read this repository. Sign in as one that can, or give a token that can.`;
+  } else if (need.refused) {
+    text = `That ${host} token was refused, or cannot read this repository. Give one that can.${signIn ? ` Or sign in to ${host}.` : ''}`;
+  } else {
+    text = signIn
+      ? `${host} shows this repository only to someone who can read it. Sign in to ${host} to run it as you, or give your own token: it is sent with this tab's Runs only and never kept on the server.`
+      : `${host} reads this repository with your own token. It is sent with this tab's Runs only and never kept on the server.`;
+  }
+  return { kind: need.kind, label: `${host} token`, refused: need.refused === true, text, ...(signIn ? { signIn } : {}) };
 }
 
 // ---------- the Add a service form ----------

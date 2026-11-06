@@ -361,6 +361,11 @@ test('enabled: no header → 401; /auth/login is the 401 explainer (html and JSO
       user: { login: 'proxy://proxy#alice', kind: 'oidc', owner: false },
       orgs: [{ id: 'default', name: 'Default', role: 'operator', effectiveRole: 'operator', default: true }],
       logoutUrl: 'https://sso.example.test/logout',
+      // Behind a proxy too: the repository hosts on offer (none set up here; server/test-repo-sign-in.mjs).
+      repoSignIn: {
+        github: { available: false, signedIn: false, account: null, expiresAt: null },
+        ado: { available: false, signedIn: false, account: null, expiresAt: null },
+      },
     });
     assert.equal((await get(s.base, '/api/packs', dev)).status, 200);
     assert.equal(await inspect(ws, (v) => v.seq()), seq, 'the second and third requests wrote nothing (the gate and /auth/me share one sign-in)');

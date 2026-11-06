@@ -93,6 +93,24 @@ export const ROUTES = Object.freeze({
     class: 'self', csrf: 'always', modes: ['local', 'oidc'], audit: ['user.signout'],
     self: { pwflow: false, session: true, unauth: 'json' },
   },
+  // Signing in to a repository host (server/repo-sign-in.mjs): the caller's
+  // own session in every mode with a sign-in, and nothing kept on the server
+  // (the host's token rides back sealed in the caller's browser), so no
+  // audit row. The start and the host's return are top-level navigations:
+  // a signed flow cookie and the state the host echoes stand in for the
+  // CSRF header; the sign-out takes it.
+  'GET /auth/repo/:kind/start': {
+    class: 'self', modes: ['local', 'oidc', 'proxy'],
+    self: { pwflow: false, session: true, unauth: 'redirect' },
+  },
+  'GET /auth/repo/:kind/callback': {
+    class: 'self', modes: ['local', 'oidc', 'proxy'],
+    self: { pwflow: false, session: true, unauth: 'redirect' },
+  },
+  'POST /auth/repo/:kind/sign-out': {
+    class: 'self', csrf: 'always', modes: ['local', 'oidc', 'proxy'],
+    self: { pwflow: false, session: true, unauth: 'json' },
+  },
 
   // ---------- viewer: every read in the org ----------
   'GET /api/orgs': { class: 'viewer' },

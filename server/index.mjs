@@ -87,7 +87,9 @@ import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
-import { REPO_AUTH_WAYS, RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repositoryCredential } from './repo-auth.mjs';
+import { RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repoAuthTail, repositoryCredential } from './repo-auth.mjs';
+import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
+import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
 import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
@@ -1335,13 +1337,16 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
   // 2. The scan — a GitHub or Azure DevOps repository read as the person
   // who asked (server/repo-auth.mjs): their own token, sent with this Run
-  // and used for this read only, else the server's own on a server without
+  // and used for this read only, else their sign-in to the host
+  // (server/repo-sign-in.mjs), else the server's own on a server without
   // sign-in, else none (a public repository).
   const t0 = Date.now();
   const remote = service.repository.kind === 'github' || service.repository.kind === 'ado';
   let credential = null;
   if (remote) {
-    try { credential = repositoryCredential(service.repository.kind, { repoAuth: parseRepoAuth(req.body?.repoAuth) }); }
+    // The Azure DevOps sign-in is Entra ID's, for Azure DevOps Services only.
+    const signedIn = service.repository.kind === 'ado' && !isAdoServices(service.repository.location) ? null : readRepoLink(req, service.repository.kind);
+    try { credential = repositoryCredential(service.repository.kind, { repoAuth: parseRepoAuth(req.body?.repoAuth), link: signedIn }); }
     catch (e) { if (e instanceof RepoAuthRefusal) return res.status(400).json({ ok: false, error: e.message }); throw e; }
   }
   let read;
@@ -1351,8 +1356,10 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
     const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
     const message = redactToken(e.message, credential?.token);
     process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${message})\n`);
-    const need = remote ? repoAuthNeed(service.repository.kind, credential, e.status === 401 ? 401 : status) : null;
-    const tail = need ? ` — ${need.refused ? REPO_AUTH_WAYS.refused(need.kind) : REPO_AUTH_WAYS.needed(need.kind)}` : '';
+    const need = remote ? repoAuthNeed(service.repository.kind, credential, e.status === 401 ? 401 : status, { signIn: repoSignInOffered(service.repository.kind) }) : null;
+    // GitHub no longer takes the person's sign-in: this browser forgets it.
+    if (need?.expired) clearRepoLink(res, need.kind);
+    const tail = need ? ` — ${repoAuthTail(need)}` : '';
     return res.status(status).json({ ok: false, error: `the repository could not be read: ${message}${tail}`, ...(need ? { repoAuth: need } : {}) });
   }
   const scan = { source: read.source, ref: read.ref, files: Object.keys(read.files).length, candidates: read.candidates, skipped: read.skipped.length };
@@ -2114,9 +2121,10 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 // }
 //
 // Auth (server/repo-auth.mjs): the person's own token when they send one —
-// a private repository, the API's own quota; else the server's GITHUB_TOKEN,
-// only on a server without sign-in; else none: public-only, the contents
-// from raw.githubusercontent.com.
+// a private repository, the API's own quota; else their sign-in to GitHub
+// (server/repo-sign-in.mjs); else the server's GITHUB_TOKEN, only on a
+// server without sign-in; else none: public-only, the contents from
+// raw.githubusercontent.com.
 //
 // Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
 // ----------------------------------------------------------------
@@ -2134,9 +2142,10 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
   const { owner, repo } = parsed;
   const explicitRef = (typeof body.ref === 'string' && body.ref.trim()) ? body.ref.trim() : parsed.ref || null;
   // Read as the person who asked (server/repo-auth.mjs): their own token
-  // (`repoAuth`), else the server's on a server without sign-in, else none.
+  // (`repoAuth`), else their sign-in to GitHub, else the server's on a server
+  // without sign-in, else none.
   let credential;
-  try { credential = repositoryCredential('github', { repoAuth: parseRepoAuth(body.repoAuth) }); }
+  try { credential = repositoryCredential('github', { repoAuth: parseRepoAuth(body.repoAuth), link: readRepoLink(req, 'github') }); }
   catch (e) { if (e instanceof RepoAuthRefusal) return res.status(400).json({ ok: false, error: e.message }); throw e; }
   const t0 = Date.now();
 
@@ -2215,11 +2224,12 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
     const message = redactToken(e.message, credential.token);
     process.stderr.write(`[crawl-github] error: ${message}\n`);
     const status = e.status === 404 ? 404 : (e.status === 403 ? 403 : 500);
-    const need = repoAuthNeed('github', credential, e.status);
+    const need = repoAuthNeed('github', credential, e.status, { signIn: repoSignInOffered('github') });
+    if (need?.expired) clearRepoLink(res, 'github');
     res.status(status).json({
       ok: false,
       error: message,
-      hint: need ? `${need.refused ? REPO_AUTH_WAYS.refused('github') : REPO_AUTH_WAYS.needed('github')}.`
+      hint: need ? `${repoAuthTail(need)}.`
         : e.status === 403 ? 'GitHub rate limit, or the server\'s token was refused.' : undefined,
       ...(need ? { repoAuth: need } : {}),
     });
