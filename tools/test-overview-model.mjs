@@ -1264,6 +1264,14 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
   assert.deepEqual(chaos([exp(1, { at: ago(2), outcome: 'fail', alerts_fired: [] })]), { ok: 'no', text: `Chaos experiment fault-1 failed on ${ago(2).slice(0, 10)}: KxDown did not fire within 3m.` });
   assert.deepEqual(chaos([exp(1, { at: ago(20), outcome: 'pass' })]), { ok: 'partly', text: `1 chaos experiment declared; the last recorded pass, ${ago(20).slice(0, 10)}, is older than 8 days.` });
   assert.deepEqual(chaos([exp(1)]), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
+  // Each line counts what the engine counted, so a declared experiment never
+  // stops the seven lines adding up to the letter (a real Run on krystaline,
+  // 2026-11-06, drew no list: the partly line counted 0 against the engine's 0.25).
+  for (const L5 of [[exp(1)], [exp(1, { at: ago(1), outcome: 'pass' }), exp(2)], [exp(1, { at: ago(20), outcome: 'pass' })]]) {
+    const diagnostic = computeOverviewDiagnostic(layered(L5));
+    const g = gradeWhy({ diagnostic, run: null, letter: diagnostic.overall.instrumentGrade.letter, score: diagnostic.overall.audit.scorePctExact, now: NOW });
+    assert.equal(g.why.length, 7, `the list adds up to the letter (${diagnostic.overall.audit.scorePctExact}%)`);
+  }
 });
 
 // ---------- the service list: Overview's front door ----------

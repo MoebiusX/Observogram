@@ -293,16 +293,19 @@ function chaosLine(crit, liveUnobserved) {
   const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;
   const day = (iso) => String(iso || '').slice(0, 10);
   const p = crit.proof;
+  // The line counts what the engine counted (its `score`: a quarter for a
+  // declaration), so the seven lines still add up to the letter.
+  const scored = (line) => (typeof crit.score === 'number' ? { ...line, score: crit.score } : line);
   if (p?.state === 'proven') {
-    return { ok: crit.pass ? 'yes' : 'partly', text: `Recovery proven ${day(p.provenAt)} by fault injection: ${p.fresh} of ${exps} passed a recent run (${PROOF_SOURCE[p.source] || p.source}).` };
+    return scored({ ok: crit.pass ? 'yes' : 'partly', text: `Recovery proven ${day(p.provenAt)} by fault injection: ${p.fresh} of ${exps} passed a recent run (${PROOF_SOURCE[p.source] || p.source}).` });
   }
   if (p?.state === 'failed') {
     const f = p.failed[0];
     const why = f.missing?.length ? `: ${f.missing.join(', ')} did not fire${f.expectedMttd ? ` within ${f.expectedMttd}` : ''}` : '';
-    return { ok: 'no', text: `Chaos experiment ${f.id} failed on ${day(f.at)}${why}.` };
+    return scored({ ok: 'no', text: `Chaos experiment ${f.id} failed on ${day(f.at)}${why}.` });
   }
-  if (p?.state === 'stale') return { ok: 'partly', text: `${exps} declared; the last recorded pass, ${day(p.stale.at)}, is older than ${p.stale.windowDays} days.` };
-  if (p?.state === 'declared') return { ok: 'partly', text: `${exps} declared, never recorded as run.` };
+  if (p?.state === 'stale') return scored({ ok: 'partly', text: `${exps} declared; the last recorded pass, ${day(p.stale.at)}, is older than ${p.stale.windowDays} days.` });
+  if (p?.state === 'declared') return scored({ ok: 'partly', text: `${exps} declared, never recorded as run.` });
   if (!p && crit.pass) return { ok: 'yes', text: `${n} chaos experiment${n === 1 ? ' is' : 's are'} declared; none has a recorded result.` };
   const blind = [
     crit.unobserved?.repository && 'the repository scan cannot detect chaos tooling',

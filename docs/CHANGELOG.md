@@ -55,6 +55,8 @@ A pass of its own over every in-scope file in `crawlFiles`. A file has one kind,
   - "Chaos experiment <id> failed on <date>: <alerts> did not fire within <mttd>";
   - the stale pass and its window;
   - "N chaos experiments declared, never recorded as run."
+
+  Each line counts what the engine counted (its `score`), so a *partly* line keeps the seven lines adding up to the letter. A real Run on krystaline drew no list until it did.
 - **Schema 4** keeps the seven criteria. A declared-only pack loses 0.75 of a point, and a schema-3 run explains nothing until the next check.
 - **Unchanged.** The posture matrix still counts presence: its chaos column reads *declared*, and proof lives in the criterion.
 - New exports (vendored unit, imports nothing): `chaosProof`, `liveChaosRuns`, `CHAOS_PROOF_WINDOW_DAYS`, `CHAOS_DECLARED_CREDIT`.
