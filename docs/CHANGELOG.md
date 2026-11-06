@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.8.2 — 2026-11-06
+
+**A lockfile lift and a steadier test.** `brace-expansion` moves to its latest, 5.0.12. The MCP jobs suite stops failing when its two drafts fall either side of a minute.
+
+### Changed: brace-expansion 5.0.12 in the lockfile
+- **`package-lock.json`**: `brace-expansion` moves from 5.0.6 to 5.0.12. It is a dev-only dependency, pulled in through eslint and minimatch, and nothing the server or the studio loads.
+- **The lock's own `engines`** now mirrors package.json's Node floor (`>=22.23.4`), as `npm install` writes it. Before, it still said `>=22.16.0`.
+
+### Fixed: the MCP jobs suite no longer depends on which minute its drafts fall in
+- **`server/test-mcp-jobs.mjs`**: the live fetcher versions a draft by the minute it read live (`0.<minute>.0`, from `mcp.refreshedAt`).
+  - The test that compares a job's draft with the route's masked every clock but that one, so two drafts either side of a minute boundary failed it.
+  - `masked` now masks `metadata.version` too, and `minuteOf` checks it apart: the version is the minute of the canonical's own `refreshedAt`, and the job's is the route's minute or the next.
+- **Tests**: no new test. Suite total 1702 → 1702.
+
 ## 0.8.1 — 2026-11-06
 
 **The sign-in-to-your-host release.** A person runs a private GitHub or Azure DevOps repository by signing in to the host from the row that asks, instead of pasting a token. The host's answer stays sealed in their own browser, so the server still keeps nothing.

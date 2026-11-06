@@ -166,13 +166,24 @@ async function settle(who, id, org) {
 }
 const rowsOf = (org = 'acme', action = 'live.fetch') => listAudit(db, { orgId: org, limit: 1000 }).filter((r) => r.action === action);
 const packsOf = async (org = 'acme', who = 'ada') => (await call('GET', '/api/packs', who, undefined, org)).json.packs;
-// A canonical with its clocks masked (every annotation holding an instant)
-// and without the catalogue's own __* keys (GET …/canonical adds them).
+// A canonical with its clocks masked (every annotation holding an instant,
+// and metadata.version, the fetcher's minute clock `0.<minute>.0` — two
+// drafts either side of a minute differ there) and without the catalogue's
+// own __* keys (GET …/canonical adds them). minuteOf checks the version
+// apart: the minute of the canonical's own mcp.refreshedAt.
 const masked = (canonical) => {
   const out = JSON.parse(JSON.stringify(canonical));
   for (const k of Object.keys(out)) if (k.startsWith('__')) delete out[k];
   for (const [k, v] of Object.entries(out.metadata.annotations)) if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(String(v))) out.metadata.annotations[k] = '<time>';
+  out.metadata.version = '<minute>';
   return out;
+};
+const minuteOf = (canonical) => {
+  const { version, annotations } = canonical.metadata;
+  const m = /^0\.(\d+)\.0$/.exec(version);
+  assert.ok(m, `the version is 0.<minute>.0 (got ${version})`);
+  assert.equal(Number(m[1]), Math.floor(Date.parse(annotations['mcp.refreshedAt']) / 60000), 'the version is the minute of the canonical\'s own refreshedAt');
+  return Number(m[1]);
 };
 
 const main = await fake();
@@ -291,6 +302,7 @@ test('a draft job: its canonical is POST /api/draft-from-mcp\'s byte for byte (c
   assert.equal(end.result.registered.label, 'job draft');
   const canonical = await call('GET', `/api/packs/${encodeURIComponent(end.result.registered.id)}/canonical`, 'oscar');
   assert.deepEqual(masked(canonical.json), masked(route.json.canonical), 'the job\'s canonical is the route\'s');
+  assert.ok([0, 1].includes(minuteOf(canonical.json) - minuteOf(route.json.canonical)), 'the job drafted in the route\'s minute or the next');
   const entry = (await packsOf()).find((p) => p.id === end.result.registered.id);
   assert.equal(entry.live, 'scaffold');
   assert.equal(rowsOf().at(0).detail.kind, 'draft');
