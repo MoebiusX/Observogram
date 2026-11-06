@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.7.0 — 2026-11-06
+## 0.6.3 — 2026-11-06
 
 **The bring-your-own-repository release.** A service's repository can come from the person's own machine: Overview's Upload takes a folder or a .zip, and each Run scans the kept copy against live. On a server's own machine, Browse… picks a folder the server reads. A downstream that runs the whole repository refreshes from an export it can prove (`vendor-export`, `--check`, the refresh runbook), and upstream's whole suite passes inside that copy. The taxonomy can rename the label an artefact shows for its implementation (schema version 3). From this release on, every PR raises the minor version.
 
