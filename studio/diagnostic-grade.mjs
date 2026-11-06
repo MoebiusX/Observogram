@@ -46,7 +46,7 @@ export const POSTURE_MECHANISMS_PER_LAYER = [
   { key: 'log',        label: 'Logs flowing',      hint: 'log scrape / shipper' },
   { key: 'trace',      label: 'Traces flowing',    hint: 'span emission attested' },
   { key: 'runbook',    label: 'Runbook linked',    hint: 'oncall response declared' },
-  { key: 'chaos',      label: 'Chaos validated',   hint: 'fault injection tested' },
+  { key: 'chaos',      label: 'Chaos validated',   hint: 'fault-injection experiment declared' },
   { key: 'synthetic',  label: 'Synthetic check',   hint: 'active uptime probe' },
 ];
 
@@ -82,6 +82,31 @@ export function compareModeFor(packB, compareBId) {
 
 export function isScaffoldArtefact(artefact) {
   return artefact?.source === 'Scaffold';
+}
+
+// An MTTD/MTTR baselines artefact (the adapter's BASE-, or any L5 item that
+// says baseline in its id or title).
+const isBaselineArtefact = (a) => /baseline/i.test(a?.id || '') || /baseline/i.test(a?.title || '');
+
+// Why a side could not look at chaos experiments: the repository scan's
+// stamp (tools/lib/crawler.mjs, while it has no chaos detector) and the
+// live fetcher's (tools/fetch-live-pack.mjs).
+const REPOSITORY_UNOBSERVED_CHAOS = 'crawler.unobserved.chaos';
+const LIVE_UNOBSERVED_CHAOS = 'observogram.unobserved.chaos';
+const textOrNull = (v) => (typeof v === 'string' && v.trim() ? v : null);
+
+// The Chaos-validated detail: what is declared, and when nothing is, what
+// each side could not see — never a claim about recovery nobody checked.
+function chaosDetail(declared, scaffolds, unobserved) {
+  const excluded = scaffolds ? `; ${scaffolds} scaffold excluded` : '';
+  if (declared > 0) {
+    return `${declared} chaos experiment${declared === 1 ? '' : 's'} declared; none has a recorded result${excluded}`;
+  }
+  const blind = [
+    unobserved.repository && 'the repository scan cannot detect chaos tooling',
+    unobserved.live && 'the live side cannot observe it',
+  ].filter(Boolean);
+  return `no chaos experiment declared${blind.length ? ` - ${blind.join(' and ')}` : ' in this pack'}${excluded}`;
 }
 
 export function isScaffoldDiffEntry(entry) {
@@ -286,7 +311,13 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   const logCorrelationDeclared = !!(otel?.spec?.log_correlation === true || otel?.log_correlation === true);
   const correlated = hasTraceContext && (logCorrelationDeclared || signalsPresent.has('logs'));
 
-  const hasBaselines = L5.some(a => /baseline/i.test(a.id || '') || /baseline/i.test(a.title || ''));
+  // Calibrated counts only baselines someone declared. The MTTD/MTTR block
+  // the repository scan and the live fetcher always write is a scaffold
+  // (platform defaults nobody measured; tools/lib/crawler.mjs marks it
+  // crawler.scaffold.baselines), and a scaffold earns no pass.
+  const baselineArtefacts = L5.filter(isBaselineArtefact);
+  const scaffoldBaselines = baselineArtefacts.filter(isScaffoldArtefact).length;
+  const hasBaselines = baselineArtefacts.length > scaffoldBaselines;
   const slos = L1.filter(a => /^SLO-/.test(a.id || ''));
   const slosWithObjective = slos.filter(a => {
     const obj = a.spec?.objective ?? a.objective;
@@ -333,7 +364,12 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         ? (slosWithObjective.length
             ? `MTTD/MTTR baselines + ${slosWithObjective.length} SLO${slosWithObjective.length === 1 ? '' : 's'} with explicit objective`
             : 'baselines declared but no SLOs have explicit objectives')
-        : 'no MTTD/MTTR baselines declared',
+        : 'no MTTD/MTTR baselines declared' + (scaffoldBaselines
+            ? ` - ${scaffoldBaselines === 1 ? 'the one present is a scaffold' : `the ${scaffoldBaselines} present are scaffolds`} (defaults, never measured)`
+            : ''),
+      // Additive (vendored): the baseline artefacts counted, and the
+      // scaffolds left out of the count.
+      baselines: { declared: baselineArtefacts.length - scaffoldBaselines, scaffolds: scaffoldBaselines },
     },
     { key: 'comprehensive', label: 'Comprehensive', sub: 'coverage spans all layers',
       pass: comprehensive,
@@ -362,8 +398,22 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   const hasMcpAnnotations = (a) => !!a && Object.keys(a).some(k => k.startsWith('mcp.'));
   const liveAnn = hasMcpAnnotations(annB) ? annB : ann;
 
-  const chaosCount = L5.filter(a => /^CHAOS-/.test(a.id || '')).length;
+  // Chaos-validated counts the chaos experiments the pack declares, scaffolds
+  // aside (a library experiment whose fault is still the generic one,
+  // library.todo.*). The spec holds no result for an experiment, so a pass
+  // says one is declared, never that recovery was proven. When none is
+  // declared the detail says what each side could see: the repository scan
+  // stamps crawler.unobserved.chaos while it has no chaos detector, the live
+  // fetcher observogram.unobserved.chaos (no MCP tool exposes chaos); a
+  // pack graded alone, or a live pack, carries the latter on its own meta.
+  const chaosArtefacts = L5.filter(a => /^CHAOS-/.test(a.id || ''));
+  const chaosScaffolds = chaosArtefacts.filter(isScaffoldArtefact).length;
+  const chaosCount = chaosArtefacts.length - chaosScaffolds;
   const chaosValidated = chaosCount > 0;
+  const chaosUnobserved = {
+    repository: textOrNull(ann[REPOSITORY_UNOBSERVED_CHAOS]),
+    live: textOrNull(annB[LIVE_UNOBSERVED_CHAOS]) || textOrNull(ann[LIVE_UNOBSERVED_CHAOS]),
+  };
 
   const probesAttempted = (liveAnn['mcp.probesAttempted']  || '').split(',').filter(Boolean);
   const probesSucceeded = (liveAnn['mcp.probesSucceeded']  || '').split(',').filter(Boolean);
@@ -484,11 +534,17 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   }
 
   const trustCriteria = [
-    { key: 'chaos-validated', label: 'Chaos-validated', sub: 'recovery proven by fault injection',
+    { key: 'chaos-validated', label: 'Chaos-validated', sub: 'fault-injection experiments declared',
       pass: chaosValidated,
-      detail: chaosCount > 0
-        ? `${chaosCount} chaos experiment${chaosCount === 1 ? '' : 's'} declared`
-        : 'no chaos experiments - recovery procedures are theoretical',
+      detail: chaosDetail(chaosCount, chaosScaffolds, chaosUnobserved),
+      // Additive (vendored): the experiments counted, the scaffolds left
+      // out, why each side could not look (a reason, or null), and whether
+      // Pack A is the repository scan's output — an experiment added to it
+      // by hand is gone at the next scan.
+      declared: chaosCount,
+      scaffolds: chaosScaffolds,
+      unobserved: chaosUnobserved,
+      fromScan: !!ann['crawler.discoveredAt'],
     },
     { key: 'drift-free',      label: 'Drift-free',      sub: 'declarations match live state',
       pass: driftFree,
@@ -524,7 +580,11 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // persisted run records can explain score discontinuities honestly.
     // Schema 2 (2026-06-10): Actionable reclassified from scored coverage
     // criterion to informational operability — 7 scored criteria (4+3).
-    gradeSchema: 2,
+    // Schema 3 (2026-11-06): scaffolds earn nothing — Calibrated and
+    // Chaos-validated skip them — and a chaos experiment's layer on the
+    // posture matrix (Comprehensive) is its target's or its steady-state
+    // SLO's, never its name's. Same 7 criteria; scores can fall.
+    gradeSchema: 3,
     coverage: {
       criteria: coverageCriteria,
       passed:   coveragePassed,
@@ -628,6 +688,13 @@ export function classifyArtefactLayer(art, pack) {
   const override = ann[`layer.${art.id}`];
   if (override && ['infra','platform','app','ux'].includes(override)) return override;
 
+  // A chaos experiment is on the layer of what its fault hits — its
+  // `target` — never of the words in its name: four experiments named after
+  // the four layers would otherwise light the chaos row of every layer
+  // (Comprehensive) whatever they inject into. Without a target word,
+  // resolveArtefactLayers places it by its steady-state hypothesis' SLO.
+  if (CHAOS_ID_RE.test(art.id || '')) return layerOfText(String(art.spec?.target || '').toLowerCase());
+
   const hay = `${id} ${title} ${folder} ${refsStr} ${sourceSlug} ${tags}`;
   const named = layerOfText(hay);
   if (named) return named;
@@ -657,12 +724,14 @@ export function classifyArtefactLayer(art, pack) {
 // only for the artefacts the steps before left without a layer, so nothing
 // classifyArtefactLayer places moves:
 //   'name'     classifyArtefactLayer: the id, title, folder, refs, source,
-//              tags, and an `annotations.layer.<id>` override
+//              tags, and an `annotations.layer.<id>` override (a chaos
+//              experiment: the override, else its `target` alone)
 //   'query'    its own queries (expr, query, good, total…): the metric names
 //              in them, by vote (label matchers, by-clauses, strings dropped)
 //   'parent'   what it belongs to or refers to, placed by name or query: a
 //              panel's dashboard (`parent`), a burn-rate alert's objective
-//              (`refs`), a metric's dashboards (`spec.used_by`), by vote
+//              (`refs`), a metric's dashboards (`spec.used_by`), by vote;
+//              a chaos experiment's steady-state hypothesis (its SLO)
 //   'readers'  a metric: the placed artefacts whose queries read it, by vote
 //   'exports'  a scrape job: the metrics it exports (or, for a live job, the
 //              declared job of the same name), by vote
@@ -705,6 +774,15 @@ function vote(layers) {
 const queryLayer = (art) => vote(metricNamesIn(queryTextsOf(art)).map(layerOfText));
 const METRIC_ID_RE = /^METRIC-/;
 const SCRAPE_ID_RE = /^SCRAPE-/;
+const CHAOS_ID_RE = /^CHAOS-/;
+// The symbols a chaos experiment's steady-state hypothesis names: the spec's
+// Ref is `slos.<id>`, `slis.<id>`, `ref:<path>` or a bare id (an SLO's,
+// else an SLI's), so a bare id is looked up as both.
+function hypothesisSymbols(art) {
+  const ref = String(art?.spec?.steady_state_hypothesis || '').replace(/^ref:/, '').replace(/@[0-9.]+$/, '');
+  if (!ref) return [];
+  return /^(slos|slis)\./.test(ref) ? [ref] : [`slos.${ref}`, `slis.${ref}`];
+}
 
 // resolveArtefactLayers(pack) → Map(id → { layer, how }) over every artefact
 // of the seven layers that carries an id; `how` is one of the steps above,
@@ -719,9 +797,12 @@ export function resolveArtefactLayers(pack) {
     const named = classifyArtefactLayer(a, pack);
     set(a, named || queryLayer(a), named ? 'name' : 'query');
   }
-  // What it belongs to or refers to, placed by its own words.
+  // What it belongs to or refers to, placed by its own words. A chaos
+  // experiment refers to the SLO its steady-state hypothesis names, and to
+  // nothing else here (its expected alerts are not what it faults).
   const byDefines = new Map(all.filter((a) => a.defines).map((a) => [a.defines, a.id]));
   const owners = (a) => {
+    if (CHAOS_ID_RE.test(a.id)) return hypothesisSymbols(a).map((k) => byDefines.get(k)).filter((id) => id && id !== a.id).slice(0, 1);
     const keys = [a.parent, ...(Array.isArray(a.refs) ? a.refs : [])];
     for (const u of (Array.isArray(a.spec?.used_by) ? a.spec.used_by : [])) {
       const m = /^dashboard:([^/]+)/.exec(String(u));
@@ -849,9 +930,9 @@ export function computePostureMatrix(packA, packB) {
     platformWide.instrumentation = true;
   }
 
-  // Baselines declared?
+  // Baselines declared? A scaffold block (platform defaults) is not.
   const L5 = packA?.layers?.L5 || [];
-  if (L5.some(a => /baseline/i.test(a.id || '') || /baseline/i.test(a.title || ''))) {
+  if (L5.some(a => isBaselineArtefact(a) && !isScaffoldArtefact(a))) {
     platformWide.baselines = true;
   }
 

@@ -51,6 +51,21 @@ function exporters(c)     { return spec(c).pipelines?.exporters || {}; }
 function otel(c)          { return spec(c).otel || {}; }
 function baselines(c)     { return spec(c).baselines || {}; }
 
+// A value a scanner invented: the crawler and the live fetcher write a
+// schema-forced placeholder and mark it `crawler.scaffold.<symbol>` /
+// `mcp.scaffold.<symbol>` (the crawler's health canary on
+// https://<repo>.example.com, for one). It satisfies no clause. A library
+// placeholder (`library.todo.<symbol>`) still does: the pack represents the
+// requirement and the server lists it under onPlaceholder (server/index.mjs).
+const SCANNER_SCAFFOLD_PREFIXES = ['crawler.scaffold.', 'mcp.scaffold.'];
+function scannerInvented(c, symbol) {
+  const annotations = c?.metadata?.annotations || {};
+  return SCANNER_SCAFFOLD_PREFIXES.some(p => annotations[`${p}${symbol}`]);
+}
+function declaredSyntheticChecks(c) {
+  return syntheticChecks(c).filter(s => !scannerInvented(c, `validation.synthetic_checks.${s?.id}`));
+}
+
 function extendedBackendRefs(c) {
   const s = spec(c);
   return [
@@ -302,7 +317,7 @@ export const RUBRIC = [
     id: 'L5.MUST.synthetic_probe', dimension: 'L5', severity: 'MUST', minTier: 'tier-3',
     description: 'At least one synthetic check declared.',
     specRef: '§5.11',
-    evaluate(c) { return syntheticChecks(c).length >= 1; },
+    evaluate(c) { return declaredSyntheticChecks(c).length >= 1; },
   },
   {
     id: 'L5.MUST.tier1_chaos_for_each_slo', dimension: 'L5', severity: 'MUST', minTier: 'tier-1',
@@ -327,7 +342,7 @@ export const RUBRIC = [
     specRef: '§5.11',
     evaluate(c) {
       const weeklyProd = chaos(c).some(x => (x.schedule === 'weekly' || x.schedule === 'daily') && (x.environment === 'prod' || x.environment === 'production'));
-      const otelProbe = syntheticChecks(c).some(s => s.otel_instrumentation === true);
+      const otelProbe = declaredSyntheticChecks(c).some(s => s.otel_instrumentation === true);
       return weeklyProd && otelProbe;
     },
   },

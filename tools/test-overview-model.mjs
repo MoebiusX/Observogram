@@ -31,7 +31,7 @@ import {
   uploadReading, uploadStaged, uploadFailed,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
-import { loadServiceListFacts, loadRepositoryFolders } from '../studio/overview-api.mjs';
+import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 
 // ---------- fixtures ----------
@@ -40,7 +40,13 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/overview/$
 const services = fixture('services').services;
 const packs = fixture('packs').packs;
 const journeys = fixture('journeys').journeys;
-const run = fixture('krystaline-run');
+// The recorded runs carry grade schema 2; the board explains a run of the
+// engine's current schema only (studio/overview-model.mjs GRADE_SCHEMA), so
+// the tests read them re-stamped as schema 3 — a schema-2 run explains
+// nothing, pinned in the gradeWhy test below.
+const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: 3 } });
+const recordedRun = fixture('krystaline-run');
+const run = restamp(recordedRun);
 
 const KRYSTALINE = services.find((s) => s.slug === 'krystaline');
 const krystalinePack = packs.find((p) => p.id === 'uploaded-krystaline-a37d2521');
@@ -55,9 +61,9 @@ const HOUR = 3600e3;
 // The pack-alone diagnostic (computeDiagnosticGrade on Pack A) and the decision (buildAssessmentDecision), minimal.
 const diagnostic = { overall: { instrumentGrade: { letter: 'C', tier: 'c', label: 'Field Grade', blurb: '…' }, verdict: { word: 'Not yet diagnostic-grade' }, audit: { scorePctExact: 43 } } };
 const decision = { causes: [{ title: 'Nothing live has been checked' }, { title: 'Not every signal type is declared' }, { title: 'Whole layers are unobserved' }, { title: 'a fourth' }] };
-// The same diagnostic with the engine's criteria (grade schema 2), as computeDiagnosticGrade writes them for the demo pack alone.
+// The same diagnostic with the engine's criteria (grade schema 3), as computeDiagnosticGrade writes them for the demo pack alone.
 const diagnosticFull = {
-  ...diagnostic, gradeSchema: 2,
+  ...diagnostic, gradeSchema: 3,
   coverage: { criteria: [
     { key: 'multi-modal', label: 'Multi-modal', pass: true, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
     { key: 'correlated', label: 'Correlated', pass: true, detail: 'tracecontext propagator declared' },
@@ -65,7 +71,7 @@ const diagnosticFull = {
     { key: 'comprehensive', label: 'Comprehensive', pass: false, detail: '35% average observed across infra · platform · app · ux' },
   ] },
   trust: { criteria: [
-    { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiments - recovery procedures are theoretical' },
+    { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiment declared - the repository scan cannot detect chaos tooling', declared: 0, scaffolds: 0, unobserved: { repository: 'the repository scan has no chaos-experiment detector', live: null }, fromScan: true },
     { key: 'drift-free', label: 'Drift-free', pass: false, score: 0, detail: 'declared-only - no live signal to verify against (connect MCP or scan live)' },
     { key: 'fresh', label: 'Fresh', pass: false, detail: 'no mcp.refreshedAt annotation - pack has never been verified against live state' },
   ] },
@@ -77,7 +83,7 @@ const unchangedRun = withDrift({ declaredNotLive: 0, drifted: 0, liveNotDeclared
 const lostRun = { ...run, outcome: 'vantage-lost' };
 // The record the night before the first demo: the stack behind the MCP was restarting, the metric names
 // probe newly failed, and the engine read C · 30 % alignment · 86 declared-not-live — a smaller live picture.
-const partialRun = fixture('krystaline-run-partial');
+const partialRun = restamp(fixture('krystaline-run-partial'));
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
 
@@ -334,7 +340,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   ];
   const lacks = [
     ['no', 'Coverage reaches only 35 in 100 across infrastructure, platform, application and user experience.'],
-    ['no', 'Recovery has never been proven by fault injection.'],
+    ['no', 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.'],
   ];
   const rows = (why) => why.map((w) => [w.ok, w.text]);
   // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
@@ -1204,6 +1210,39 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
+
+test('gradeWhy, grade schema 3 (krystaline audit 2026-11-06): the scan\'s default baselines and a placeholder chaos experiment earn nothing, and the chaos line says what each side could see — never that recovery was or was not proven; a schema-2 run explains nothing', () => {
+  const layered = (L5, annotations = {}) => ({ id: 'kx', meta: { name: 'kx', annotations }, layers: { L1: [{ id: 'SLO-01', title: 'kx_availability', spec: { objective: 0.999 } }], L2: [], L5 } });
+  const SCAN = { 'crawler.discoveredAt': '2026-11-06T00:00:00Z', 'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector' };
+  const SCAFFOLD_BASE = { id: 'BASE-01', title: 'MTTD / MTTR baselines', source: 'Scaffold' };
+  const REAL_BASE = { id: 'BASE-01', title: 'MTTD / MTTR baselines' };
+  const CHAOS = (n, source) => ({ id: `CHAOS-0${n}`, title: `pod-kill-${n}`, spec: { target: 'deployment/kx' }, ...(source ? { source } : {}) });
+  // score NaN: the lines are read alone, not held to a letter (null would read as 0).
+  const why = (pack, r = null) => gradeWhy({ diagnostic: computeOverviewDiagnostic(pack), run: r, letter: 'D', score: NaN, now: NOW }).why;
+  const line = (w, re) => w.find((x) => re.test(x.text)) || null;
+  const chaos = (w) => line(w, /chaos/i);
+  const normal = (w) => line(w, /^Normal is/);
+
+  // The repository scan's pack, nothing live checked.
+  const scanned = why(layered([SCAFFOLD_BASE, CHAOS(2, 'Scaffold')], SCAN));
+  assert.equal(scanned.length, 7);
+  assert.deepEqual(chaos(scanned), { ok: 'no', text: 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.' }, 'a placeholder experiment is none; the scan says why it cannot see more');
+  assert.deepEqual(normal(scanned), { ok: 'no', text: 'Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.' }, 'the scan\'s baselines are defaults, not a pass');
+  // Checked against live: the run's Pack B says it could not look at chaos.
+  const liveRun = { ...run, packB: { ...run.packB, unobserved: ['baselines', 'chaos', 'synthetic'] } };
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE], SCAN), liveRun)).text, 'No chaos experiment is declared — the repository scan cannot detect chaos tooling and the live side cannot observe it.');
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE], SCAN), run)).text, 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.', 'a record without packB.unobserved claims nothing about the live side');
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE]), liveRun)).text, 'No chaos experiment is declared — the live side cannot observe it.', 'a pack the scan did not write');
+  assert.equal(chaos(why(layered([REAL_BASE]))).text, 'No chaos experiment is declared in this pack.', 'no stamp on either side: only what the pack holds');
+  // Declared: a pass, and no result is claimed (the spec holds none).
+  assert.deepEqual(chaos(why(layered([REAL_BASE, CHAOS(1)]))), { ok: 'yes', text: '1 chaos experiment is declared; none has a recorded result.' });
+  assert.equal(chaos(why(layered([REAL_BASE, CHAOS(1), CHAOS(3), CHAOS(2, 'Scaffold')]))).text, '2 chaos experiments are declared; none has a recorded result.', 'the scaffold is not counted');
+  assert.equal(normal(why(layered([REAL_BASE, CHAOS(1)]))).ok, 'yes', 'a declared baseline still makes normal defined');
+  for (const w of [scanned, why(layered([REAL_BASE, CHAOS(1)]))]) assert.ok(w.every((x) => !/proven|never been/i.test(x.text)), 'no line says recovery was or was not proven');
+  // A run graded under schema 2 explains nothing on a schema-3 board.
+  assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: recordedRun, letter: recordedRun.grade.letter, score: recordedRun.grade.score, now: NOW }), { why: [], points: '' });
+  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, 3);
 });
 
 // ---------- the service list: Overview's front door ----------
