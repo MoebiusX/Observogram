@@ -195,8 +195,9 @@ Same seven criteria, same weights. Scores can fall, never rise, on the same pack
 
 ### Changed: the synthetic-probe clause skips the crawler's invented canary (`tools/lib/conformance.mjs`)
 `L5.MUST.synthetic_probe` passed on the `https://<repo>.example.com/health` check the crawler writes when a repository has none. A check marked `crawler.scaffold.` or `mcp.scaffold.` now satisfies no clause; the weekly-production-chaos clause's instrumented probe reads the same way. A library placeholder (`library.todo.*`) still passes: the pack represents the requirement, and the server lists it under `onPlaceholder`.
-- **`scannerInvented(annotations, symbol)`** is exported, the one rule for "a scanner invented this value".
+- **`SCANNER_SCAFFOLD_PREFIXES`** is exported, the marks that make a value scanner-invented.
 - **The Conformance view** (`studio/conformance-view.mjs`) says so. Its Scoring rules read *Template values count as passes, with one exception*, the invented synthetic check. A failing synthetic clause names the check it left out (*The synthetic check `krystaline-health-canary` is a placeholder the scan wrote…*). Before, the text said every placeholder passes, beside a clause that failed on one.
+  - The view mirrors the prefixes as `SCANNER_INVENTED_PREFIXES`, and a test pins the two lists equal. The live server serves tools/lib at `/lib` only, so a static `../tools/lib/` import there loads the HTML shell and the studio does not start. `tools/test-studio-bundle.mjs` T1 now refuses such an import in any live studio module.
 
 ### Added: what the scan and the live check could not look at
 - **`tools/lib/crawler.mjs`** stamps `crawler.unobserved.chaos: the repository scan has no chaos-experiment detector` on every crawled pack. The key goes when the scan learns to detect chaos experiments.

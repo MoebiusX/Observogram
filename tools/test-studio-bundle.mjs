@@ -196,6 +196,13 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   // literal specifier each (a const would not be collected and the panel would stay off).
   assert.deepEqual(graph.get('studio/brand.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/brand.mjs'], 'studio/brand.mjs → /lib/brand.mjs');
   assert.deepEqual(graph.get('studio/remediation-flow-view.mjs').imports.map((i) => i.spec).filter((sp) => sp.startsWith('/lib/')), ['/lib/remediation-flow.mjs'], 'studio/remediation-flow-view.mjs → /lib/remediation-flow.mjs (B3.3: the response path renders in the bundle)');
+  // The live server mounts tools/lib at /lib only: a static `../tools/lib/…` import resolves to
+  // /tools/lib/… there, which answers the HTML shell, so the studio does not load at all (node
+  // resolves it, so no other suite notices). Only the static shim, which the bundle rewrites, may
+  // import that way; a view that needs an engine constant mirrors it, pinned by a test.
+  const viaTools = keys.filter((k) => k.startsWith('studio/') && k !== 'studio/static-backend.mjs')
+    .flatMap((k) => graph.get(k).imports.filter((i) => typeof i.spec === 'string' && i.spec.startsWith('../tools/')).map((i) => `${k} → ${i.spec}`));
+  assert.deepEqual(viaTools, [], 'no live studio module imports ../tools/ (the server serves tools/lib at /lib only)');
   // The shim's Compare, retrofeed and audit-report engines: literal dynamic imports, so they are in its imports and in the graph —
   // and through the traceability graph the PromQL parser's package is the graph's one package root.
   const shimImports = graph.get('studio/static-backend.mjs').imports.map((i) => i.key);

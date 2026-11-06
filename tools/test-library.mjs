@@ -1039,11 +1039,13 @@ test('the Conformance screen splits blocking, on-placeholder, passed and not-app
 
 // The 0.8.7 walkthrough (j2-67): Scoring rules said every template value passes, while the tier-1 MUST
 // "No synthetic check" failed on the canary the repository scan invents (crawler.scaffold.*). The rule is
-// the engine's (tools/lib/conformance.mjs scannerInvented); the text names the exception, and the failing
+// the engine's (tools/lib/conformance.mjs SCANNER_SCAFFOLD_PREFIXES); the text names the exception, and the failing
 // row names the check it left out. A library placeholder still passes, so it gets no such line.
 test('the Conformance screen on a scan-invented synthetic check: Scoring rules name the one exception, the failing synthetic clause names the invented check; a library placeholder passes with no such line', async () => {
-  const { readConformance, renderConformanceView } = await import('../studio/conformance-view.mjs');
+  const { readConformance, renderConformanceView, SCANNER_INVENTED_PREFIXES } = await import('../studio/conformance-view.mjs');
+  const { SCANNER_SCAFFOLD_PREFIXES } = await import('./lib/conformance.mjs');
   const { state } = await import('../studio/state.mjs');
+  assert.deepEqual([...SCANNER_INVENTED_PREFIXES], [...SCANNER_SCAFFOLD_PREFIXES], 'the view mirrors the engine\'s rule (a live studio module never imports tools/lib)');
   const { canonical } = build(byId.kafka, 'tier-2');
   const canary = (mark) => {
     const c = JSON.parse(JSON.stringify(canonical));

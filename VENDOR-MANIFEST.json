@@ -375,15 +375,15 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "4deea5ff09a129f7f5f52407d083f5df65f5540f7e569d9b435f7da52dc031f2",
-      "bytes": 19796,
+      "sha256": "515f6cbf5b9be6a0ba8633f29c22b4d3b1b6425e1e2dc12673e0f3fffacadde4",
+      "bytes": 19945,
       "exports": [
         "RUBRIC",
+        "SCANNER_SCAFFOLD_PREFIXES",
         "SUBJECT_CLAUSES",
         "TIER_RANK",
         "clauseSubjects",
-        "evaluateConformance",
-        "scannerInvented"
+        "evaluateConformance"
       ],
       "imports": [],
       "npm": [],
