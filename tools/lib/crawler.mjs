@@ -1188,11 +1188,10 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
         'crawler.scaffoldCount':   String(scaffoldMarks.size),
-        // What this scan has no way to look at, with why: the grade says so
-        // instead of reading "none declared" as "none exists"
-        // (studio/diagnostic-grade.mjs Chaos-validated). Drop the key when
-        // the scan learns to detect chaos experiments.
-        'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector',
+        // `crawler.unobserved.chaos` is gone: the scan detects chaos
+        // experiments (chaos-detect.mjs), so "none declared" here means it
+        // looked. A pack scanned before still carries the key, and the grade
+        // still reads it there.
         // An input that was not a spec Slug or not in a spec vocabulary — the
         // original name and environment are kept here (owners only in the
         // summary: an owner string may be an address).

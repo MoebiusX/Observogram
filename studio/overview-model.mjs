@@ -236,7 +236,7 @@ export function runGradedPack(run, pack) {
 // points of a hundred): a run of another schema, or a pack whose own
 // annotations already carry live evidence, explains nothing and shows nothing.
 const GRADE_POINTS = 7;
-const GRADE_SCHEMA = 3;
+const GRADE_SCHEMA = 4;
 const GRADE_BAR = 85;
 const WHY_RANK = { yes: 0, partly: 1, no: 2 };
 const criterionOf = (diagnostic, key) => [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].find((c) => c && c.key === key) || null;
@@ -283,12 +283,27 @@ function calibratedNo(crit) {
     : 'Normal is not defined with numbers: no detection and repair baselines.';
 }
 
-// Chaos-validated, as the engine knows it: experiments declared (the spec
-// holds no result for one, so nothing says recovery was proven), or none —
-// and then what each side could not see, never that recovery is unproven.
+// Chaos-validated, as the engine knows it (grade schema 4, `proof`): proven
+// by a recent passing run, failed, declared with only an old pass, declared
+// and never recorded as run — or none, and then what each side could not
+// see, never that recovery is unproven.
+const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository' };
 function chaosLine(crit, liveUnobserved) {
   const n = Number.isFinite(crit.declared) ? crit.declared : (numbersIn(crit.detail)[0] || 0);
-  if (crit.pass) return { ok: 'yes', text: `${n} chaos experiment${n === 1 ? ' is' : 's are'} declared; none has a recorded result.` };
+  const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;
+  const day = (iso) => String(iso || '').slice(0, 10);
+  const p = crit.proof;
+  if (p?.state === 'proven') {
+    return { ok: crit.pass ? 'yes' : 'partly', text: `Recovery proven ${day(p.provenAt)} by fault injection: ${p.fresh} of ${exps} passed a recent run (${PROOF_SOURCE[p.source] || p.source}).` };
+  }
+  if (p?.state === 'failed') {
+    const f = p.failed[0];
+    const why = f.missing?.length ? `: ${f.missing.join(', ')} did not fire${f.expectedMttd ? ` within ${f.expectedMttd}` : ''}` : '';
+    return { ok: 'no', text: `Chaos experiment ${f.id} failed on ${day(f.at)}${why}.` };
+  }
+  if (p?.state === 'stale') return { ok: 'partly', text: `${exps} declared; the last recorded pass, ${day(p.stale.at)}, is older than ${p.stale.windowDays} days.` };
+  if (p?.state === 'declared') return { ok: 'partly', text: `${exps} declared, never recorded as run.` };
+  if (!p && crit.pass) return { ok: 'yes', text: `${n} chaos experiment${n === 1 ? ' is' : 's are'} declared; none has a recorded result.` };
   const blind = [
     crit.unobserved?.repository && 'the repository scan cannot detect chaos tooling',
     (crit.unobserved?.live || liveUnobserved.includes('chaos')) && 'the live side cannot observe it',

@@ -42,9 +42,9 @@ const packs = fixture('packs').packs;
 const journeys = fixture('journeys').journeys;
 // The recorded runs carry grade schema 2; the board explains a run of the
 // engine's current schema only (studio/overview-model.mjs GRADE_SCHEMA), so
-// the tests read them re-stamped as schema 3 — a schema-2 run explains
+// the tests read them re-stamped as schema 4 — a schema-2 run explains
 // nothing, pinned in the gradeWhy test below.
-const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: 3 } });
+const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: 4 } });
 const recordedRun = fixture('krystaline-run');
 const run = restamp(recordedRun);
 
@@ -61,9 +61,9 @@ const HOUR = 3600e3;
 // The pack-alone diagnostic (computeDiagnosticGrade on Pack A) and the decision (buildAssessmentDecision), minimal.
 const diagnostic = { overall: { instrumentGrade: { letter: 'C', tier: 'c', label: 'Field Grade', blurb: '…' }, verdict: { word: 'Not yet diagnostic-grade' }, audit: { scorePctExact: 43 } } };
 const decision = { causes: [{ title: 'Nothing live has been checked' }, { title: 'Not every signal type is declared' }, { title: 'Whole layers are unobserved' }, { title: 'a fourth' }] };
-// The same diagnostic with the engine's criteria (grade schema 3), as computeDiagnosticGrade writes them for the demo pack alone.
+// The same diagnostic with the engine's criteria (grade schema 4), as computeDiagnosticGrade writes them for the demo pack alone.
 const diagnosticFull = {
-  ...diagnostic, gradeSchema: 3,
+  ...diagnostic, gradeSchema: 4,
   coverage: { criteria: [
     { key: 'multi-modal', label: 'Multi-modal', pass: true, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
     { key: 'correlated', label: 'Correlated', pass: true, detail: 'tracecontext propagator declared' },
@@ -1243,14 +1243,27 @@ test('gradeWhy, grade schema 3 (krystaline audit 2026-11-06): the scan\'s defaul
   assert.equal(chaos(why(layered([SCAFFOLD_BASE], SCAN), run)).text, 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.', 'a record without packB.unobserved claims nothing about the live side');
   assert.equal(chaos(why(layered([SCAFFOLD_BASE]), liveRun)).text, 'No chaos experiment is declared — the live side cannot observe it.', 'a pack the scan did not write');
   assert.equal(chaos(why(layered([REAL_BASE]))).text, 'No chaos experiment is declared in this pack.', 'no stamp on either side: only what the pack holds');
-  // Declared: a pass, and no result is claimed (the spec holds none).
-  assert.deepEqual(chaos(why(layered([REAL_BASE, CHAOS(1)]))), { ok: 'yes', text: '1 chaos experiment is declared; none has a recorded result.' });
-  assert.equal(chaos(why(layered([REAL_BASE, CHAOS(1), CHAOS(3), CHAOS(2, 'Scaffold')]))).text, '2 chaos experiments are declared; none has a recorded result.', 'the scaffold is not counted');
+  // Declared (grade schema 4): partly — never a yes, and never "proven".
+  assert.deepEqual(chaos(why(layered([REAL_BASE, CHAOS(1)]))), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
+  assert.equal(chaos(why(layered([REAL_BASE, CHAOS(1), CHAOS(3), CHAOS(2, 'Scaffold')]))).text, '2 chaos experiments declared, never recorded as run.', 'the scaffold is not counted');
   assert.equal(normal(why(layered([REAL_BASE, CHAOS(1)]))).ok, 'yes', 'a declared baseline still makes normal defined');
-  for (const w of [scanned, why(layered([REAL_BASE, CHAOS(1)]))]) assert.ok(w.every((x) => !/proven|never been/i.test(x.text)), 'no line says recovery was or was not proven');
-  // A run graded under schema 2 explains nothing on a schema-3 board.
+  for (const w of [scanned, why(layered([REAL_BASE, CHAOS(1)]))]) assert.ok(w.every((x) => !/proven|never been/i.test(x.text)), 'no line without a passing run says recovery was or was not proven');
+  // A run graded under schema 2 explains nothing on a schema-4 board.
   assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: recordedRun, letter: recordedRun.grade.letter, score: recordedRun.grade.score, now: NOW }), { why: [], points: '' });
-  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, 3);
+  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, 4);
+});
+
+test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never recorded as run, proven <date>, failed or stale, from the engine\'s proof', () => {
+  const layered = (L5) => ({ id: 'kx', meta: { name: 'kx', annotations: {} }, layers: { L1: [{ id: 'SLO-01', title: 'kx_availability', spec: { objective: 0.999 } }], L2: [], L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }, ...L5] } });
+  // computeOverviewDiagnostic grades on the real clock: the runs are dated from it.
+  const ago = (days) => new Date(Date.now() - days * 86400e3).toISOString();
+  const exp = (n, last_result, schedule = 'weekly') => ({ id: `CHAOS-0${n}`, title: `fault-${n}`, spec: { id: `fault-${n}`, target: 'deployment/kx', schedule, expected_alerts: ['KxDown'], expected_mttd: '3m', ...(last_result ? { last_result } : {}) } });
+  const chaos = (L5) => gradeWhy({ diagnostic: computeOverviewDiagnostic(layered(L5)), run: null, letter: 'D', score: NaN, now: NOW }).why.find((x) => /chaos|Recovery/i.test(x.text));
+  assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' })]), { ok: 'yes', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 1 chaos experiment passed a recent run (recorded in the repository).` });
+  assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' }), exp(2)]), { ok: 'partly', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 2 chaos experiments passed a recent run (recorded in the repository).` }, 'one of two: partly');
+  assert.deepEqual(chaos([exp(1, { at: ago(2), outcome: 'fail', alerts_fired: [] })]), { ok: 'no', text: `Chaos experiment fault-1 failed on ${ago(2).slice(0, 10)}: KxDown did not fire within 3m.` });
+  assert.deepEqual(chaos([exp(1, { at: ago(20), outcome: 'pass' })]), { ok: 'partly', text: `1 chaos experiment declared; the last recorded pass, ${ago(20).slice(0, 10)}, is older than 8 days.` });
+  assert.deepEqual(chaos([exp(1)]), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
 });
 
 // ---------- the service list: Overview's front door ----------

@@ -419,8 +419,8 @@ try {
   const libraryProbe = structuredClone(declaredProbe);
   libraryProbe.metadata.annotations[`library.todo.validation.synthetic_checks.${canary.id}`] = 'point it at the endpoint';
   assert(probeClause(libraryProbe).pass === true, 'a library placeholder still represents the requirement');
-  assert(canonical.metadata.annotations['crawler.unobserved.chaos'] === 'the repository scan has no chaos-experiment detector',
-         'the scan says it cannot look for chaos experiments (crawler.unobserved.chaos)');
+  assert(!('crawler.unobserved.chaos' in canonical.metadata.annotations),
+         'the scan detects chaos experiments now (tools/lib/chaos-detect.mjs): it no longer says it cannot look');
 
   const sameLive = structuredClone(canonical);
   const aligned = diffPacks(adapted, adapt(sameLive));
