@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.8.9 — 2026-11-06
+
+**Wrong numbers and wrong packs from the 0.8.7 walkthrough.** The walkthrough on krystaline's real data found ten screens that showed a wrong count, a wrong pack or a sentence that was not meant for a person. They were there before the open PRs. Each fix is at its source and was shown on a real studio (`npm run demo -- --port 8030`, a Folder Run of the krystalinex-core clone, a restart).
+
+### Fixed
+- **The service's current pack after a restart.** "Newest" means registered last, whatever was read last. After a restart the registry comes back in the order the packs were last read, so a pack someone opened after a newer scan was listed last and opened as the service's pack. Expert's service page, its Discover / Diagnose / Remediate buttons and the derived tile now open the Run's scan.
+  - `GET /api/packs` stamps each uploaded entry with `registeredAt`: when it was registered (a re-register in the same process moves it on; after a restart, the row's `createdAt`).
+  - `newestPack` (`studio/services-model.mjs`) reads the stamp; a list without it (the static bundle) keeps catalogue order.
+- **SLO objectives print every digit.** An objective of 0.9 read "9% over 30d" and 0.5 read "5%". `adapt` (`tools/lib/adapter.mjs`) now writes 90% and 50%; 0.999 is still 99.9%.
+- **Helm's literal braces.** A chart writes an alert's own `{{ $value }}` as `{{ "{{" }} $value {{ "}}" }}`, and Helm renders the two braces. The crawler turned them into one, so every such alert read as drifted against live. `crawlFiles` (`tools/lib/crawler.mjs`) now keeps an action that is only a string literal (`{{ "…" }}` or ``{{ `…` }}``) as the string it prints. On krystalinex-core, 46 of 58 alert rules keep `{{ … }}`, and no rule drifts on its annotations any more.
+- **The board's two promises numbers.** *Why this grade* said "93 in 100 holds up live" and group B said "7 of 18 promises hold end to end". Both were right, but they counted different things. They now say so: "Of the links in the repository's 18 promises, 93 in 100 hold up live" and "7 of 18 promises hold in every link, 11 broken".
+- **Strata.**
+  - It no longer says "0 gaps" beside "+2488 new". The notches, a ribbon's "+N to add" and the bridge are one number: the diff's "only in B" (what B has in the families and service scope A declares).
+  - The bridge's second figure is how many of B's artefacts are outside A's scope (2175 for krystaline: the rest of the platform). Before, the size difference of the two stacks was shown as artefacts to add.
+  - Atlas loads the comparison when Pack B was already loaded. Until it arrives, Strata says "not compared yet" and draws no notch, never "no gaps". A diff for another selection is not used. The footnote describes notches only when there are some.
+- **Atlas and Discover count the same pack.** The strata, periodic, transit and arbor atlases left out the sibling layer L2X (RFC-0001), so krystaline read 741 in Atlas and 742 in Discover. L2X now rides in the Metrics/Logs/Traces band, as Overview's Layers count it. The drawer still names its own layer.
+- **The Neuron names Pack A by its pack.** It printed the absolute server path of the workspace where the journey was first saved.
+  - `GET /api/journeys` gives `packARef` / `packBRef` (`{ id, label }`) for a source that is a registered pack. The Neuron and the journeys list show the label, with the id and the file in its title (`packSourceHtml` in `studio/util.mjs`; `buildJourneyDetail` in `tools/lib/neuron-model.mjs` carries both).
+  - A service's Run and a captured journey save a workspace pack journey-relative (`../packs/<id>.pack.yaml`), so a moved or copied workspace checks its own copy. A journey saved before keeps its path until its next Run.
+- **The Run's toast is lime only when the check is clean.** In the reskin, every toast of no kind was lime. Now a plain toast is a neutral panel and `toast(…, 'ok')` is lime, so the Run's toast that names lost files (#223) no longer looks like a clean success.
+- **A private GitHub repository's answer is a sentence.** A failed GitHub call kept GitHub's JSON body (`{"message":"Not Found","documentation_url":…}`). It now keeps only the message: "GitHub 404 on /repos/MoebiusX/krystalinex-core: Not Found". This holds on the service row and in Expert's scan (`ghFetch` in `server/github-crawl.mjs`).
+- **The Add a service hint names sign-in.** Where the server offers Sign in to GitHub (or Azure DevOps) and the person is signed in to the studio, the repository hint says to sign in or give a token. Before, it mentioned only a token. A server without it reads as before (`formModel`'s `repoSignIn` in `studio/overview-model.mjs`).
+
+### Tests
+- `server/test-workspace.mjs`: the newest pack survives a restart that lists it first, and a re-register makes a pack the newest again.
+- `tools/test-services-model.mjs` gains one, for `newestPack` by registration.
+- `tools/test-adapt.mjs`: objectives of 0.9, 0.99, 0.999, 0.9995 and 0.5 print every digit.
+- `tools/test-crawl.mjs`: a Helm literal-brace escape and a backtick literal keep both braces.
+- `tools/test-overview-model.mjs`: the two promises sentences, and the hint with and without sign-in offered.
+- `tools/test-atlases.mjs` is new (four tests): L2X in the band, Strata's one number, the scope figure, and Strata without a diff.
+- `tools/test-neuron-model.mjs` gains one, for the pack named by its label.
+- `tools/test-design-system.mjs` gains one, for the toast colours.
+- `server/test-service-run.mjs`: the listing's `packARef`, the journey-relative save, and GitHub's real 404 body read as a sentence.
+- `tools/test-studio-bundle.mjs`: the catalogue's `registeredAt` is the server's alone.
+- Suite total 1704 → 1711.
+
 ## 0.8.4 — 2026-11-06
 
 **Layout fixes from the studio walkthrough.** A screenshot pass over every page of the studio, on krystaline's real data, found eight rendering defects. Each is fixed at its source and checked at 1440 px and at phone width.
