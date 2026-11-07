@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+## 0.8.12 — 2026-11-07
+
+**An Azure DevOps repository that is not public asks for a sign-in or a token, and a host the server cannot reach says why.** Azure DevOps Services refuses a read it will not serve with a redirect to its sign-in page, never a 401. That covers no token, a wrong one, and a sign-in it does not take (measured against dev.azure.com). The reader refused redirects, so Node's fetch threw, and a Run answered *502 the repository could not be read: fetch failed*. The service row never asked for a sign-in or a token, on a server with sign-in as on one without.
+
+### Fixed
+- **`adoFetch`** (`server/ado-crawl.mjs`).
+  - **It asks Azure DevOps for its 401.** Every call sends `X-TFS-FedAuthRedirect: Suppress`, so Azure DevOps answers a 401 with JSON (TF400813) instead of the redirect. The reader also reads a redirect (`redirect: 'manual'`) and never follows it, so a token goes to the repository's host only.
+  - **A redirect to the sign-in page counts as a refusal; no other does.** That page is `*.vssps.visualstudio.com/_signin`, Entra ID's sign-in, or any redirect carrying a challenge (`isSignInRedirect`, new). Any other redirect, such as a moved host or a proxy, is named as one: *redirects this read to <origin>, which the server does not follow*. It answers 502, and the person is not asked.
+  - **A refusal states the fact once**, and the Run's tail says what the person can do on this server:
+    - no token: *this repository is not public*, then *sign in to Azure DevOps…* where that sign-in is set up, else the person's own token. On a server without sign-in it adds *or AZURE_DEVOPS_TOKEN set on this server for every Run*;
+    - the person's token: *not authorised to read this repository*, then *your Azure DevOps token was refused or cannot read it — check that it can read this repository (Code (Read))*;
+    - the person's Entra ID sign-in: the same, then *you are signed in to Azure DevOps as …, and that account cannot read this repository*;
+    - the server's own token: *the token in AZURE_DEVOPS_TOKEN was refused*, the operator's to fix, with no ask.
+- **A refused sign-in names the tenants when they differ.** Azure DevOps's refusal names the tenant the organization signs in through (`WWW-Authenticate: Bearer authorization_uri=…/<tenant>`), and the sign-in's token names the person's own (its `tid`). The sentence then reads *this organization signs in through Entra tenant A, and your sign-in is for tenant B*. `tenantMismatch(wwwAuthenticate, token)` is new and exported. It takes whole tenant ids only, compares them without case, and never verifies or returns the token.
+- **An Azure DevOps Server repository is never offered the Azure DevOps sign-in**, which is never sent there. The Run's `repoAuth` says `signIn: false`, and the row (`studio/overview-model.mjs` `authAsk`) then offers the token only, even where `/auth/me` offers the sign-in.
+- **A fetch that failed below HTTP says what happened.** `server/fetch-failure.mjs` (new) has `unreachable(label, url, error)`, used by `adoFetch`, `ghFetch` and `rawFetch`:
+  - *<host> could not be reached from the server — <reason> (<code>)* only when the host was not reached: a name that does not resolve, a refused, timed-out or dropped connection, an unreachable network, or a TLS failure. Each TLS failure has its own words, and only an untrusted issuer gets the `NODE_EXTRA_CA_CERTS` hint. For a host with IPv6 and IPv4 addresses, the last attempt's reason is the one named.
+  - a redirect fetch was told not to follow: *answered with a redirect*;
+  - a request that was never sent: *was not sent*;
+  - anything else: *fetch failed — <code>*.
+
+  The Run still answers 502, and the original error is kept as `cause`.
+- **`rawFetch`** reads a redirect from raw.githubusercontent.com and names it (*the repository may have moved*), instead of calling the host unreachable.
+- **`parseRepoAuth`** takes printable ASCII only. A control character made fetch refuse to build the request, which read as an unreachable host. Now it is refused with the shape sentence before anything is sent.
+
+### Tests
+- **`server/test-repo-sign-in.mjs`:** the Azure DevOps stub answers as Azure DevOps does. With the suppress header it is a 401 naming the organization's tenant; without it, a 302 to `_signin`, and *fetch failed* under `redirect: 'error'`, as Node throws. Before, it was a 401 without asking, which is why the suite passed. These cases are new, each with its exact sentence:
+  - a signed-in Run whose account is refused, with the tenants differing and with them the same;
+  - a Run without the sign-in;
+  - a Run of an Azure DevOps Server repository, where no sign-in is sent or offered.
+- **`server/test-service-run.mjs`** gains five tests:
+  - the refusal for each token source, both as the 401 and as a 301/302/303/307/308 to the sign-in page, never followed;
+  - another redirect named as one;
+  - `tenantMismatch` with hex-letter tenant ids;
+  - `unreachable`, one exact sentence per kind of failure, through `adoFetch`, `ghFetch` and `rawFetch`;
+  - a private Azure DevOps Run on a server without sign-in, with exact sentences for no token, the person's token, a wrong one, a control character, the server's refused token and an unreachable host.
+- **`tools/test-overview-model.mjs`:** a row with `signIn: false` offers the token only.
+- Each fix was undone in turn; all 13 undone fixes fail the suites.
+- Suite total 1757 → 1762.
+
 ## 0.8.11 — 2026-11-07
 
 **Spec 1.5 is pinned at upstream `develop`.** RFC-0004 merged upstream (MoebiusX/otel-observability-pack#11, merge commit `5be3baa7`), so the vendored copy is re-synced with `node tools/sync-spec.mjs` against the default branch instead of the RFC branch commit `adea3bf3`.

@@ -51,8 +51,9 @@ writeFileSync(join(EMPTY_REPO, 'notes.txt'), 'nothing to scan here\n');
 const REPO = join(ROOT, 'tools', 'fixtures', 'crawl', 'operational-alerts');
 
 const { parseRepository, folderRefusal, repositoryRoots, WAYS } = await import('./service-admin.mjs');
-const { parseAdoUrl, adoHostRefusal, adoFetch, listedAdoOrigins } = await import('./ado-crawl.mjs');
-const { fetchGithubFiles } = await import('./github-crawl.mjs');
+const { parseAdoUrl, adoHostRefusal, adoFetch, listedAdoOrigins, tenantMismatch } = await import('./ado-crawl.mjs');
+const { fetchGithubFiles, ghFetch, rawFetch } = await import('./github-crawl.mjs');
+const { unreachable } = await import('./fetch-failure.mjs');
 const { fetchRepositoryFiles } = await import('./repo-sources.mjs');
 
 const LOCAL = { posture: 'open-loopback', direct: true };
@@ -108,28 +109,161 @@ test('parseAdoUrl: Services (dev.azure.com, <org>.visualstudio.com), a Server co
   for (const bad of ['https://dev.azure.com/_git/x', 'http://dev.azure.com/a/b/_git/c', 'https://tfs.corp.test/_git/x', 'https://dev.azure.com/a/b/c', 'not a url', '', null]) assert.equal(p(bad), null, String(bad));
 });
 
-test('adoFetch: the token as Basic only to an allowed host; 203 and 401 read as the token; the host\'s message on another error', async () => {
+test('adoFetch: the token as Basic only to an allowed host, with the redirect suppressed; 203 and 401 read as the token, worded for whoever can fix it; the host\'s message on another error', async () => {
   const seen = [];
   const answer = (status, body, ct = 'application/json') => async (url, init) => {
-    seen.push({ url, auth: init.headers.Authorization ?? null, redirect: init.redirect });
+    seen.push({ url, auth: init.headers.Authorization ?? null, redirect: init.redirect, suppress: init.headers['X-TFS-FedAuthRedirect'] ?? null });
     return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': ct } });
   };
   const ok = await adoFetch('https://dev.azure.com/acme/Shop/_apis/git/repositories/c/items', { fetchImpl: answer(200, { value: [] }), token: 'pat-SECRET' });
   assert.deepEqual(ok, { value: [] });
   assert.equal(seen[0].auth, `Basic ${Buffer.from(':pat-SECRET').toString('base64')}`);
-  assert.equal(seen[0].redirect, 'error', 'a redirect never carries the token elsewhere');
+  assert.equal(seen[0].redirect, 'manual', 'a redirect is read, never followed: the token never goes elsewhere');
+  assert.equal(seen[0].suppress, 'Suppress', 'Azure DevOps is asked to refuse with a 401, not a redirect to its sign-in page');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(203, '<html>sign in</html>', 'text/html'), token: '' }),
-    (e) => e.status === 401 && /sign-in needed — give your own Azure DevOps token \(a personal access token with Code \(Read\)\), or, on a server without sign-in, set AZURE_DEVOPS_TOKEN$/.test(e.message));
+    (e) => e.status === 401 && e.message === 'Azure DevOps 401: this repository is not public');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(401, ''), token: 'pat-MINE', tokenSource: 'request' }),
-    (e) => e.status === 401 && /your Azure DevOps token was refused \(it needs Code \(Read\) on this repository\)$/.test(e.message) && !e.message.includes('pat-MINE'));
+    (e) => e.status === 401 && e.message === 'Azure DevOps 401: not authorised to read this repository');
   assert.equal(seen.at(-1).auth, `Basic ${Buffer.from(':pat-MINE').toString('base64')}`, 'their own token, as Basic');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(401, ''), token: 'pat-SECRET' }),
-    (e) => e.status === 401 && /the token in AZURE_DEVOPS_TOKEN was refused/.test(e.message) && !e.message.includes('pat-SECRET'));
+    (e) => e.status === 401 && e.message === 'Azure DevOps 401: the token in AZURE_DEVOPS_TOKEN was refused');
   await assert.rejects(adoFetch('https://dev.azure.com/a/b/_apis/x', { fetchImpl: answer(404, { message: 'TF401019: The Git repository does not exist.' }), token: '' }),
     (e) => e.status === 404 && e.message === 'Azure DevOps 404: TF401019: The Git repository does not exist.');
   const before = seen.length;
   await assert.rejects(adoFetch('https://evil.test/a/b/_apis/x', { fetchImpl: answer(200, {}), token: 'pat-SECRET' }), (e) => e.status === 400 && /OBSERVOGRAM_ADO_ORIGINS/.test(e.message));
   assert.equal(seen.length, before, 'a refused host is never fetched');
+});
+
+// How Azure DevOps Services refuses a read it will not serve (no token, a wrong one, a sign-in
+// it does not take), measured against dev.azure.com on 2026-11-07: with
+// `X-TFS-FedAuthRedirect: Suppress`, a 401 with JSON (TF400813); without it, a 302 to its
+// sign-in page — under redirect: 'error' Node's fetch throws "fetch failed" on that. Both name
+// the tenant the organization signs in through. Tenant ids with hex letters, so case matters.
+const ORG_TENANT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const PERSON_TENANT = 'ffffffff-1111-4222-8333-444444444444';
+const WWW = `Bearer authorization_uri=https://login.microsoftonline.com/${ORG_TENANT}, Basic realm="https://tfsprodweu5.app.visualstudio.com/"`;
+const jwtFor = (tid) => `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify({ tid, upn: 'ada@contoso.example' })).toString('base64url')}.sig`;
+const adoRefusal = (init, { status = 302, location = 'https://spsprodweu5.vssps.visualstudio.com/_signin?realm=dev.azure.com', www = WWW } = {}) => {
+  if (init.headers?.['X-TFS-FedAuthRedirect'] === 'Suppress') {
+    return new Response(JSON.stringify({ message: "TF400813: The user '' is not authorized to access this resource." }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'www-authenticate': www } });
+  }
+  if (init.redirect === 'error') throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+  return new Response('<html>sign in</html>', { status, headers: { 'content-type': 'text/html; charset=utf-8', location, ...(www ? { 'www-authenticate': www } : {}) } });
+};
+// A host that ignores the suppress header and redirects anyway (an older Server, a proxy).
+const redirectAnyway = (seen, opts) => async (url, init) => {
+  seen.push({ url, auth: init.headers.Authorization ?? null, redirect: init.redirect });
+  return adoRefusal({ ...init, headers: { ...init.headers, 'X-TFS-FedAuthRedirect': undefined } }, opts);
+};
+
+test('adoFetch: a refusal reads as the token, the fact worded for whoever can fix it — Azure DevOps\'s 401 (asked to suppress its redirect), or a redirect to its sign-in page, of any 3xx, never followed; a refused sign-in names both tenants when they differ', async () => {
+  const URL_ = 'https://dev.azure.com/acme/Private/_apis/git/repositories/shop/items?scopePath=/';
+  const each = [
+    [{ token: '' }, 'Azure DevOps 401: this repository is not public'],
+    [{ token: 'pat-MINE-0000', tokenSource: 'request' }, 'Azure DevOps 401: not authorised to read this repository'],
+    [{ token: 'pat-SERVER-0000' }, 'Azure DevOps 401: the token in AZURE_DEVOPS_TOKEN was refused'],
+    [{ token: jwtFor(PERSON_TENANT), tokenSource: 'link' }, `Azure DevOps 401: not authorised to read this repository: this organization signs in through Entra tenant ${ORG_TENANT}, and your sign-in is for tenant ${PERSON_TENANT}`],
+    [{ token: jwtFor(ORG_TENANT.toUpperCase()), tokenSource: 'link' }, 'Azure DevOps 401: not authorised to read this repository'],
+  ];
+  // Suppressed: the 401 Azure DevOps sends to a call that asks for it.
+  for (const [opts, message] of each) {
+    await assert.rejects(adoFetch(URL_, { fetchImpl: async (url, init) => adoRefusal(init), ...opts }), (e) => e.status === 401 && e.message === message, message);
+  }
+  // Not suppressed: the redirect to its sign-in page, whatever 3xx it comes as.
+  for (const status of [301, 302, 303, 307, 308]) {
+    const seen = [];
+    for (const [opts, message] of each) {
+      await assert.rejects(adoFetch(URL_, { fetchImpl: redirectAnyway(seen, { status }), ...opts }), (e) => e.status === 401 && e.message === message, `${status}: ${message}`);
+    }
+    assert.ok(seen.every((s) => s.redirect === 'manual' && s.url === URL_), `${status}: one call each, the sign-in page never fetched`);
+  }
+  // Entra ID's sign-in as the Location, or a challenge beside any Location: the same refusal.
+  await assert.rejects(adoFetch(URL_, { fetchImpl: redirectAnyway([], { location: `https://login.microsoftonline.com/${ORG_TENANT}/oauth2/authorize`, www: null }), token: '' }), (e) => e.status === 401);
+  await assert.rejects(adoFetch(URL_, { fetchImpl: redirectAnyway([], { location: 'https://elsewhere.example/x' }), token: '' }), (e) => e.status === 401, 'a challenge beside it');
+});
+
+test('adoFetch: a redirect anywhere but the sign-in page is named as one — never followed, never read as the token, the person not asked', async () => {
+  process.env.OBSERVOGRAM_ADO_ORIGINS = 'https://tfs.corp.example';
+  try {
+    const seen = [];
+    const moved = redirectAnyway(seen, { status: 302, location: 'https://tfs.corp.example.com/DefaultCollection/Shop/_apis/git/repositories/c/items', www: null });
+    for (const opts of [{ token: 'pat-MINE-0000', tokenSource: 'request' }, { token: 'pat-SERVER-0000' }, { token: '' }]) {
+      await assert.rejects(adoFetch('https://tfs.corp.example/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: moved, ...opts }),
+        (e) => e.status === undefined && e.message === "Azure DevOps 302: https://tfs.corp.example redirects this read to https://tfs.corp.example.com, which the server does not follow — give the repository's address on the host that serves it");
+    }
+    await assert.rejects(adoFetch('https://tfs.corp.example/x/_apis/y', { fetchImpl: redirectAnyway([], { location: '', www: null }), token: '' }),
+      (e) => e.status === undefined && /redirects this read to another address, which the server does not follow/.test(e.message), 'no Location at all');
+    assert.ok(seen.every((s) => s.url.startsWith('https://tfs.corp.example/')), 'nothing followed');
+  } finally { delete process.env.OBSERVOGRAM_ADO_ORIGINS; }
+});
+
+test('tenantMismatch: the organization\'s tenant from the refusal, the person\'s from the token, compared without case; null unless both are whole tenant ids and differ', () => {
+  assert.deepEqual(tenantMismatch(WWW, jwtFor(PERSON_TENANT)), { organization: ORG_TENANT, yours: PERSON_TENANT });
+  assert.deepEqual(tenantMismatch(WWW.replace(ORG_TENANT, ORG_TENANT.toUpperCase()), jwtFor(PERSON_TENANT.toUpperCase())), { organization: ORG_TENANT, yours: PERSON_TENANT }, 'both come back lower case');
+  assert.equal(tenantMismatch(WWW.replace(ORG_TENANT, ORG_TENANT.toUpperCase()), jwtFor(ORG_TENANT)), null, 'the same tenant in another case is the same tenant');
+  assert.equal(tenantMismatch(`Bearer authorization_uri=https://login.microsoftonline.com/${ORG_TENANT}0`, jwtFor(PERSON_TENANT)), null, 'more than a tenant id is no tenant id');
+  assert.deepEqual(tenantMismatch(`Bearer authorization_uri=https://login.microsoftonline.com/${ORG_TENANT}x, Bearer authorization_uri="https://login.microsoftonline.com/${PERSON_TENANT}"`, jwtFor(ORG_TENANT)),
+    { organization: PERSON_TENANT, yours: ORG_TENANT }, 'a malformed challenge is passed over for a whole one');
+  assert.equal(tenantMismatch(WWW, jwtFor(ORG_TENANT)), null);
+  assert.equal(tenantMismatch(WWW, 'pat-not-a-jwt'), null);
+  assert.equal(tenantMismatch(WWW, jwtFor('not-a-tenant')), null);
+  assert.equal(tenantMismatch('Basic realm="x"', jwtFor(PERSON_TENANT)), null);
+  assert.equal(tenantMismatch(null, null), null);
+});
+
+test('unreachable: "could not be reached" only when the host was not reached, with the reason per code; a redirect, a request never sent and anything else are each named as what they are; the original error is kept; any other error is left as it is', async () => {
+  const failed = (cause) => new TypeError('fetch failed', { cause });
+  const withCode = (code, message = code) => Object.assign(new Error(message), { code });
+  const said = (cause) => unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', failed(cause)).message;
+  const REACH = 'Azure DevOps: https://dev.azure.com could not be reached from the server — ';
+  const table = [
+    ['ENOTFOUND', 'its name does not resolve on the server (ENOTFOUND)'],
+    ['EAI_AGAIN', 'its name does not resolve on the server (the lookup timed out) (EAI_AGAIN)'],
+    ['ECONNREFUSED', 'the connection was refused (ECONNREFUSED)'],
+    ['ETIMEDOUT', 'the connection timed out (ETIMEDOUT)'],
+    ['UND_ERR_CONNECT_TIMEOUT', 'the connection timed out (UND_ERR_CONNECT_TIMEOUT)'],
+    ['ECONNRESET', 'the connection was dropped (ECONNRESET)'],
+    ['UND_ERR_SOCKET', 'the connection was dropped (UND_ERR_SOCKET)'],
+    ['ENETUNREACH', 'the network is unreachable from the server (ENETUNREACH)'],
+    ['SELF_SIGNED_CERT_IN_CHAIN', 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS) (SELF_SIGNED_CERT_IN_CHAIN)'],
+    ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS) (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)'],
+    ['CERT_HAS_EXPIRED', 'its certificate has expired or is not yet valid (CERT_HAS_EXPIRED)'],
+    ['ERR_TLS_CERT_ALTNAME_INVALID', 'its certificate does not name this host (something else answered, or the address uses a name the certificate is not for) (ERR_TLS_CERT_ALTNAME_INVALID)'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'the TLS handshake failed (is it https on that port?) (ERR_SSL_WRONG_VERSION_NUMBER)'],
+  ];
+  for (const [code, reason] of table) assert.equal(said(withCode(code)), REACH + reason, code);
+  // A host with IPv6 and IPv4 addresses: an AggregateError, the last attempt's reason first.
+  const both = Object.assign(new AggregateError([withCode('ENETUNREACH'), withCode('ETIMEDOUT')], ''), { code: 'ENETUNREACH' });
+  assert.equal(said(both), `${REACH}the connection timed out (ETIMEDOUT)`);
+  // Reached, but not followed / not sent / something else.
+  assert.equal(said(new Error('unexpected redirect')), 'Azure DevOps: https://dev.azure.com answered with a redirect, which the server does not follow (unexpected redirect)');
+  assert.equal(said(new Error('redirect count exceeded')), 'Azure DevOps: https://dev.azure.com answered with a redirect, which the server does not follow (redirect count exceeded)');
+  assert.equal(said(withCode('UND_ERR_INVALID_ARG', 'invalid Authorization header')), 'Azure DevOps: the request to https://dev.azure.com was not sent — invalid Authorization header');
+  assert.equal(said(withCode('EWHATEVER', 'x')), 'Azure DevOps: https://dev.azure.com: fetch failed — EWHATEVER');
+  assert.equal(said(new Error(`other side\n  closed ${'y'.repeat(300)}`)), `Azure DevOps: https://dev.azure.com: fetch failed — other side closed ${'y'.repeat(160 - 'other side closed '.length)}`, 'one line, at most 160 characters');
+  assert.equal(said(undefined), 'Azure DevOps: https://dev.azure.com: fetch failed — no reason given');
+  const original = failed(withCode('ENOTFOUND'));
+  assert.equal(unreachable('GitHub', 'https://api.github.com', original).cause, original, 'the original kept as the cause');
+  const other = new Error('Azure DevOps 404: no such repository');
+  assert.equal(unreachable('Azure DevOps', 'https://dev.azure.com', other), other, 'not fetch\'s network failure: untouched');
+  assert.ok(unreachable('x', 'not a url', failed(withCode('ENOTFOUND'))).message.startsWith('x: not a url could not be reached'));
+
+  // Through the readers: the token never in the sentence, no status, so the Run answers 502.
+  await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => { throw failed(withCode('ENOTFOUND')); }, token: 'pat-SECRET-0000' }),
+    (e) => e.status === undefined && e.message === `${REACH}its name does not resolve on the server (ENOTFOUND)` && !e.message.includes('pat-SECRET'));
+  const realFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw failed(withCode('ECONNREFUSED')); };
+    await assert.rejects(ghFetch('/repos/acme/shop', {}, { token: 'ghp_Secret0000' }),
+      (e) => e.status === undefined && e.message === 'GitHub: https://api.github.com could not be reached from the server — the connection was refused (ECONNREFUSED)');
+    await assert.rejects(rawFetch('acme', 'shop', 'main', 'alerts/a.yml'),
+      (e) => e.status === undefined && e.message === 'GitHub: https://raw.githubusercontent.com could not be reached from the server — the connection was refused (ECONNREFUSED)');
+    const rawSeen = [];
+    globalThis.fetch = async (url, init) => { rawSeen.push(init.redirect); return new Response('', { status: 301, headers: { location: 'https://raw.githubusercontent.com/acme/shop-renamed/main/alerts/a.yml' } }); };
+    await assert.rejects(rawFetch('acme', 'shop', 'main', 'alerts/a.yml'),
+      (e) => e.status === 301 && e.message === 'GitHub 301 on alerts/a.yml: raw.githubusercontent.com redirected it, which the server does not follow (the repository may have moved)');
+    assert.deepEqual(rawSeen, ['manual'], 'read, not followed');
+  } finally { globalThis.fetch = realFetch; }
 });
 
 test('fetchRepositoryFiles: an Azure DevOps tree, the crawler\'s files downloaded on the branch; GitHub through raw without a token; a folder; an unknown kind', async () => {
@@ -633,5 +767,68 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
     globalThis.fetch = realFetch;
     process.stderr.write = realWrite;
     delete process.env.GITHUB_TOKEN;
+  }
+});
+
+test('a Run of a private Azure DevOps repository on a server without sign-in: the refusal asks for the person\'s token (never "fetch failed") and names the server\'s own; the person\'s token reads it; a wrong one, the server\'s refused one and an unreachable host each say so, exactly', async () => {
+  const created = await call('POST', '/api/services', { name: 'Private Ado', repository: { kind: 'ado', location: 'https://dev.azure.com/acme/Private/_git/shop' } });
+  assert.equal(created.status, 201, created.text);
+  const id = created.json.service.id;
+  assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+
+  const MINE = 'ado-pat-PersonalToken0123456789';
+  const SERVER = 'ado-pat-ServerToken0123456789';
+  const RULES = readFileSync(join(REPO, 'prometheus', 'rules.yml'), 'utf8');
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  let down = false;
+  // Azure DevOps, stubbed as it answers: the repository serves only MINE; anything else is its refusal.
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://dev.azure.com/')) return realFetch(url, init);
+    seen.push({ url: u, auth: init.headers?.Authorization ?? null, redirect: init.redirect, suppress: init.headers?.['X-TFS-FedAuthRedirect'] ?? null });
+    if (down) throw new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND dev.azure.com'), { code: 'ENOTFOUND' }) });
+    if (init.headers?.Authorization !== `Basic ${Buffer.from(`:${MINE}`).toString('base64')}`) return adoRefusal(init);
+    if (u.includes('recursionLevel=Full')) return new Response(JSON.stringify({ value: [{ gitObjectType: 'blob', path: '/alerts/api.rules.yml' }] }), { headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ content: RULES }), { headers: { 'content-type': 'application/json' } });
+  };
+  delete process.env.AZURE_DEVOPS_TOKEN;
+  const answers = [];
+  const run = async (body) => { const r = await call('POST', `/api/services/${id}/run`, body); answers.push(r); return r; };
+  try {
+    const without = await run({});
+    assert.equal(without.status, 403, without.text);
+    assert.deepEqual(without.json.repoAuth, { kind: 'ado', label: 'Azure DevOps token', refused: false });
+    assert.equal(without.json.error, `the repository could not be read: Azure DevOps 401: this repository is not public — ${REPO_AUTH_WAYS.needed('ado', { serverToken: true })}`);
+    assert.ok(without.json.error.endsWith('or AZURE_DEVOPS_TOKEN set on this server for every Run'), 'a server without sign-in: the operator\'s way is named too');
+    assert.ok(seen.every((s) => s.redirect === 'manual' && s.suppress === 'Suppress' && s.url.startsWith('https://dev.azure.com/acme/')), 'asked for a 401, never following a redirect');
+
+    seen.length = 0;
+    const withMine = await run({ repoAuth: MINE });
+    assert.equal(withMine.status, 200, withMine.text);
+    assert.deepEqual([withMine.json.scan.source, withMine.json.scan.files], ['Private/shop on Azure DevOps', 1]);
+    assert.ok(seen.length >= 2 && seen.every((s) => s.auth === `Basic ${Buffer.from(`:${MINE}`).toString('base64')}`), 'the person\'s token, as Basic, on the tree and the file');
+
+    const wrong = await run({ repoAuth: 'ado-pat-WrongToken000000000' });
+    assert.deepEqual([wrong.status, wrong.json.repoAuth], [403, { kind: 'ado', label: 'Azure DevOps token', refused: true }]);
+    assert.equal(wrong.json.error, `the repository could not be read: Azure DevOps 401: not authorised to read this repository — ${REPO_AUTH_WAYS.refused('ado')}`);
+
+    const shape = await run({ repoAuth: 'ado-pat-with-a-bell\u0007' });
+    assert.deepEqual([shape.status, shape.json.error], [400, REPO_AUTH_WAYS.shape], 'a control character is refused before anything is sent');
+
+    // The server's own token, refused: the operator's to fix — the person is not asked.
+    process.env.AZURE_DEVOPS_TOKEN = SERVER;
+    const server = await run({});
+    assert.deepEqual([server.status, server.json.repoAuth, server.json.error], [403, undefined, 'the repository could not be read: Azure DevOps 401: the token in AZURE_DEVOPS_TOKEN was refused']);
+    delete process.env.AZURE_DEVOPS_TOKEN;
+
+    down = true;
+    const unreachableRun = await run({ repoAuth: MINE });
+    assert.deepEqual([unreachableRun.status, unreachableRun.json.repoAuth, unreachableRun.json.error],
+      [502, undefined, 'the repository could not be read: Azure DevOps: https://dev.azure.com could not be reached from the server — its name does not resolve on the server (ENOTFOUND)']);
+    for (const r of answers) for (const token of [MINE, SERVER]) assert.ok(!r.text.includes(token), 'no token is ever answered');
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.AZURE_DEVOPS_TOKEN;
   }
 });

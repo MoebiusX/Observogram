@@ -20,11 +20,12 @@ const SERVER_TOKEN_VAR = Object.freeze({ github: 'GITHUB_TOKEN', ado: 'AZURE_DEV
 export const HOST_LABEL = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
 
 export const REPO_AUTH_WAYS = Object.freeze({
-  shape: 'repoAuth is your own token for the repository\'s host: one line of 1–4096 characters, no spaces',
-  needed: (kind) => (kind === 'ado'
-    ? 'it needs your own Azure DevOps token (a personal access token with Code (Read)), sent with this Run and never kept'
+  shape: 'repoAuth is your own token for the repository\'s host: one line of 1–4096 printable characters, no spaces',
+  // `serverToken`: a server without sign-in, where the operator's AZURE_DEVOPS_TOKEN reads every Run.
+  needed: (kind, { serverToken = false } = {}) => (kind === 'ado'
+    ? `it needs your own Azure DevOps token (a personal access token with Code (Read)), sent with this Run and never kept${serverToken ? ', or AZURE_DEVOPS_TOKEN set on this server for every Run' : ''}`
     : 'if it is private, run it with your own GitHub token (read access to its contents), sent with this Run and never kept'),
-  refused: (kind) => `your ${HOST_LABEL[kind] || 'repository host'} token was refused or cannot read it — check that it can read this repository`,
+  refused: (kind) => `your ${HOST_LABEL[kind] || 'repository host'} token was refused or cannot read it — check that it can read this repository${kind === 'ado' ? ' (Code (Read))' : ''}`,
   // The person is signed in to the host, and that account was refused or cannot see it.
   signedInRefused: (kind, account, { expired = false } = {}) => (expired
     ? `your ${HOST_LABEL[kind]} sign-in has ended — sign in to ${HOST_LABEL[kind]} again`
@@ -36,11 +37,12 @@ export const REPO_AUTH_WAYS = Object.freeze({
 });
 
 // The sentence a refused read ends with, from repoAuthNeed's answer.
-export function repoAuthTail(need) {
+// `serverToken`: the server has no sign-in, so its own token would read it too.
+export function repoAuthTail(need, { serverToken = false } = {}) {
   if (!need) return '';
   if (need.via === 'sign-in') return REPO_AUTH_WAYS.signedInRefused(need.kind, need.account, { expired: need.expired === true });
   if (need.refused) return REPO_AUTH_WAYS.refused(need.kind);
-  return need.signIn ? REPO_AUTH_WAYS.signIn(need.kind) : REPO_AUTH_WAYS.needed(need.kind);
+  return need.signIn ? REPO_AUTH_WAYS.signIn(need.kind) : REPO_AUTH_WAYS.needed(need.kind, { serverToken });
 }
 
 export class RepoAuthRefusal extends Error {
@@ -48,10 +50,12 @@ export class RepoAuthRefusal extends Error {
 }
 
 // The request's `repoAuth` → the token, or null when none was sent; a value
-// that is no token is refused (its text is never quoted back).
+// that is no token is refused (its text is never quoted back). Printable
+// ASCII only: a control character makes fetch refuse to build the request
+// at all, which would read as a host the server could not reach.
 export function parseRepoAuth(value) {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string' || value.length > REPO_AUTH_MAX || /\s/.test(value)) throw new RepoAuthRefusal(REPO_AUTH_WAYS.shape);
+  if (typeof value !== 'string' || value.length > REPO_AUTH_MAX || !/^[\x21-\x7e]+$/.test(value)) throw new RepoAuthRefusal(REPO_AUTH_WAYS.shape);
   return value;
 }
 
