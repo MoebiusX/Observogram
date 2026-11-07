@@ -87,7 +87,7 @@ import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
-import { RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repoAuthTail, repositoryCredential } from './repo-auth.mjs';
+import { RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repoAuthTail, repositoryCredential, signInOn } from './repo-auth.mjs';
 import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
 import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
@@ -1387,10 +1387,15 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
     const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
     const message = redactToken(e.message, credential?.token);
     process.stderr.write(`[service-run] ${service.slug}: the repository could not be read (${message})\n`);
-    const need = remote ? repoAuthNeed(service.repository.kind, credential, e.status === 401 ? 401 : status, { signIn: repoSignInOffered(service.repository.kind) }) : null;
+    // The Azure DevOps sign-in reads Azure DevOps Services only (above): an
+    // Azure DevOps Server repository is never offered it, and says so, so the
+    // row does not fall back to the host's sign-in being available.
+    const signInHere = service.repository.kind !== 'ado' || isAdoServices(service.repository.location);
+    const need = remote ? repoAuthNeed(service.repository.kind, credential, e.status === 401 ? 401 : status, { signIn: signInHere && repoSignInOffered(service.repository.kind) }) : null;
+    if (need && !signInHere) need.signIn = false;
     // GitHub no longer takes the person's sign-in: this browser forgets it.
     if (need?.expired) clearRepoLink(res, need.kind);
-    const tail = need ? ` — ${repoAuthTail(need)}` : '';
+    const tail = need ? ` — ${repoAuthTail(need, { serverToken: !signInOn() })}` : '';
     return res.status(status).json({ ok: false, error: `the repository could not be read: ${message}${tail}`, ...(need ? { repoAuth: need } : {}) });
   }
   let scan = scanReport(read);

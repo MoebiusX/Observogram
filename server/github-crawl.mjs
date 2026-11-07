@@ -8,6 +8,7 @@
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
 import { SCAN_MAX_FILE_BYTES, SCAN_WHY, scanReadsPath, scanRefusal } from '../tools/lib/crawler.mjs';
+import { unreachable } from './fetch-failure.mjs';
 
 export function parseGithubUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -170,7 +171,9 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
     ...(init.headers || {}),
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
+  let res;
+  try { res = await fetch(`https://api.github.com${path}`, { ...init, headers }); }
+  catch (e) { throw unreachable('GitHub', 'https://api.github.com', e); }
   if (!res.ok) {
     const said = githubSays(await res.text().catch(() => ''));
     const err = new Error(`GitHub ${res.status} on ${path}${said ? `: ${said}` : ''}`);
@@ -196,7 +199,15 @@ function githubSays(body) {
 // would spend in its first minute). Never sent a token.
 export async function rawFetch(owner, repo, ref, path) {
   const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref).replace(/%2F/g, '/')}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
-  const res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'error' });
+  let res;
+  try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual' }); }
+  catch (e) { throw unreachable('GitHub', url, e); }
+  // A redirect is read, never followed, and named as what it is.
+  if (res.status >= 300 && res.status < 400) {
+    const err = new Error(`GitHub ${res.status} on ${path}: raw.githubusercontent.com redirected it, which the server does not follow (the repository may have moved)`);
+    err.status = res.status;
+    throw err;
+  }
   if (!res.ok) {
     const err = new Error(`GitHub ${res.status} on ${path}`);
     err.status = res.status;

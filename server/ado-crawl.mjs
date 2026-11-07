@@ -20,6 +20,8 @@
 // with versionDescriptor.version=<branch> when the repository names one
 // (else the repository's default branch).
 
+import { unreachable } from './fetch-failure.mjs';
+
 const SERVICES_HOST = /^(?:dev\.azure\.com|[a-z0-9][a-z0-9-]*\.visualstudio\.com)$/i;
 const SEGMENT = /^[^/?#\s][^/?#]*$/;
 const API_VERSION = '7.0';
@@ -89,10 +91,56 @@ export function parseAdoUrl(input) {
   return { base, project, repo, ref, location };
 }
 
+// A refused Entra ID sign-in, when the tenants say why: Azure DevOps's
+// refusal names the tenant the organization signs in through
+// (`WWW-Authenticate: Bearer authorization_uri=https://login.microsoftonline.com/<tenant>`),
+// and the sign-in's access token names its own (the JWT's `tid`, read, never
+// verified: it only words the sentence). → { organization, yours } when both
+// are known and differ, else null. Tenant ids are not secrets; the token
+// itself never leaves this function.
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const AUTHORIZATION_URI = /authorization_uri="?https:\/\/login\.microsoftonline\.com\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=["/\s,]|$)/gi;
+export function tenantMismatch(wwwAuthenticate, token) {
+  const found = [...String(wwwAuthenticate || '').matchAll(AUTHORIZATION_URI)];
+  const organization = found.length ? found[0][1].toLowerCase() : null;
+  let yours = null;
+  try {
+    const payload = JSON.parse(Buffer.from(String(token || '').split('.')[1] || '', 'base64url').toString('utf8'));
+    if (typeof payload?.tid === 'string' && TENANT_ID.test(payload.tid)) yours = payload.tid.toLowerCase();
+  } catch { /* not a JWT: nothing to compare */ }
+  return organization && yours && organization !== yours ? { organization, yours } : null;
+}
+
+// Whether a redirect is Azure DevOps's way to its sign-in page: a Location
+// on its identity service's /_signin, or Entra ID's sign-in, or a challenge
+// beside it. Any other redirect (a moved host, a proxy) is not a refusal.
+export function isSignInRedirect(location, base, wwwAuthenticate = null) {
+  if (wwwAuthenticate) return true;
+  let u;
+  try { u = new URL(String(location || ''), base); } catch { return false; }
+  if (u.protocol !== 'https:') return false;
+  return (/\.vssps\.visualstudio\.com$/i.test(u.hostname) && /^\/_signin\b/i.test(u.pathname)) || /^login\.microsoftonline\.com$/i.test(u.hostname);
+}
+
 // The one authenticated wrapper around the Azure DevOps REST API. A refused
-// host never reaches fetch. Azure DevOps answers an unauthenticated call
-// with 203 and a sign-in page, or 401: both read as "the token".
-// tokenSource ('request' | 'link' | 'server' | 'none') words a refusal for whoever can fix it.
+// host never reaches fetch.
+//
+// How Azure DevOps refuses a read it will not serve (no token, a wrong one, a
+// sign-in it does not take): with `X-TFS-FedAuthRedirect: Suppress`, sent on
+// every call, a 401 with JSON (TF400813) — measured against dev.azure.com
+// on 2026-11-07. Without it, Services answers a 302 to its sign-in page
+// (https://<x>.vssps.visualstudio.com/_signin), and an older host may answer
+// 203 with a sign-in page: all of these read as the token. A redirect is read,
+// never followed, so the token goes to the repository's host and nowhere
+// else; a redirect anywhere else is named as one. A host the server cannot
+// reach says why (server/fetch-failure.mjs).
+//
+// The sentence is the fact, for whoever can fix it; the Run's tail
+// (server/repo-auth.mjs repoAuthTail) says what the person can do here:
+//   none     "this repository is not public"
+//   request  "not authorised to read this repository"
+//   link     the same, and the two tenants when they differ
+//   server   "the token in AZURE_DEVOPS_TOKEN was refused" (no tail: the operator's to fix)
 // A personal access token goes as Basic; the person's Entra ID sign-in
 // ('link', server/repo-sign-in.mjs) as a Bearer token.
 export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSource = token ? 'server' : 'none' } = {}) {
@@ -103,16 +151,27 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
     err.status = 400;
     throw err;
   }
-  const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity', 'X-TFS-FedAuthRedirect': 'Suppress' };
   if (token) headers.Authorization = tokenSource === 'link' ? `Bearer ${token}` : `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
-  const res = await fetchImpl(url, { headers, redirect: 'error' });
+  let res;
+  try { res = await fetchImpl(url, { headers, redirect: 'manual' }); }
+  catch (e) { throw unreachable('Azure DevOps', url, e); }
   const ct = res.headers.get('content-type') || '';
-  if (res.status === 203 || res.status === 401 || (res.ok && !ct.includes('json'))) {
-    const why = tokenSource === 'request' ? 'your Azure DevOps token was refused (it needs Code (Read) on this repository)'
-      : tokenSource === 'link' ? 'your Azure DevOps sign-in was refused (that account cannot read this repository\'s organization or project)'
+  const www = res.headers.get('www-authenticate');
+  const redirected = res.status >= 300 && res.status < 400;
+  if (redirected && !isSignInRedirect(res.headers.get('location'), url, www)) {
+    let to = 'another address';
+    const location = res.headers.get('location');
+    if (location) { try { to = new URL(location, url).origin; } catch { /* no usable Location */ } }
+    throw new Error(`Azure DevOps ${res.status}: ${new URL(url).origin} redirects this read to ${to}, which the server does not follow — give the repository's address on the host that serves it`);
+  }
+  if (res.status === 203 || res.status === 401 || redirected || (res.ok && !ct.includes('json'))) {
+    const tenants = tokenSource === 'link' ? tenantMismatch(www, token) : null;
+    const fact = tokenSource === 'request' ? 'not authorised to read this repository'
+      : tokenSource === 'link' ? `not authorised to read this repository${tenants ? `: this organization signs in through Entra tenant ${tenants.organization}, and your sign-in is for tenant ${tenants.yours}` : ''}`
       : token ? 'the token in AZURE_DEVOPS_TOKEN was refused'
-        : 'sign-in needed — give your own Azure DevOps token (a personal access token with Code (Read)), or, on a server without sign-in, set AZURE_DEVOPS_TOKEN';
-    const err = new Error(`Azure DevOps ${res.status === 203 ? 401 : res.status}: ${why}`);
+        : 'this repository is not public';
+    const err = new Error(`Azure DevOps 401: ${fact}`);
     err.status = 401;
     throw err;
   }

@@ -1153,7 +1153,8 @@ const HOST_LABEL = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
 function authAsk(need, canWrite, repoSignIn = null) {
   if (!canWrite || !need || typeof need !== 'object' || !HOST_LABEL[need.kind]) return null;
   const host = HOST_LABEL[need.kind];
-  const offered = !!repoSignIn && (need.signIn === true || repoSignIn[need.kind]?.available === true);
+  // `signIn: false` from the server: this repository's host takes no sign-in (an Azure DevOps Server).
+  const offered = !!repoSignIn && need.signIn !== false && (need.signIn === true || repoSignIn[need.kind]?.available === true);
   const signIn = offered ? { kind: need.kind, label: `Sign in to ${host}` } : null;
   let text;
   if (need.via === 'sign-in') {

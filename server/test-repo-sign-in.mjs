@@ -73,12 +73,33 @@ const ADO_ID = 'ado-app-00000000';
 const ADO_SECRET = 'ado-client-secret-0000000000';
 const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 // An Entra ID access token as large as real ones get (with group claims): more than one cookie holds.
-const ADO_TOKEN = `${b64u({ alg: 'RS256', typ: 'JWT' })}.${b64u({ aud: '499b84ac-1321-427f-aa17-267ca6975798', upn: 'ada@contoso.example', groups: 'g'.repeat(3200) })}.${'s'.repeat(342)}`;
+// `tid` is the tenant the person signed in to; the organization below signs in through another
+// (host.adoOrgTenant). Tenant ids with hex letters, so their case is tested too.
+const PERSON_TENANT = 'ffffffff-1111-4222-8333-444444444444';
+const ORG_TENANT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const ADO_TOKEN = `${b64u({ alg: 'RS256', typ: 'JWT' })}.${b64u({ aud: '499b84ac-1321-427f-aa17-267ca6975798', upn: 'ada@contoso.example', tid: PERSON_TENANT, groups: 'g'.repeat(3200) })}.${'s'.repeat(342)}`;
 
 const realFetch = globalThis.fetch;
 const hostCalls = [];
-const host = { ghRevoked: false, ghExchange: null, adoExchange: null };
+const host = { ghRevoked: false, ghExchange: null, adoExchange: null, adoRefuses: false, adoOrgTenant: ORG_TENANT };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+// How Azure DevOps Services refuses a read it will not serve — no token, a wrong one, or a
+// sign-in it does not take (measured against dev.azure.com, 2026-11-07): asked with
+// `X-TFS-FedAuthRedirect: Suppress`, a 401 with JSON (TF400813); otherwise a redirect to its
+// sign-in page, on which Node's fetch throws "fetch failed" under redirect: 'error'. Both name
+// the tenant the organization signs in through.
+function adoRefusal(headers, init) {
+  const www = `Bearer authorization_uri=https://login.microsoftonline.com/${host.adoOrgTenant.toUpperCase()}, Basic realm="https://tfsprodweu5.app.visualstudio.com/"`;
+  if (headers.get('x-tfs-fedauthredirect') === 'Suppress') {
+    return new Response(JSON.stringify({ message: "TF400813: The user '' is not authorized to access this resource." }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'www-authenticate': www } });
+  }
+  if (init.redirect === 'error') throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+  return new Response('<html>Azure DevOps sign-in</html>', {
+    status: 302,
+    headers: { 'content-type': 'text/html; charset=utf-8', location: 'https://spsprodweu5.vssps.visualstudio.com/_signin?realm=dev.azure.com&reply_to=https%3A%2F%2Fdev.azure.com%2Fcontoso', 'www-authenticate': www },
+  });
+}
+
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   if (u.startsWith('http://127.0.0.1')) return realFetch(url, init);
@@ -86,7 +107,7 @@ globalThis.fetch = async (url, init = {}) => {
   const auth = headers.get('authorization');
   const method = init.method || 'GET';
   const body = init.body instanceof URLSearchParams ? init.body.toString() : (typeof init.body === 'string' ? init.body : null);
-  hostCalls.push({ url: u, method, auth, body });
+  hostCalls.push({ url: u, method, auth, body, suppress: headers.get('x-tfs-fedauthredirect') });
   if (u === 'https://github.com/login/oauth/access_token') return json(host.ghExchange(new URLSearchParams(body)));
   if (u.startsWith('https://login.microsoftonline.com/contoso.example/oauth2/v2.0/token')) return json(host.adoExchange(new URLSearchParams(body)));
   if (u.startsWith('https://api.github.com/')) {
@@ -100,10 +121,12 @@ globalThis.fetch = async (url, init = {}) => {
     return json({ message: 'Not Found' }, 404);
   }
   if (u.startsWith('https://dev.azure.com/contoso/shop/_apis/git/repositories/api/items')) {
-    if (auth !== `Bearer ${ADO_TOKEN}`) return new Response('', { status: 401 });
+    if (auth !== `Bearer ${ADO_TOKEN}` || host.adoRefuses) return adoRefusal(headers, init);
     if (u.includes('recursionLevel=Full')) return json({ value: [{ gitObjectType: 'blob', path: '/alerts/api.rules.yml' }] });
     return json({ content: RULES });
   }
+  // An Azure DevOps Server (listed in OBSERVOGRAM_ADO_ORIGINS by the test): it refuses what it is not given a token for.
+  if (u.startsWith('https://tfs.example.test/')) return json({ message: "TF400813: The user '' is not authorized to access this resource." }, 401);
   return new Response('not stubbed', { status: 599 });
 };
 
@@ -425,11 +448,29 @@ test('Azure DevOps: Entra ID with PKCE and the Azure DevOps scope; a token large
   const reads = hostCalls.filter((c) => c.url.startsWith('https://dev.azure.com/'));
   assert.ok(reads.length >= 2 && reads.every((c) => c.auth === `Bearer ${ADO_TOKEN}`), `the person's Entra ID token as Bearer (${run.status} ${run.text.slice(0, 200)})`);
   assert.equal(run.json?.repoAuth, undefined, 'the repository read; whatever the live side said');
+  assert.ok(reads.every((c) => c.url.startsWith('https://dev.azure.com/contoso/')), 'no redirect followed: the token went to the repository\'s host only');
+
+  // Azure DevOps refuses the signed-in account, as it does (a 401 when asked to suppress its
+  // redirect, which the reader always asks): the Run states the fact once, names both tenants
+  // when they differ, and its tail asks for an account that can.
+  host.adoRefuses = true;
+  try {
+    const refused = await browse(ada, 'POST', `/api/services/${id}/run`, { body: { env: 'prod' }, headers: API });
+    assert.deepEqual([refused.status, refused.json.repoAuth], [403, { kind: 'ado', label: 'Azure DevOps token', refused: true, signIn: true, via: 'sign-in', account: 'ada@contoso.example' }], refused.text);
+    assert.equal(refused.json.error, `the repository could not be read: Azure DevOps 401: not authorised to read this repository: this organization signs in through Entra tenant ${ORG_TENANT}, and your sign-in is for tenant ${PERSON_TENANT} — ${REPO_AUTH_WAYS.signedInRefused('ado', 'ada@contoso.example')}`);
+    // The same tenant (named in another case by the host): the account, not the tenant, is the reason.
+    host.adoOrgTenant = PERSON_TENANT;
+    const sameTenant = await browse(ada, 'POST', `/api/services/${id}/run`, { body: { env: 'prod' }, headers: API });
+    assert.deepEqual([sameTenant.status, sameTenant.json.repoAuth?.via], [403, 'sign-in']);
+    assert.equal(sameTenant.json.error, `the repository could not be read: Azure DevOps 401: not authorised to read this repository — ${REPO_AUTH_WAYS.signedInRefused('ado', 'ada@contoso.example')}`);
+    const asked = hostCalls.filter((c) => c.url.startsWith('https://dev.azure.com/'));
+    assert.ok(asked.every((c) => c.suppress === 'Suppress'), 'every call asks Azure DevOps for its 401');
+  } finally { host.adoRefuses = false; host.adoOrgTenant = ORG_TENANT; }
 
   const bare = new Map([...ada].filter(([k]) => k === 'observogram_session'));
   const without = await browse(bare, 'POST', `/api/services/${id}/run`, { body: { env: 'prod' }, headers: API });
   assert.deepEqual([without.status, without.json.repoAuth], [403, { kind: 'ado', label: 'Azure DevOps token', refused: false, signIn: true }]);
-  assert.ok(without.json.error.endsWith(` — ${REPO_AUTH_WAYS.signIn('ado')}`), without.json.error);
+  assert.equal(without.json.error, `the repository could not be read: Azure DevOps 401: this repository is not public — ${REPO_AUTH_WAYS.signIn('ado')}`, 'a server with sign-in: the way is to sign in, never AZURE_DEVOPS_TOKEN');
 
   // Azure DevOps Server takes a personal access token: the sign-in is never sent there.
   const user = getUserByLogin(currentStore(), 'ada');
@@ -443,6 +484,19 @@ test('Azure DevOps: Entra ID with PKCE and the Azure DevOps scope; a token large
       (e) => e.status === 400 && /an Azure DevOps sign-in reads Azure DevOps Services only/.test(e.message),
     );
     assert.equal(hostCalls.length, 0, 'refused before a request is made');
+
+    // A Run of a Server repository by a person signed in to Azure DevOps: no sign-in is sent,
+    // none is offered (signIn: false, so the row does not fall back to /auth/me's), the token is asked for.
+    const onServer = await browse(ada, 'POST', '/api/services', { body: { name: 'Ado Server Shop', repository: { kind: 'ado', location: 'https://tfs.example.test/DefaultCollection/shop/_git/api' } }, headers: API });
+    assert.equal(onServer.status, 201, onServer.text);
+    const sid = onServer.json.service.id;
+    assert.equal((await browse(ada, 'POST', `/api/services/${sid}/environments`, { body: { name: 'prod', mcpEndpointId: endpointId }, headers: API })).status, 201);
+    hostCalls.length = 0;
+    const serverRun = await browse(ada, 'POST', `/api/services/${sid}/run`, { body: { env: 'prod' }, headers: API });
+    assert.deepEqual([serverRun.status, serverRun.json.repoAuth], [403, { kind: 'ado', label: 'Azure DevOps token', refused: false, signIn: false }], serverRun.text);
+    assert.equal(serverRun.json.error, `the repository could not be read: Azure DevOps 401: this repository is not public — ${REPO_AUTH_WAYS.needed('ado')}`);
+    const toServer = hostCalls.filter((c) => c.url.startsWith('https://tfs.example.test/'));
+    assert.ok(toServer.length >= 1 && toServer.every((c) => c.auth === null), 'the sign-in is never sent to an Azure DevOps Server');
   } finally { delete process.env.OBSERVOGRAM_ADO_ORIGINS; }
   assert.equal(readRepoLink({ headers: { cookie: cookieHeader } }, 'ado', { ...user, sessionEpoch: user.sessionEpoch + 1 }), null);
   assert.equal(readRepoLink({ headers: { cookie: cookieHeader.replace(/observogram_repo_ado_1=[^;]+/, 'observogram_repo_ado_1=xyz') } }, 'ado', user), null, 'a part missing or changed: no sign-in');

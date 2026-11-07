@@ -1759,6 +1759,9 @@ test('a host that offers sign-in: the row asks to sign in first, then for a toke
   assert.equal(serviceListModel({ ...base, results: { '1:prod': { error: 'x', repoAuth: ask } } }).rows[0].auth.signIn, undefined, 'no repoSignIn passed: no Sign in button, whatever the server offers');
   assert.equal(serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, signIn: undefined } } } }).rows[0].auth.signIn.label, 'Sign in to GitHub', '/auth/me says GitHub offers it');
   assert.equal(serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { kind: 'ado', label: 'Azure DevOps token', refused: false } } } }).rows[0].auth.signIn, undefined, 'Azure DevOps offers none here');
+  const adoOffered = { ...offered, ado: { available: true, signedIn: false, account: null } };
+  const server = serviceListModel({ ...base, repoSignIn: adoOffered, results: { '1:prod': { error: 'x', repoAuth: { kind: 'ado', label: 'Azure DevOps token', refused: false, signIn: false } } } }).rows[0].auth;
+  assert.deepEqual([server.signIn, server.text], [undefined, 'Azure DevOps reads this repository with your own token. It is sent with this tab\'s Runs only and never kept on the server.'], 'an Azure DevOps Server repository (signIn: false): the token only, though /auth/me offers the Azure DevOps sign-in');
 
   const cannot = serviceListModel({ ...base, repoSignIn: offered, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true, via: 'sign-in', account: 'ada-gh' } } } });
   assert.equal(cannot.rows[0].auth.text, 'You are signed in to GitHub as ada-gh, and that account cannot read this repository. Sign in as one that can, or give a token that can.');
