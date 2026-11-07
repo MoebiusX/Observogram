@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.8.13 — 2026-11-07
+
+**A Run's repository reads are checked against the real GitHub and Azure DevOps, not only stubs.** The 0.8.12 fault passed every stubbed test: Azure DevOps refuses with a redirect unless asked for its 401, and the stubs sent the 401 unasked. This release adds a suite that asks the hosts themselves, a weekly workflow that runs it, and the guide to the test repositories it reads.
+
+### Added
+- **`npm run test:live:repos`** (`tools/test-live-repos.mjs`, a `node --test` suite, not part of `npm test`).
+  - **Setup.** It runs the studio in process with sign-in on. The test user is made by `npm run users -- add` with a password made for the run, and a fake MCP stands in as the live side. The real hosts sit behind `fetchRepositoryFiles` and `POST /api/services/:id/run`.
+  - **No token is printed.** Every request the readers send is recorded by host and by which token it carried, as a label. Every text the suite shows is masked: each token, and an Azure DevOps token's Basic form, which gives the token back.
+
+  The checks:
+  - **the fixture:** a folder Run of `tools/fixtures/live-repo` reads three files, one of each kind, into a valid pack. That is what each host must return. It needs no network.
+  - **GitHub, public:** a public repository (`MoebiusX/Observogram`, or `OBSERVOGRAM_LIVE_GITHUB_PUBLIC_REPO`) reads with no token. Nothing carries an `Authorization` header, and the files come from raw.githubusercontent.com. A spent quota without a token skips the check rather than failing it.
+  - **GitHub, private** (`OBSERVOGRAM_LIVE_GITHUB_REPO`): no token is answered 404 with the way to give one. A made-up token is answered *401 … Bad credentials* as refused, which is GitHub's real answer; the stubs model a wrong token as 404, and the row treats both alike. With `OBSERVOGRAM_LIVE_GITHUB_TOKEN`, the Run scans the fixture, the same scan as the folder, byte for byte. The token goes to api.github.com only, and the next Run without it has none.
+  - **Azure DevOps** (`OBSERVOGRAM_LIVE_ADO_REPO`, `OBSERVOGRAM_LIVE_ADO_TOKEN`): the same. No token is *this repository is not public*, and a made-up token is *not authorised to read this repository*. Every call asks for the 401 and follows no redirect.
+  - **unreachable:** a host whose name does not resolve is answered 502 with its reason, and no token is asked for.
+  - **no leak:** no token or password appears in a log line, an answer, a request's URL, another header or a body, or anything the live side was sent. Each real token went only to its repository's host.
+
+  How a check that cannot run says so:
+  - **A check whose values are not set** is skipped, and the skip names the missing variable.
+  - **A value that cannot be what it names** fails with what it must be: a GitHub URL instead of `owner/name`, or an Azure DevOps URL off dev.azure.com.
+  - **A spent GitHub quota** skips a check that reads with no token; it does not fail it.
+
+  The refusal checks pass against the real hosts today, run with made-up tokens only. The private reads wait for the test repositories.
+- **`.github/workflows/live-repos.yml`:**
+  - **When it runs:** on Mondays, on demand, and on pull requests into develop or main that change a reader, the Run route (`server/index.mjs`) or the suite's harness.
+  - **When it does not:** for a fork's pull request, or for Dependabot's, which GitHub gives no Actions secrets.
+  - **Where the values come from:** the repository names from Actions variables, the tokens from secrets. The run summary says which were set, never their values.
+- **`docs/LIVE_REPO_TESTS.md`:**
+  - what to create: a private GitHub repository with a fine-grained Contents: Read-only token, and an Azure DevOps organization on the free tier (creating one now asks for an Azure subscription) with a private repository and a Code (Read) token;
+  - optionally, the app registrations for checking the sign-ins by hand;
+  - where each value goes, how to run the suite locally, and what each failure means.
+- **`tools/fixtures/live-repo`:** the test repositories' content. It has a Prometheus rules file, a Grafana dashboard and an OpenTelemetry collector config, plus a README the scan does not read.
+
+### Tests
+- **`server/test-service-run.mjs`:** the fixture reads to three files, one of each kind, and a valid pack. A change to how a scan reads it fails here, before the weekly run.
+- Suite total 1762 → 1763.
+
 ## 0.8.12 — 2026-11-07
 
 **An Azure DevOps repository that is not public asks for a sign-in or a token, and a host the server cannot reach says why.** Azure DevOps Services refuses a read it will not serve with a redirect to its sign-in page, never a 401. That covers no token, a wrong one, and a sign-in it does not take (measured against dev.azure.com). The reader refused redirects, so Node's fetch threw, and a Run answered *502 the repository could not be read: fetch failed*. The service row never asked for a sign-in or a token, on a server with sign-in as on one without.

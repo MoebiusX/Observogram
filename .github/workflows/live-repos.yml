@@ -1,0 +1,108 @@
+name: live-repos
+
+# Reads the GitHub and Azure DevOps test repositories through the studio's
+# real readers (tools/test-live-repos.mjs), the way a signed-in person's Run
+# does. The stubbed suites in `npm test` say what we believe each host
+# answers; this asks the hosts. docs/LIVE_REPO_TESTS.md says what to create
+# and where each value goes:
+#
+#   Variables (Settings → Secrets and variables → Actions → Variables)
+#     OBSERVOGRAM_LIVE_GITHUB_REPO   owner/name of the private GitHub test repository
+#     OBSERVOGRAM_LIVE_ADO_REPO      https://dev.azure.com/<org>/<project>/_git/<repo>
+#   Secrets (… → Actions → Secrets)
+#     OBSERVOGRAM_LIVE_GITHUB_TOKEN  fine-grained, Contents: Read on that repository only
+#     OBSERVOGRAM_LIVE_ADO_TOKEN     a personal access token with Code (Read) only
+#
+# A host whose values are not set is skipped, and the log names the missing
+# variable. The public GitHub read and the unreachable-host check need
+# nothing and always run.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 06:17 UTC: an expired token or a host that changed its answers
+    # shows within a week.
+    - cron: '17 6 * * 1'
+  # A change to a reader, to the Run route that words its answers
+  # (server/index.mjs), or to the suite's harness is checked against the
+  # real hosts before it merges.
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - server/ado-crawl.mjs
+      - server/github-crawl.mjs
+      - server/fetch-failure.mjs
+      - server/repo-auth.mjs
+      - server/repo-sign-in.mjs
+      - server/repo-sources.mjs
+      - server/index.mjs
+      - server/service-admin.mjs
+      - server/fixtures/serve-child.mjs
+      - server/fixtures/fake-mcp.mjs
+      - tools/user-admin.mjs
+      - tools/test-live-repos.mjs
+      - tools/fixtures/live-repo/**
+      - .github/workflows/live-repos.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-repos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    # Never for a pull request from a fork: its code would run with the
+    # repository's values (GitHub withholds the secrets from one anyway).
+    # Nor for Dependabot's: GitHub gives its runs Dependabot secrets only, so
+    # the reads would skip and the run would pass without them; the weekly
+    # run covers an action bump. The pull request's author, not the actor, so
+    # a re-run by a person does not change it.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read the test repositories (tools/test-live-repos.mjs)
+        env:
+          OBSERVOGRAM_LIVE_GITHUB_REPO: ${{ vars.OBSERVOGRAM_LIVE_GITHUB_REPO }}
+          OBSERVOGRAM_LIVE_GITHUB_TOKEN: ${{ secrets.OBSERVOGRAM_LIVE_GITHUB_TOKEN }}
+          OBSERVOGRAM_LIVE_ADO_REPO: ${{ vars.OBSERVOGRAM_LIVE_ADO_REPO }}
+          OBSERVOGRAM_LIVE_ADO_TOKEN: ${{ secrets.OBSERVOGRAM_LIVE_ADO_TOKEN }}
+        run: npm run test:live:repos
+
+      # Which hosts this run could read: whether each value is set, never a value.
+      - name: Say which hosts were set up
+        if: always()
+        env:
+          GITHUB_REPO_SET: ${{ vars.OBSERVOGRAM_LIVE_GITHUB_REPO != '' }}
+          GITHUB_TOKEN_SET: ${{ secrets.OBSERVOGRAM_LIVE_GITHUB_TOKEN != '' }}
+          ADO_REPO_SET: ${{ vars.OBSERVOGRAM_LIVE_ADO_REPO != '' }}
+          ADO_TOKEN_SET: ${{ secrets.OBSERVOGRAM_LIVE_ADO_TOKEN != '' }}
+        run: |
+          mark() { if [ "$1" = "true" ]; then echo "set"; else echo "**not set** — skipped"; fi; }
+          {
+            echo "### Live repository reads"
+            echo ""
+            echo "| Value | |"
+            echo "|---|---|"
+            echo "| \`OBSERVOGRAM_LIVE_GITHUB_REPO\` (variable) | $(mark "$GITHUB_REPO_SET") |"
+            echo "| \`OBSERVOGRAM_LIVE_GITHUB_TOKEN\` (secret) | $(mark "$GITHUB_TOKEN_SET") |"
+            echo "| \`OBSERVOGRAM_LIVE_ADO_REPO\` (variable) | $(mark "$ADO_REPO_SET") |"
+            echo "| \`OBSERVOGRAM_LIVE_ADO_TOKEN\` (secret) | $(mark "$ADO_TOKEN_SET") |"
+            echo ""
+            echo "docs/LIVE_REPO_TESTS.md says what to create."
+          } >> "$GITHUB_STEP_SUMMARY"

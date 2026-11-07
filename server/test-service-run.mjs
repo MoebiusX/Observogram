@@ -315,6 +315,21 @@ test('fetchRepositoryFiles: an Azure DevOps tree, the crawler\'s files downloade
   await assert.rejects(fetchRepositoryFiles({ kind: 'svn', location: 'x' }), (e) => e.status === 400);
 });
 
+// The live suite's test repositories hold tools/fixtures/live-repo
+// (tools/test-live-repos.mjs, docs/LIVE_REPO_TESTS.md): a change to how a
+// scan reads or classifies it shows here, before the weekly live run does.
+test('the live-repo fixture, what the live suite\'s test repositories hold: three files read, one of each kind, a valid pack; its README is not read', async () => {
+  const { crawlFiles, scanReport } = await import('../tools/lib/crawler.mjs');
+  const { validateCanonical, SPEC_SCHEMA_PATH } = await import('../tools/lib/validator.mjs');
+  const fixture = join(ROOT, 'tools', 'fixtures', 'live-repo');
+  const read = await fetchRepositoryFiles({ kind: 'path', location: fixture, ref: null });
+  assert.deepEqual(Object.keys(read.files), ['grafana/dashboards/checkout.json', 'otel/collector.yaml', 'prometheus/rules.yml']);
+  const { canonical, summary } = crawlFiles(read.files, { repoName: 'checkout', environment: 'prod' });
+  const scan = scanReport(read, summary);
+  assert.deepEqual([scan.files, scan.candidates, scan.skipped, scan.byKind, scan.unclassified], [3, 3, 0, { 'grafana-dashboard': 1, 'otel-collector': 1, 'prometheus-rules': 1 }, 0]);
+  assert.deepEqual(validateCanonical(canonical, JSON.parse(readFileSync(join(ROOT, SPEC_SCHEMA_PATH), 'utf8'))), []);
+});
+
 // ---------- the route ----------
 
 const { start } = await import('./index.mjs');

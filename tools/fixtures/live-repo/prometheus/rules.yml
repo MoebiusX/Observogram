@@ -1,0 +1,26 @@
+groups:
+  - name: checkout.slo
+    interval: 30s
+    rules:
+      - record: checkout:availability:ratio_5m
+        expr: sum(rate(http_server_request_duration_seconds_count{service_name="checkout",http_response_status_code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count{service_name="checkout"}[5m]))
+      - record: checkout:latency:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket{service_name="checkout"}[5m])) by (le))
+  - name: checkout.alerts
+    rules:
+      - alert: CheckoutAvailabilityLow
+        expr: checkout:availability:ratio_5m < 0.99
+        for: 5m
+        labels:
+          severity: critical
+          team: checkout
+        annotations:
+          summary: "checkout answers fewer than 99% of requests without a server error"
+      - alert: CheckoutLatencyHigh
+        expr: checkout:latency:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: checkout
+        annotations:
+          summary: "checkout p95 latency above 500ms for 10m"

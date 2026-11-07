@@ -1,0 +1,35 @@
+{
+  "uid": "checkout-overview",
+  "title": "Checkout overview",
+  "tags": ["checkout"],
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(http_server_request_duration_seconds_count{service_name=\"checkout\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "p95 latency",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "checkout:latency:p95_5m" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Availability",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "checkout:availability:ratio_5m" }
+      ]
+    }
+  ]
+}

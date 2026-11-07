@@ -1,6 +1,6 @@
 {
   "name": "observogram",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.5 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
@@ -113,6 +113,7 @@
     "test:backend:live:strict": "node tools/test-backend-live.mjs --strict",
     "test:stack:live": "node tools/test-stack-live.mjs",
     "test:stack:live:strict": "node tools/test-stack-live.mjs --strict",
+    "test:live:repos": "node --test tools/test-live-repos.mjs",
     "test:retrofeed": "node tools/test-retrofeed.mjs",
     "test:store": "node --test server/test-store.mjs server/test-store-guards.mjs server/test-store-import.mjs server/test-store-boot.mjs server/test-store-ops.mjs",
     "test:store:prestore": "node tools/test-store-prestore-live.mjs",
