@@ -14,6 +14,17 @@ export function escapeHtml(s) {
     .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
+// A journey's Pack A or Pack B as the journeys list and the Neuron show it
+// (GET /api/journeys' packA / packARef): a registered pack by its label, its
+// id and file in the title — never a server path — else the source as the
+// definition gives it (crawl:, mcp:, a file outside the workspace).
+export function packSourceHtml(source, ref = null) {
+  if (ref && typeof ref.label === 'string' && ref.label) {
+    return `<code title="${escapeHtml([ref.id, source].filter(Boolean).join(' · '))}">${escapeHtml(ref.label)}</code>`;
+  }
+  return `<code>${escapeHtml(source || '?')}</code>`;
+}
+
 // Transient status message in the bottom toast. kind: '' | 'error' | 'ok' …
 export function toast(message, kind = '') {
   const el = $('#toast');

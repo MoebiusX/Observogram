@@ -172,12 +172,23 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    const err = new Error(`GitHub ${res.status} on ${path}: ${body.slice(0, 200)}`);
+    const said = githubSays(await res.text().catch(() => ''));
+    const err = new Error(`GitHub ${res.status} on ${path}${said ? `: ${said}` : ''}`);
     err.status = res.status;
     throw err;
   }
   return res;
+}
+
+// What a failed GitHub REST call says, for a sentence a person reads: the
+// JSON body's `message` ("Not Found", "Bad credentials") — never the body
+// itself, with its documentation_url and status — else the text, on one
+// line. At most 200 characters.
+function githubSays(body) {
+  const text = String(body ?? '');
+  let message = null;
+  try { const j = JSON.parse(text); if (j && typeof j.message === 'string') message = j.message; } catch { /* not JSON */ }
+  return (message ?? text).replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 // A public file's bytes from raw.githubusercontent.com — outside the REST

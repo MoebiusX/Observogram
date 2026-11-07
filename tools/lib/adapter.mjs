@@ -997,9 +997,11 @@ function adaptImports(canonical) {
 
 function pad(n) { return String(n).padStart(2, '0'); }
 
+// 0.999 → "99.9%", 0.9 → "90%", 1 → "100%": only the zeros after a decimal
+// point go (the integer's own zeros are digits).
 function formatPct(objective) {
   if (typeof objective !== 'number') return '?';
-  return (objective * 100).toFixed(2).replace(/\.00$/, '').replace(/\.?0+$/, '') + '%';
+  return (objective * 100).toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1') + '%';
 }
 
 function stripRefPrefix(s) {

@@ -333,9 +333,14 @@ function liveGradeLines(run, { against, where, now }) {
   // The engine scores this criterion by the integrity itself (0.85 of a
   // point at 85 in 100) and calls it met at the bar: the mark follows the
   // bar, the points follow the integrity, above the bar too.
+  // The integrity is the mean share of each promise's LINKS that hold; the
+  // board's chains strip counts the promises whose every link holds — the
+  // sentence says which it counts, so 93 in 100 beside "7 of 18" reads as
+  // two measures, not a contradiction.
+  const promises = Number(run.traceability.declaredTotal);
   return [
     { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
-      text: `Of what the repository promises, ${Math.round(pct)} in 100 holds up ${where}; the bar is ${GRADE_BAR}.` },
+      text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
       text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
         : dated ? `The ${picture} was more than a day old when it was checked.`
@@ -793,7 +798,9 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const integrity = Number(t.integrityPct);
   const chains = total ? {
     total, intact: n(t.intact), partial: n(t.partial), broken: n(t.broken), integrityPct: Number.isFinite(integrity) ? integrity : null,
-    sentence: `${n(t.intact)} of ${total} promises hold end to end${n(t.partial) ? `, ${n(t.partial)} in part` : ''}.`,
+    // Whole promises: every link holds (intact), a link runs differently
+    // (partial), a link the promise rests on is missing (broken).
+    sentence: `${n(t.intact)} of ${total} promises hold in every link${n(t.partial) ? `, ${n(t.partial)} in part` : ''}${n(t.broken) ? `, ${n(t.broken)} broken` : ''}.`,
   } : null;
   const pct = Number(d.alignmentPct);
   // A live side that answered only in part (a probe family failed) is said
@@ -1163,6 +1170,20 @@ function authAsk(need, canWrite, repoSignIn = null) {
   return { kind: need.kind, label: `${host} token`, refused: need.refused === true, text, ...(signIn ? { signIn } : {}) };
 }
 
+// A repository kind's hint on this server: a host that offers sign-in (and
+// the person signed in to this studio, which is when the page passes
+// `repoSignIn`) is named with it — the hint never mentions only a token where
+// Sign in is the first way offered.
+function repositoryHint(kind, repoSignIn) {
+  const host = HOST_LABEL[kind.kind];
+  const s = host && repoSignIn && typeof repoSignIn === 'object' ? repoSignIn[kind.kind] : null;
+  if (!s || s.available !== true) return kind.hint;
+  const who = s.signedIn && s.account ? ` (you are signed in to ${host} as ${s.account})` : '';
+  return kind.kind === 'github'
+    ? `A public repository, or a private one read as you${who}: sign in to GitHub, or give your own GitHub token, when you run it.`
+    : `Read as you${who}: sign in to Azure DevOps, or give your own token (Code (Read)), when you run it.`;
+}
+
 // ---------- the Add a service form ----------
 //
 // The form's state is the host's: { open, mode: 'add' | 'edit', serviceId, envFixed, values, saving,
@@ -1226,18 +1247,21 @@ export function formProblems(values = {}) {
   return out;
 }
 
-// formModel(form, { endpoints, register, access, folders, uploads, now }) → what the renderer draws:
+// formModel(form, { endpoints, register, access, folders, uploads, repoSignIn, now }) → what the renderer draws:
 //   register  GET /api/mcp-endpoints' policy.register ({ allowed, why }) — may a new endpoint be registered here
 //   folders   loadServiceListFacts' `folders` ({ allowed, why }) — may a folder be picked on the server
 //             (Browse…: below); without it the Folder answer is typed, as before
 //   uploads   true when the host wires Upload (below): the kind is offered; without it, never
-export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, now = Date.now() } = {}) {
+//   repoSignIn  /auth/me's `repoSignIn` (as serviceListModel takes it): a host this server
+//             offers sign-in to says so in its hint — a private repository is read as you
+export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;
   const newAllowed = register ? register.allowed !== false : true;
-  const offered = REPOSITORY_KINDS.filter((k) => k.kind !== 'upload' || uploads || v.kind === 'upload');
+  const offered = REPOSITORY_KINDS.filter((k) => k.kind !== 'upload' || uploads || v.kind === 'upload')
+    .map((k) => ({ ...k, hint: repositoryHint(k, repoSignIn) }));
   return {
     open: true, mode: form.mode, saving: !!form.saving, error: form.error || null, focus: form.focus || null,
     title: form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',

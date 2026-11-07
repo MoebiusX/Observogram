@@ -82,9 +82,30 @@ function flatLayer(pack, layerId) {
   return ls[layerId] || [];
 }
 
+// The six bands the strata, periodic, transit and arbor atlases draw are the
+// stack's: the spec v1.2 sibling layer L2X (RFC-0001) rides in the
+// Metrics/Logs/Traces band, as Overview's Layers count it (overview-model.mjs
+// folds L2X into L2). Left out of every band, the same pack read one artefact
+// fewer here than in Discover (741 against 742). The constellation and the
+// skyline draw L2X as a layer of its own, from flatLayer.
+function bandOf(pack, layerId) {
+  return layerId === 'L2' ? [...flatLayer(pack, 'L2'), ...flatLayer(pack, 'L2X')] : flatLayer(pack, layerId);
+}
+
+// The layer an artefact of a band sits on — the drawer names it.
+function layerIn(pack, layerId, item) {
+  return layerId === 'L2' && flatLayer(pack, 'L2X').includes(item) ? 'L2X' : layerId;
+}
+
+// The diff's entries only in B, for a band.
+function bandGaps(diff, layerId) {
+  const of = (id) => diff?.layers?.[id]?.onlyInB || [];
+  return layerId === 'L2' ? [...of('L2'), ...of('L2X')] : of(layerId);
+}
+
 function allArtefacts(pack) {
   const out = [];
-  for (const l of LAYERS) for (const a of flatLayer(pack, l)) out.push(a);
+  for (const l of LAYERS) for (const a of bandOf(pack, l)) out.push(a);
   return out;
 }
 
@@ -123,7 +144,15 @@ function cssVar(name, fallback) {
 // doesn't, per the diff). Right bands are clean parallelograms with a
 // subtle isometric skew, filled with a per-layer linear gradient and
 // drop-shadowed via an SVG filter. A central bridge calls out the
-// migration math: how many artefacts to add, how many gaps to close.
+// migration math: how many artefacts to add, and how many of B's sit
+// outside A's scope.
+//
+// Every count of what A lacks is the diff's (onlyInB: what B has, in a
+// family A declares, in A's service scope) — the notches, the "+N" on a
+// ribbon and the bridge are one number. The ribbons' size difference is not
+// a count of anything to add: most of a live pack is the rest of the
+// platform (outOfScope). Without a diff (still loading, or it failed) the
+// strata say so and draw no notch, never "no gaps".
 //
 // Inspired by Cuvier 1812, Lyell 1830, USGS strata columns.
 // ============================================================
@@ -139,8 +168,8 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
   // Per-layer "list" for A's silhouette: present items + injected gap
   // markers (one per onlyInB diff entry) so notches carve into the band.
   function aSilhouetteList(L) {
-    const present = flatLayer(A, L);
-    const gaps = (diff?.layers?.[L]?.onlyInB || []).map(e => ({
+    const present = bandOf(A, L);
+    const gaps = bandGaps(diff, L).map(e => ({
       ...e.artefact,
       _isGap: true,
     }));
@@ -148,7 +177,7 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
   }
 
   function layerStats(pack, L) {
-    const list = flatLayer(pack, L);
+    const list = bandOf(pack, L);
     return { list, count: list.length };
   }
 
@@ -249,16 +278,18 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
   `;
 
   // ---- bands ----
-  let totalAddedAll = 0, totalGapsAll = 0;
+  const compared = !!diff?.layers;
+  const outsideOf = (L) => (L === 'L2' ? ['L2', 'L2X'] : [L]).reduce((n, id) => n + (diff?.layers?.[id]?.outOfScope?.length || 0), 0);
+  let totalGapsAll = 0, totalOutsideAll = 0;
 
   LAYERS.forEach((L, idx) => {
     const sa = layerStats(A, L);
     const sb = layerStats(B, L);
     const aList = aSilhouetteList(L);
     const gapsHere = aList.filter(x => x._isGap).length;
-    const addedHere = Math.max(0, sb.count - sa.count);
-    totalAddedAll += addedHere;
     totalGapsAll += gapsHere;
+    totalOutsideAll += compared ? outsideOf(L) : 0;
+    const gapText = !compared ? 'not compared' : (gapsHere ? gapsHere + ' missing' : 'no gaps');
 
     const yTop = STACK_TOP + idx * (BAND_H + 6);
 
@@ -269,7 +300,7 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
         <path d="${dPath}" fill="url(#hatch-${L})" stroke="${C[L]}" stroke-width="1.3" stroke-linejoin="round"/>
         <text x="${LEFT_X + 8}" y="${yTop + 14}" style="fill:${C[L]}; font-weight:700; font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.04em;">${L} · ${LAYER_NAMES[L].toUpperCase()}</text>
         <text x="${LEFT_X + COL_W - 8}" y="${yTop + 14}" text-anchor="end"
-          style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#4A4A4A;">${sa.count} present · ${gapsHere ? gapsHere + ' missing' : 'no gaps'}</text>
+          style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#4A4A4A;">${sa.count} present · ${gapText}</text>
       </g>
     `;
 
@@ -301,9 +332,9 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
         <text x="${RIGHT_X + 18}" y="${yTop + 16}" style="font-family:'Newsreader', serif; font-style:italic; font-size:13px; fill:#fff; font-weight:500;">${L} · ${LAYER_NAMES[L]}</text>
         <text x="${rightEdgeAt(yTop + 16) - 8}" y="${yTop + 16}" text-anchor="end"
           style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#fff; opacity:0.92;">${sb.count} artefacts</text>
-        ${addedHere > 0 ? `
+        ${gapsHere > 0 ? `
           <text x="${rightEdgeAt(noteY) - 8}" y="${noteY}" text-anchor="end"
-            style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#ECFCEF; font-weight:600;">+${addedHere} new</text>` : ''}
+            style="font-family:'IBM Plex Mono', monospace; font-size:10px; fill:#ECFCEF; font-weight:600;">+${gapsHere} to add</text>` : ''}
       </g>
     `;
   });
@@ -320,13 +351,14 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
       <text x="${bridgeX + 70}" y="${bridgeY - 30}" text-anchor="middle"
         style="font-family:'Newsreader', serif; font-style:italic; font-size:13px; fill:#1F3A5F;">close the gap</text>
       <text x="${bridgeX + 70}" y="${bridgeY}" text-anchor="middle"
-        style="font-family:'Newsreader', serif; font-size:34px; font-weight:500; fill:${SRC_ADDED}; font-variant-numeric:tabular-nums;">+${totalAddedAll}</text>
+        style="font-family:'Newsreader', serif; font-size:34px; font-weight:500; fill:${compared ? SRC_ADDED : '#6B6B6B'}; font-variant-numeric:tabular-nums;">${compared ? `+${totalGapsAll}` : '—'}</text>
       <text x="${bridgeX + 70}" y="${bridgeY + 18}" text-anchor="middle"
-        style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.08em; fill:#6B6B6B;">artefacts to add</text>
+        style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.08em; fill:#6B6B6B;">${compared ? 'artefacts to add' : 'not compared yet'}</text>
+      ${compared ? `
       <text x="${bridgeX + 70}" y="${bridgeY + 60}" text-anchor="middle"
-        style="font-family:'Newsreader', serif; font-size:26px; font-weight:500; fill:${SRC_MISSING}; font-variant-numeric:tabular-nums;">${totalGapsAll}</text>
+        style="font-family:'Newsreader', serif; font-size:26px; font-weight:500; fill:#6B6B6B; font-variant-numeric:tabular-nums;">${totalOutsideAll}</text>
       <text x="${bridgeX + 70}" y="${bridgeY + 78}" text-anchor="middle"
-        style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.08em; fill:#6B6B6B;">gaps to close</text>
+        style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.08em; fill:#6B6B6B;">outside ${escapeHtml(A.name)}'s scope</text>` : ''}
     </g>
   `;
 
@@ -334,7 +366,9 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
   svg += `
     <text x="${VB_W/2}" y="${VB_H - 30}" text-anchor="middle"
       style="font-family:'Newsreader', serif; font-style:italic; font-size:13px; fill:#6B6B6B;">
-      Each notch in the left-hand strata is an artefact missing from ${escapeHtml(A.name)}.
+      ${!compared ? `No notch is drawn: ${diff?.error ? `the comparison of the two packs failed (${escapeHtml(String(diff.error).slice(0, 90))})` : 'the comparison of the two packs has not loaded'}.`
+        : totalGapsAll ? `Each notch in the left-hand strata is an artefact ${escapeHtml(B.name)} has and ${escapeHtml(A.name)} lacks.`
+          : `${escapeHtml(A.name)} lacks nothing ${escapeHtml(B.name)} has in its scope, so its strata have no notch.`}
       The right column shows the layer-stack ${escapeHtml(B.name)} is meant to be.
     </text>
     <text x="${VB_W/2}" y="${VB_H - 12}" text-anchor="middle"
@@ -349,7 +383,7 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
     <div class="strata-wrap">${svg}</div>
     <div class="strata-legend">
       Click any layer band to open the drawer for its first artefact.
-      Notches on the left represent items present in <code>${escapeHtml(B.name)}</code> but absent from <code>${escapeHtml(A.name)}</code>.
+      Notches on the left are the artefacts <code>${escapeHtml(B.name)}</code> has and <code>${escapeHtml(A.name)}</code> lacks, in the families and the service scope <code>${escapeHtml(A.name)}</code> declares — the comparison's "only in B".
       Ribbons on the right are scaled to <code>${escapeHtml(B.id)}</code>.
     </div>
   `;
@@ -360,9 +394,9 @@ function renderStrata(host, { a, b, diff }, opts = {}) {
       const L = el.dataset.layer;
       const side = el.dataset.side;
       const pack = side === 'current' ? A : B;
-      const list = flatLayer(pack, L);
+      const list = bandOf(pack, L);
       const target = list[0];
-      if (target && onClick) onClick(target, L);
+      if (target && onClick) onClick(target, layerIn(pack, L, target));
     });
   });
 }
@@ -409,8 +443,8 @@ function renderPeriodic(host, { a, b }, opts = {}) {
   }
 
   // Pre-seed counter from A so its numbering reads first.
-  for (const L of LAYERS) for (const it of flatLayer(A, L)) num(keyOf(it));
-  for (const L of LAYERS) for (const it of flatLayer(B, L)) num(keyOf(it));
+  for (const L of LAYERS) for (const it of bandOf(A, L)) num(keyOf(it));
+  for (const L of LAYERS) for (const it of bandOf(B, L)) num(keyOf(it));
 
   // For each side, build a per-layer list that includes:
   //   - real items in this pack (filled cells)
@@ -418,8 +452,8 @@ function renderPeriodic(host, { a, b }, opts = {}) {
   function rowsFor(pack, otherPack, side) {
     const otherKeys = new Set(allArtefacts(otherPack).map(keyOf));
     return LAYERS.map(L => {
-      const here = flatLayer(pack, L);
-      const otherHere = flatLayer(otherPack, L);
+      const here = bandOf(pack, L);
+      const otherHere = bandOf(otherPack, L);
       const hereKeys = new Set(here.map(keyOf));
       const missingHere = otherHere.filter(o => !hereKeys.has(keyOf(o)))
         .map(o => ({ ...o, _isGap: true }));
@@ -492,10 +526,11 @@ function renderPeriodic(host, { a, b }, opts = {}) {
       const pack = side === 'current' ? A : B;
       // Match by canonical key first; if not present (gap), open the
       // other pack's version since that's where the artefact lives.
-      const here = flatLayer(pack, layer).find(it => keyOf(it) === key);
-      if (here) return onClick && onClick(here, layer);
-      const other = flatLayer(side === 'current' ? B : A, layer).find(it => keyOf(it) === key);
-      if (other) return onClick && onClick(other, layer);
+      const here = bandOf(pack, layer).find(it => keyOf(it) === key);
+      if (here) return onClick && onClick(here, layerIn(pack, layer, here));
+      const otherPack = side === 'current' ? B : A;
+      const other = bandOf(otherPack, layer).find(it => keyOf(it) === key);
+      if (other) return onClick && onClick(other, layerIn(otherPack, layer, other));
     });
   });
 }
@@ -946,7 +981,7 @@ function renderTransit(host, { a, b, diff }, opts = {}) {
   // layers (every station compared to every adjacent station for x-column
   // proximity). At ~800 stations total it crosses the 100ms perception
   // threshold; at ~1500 it locks the tab. Cap with a clear message.
-  const totalCount = TRANSIT_LAYERS.reduce((s, L) => s + flatLayer(A, L).length, 0)
+  const totalCount = TRANSIT_LAYERS.reduce((s, L) => s + bandOf(A, L).length, 0)
                    + (A.layers?.L4 ? (A.layers.L4.policy?.length || 0) + (A.layers.L4.alerting?.length || 0) + (A.layers.L4.healing?.length || 0) : 0);
   if (totalCount > 600) {
     host.innerHTML = `<div class="placeholder">Transit atlas is capped at 600 artefacts (this pack has ${totalCount}).<br><br>
@@ -958,8 +993,8 @@ function renderTransit(host, { a, b, diff }, opts = {}) {
   // (artefacts only in B viewed from A's POV). Gap markers carry
   // _isGap = true and the artefact's id from B.
   function withGaps(L) {
-    const present = flatLayer(A, L);
-    const gaps = (diff?.layers?.[L]?.onlyInB || []).map(e => ({ ...e.artefact, _isGap: true }));
+    const present = bandOf(A, L);
+    const gaps = bandGaps(diff, L).map(e => ({ ...e.artefact, _isGap: true }));
     return [...present, ...gaps];
   }
 
@@ -1151,9 +1186,9 @@ function renderTransit(host, { a, b, diff }, opts = {}) {
       const L = el.dataset.layer;
       const from = el.dataset.from;
       const pack = from === 'b' ? B : A;
-      const list = flatLayer(pack, L);
+      const list = bandOf(pack, L);
       const target = list.find(x => x.id === id) || list[0];
-      if (target && onClick) onClick(target, L);
+      if (target && onClick) onClick(target, layerIn(pack, L, target));
     });
   });
 }
@@ -1195,7 +1230,7 @@ function renderArbor(host, { a, b, diff }, opts = {}) {
   // tab. Cap before we get there.
   const sideCount = (pack) => pack ? ARBOR_LAYERS.reduce((s, L) => {
     if (L === 'L4') return s + (pack.layers?.L4 ? (pack.layers.L4.policy?.length || 0) + (pack.layers.L4.alerting?.length || 0) + (pack.layers.L4.healing?.length || 0) : 0);
-    return s + (pack.layers?.[L]?.length || 0);
+    return s + bandOf(pack, L).length;
   }, 0) : 0;
   const aCount = sideCount(A), bCount = showB ? sideCount(B) : 0;
   const heaviest = Math.max(aCount, bCount);
@@ -1229,9 +1264,9 @@ function renderArbor(host, { a, b, diff }, opts = {}) {
         }
         return out;
       }
-      const out = flatLayer(pack, L).map(x => ({ ...x, layer: L }));
+      const out = bandOf(pack, L).map(x => ({ ...x, layer: L }));
       if (otherPack) {
-        const gaps = (diff?.layers?.[L]?.onlyInB || []).map(e => ({ ...e.artefact, layer: L, _isGap: true }));
+        const gaps = bandGaps(diff, L).map(e => ({ ...e.artefact, layer: L, _isGap: true }));
         out.push(...gaps);
       }
       return out;
@@ -1480,17 +1515,17 @@ function renderArbor(host, { a, b, diff }, opts = {}) {
   const cardAEl = host.querySelector('[data-pack="A"]');
   if (cardAEl) cardAEl.querySelectorAll('.arbor-node').forEach(el => {
     el.addEventListener('click', () => {
-      const list = flatLayer(A, el.dataset.layer);
+      const list = bandOf(A, el.dataset.layer);
       const target = list.find(x => x.id === el.dataset.id) || list[0];
-      if (target && onClick) onClick(target, el.dataset.layer);
+      if (target && onClick) onClick(target, layerIn(A, el.dataset.layer, target));
     });
   });
   const cardBEl = host.querySelector('[data-pack="B"]');
   if (cardBEl && B) cardBEl.querySelectorAll('.arbor-node').forEach(el => {
     el.addEventListener('click', () => {
-      const list = flatLayer(B, el.dataset.layer);
+      const list = bandOf(B, el.dataset.layer);
       const target = list.find(x => x.id === el.dataset.id) || list[0];
-      if (target && onClick) onClick(target, el.dataset.layer);
+      if (target && onClick) onClick(target, layerIn(B, el.dataset.layer, target));
     });
   });
 

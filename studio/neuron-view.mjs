@@ -50,7 +50,7 @@
 
 import { state } from './state.mjs';
 import { api, getActiveOrg } from './api.mjs';
-import { escapeHtml, toast } from './util.mjs';
+import { escapeHtml, toast, packSourceHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
@@ -466,7 +466,7 @@ function renderLatestRecord(d, c) {
   const when = last
     ? `${escapeHtml(capitalise(agoText(c.ageMs)))} <span class="nrn-rec-abs">${escapeHtml(absTime(last.startedAt))}</span>${last.tookMs !== null ? ` <span class="nrn-rec-abs">· took ${escapeHtml(fmtMs(last.tookMs))}</span>` : ''}`
     : 'Never — no run is on record.';
-  const what = `Journey <strong>${escapeHtml(d.name)}</strong> compares Pack A <code>${escapeHtml(d.packA || '?')}</code> with Pack B <code>${escapeHtml(d.packB || '?')}</code> <span class="nrn-rec-abs">· gate: ${escapeHtml(gateBits(d.gate))}</span>`;
+  const what = `Journey <strong>${escapeHtml(d.name)}</strong> compares Pack A ${packSourceHtml(d.packA, d.packARef)} with Pack B ${packSourceHtml(d.packB, d.packBRef)} <span class="nrn-rec-abs">· gate: ${escapeHtml(gateBits(d.gate))}</span>`;
   const outcome = `${outcomeChipHtml(c.outcome)} <span class="nrn-rec-meaning">${escapeHtml(o.meaning)}</span>`;
   const s = d.scope || {};
   const service = `${s.service ? `<strong>${escapeHtml(s.service)}</strong>` : 'Every service in the pack (no service scope)'}${s.env ? ` · environment ${escapeHtml(s.env)}` : ''}${s.scopeMode ? ` · scope mode ${escapeHtml(s.scopeMode)}` : ''}`;
@@ -810,8 +810,8 @@ function renderFocus(d, charts, stackLib, schedLib, trend, fleetReady) {
       <button type="button" class="ctrl-btn nrn-run-focus" data-journey="${escapeHtml(d.name)}">▶ run now</button>
     </div>
     <div class="journey-card-meta">
-      <span title="Pack A source">A: <code>${escapeHtml(d.packA || '?')}</code></span>
-      <span title="Pack B source">B: <code>${escapeHtml(d.packB || '?')}</code></span>
+      <span title="Pack A source">A: ${packSourceHtml(d.packA, d.packARef)}</span>
+      <span title="Pack B source">B: ${packSourceHtml(d.packB, d.packBRef)}</span>
       ${d.scope?.env || d.scope?.service ? `<span>scope: ${escapeHtml([d.scope.env && `env ${d.scope.env}`, d.scope.service && `service ${d.scope.service}`, d.scope.scopeMode && `mode ${d.scope.scopeMode}`].filter(Boolean).join(' · '))}</span>` : ''}
       <span title="Gate">gate: ${escapeHtml(gateBits(d.gate))}</span>
       <span title="schedule:">${escapeHtml(scheduleText(d.schedule))}</span>

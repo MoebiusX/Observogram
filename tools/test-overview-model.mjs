@@ -345,7 +345,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   const rows = (why) => why.map((w) => [w.ok, w.text]);
   // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
   const live = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }));
-  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up live; the bar is 85.'], ...lacks]);
+  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85."], ...lacks]);
   assert.equal(live.points, '4.8 of 7 points. B+ starts at 5.3.');
   // The repository alone: the two live criteria say so, and score nothing.
   const alone = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: null, now: NOW }));
@@ -353,7 +353,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   assert.equal(alone.points, '3 of 7 points. B starts at 4.4.');
   // Against a recording: the words say so.
   const recorded = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey: fileJourney, now: NOW }));
-  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up in the recording; the bar is 85.']]);
+  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up in the recording; the bar is 85."]]);
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
   assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
@@ -982,7 +982,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
-  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
+  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold in every link, 1 in part, 12 broken.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
@@ -1079,7 +1079,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
   for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
   assert.ok(html.includes('<span class="ov-chains__seg ov-chains__seg--ok" style="flex-grow:5"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--warn" style="flex-grow:1"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--fail" style="flex-grow:12"></span>'));
-  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold end to end, 1 in part.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
+  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold in every link, 1 in part, 12 broken.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
   assert.ok(html.includes('<span class="og-pill og-pill--warn ov-live__pill">Changed</span>') && html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — 43 things differ from what the repository declares.</p>') && html.includes('<button type="button" class="og-btn ov-check" data-ux-action="ov-check">Check again</button>'));
   // Remediate: three tiles with their icons, then the one next step.
   assert.ok(html.includes('<div class="ov-change ov-change--fail" title="declared in the repository, not running live"><svg class="ov-ic ov-change__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false">') && html.includes('<span class="ov-change__l">to add</span><span class="ov-change__n">38</span><span class="ov-change__note og-muted">declared, not live</span></div>'));
@@ -1213,8 +1213,8 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   const atBar = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
   const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBar, journey, now: NOW }));
   assert.equal(g.why.length, 7, 'offered: 3 + 0.85 + 1 = 4.85 of 7 is the letter\'s 69');
-  assert.equal(g.why.find((w) => w.text.startsWith('Of what the repository promises'))?.ok, 'yes', 'at the bar the mark is a yes');
-  assert.ok(g.why.some((w) => w.text === 'Of what the repository promises, 85 in 100 holds up live; the bar is 85.'));
+  assert.equal(g.why.find((w) => w.text.startsWith('Of the links in the repository'))?.ok, 'yes', 'at the bar the mark is a yes');
+  assert.ok(g.why.some((w) => w.text === "Of the links in the repository's 18 promises, 85 in 100 hold up live; the bar is 85."));
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
@@ -1695,6 +1695,20 @@ test('a Run its host would not read without the person\'s own token asks for it 
     'A public repository, or a private one read with your own GitHub token, asked for when you run it.',
     'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.',
   ], 'no hint says the server reads with its own token');
+  // A server that offers Sign in to GitHub says so where the repository is typed.
+  const hintFor = (kind, repoSignIn) => formModel({ ...formOpened([], { endpoints: [EP] }), values: { ...formOpened([], { endpoints: [EP] }).values, kind } }, { endpoints: [EP], repoSignIn }).kind.hint;
+  assert.equal(hintFor('github', null), REPOSITORY_KINDS[0].hint, 'no sign-in offered (or no one signed in to the studio): the token hint, as before');
+  assert.equal(hintFor('github', { github: { available: false }, ado: { available: true } }), REPOSITORY_KINDS[0].hint);
+  assert.equal(hintFor('github', { github: { available: true, signedIn: false, account: null } }),
+    'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token, when you run it.');
+  assert.equal(hintFor('github', { github: { available: true, signedIn: true, account: 'octo' } }),
+    'A public repository, or a private one read as you (you are signed in to GitHub as octo): sign in to GitHub, or give your own GitHub token, when you run it.');
+  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), when you run it.');
+  assert.equal(hintFor('path', { github: { available: true } }), REPOSITORY_KINDS[2].hint, 'a folder has no sign-in');
+  const opened = formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP], repoSignIn: { github: { available: true } } });
+  assert.equal(opened.kind.kind, 'github', 'a new service opens on GitHub');
+  assert.equal(opened.kinds.find((k) => k.kind === 'github').hint, opened.kind.hint, 'the kind buttons carry the same hint');
+  assert.match(opened.kind.hint, /sign in to GitHub/);
 });
 
 test('renderServiceList: the row\'s token field (a password input, Run with it) and the held-token line with Forget it; both proxied to host.overview; nothing typed is kept in the markup', () => {

@@ -289,6 +289,12 @@ test('POST /api/services/:id/run: the folder scanned and registered as the servi
   const j = journeys.find((x) => x.name === 'shop-api.prod');
   assert.deepEqual([j.scope.service, j.scope.env], ['shop-api', 'prod']);
   assert.match(j.packA, new RegExp(`${r.json.pack.id}\\.pack\\.yaml$`));
+  // Pack A is named by the pack (the Neuron and the journeys list show its
+  // label), and saved beside the journey, not at this workspace's absolute
+  // path: a moved or copied workspace checks its own copy.
+  assert.deepEqual(j.packARef, { id: r.json.pack.id, label: 'Shop API · prod · repository' });
+  assert.equal(j.packBRef, null, 'a live Pack B is no registered pack');
+  assert.match(readFileSync(join(WORKSPACE, 'journeys', 'shop-api.prod.journey.yaml'), 'utf8'), new RegExp(`packA:\\s*\\{?\\s*file: \\.\\./packs/${r.json.pack.id}\\.pack\\.yaml`));
   assert.match(String(j.packB), /^mcp:/, 'Pack B is the live endpoint, re-drafted on every run');
   assert.equal(j.lastRun.outcome, r.json.record.outcome);
   const capture = auditRows('journey.capture');
@@ -559,7 +565,8 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
     if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
     const auth = init.headers?.Authorization ?? null;
     seen.push({ url: u, auth });
-    if (auth !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    // GitHub's own 404 body, word for word: the sentence keeps its message only.
+    if (auth !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found', documentation_url: 'https://docs.github.com/rest/repos/repos#get-a-repository', status: '404' }), { status: 404 });
     if (u.endsWith('/repos/acme/private-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
     if (u.includes('/repos/acme/private-shop/git/trees/main')) return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] }));
     if (u.includes('/repos/acme/private-shop/contents/')) return new Response(RULES);
@@ -576,6 +583,8 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
     assert.equal(without.status, 404, without.text);
     assert.deepEqual(without.json.repoAuth, { kind: 'github', label: 'GitHub token', refused: false });
     assert.ok(without.json.error.endsWith(` — ${REPO_AUTH_WAYS.needed('github')}`), without.json.error);
+    assert.ok(without.json.error.startsWith('the repository could not be read: GitHub 404 on /repos/acme/private-shop: Not Found — '), without.json.error);
+    assert.ok(!/[{}]|documentation_url/.test(without.json.error), 'a sentence for a person, not the JSON GitHub sent');
     assert.ok(seen.length > 0 && seen.every((s) => s.auth === null), 'no token at all: none sent');
 
     seen.length = 0;
