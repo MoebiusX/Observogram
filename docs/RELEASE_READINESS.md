@@ -47,7 +47,10 @@ external reference evidence and is not score-reachable). A is anchored
 strictly above the audit bar, so "A or better" and PASS are the same
 statement — gates and run records keep keying off PASS/FAIL.
 
-The seven scored criteria are (grade schema 2, ratified 2026-06-10):
+The seven scored criteria are (grade schema 2, ratified 2026-06-10; schema 3,
+2026-11-06, keeps them and stops scaffolds earning Calibrated or
+Chaos-validated; schema 4, the same day, makes Chaos-validated tell a declared
+experiment, a quarter of the point, from one proven by a recent passing run):
 
 | Area | Criteria | Scored |
 |---|---|---|

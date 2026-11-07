@@ -227,7 +227,7 @@ export function runGradedPack(run, pack) {
 // ---------- why this grade ----------
 //
 // The seven criteria the engine scores (studio/diagnostic-grade.mjs, grade
-// schema 2: one point each, Drift-free fractional), each as one plain
+// schema 3: one point each, Drift-free fractional), each as one plain
 // sentence with a yes / partly / no mark, the yeses first. Five read the
 // repository alone and come from the pack-alone diagnostic's criteria; the
 // two that need the other side (Drift-free, Fresh) come from the run that
@@ -236,7 +236,7 @@ export function runGradedPack(run, pack) {
 // points of a hundred): a run of another schema, or a pack whose own
 // annotations already carry live evidence, explains nothing and shows nothing.
 const GRADE_POINTS = 7;
-const GRADE_SCHEMA = 2;
+const GRADE_SCHEMA = 4;
 const GRADE_BAR = 85;
 const WHY_RANK = { yes: 0, partly: 1, no: 2 };
 const criterionOf = (diagnostic, key) => [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].find((c) => c && c.key === key) || null;
@@ -244,8 +244,11 @@ const numbersIn = (s) => (String(s || '').match(/\d+(?:\.\d+)?/g) || []).map(Num
 const tenth = (n) => String(Math.round(n * 10) / 10);
 
 // The five criteria that read the repository alone, from the engine's
-// criteria (key, pass, detail) — the numbers are read back out of the detail.
-function repositoryGradeLines(diagnostic) {
+// criteria (key, pass, detail) — the numbers are read back out of the detail,
+// the counts the engine states (baselines, experiments) from their fields.
+// `liveUnobserved` lists the families the run's Pack B could not look at
+// (the record's packB.unobserved), [] without a run.
+function repositoryGradeLines(diagnostic, liveUnobserved = []) {
   const keys = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
   const c = Object.fromEntries(keys.map((k) => [k, criterionOf(diagnostic, k)]));
   if (keys.some((k) => !c[k])) return null;
@@ -253,7 +256,6 @@ function repositoryGradeLines(diagnostic) {
   const kinds = (String(c['multi-modal'].detail).match(/\(([^)]*)\)/) || [])[1] || '';
   const [objectives = 0] = numbersIn(c.calibrated.detail);
   const [coverage = 0] = numbersIn(c.comprehensive.detail);
-  const [experiments = 0] = numbersIn(c['chaos-validated'].detail);
   const line = (crit, yes, no) => ({ ok: crit.pass ? 'yes' : 'no', text: crit.pass ? yes : no });
   return [
     line(c['multi-modal'],
@@ -264,14 +266,52 @@ function repositoryGradeLines(diagnostic) {
       'Traces and logs cannot be joined, so a request cannot be followed end to end.'),
     line(c.calibrated,
       `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
-      /no .*baselines/i.test(c.calibrated.detail) ? 'Normal is not defined with numbers: no detection and repair baselines.' : 'Normal is not defined with numbers: no objective has a target.'),
+      calibratedNo(c.calibrated)),
     line(c.comprehensive,
       `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience.`,
       `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience.`),
-    line(c['chaos-validated'],
-      `Recovery has been proven by fault injection: ${experiments} experiment${experiments === 1 ? '' : 's'}.`,
-      'Recovery has never been proven by fault injection.'),
+    chaosLine(c['chaos-validated'], liveUnobserved),
   ];
+}
+
+// Calibrated's "no": the baselines are missing, or only placeholders the
+// scan wrote (the engine's `baselines.scaffolds`), or no objective has a target.
+function calibratedNo(crit) {
+  if (!/no .*baselines/i.test(crit.detail)) return 'Normal is not defined with numbers: no objective has a target.';
+  return crit.baselines?.scaffolds > 0
+    ? 'Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.'
+    : 'Normal is not defined with numbers: no detection and repair baselines.';
+}
+
+// Chaos-validated, as the engine knows it (grade schema 4, `proof`): proven
+// by a recent passing run, failed, declared with only an old pass, declared
+// and never recorded as run — or none, and then what each side could not
+// see, never that recovery is unproven.
+const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository' };
+function chaosLine(crit, liveUnobserved) {
+  const n = Number.isFinite(crit.declared) ? crit.declared : (numbersIn(crit.detail)[0] || 0);
+  const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;
+  const day = (iso) => String(iso || '').slice(0, 10);
+  const p = crit.proof;
+  // The line counts what the engine counted (its `score`: a quarter for a
+  // declaration), so the seven lines still add up to the letter.
+  const scored = (line) => (typeof crit.score === 'number' ? { ...line, score: crit.score } : line);
+  if (p?.state === 'proven') {
+    return scored({ ok: crit.pass ? 'yes' : 'partly', text: `Recovery proven ${day(p.provenAt)} by fault injection: ${p.fresh} of ${exps} passed a recent run (${PROOF_SOURCE[p.source] || p.source}).` });
+  }
+  if (p?.state === 'failed') {
+    const f = p.failed[0];
+    const why = f.missing?.length ? `: ${f.missing.join(', ')} did not fire${f.expectedMttd ? ` within ${f.expectedMttd}` : ''}` : '';
+    return scored({ ok: 'no', text: `Chaos experiment ${f.id} failed on ${day(f.at)}${why}.` });
+  }
+  if (p?.state === 'stale') return scored({ ok: 'partly', text: `${exps} declared; the last recorded pass, ${day(p.stale.at)}, is older than ${p.stale.windowDays} days.` });
+  if (p?.state === 'declared') return scored({ ok: 'partly', text: `${exps} declared, never recorded as run.` });
+  if (!p && crit.pass) return { ok: 'yes', text: `${n} chaos experiment${n === 1 ? ' is' : 's are'} declared; none has a recorded result.` };
+  const blind = [
+    crit.unobserved?.repository && 'the repository scan cannot detect chaos tooling',
+    (crit.unobserved?.live || liveUnobserved.includes('chaos')) && 'the live side cannot observe it',
+  ].filter(Boolean);
+  return { ok: 'no', text: blind.length ? `No chaos experiment is declared — ${blind.join(' and ')}.` : 'No chaos experiment is declared in this pack.' };
 }
 
 // The two criteria that need the other side, from the run that graded the
@@ -330,7 +370,7 @@ export function gradeWhy({ diagnostic = null, run = null, letter = '', score = n
   const none = { why: [], points: '' };
   if (run && run.grade?.schema != null && Number(run.grade.schema) !== GRADE_SCHEMA) return none;
   if (diagnostic?.gradeSchema != null && Number(diagnostic.gradeSchema) !== GRADE_SCHEMA) return none;
-  const fixed = repositoryGradeLines(diagnostic);
+  const fixed = repositoryGradeLines(diagnostic, Array.isArray(run?.packB?.unobserved) ? run.packB.unobserved : []);
   if (!fixed) return none;
   const live = run ? liveGradeLines(run, { against, where, now }) : [
     { ok: 'no', text: 'Nothing live has been checked, so no promise is confirmed live.' },
@@ -773,6 +813,56 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: failed };
 }
 
+// ---------- the board: what the scan read ----------
+//
+// A service's Run keeps what its scan saw in the run record (packA.scan,
+// tools/lib/crawler.mjs scanReport): the files read, and every file the scan
+// left out — the files the rule would read and the read did not (git ignores
+// them, a secrets file, too large, a download failed), those past a host
+// read's file cap, those the environment's deployment profile excludes, the
+// files read and recognised as nothing — with the crawl's warnings. The
+// board says it beside the layers, so a grade never rests on files nobody
+// was told were missing.
+
+// The losses of a scan, in a few words ("347 past the 200-file cap, 3 not
+// read, …"), or '' when it read everything it takes. The Run's toast says it.
+export function scanLossText(scan) {
+  if (!scan || typeof scan !== 'object') return '';
+  const n = (v) => Number(v) || 0;
+  const parts = [];
+  if (n(scan.capped)) parts.push(`${n(scan.capped)} past the file cap`);
+  if (n(scan.skipped)) parts.push(`${n(scan.skipped)} not read`);
+  if (scan.truncated) parts.push('the host cut its file list short');
+  if (n(scan.environment?.excluded)) parts.push(`${n(scan.environment.excluded)} left out by the ${scan.environment.profile || 'environment'} scope`);
+  if (n(scan.unclassified)) parts.push(`${n(scan.unclassified)} recognised as nothing`);
+  return parts.join(', ');
+}
+
+// scanModel({ run }) → null when the record carries no scan, else
+//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings }
+//   tone  'warn' when the scan lost files it takes (cap, not read, a cut
+//         list), else 'neutral'
+export function scanModel({ run = null } = {}) {
+  const scan = run?.packA?.scan;
+  if (!scan || typeof scan !== 'object') return null;
+  const n = (v) => Number(v) || 0;
+  const files = n(scan.files);
+  const candidates = n(scan.candidates);
+  const of = candidates > files ? ` of ${candidates}` : '';
+  const loss = scanLossText(scan);
+  const sentence = `Read ${files}${of} file${(candidates || files) === 1 ? '' : 's'}${scan.source ? ` from ${scan.source}` : ''}${loss ? ` — ${loss}` : ''}.`;
+  const rowsOf = (list, why = '') => (Array.isArray(list) ? list : []).map((x) => (typeof x === 'string' ? { path: x, why } : { path: String(x?.path || ''), why: String(x?.why || why) }));
+  const group = (key, title, count, rows) => ({ key, title, count, rows, more: Math.max(0, count - rows.length) });
+  const groups = [];
+  if (n(scan.skipped)) groups.push(group('skipped', 'Not read', n(scan.skipped), rowsOf(scan.skippedFiles)));
+  if (n(scan.capped)) groups.push(group('capped', `Past the file cap — the read takes the likely artefacts first and stops at its cap`, n(scan.capped), []));
+  if (scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
+  if (n(scan.environment?.excluded)) groups.push(group('excluded', `Left out by the ${scan.environment.profile || 'environment'} scope — files for other deployment surfaces`, n(scan.environment.excluded), rowsOf(scan.environment.excludedFiles)));
+  if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
+  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
+  return { sentence, tone: n(scan.capped) || n(scan.skipped) || scan.truncated ? 'warn' : 'neutral', groups, warnings };
+}
+
 // ---------- the board: what to change ----------
 
 // changesModel({ fidelity }) → { known, items, total, sentence }
@@ -889,6 +979,8 @@ export function buildOverviewModel(input = {}) {
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
+    // What the last Run's scan read and left out (null: no record says).
+    scan: graded && journey ? scanModel({ run }) : null,
     rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
     fidelity: graded ? fidelity : null,
     changes: graded ? changesModel({ fidelity }) : null,
@@ -1359,7 +1451,8 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 //   endpoint  { create: { name, url, readTokenEnv? } } | { id }
 //   service   { create: { name, repository } } | { id, patch: { repository } | null }
 //   env       { create: { name } } | { id, bind: boolean } — bind: point it at the endpoint
-//   upload    { name, files } | null — PUT /api/services/:id/repository-upload, last
+//   upload    { name, files, skipped } | null — PUT /api/services/:id/repository-upload, last;
+//             `skipped` what the browser did not read and why, kept with the copy so each Run names it
 // A name that keys an existing record (the catalogue's slug rule, `keyOf`,
 // injected: tools/lib/service-keys.mjs normalizeServiceKey) is that record —
 // the form completes it, never a second one. An Upload never names its
@@ -1383,7 +1476,7 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   return {
     endpoint, service,
     env: env ? { id: env.id, bind: !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
-    upload: uploading && upload?.files ? { name: upload.name, files: upload.files } : null,
+    upload: uploading && upload?.files ? { name: upload.name, files: upload.files, skipped: Array.isArray(upload.skipped) ? upload.skipped : [] } : null,
     envName, name,
   };
 }

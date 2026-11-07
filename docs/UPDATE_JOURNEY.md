@@ -1,6 +1,7 @@
 # The UPDATE journey
 
-**Status: proposal, 2026-10-02. Nothing in this document is built.** It is the
+**Status: slices 1 and 2 are built (0.6.2, 2026-11-04); slice 3 is still a
+proposal.** Written as a proposal on 2026-10-02, it is the
 user journey for changing a pack that already exists — the second half of
 *Build or update a pack*. It is written against today's code: every stage says
 what it reuses and what is new, and the examples use numbers the engine

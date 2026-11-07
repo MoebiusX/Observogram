@@ -46,7 +46,7 @@ import { serviceMetadata, catalogEntryOf, livePackKind } from '../tools/lib/serv
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
-import { crawlFiles, crawlToYaml } from '../tools/lib/crawler.mjs';
+import { crawlFiles, crawlToYaml, scanReport } from '../tools/lib/crawler.mjs';
 import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
 import { diffPacks } from '../tools/lib/diff.mjs';
 import { comparePackBranches } from '../tools/lib/traceability-graph.mjs';
@@ -71,7 +71,7 @@ import { describeProxyAuth } from './auth-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
-import { parseGithubUrl, fetchGithubFiles } from './github-crawl.mjs';
+import { parseGithubUrl, fetchGithubFiles, HOST_READ_CAPS } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { auditAfter, actorForRecord, bounded, finite } from './audit-after.mjs';
 import { identityRoutes } from './routes/identity.mjs';
@@ -1205,7 +1205,7 @@ function journeyRunTargets(req, def) {
 // the gate's outcome is data — or 502 when a source could not be resolved.
 // A live Pack B is kept as the journey's live pack (keepLivePackOf): the
 // 200 adds `livePack: { id, label }`. `extra` rides on either answer (a
-// service's Run adds its scan).
+// service's Run adds its scan, which the record keeps as packA.scan).
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
   const t0 = new Date();
   // The row's notify key (only for a journey with `notify`): from the
@@ -1231,6 +1231,7 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
         return mcpTarget;
       },
       resolveNotify: (n) => notifyTargetOf(n, { url: notifyHook.url, auth: notifyHook.auth }),
+      scan: extra.scan || null,
     });
     const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({
@@ -1314,7 +1315,11 @@ function livePacksByJourney() {
 //      notify and budget — and run, as POST /api/journeys/:name/run runs it,
 //      which keeps the live side it read as `<service> · <env> · live`.
 // Body: { env } (may be left out when the service has one environment).
-// 200 { ok, record, pack, journey, scan, livePack }; 400/404 for a service,
+// 200 { ok, record, pack, journey, scan, livePack } — `scan` what the scan
+// saw (tools/lib/crawler.mjs scanReport: the files read, the files the rule
+// would read and the read did not, with why, the cap's and the environment
+// scope's leftovers, the files read and recognised as nothing, the crawl's
+// warnings), kept in the run record as packA.scan; 400/404 for a service,
 // environment or repository the request cannot use; 409 for a record that
 // says nowhere to look (no repository, no endpoint); 422 for a scan that
 // read nothing or made no valid pack; 502 when the repository or the live
@@ -1388,20 +1393,23 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
     const tail = need ? ` — ${repoAuthTail(need)}` : '';
     return res.status(status).json({ ok: false, error: `the repository could not be read: ${message}${tail}`, ...(need ? { repoAuth: need } : {}) });
   }
-  const scan = { source: read.source, ref: read.ref, files: Object.keys(read.files).length, candidates: read.candidates, skipped: read.skipped.length };
+  let scan = scanReport(read);
   if (!scan.files) {
     return res.status(422).json({ ok: false, error: `${read.source} has no file the scan reads — Prometheus rules, OpenTelemetry collector configs, Grafana dashboards, compose files, Helm values or metrics code`, scan });
   }
   let canonical;
-  try { ({ canonical } = crawlFiles(read.files, { repoName: service.slug, environment: env.name })); }
-  catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
+  try {
+    let summary;
+    ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name }));
+    scan = scanReport(read, summary);
+  } catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
   const errors = validateCanonical(canonical, SCHEMA);
   if (errors.length) {
     return res.status(422).json({ ok: false, error: `the scan of ${read.source} did not make a valid pack: ${errors[0]}`, errors: errors.slice(0, 20), scan });
   }
   const label = `${service.name} · ${env.name} · repository`;
   const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
-  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source} → ${packId} in ${Date.now() - t0}ms\n`);
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.skipped ? `, ${scan.skipped} not read` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
   // 3. The check, saved and run.
   def.packA = workspacePackSource(packId);
   let saved;
@@ -2134,8 +2142,8 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 // source: a public GitHub repo URL instead of an uploaded folder.
 //
 // The server fetches the repo's file tree via the GitHub Tree API,
-// downloads just the files the crawler cares about (docker-compose,
-// Prometheus rules, OTel configs, dashboards), and feeds them into
+// downloads the files the crawler reads (its own rule, scanReadsPath; the
+// artefact names first under the cap), and feeds them into
 // the same crawlFiles() pipeline as /api/crawl. Returns the same
 // response shape.
 //
@@ -2152,7 +2160,10 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
 // server without sign-in; else none: public-only, the contents from
 // raw.githubusercontent.com.
 //
-// Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
+// Bandwidth guards (github-crawl.mjs HOST_READ_CAPS): max 200 files — the
+// crawler's rule decides which files count, the artefact names are read first,
+// and the summary says how many the cap left out — max 16 MB total, max 5 MB
+// per file (the scan's own).
 // ----------------------------------------------------------------
 // parseGithubUrl / fetchGithubFiles (selectCrawlerFiles, ghFetch) live in server/github-crawl.mjs.
 
@@ -2178,7 +2189,8 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
   try {
     // 1–4. The default branch when no ref is given, the tree, the
     // crawler-relevant blobs downloaded (server/github-crawl.mjs fetchGithubFiles).
-    const { ref, candidates: candidateCount, files, skipped, truncated } = await fetchGithubFiles({ owner, repo, ref: explicitRef }, { token: credential.token });
+    const { ref, candidates: candidateCount, capped, files, skipped, truncated } = await fetchGithubFiles({ owner, repo, ref: explicitRef }, { token: credential.token });
+    const notReadNotes = skipped.map((s) => `${s.path}: ${s.why}`);
     if (truncated) {
       process.stderr.write(`[crawl-github] tree truncated for ${owner}/${repo}@${ref}; some files may be missing\n`);
     }
@@ -2201,7 +2213,7 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
         ok: true, canonical: null, canonicalYaml: '',
         summary: { source: 'github', repo: `${owner}/${repo}`, ref, files: { total: candidateCount, classified: 0 } },
         validation: { ok: false, errors: ['all candidate files were skipped (size caps or download errors)'] },
-        registered: null, tookMs: Date.now() - t0, notes: skipped,
+        registered: null, tookMs: Date.now() - t0, notes: notReadNotes,
       });
     }
 
@@ -2232,7 +2244,17 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
     summary.source = 'github';
     summary.repo   = `${owner}/${repo}`;
     summary.ref    = ref;
+    // What the read left out, never in silence: the files the crawler's rule
+    // takes past the 200-file cap, each file not read and why, and GitHub's
+    // own truncation of a tree too large to list.
+    summary.candidates = candidateCount;
+    summary.capped = capped;
     if (skipped.length) summary.skipped = skipped;
+    if (capped) summary.warnings.push(`The ${HOST_READ_CAPS.maxFiles}-file cap left out ${capped} of the ${candidateCount} files the scan reads in ${owner}/${repo} (rule files, collector configs and dashboards are read first).`);
+    if (truncated) {
+      summary.truncated = true;
+      summary.warnings.push(`GitHub cut the tree of ${owner}/${repo} short: files it did not list were not read, and nothing here can name them.`);
+    }
 
     process.stderr.write(`[crawl-github] ${owner}/${repo}@${ref} → ${Object.keys(files).length} files, ${summary.files.classified} classified, valid=${validationErrors.length === 0}, registered=${registered?.id || '-'}, ${Date.now() - t0}ms\n`);
     res.json({

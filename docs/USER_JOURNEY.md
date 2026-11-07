@@ -16,20 +16,47 @@ that answer.
 
 ## The Three Questions
 
-| Step | User question | Product answer |
-|---|---|---|
-| Discover | What do we have? | Render the observogram from a repo, live scan, or pack. |
-| Diagnose | Can we trust it? | Score coverage and trust; show declared-vs-live drift. |
-| Remediate | How do we fix it? | Compile and deploy the source-backed delta. |
+| Step | User question | Product answer | Overview's stage asks | Expert's tab reads |
+|---|---|---|---|---|
+| Discover | What do we have? | Render the observogram from a repository scan, a live MCP draft or a pack. | What is in place? | What Do We Have? |
+| Diagnose | Can we trust it? | Grade coverage and trust; show declared-vs-live drift. | Is it diagnostic-grade? | How reliable is this pack? |
+| Remediate | How do we fix it? | Compile and deploy the source-backed delta, or update the repository from live. | What to change? | Resolve gaps |
 
-The primary chrome uses these questions directly:
+The studio has two faces over the same three steps:
 
-1. **Discover - What Do We Have?**
-2. **Diagnose - How reliable is this pack?**
-3. **Remediate - Resolve gaps**
+- **Overview** (`?mode=overview`) — the simplified face. It opens on the
+  **Services** list; **Open** on a row draws that service's board: three
+  numbered stages, *1 Discover · 2 Diagnose · 3 Remediate*, each over its
+  column, every number the engine's own. `&layout=simple` is the fallback, the
+  three sentences alone (*How well is it observed?* · *Is that still true
+  right now?* · *What to do next*).
+- **Expert** (`?mode=expert`) — the full studio: the home and its services,
+  the service page, the three primary tabs, the Advanced views, Build or
+  update a pack, Settings, and Neuron's journeys.
+
+The switch, *Overview | Expert*, sits in the chrome on every screen; Advanced
+→ Administration → **Overview** opens it too. Until the person picks a face, a
+browser opens on Overview whenever the services table has rows, and on
+Expert's home when it has none. The choice is the browser's
+(`studioUiMode.v1`), never the snapshot's, and so is the layout
+(`studioOverviewLayout.v1`); `?mode=` and `?layout=` win and are remembered.
+In Overview the context bar, the tab cards and the Advanced menu are hidden.
+From the board, **Expert** opens that service's page; **Overview**, or the
+brand, returns to the Services list, where **Open →** draws the board again.
+In Expert the brand returns to the home.
+
+Expert's primary chrome uses the questions directly, one tab card each (step
+word, title, tagline):
+
+1. **Discover — What Do We Have?** — *Layers, artefacts and evidence*
+2. **Diagnose — How reliable is this pack?** — *Assessment and comparison*
+3. **Remediate — Resolve gaps** — *Update, compile and deploy*
 
 Advanced views exist, but they are not the core journey. They support expert
-analysis: References, Conformance, Schema, OTLP Coverage, Traceability, Atlas.
+analysis: Neuron, References, Conformance, Schema, OTLP Coverage,
+Traceability, Atlas. The same menu's Administration group holds Settings,
+Overview, Live MCP connection, Pack catalogue API, Switch light / dark theme,
+Reset the studio… and About Observogram (version and build).
 
 ## OLA And Observability Contract
 
@@ -43,66 +70,135 @@ as a canonical ObservabilityPack:
 - alerts, routes, and remediations
 - validation evidence and freshness expectations
 
-During the main dry-run flow, Pack A is the declared contract from the service
-repo and Pack B is the verified live state from MCP. Diagnose answers whether
+A service is two places: its **repository**, where the contract is declared,
+and, for each environment, the **live MCP endpoint** that reads what runs. A
+service's **Run** scans the repository now and registers the scan as the
+service's own pack — Pack A, the declared contract — and reads the live side
+through the environment's endpoint — Pack B, the verified live state. The
+check is saved as the journey `<slug>.<env>` and run. Diagnose answers whether
 the live production posture satisfies the declared contract well enough to be
 diagnostic-grade.
+
+What code cannot say, a repository can declare about itself: an
+`.observability/*.yaml` file holding `kind: ObservabilityPack` is read by
+every scan, in every environment scope. Today the scan takes its
+`spec.validation.chaos_experiments` (spec 1.5), merged by id; the declared
+entry wins over the one the scan discovered, and an entry that does not
+validate is left out with a warning, never a failed scan.
 
 ## North-Star Flow
 
 ```text
-Open app
+Open the studio
   |
   v
-Discover
-  |
-  |-- scan a service repo
-  |-- generate from a live MCP endpoint
-  |-- upload a YAML/JSON pack
+Overview: Services          one row per service and environment:
+  |                         its repository, its live MCP endpoint, its last check
+  |-- Add a service         1 Service · 2 Environment
+  |                         3 Repository (GitHub · Azure DevOps · Folder · Upload)
+  |                         4 Live (an MCP endpoint of the org, or a new one)
+  |-- Save and run, or Run on a row
   v
-Pack A loaded: declared observability posture
-  |
+The Run
+  |-- the repository scanned now: Pack A, the service's own pack
+  |   (read as the person who runs it; the scan report kept)
+  |-- the live side read through the environment's endpoint: Pack B
+  |-- graded and compared; the run record kept
   v
-Load Pack B: live production posture
-  |
+Open: the board              1 Discover · 2 Diagnose · 3 Remediate
+  |-- Layers: what the repository declares, layer by layer,
+  |   and what the scan read and left out
+  |-- A: the grade, Why this grade, the required rules
+  |-- B: the alignment, four counts, the promises; Check again
+  |-- Changes to apply: to add · to update · to review; the next step
   v
-Diagnose
+Open in Discover / Open in Diagnose / Open in Remediate
+  |   Expert, bound to the service, with the live pack the board graded as Pack B
   |
-  |-- Assessment (diagnostic grade)
-  |-- Coverage criteria
-  |-- Trust criteria
-  |-- Drift drill
-  |-- Traceability chains
-  v
-Remediate
-  |
-  |-- A minus B delta
-  |-- deployable source-backed artifacts
-  |-- manual follow-up items
+  |-- Discover: the layered inventory
+  |-- Diagnose: Assessment (grade, gaps, comparison and drift drill, evidence,
+  |   requirement chains, response path, layer scores) · Compare
+  |-- Remediate: the reconciliation plan
+  |     deploy repository changes to live · update the repository from live
+  |     · review differences individually · sync in both directions
   |-- compile selected artifacts
   |-- deploy through MCP write tools
   v
-Re-run live scan and compare again
+Check again (live against the last scan) or Run (the repository too), and compare again
 ```
+
+Expert keeps its own doors for packs already in hand: the header's
+**upload**, **scan a repo** and **new from live**, and the home's *Check an
+existing service or pack*, load Pack A and Pack B directly into Discover and
+Diagnose. Overview's Services list links there: *Already have the packs?
+Upload one or compare two instead*.
 
 ## Diagnostic Grade Contract
 
 The Diagnostic Grade is the top-level answer. It is scored from seven
-criteria (grade schema 2), plus one informational operability check:
+criteria (grade schema 4), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
-1. **Multi-modal** - metrics, logs, traces, or profiles cover the service.
-2. **Correlated** - telemetry can be joined through trace context or log
-   correlation.
-3. **Calibrated** - SLOs have numeric objectives and baselines exist.
-4. **Comprehensive** - coverage spans the major service layers.
+1. **Multi-modal** - at least three of metrics, logs, traces and profiles are
+   declared as telemetry backends.
+2. **Correlated** - a tracecontext propagator is declared, with log
+   correlation or a logs backend, so traces and logs can be joined.
+3. **Calibrated** - SLOs have numeric objectives and baselines are declared
+   (the scan's default baselines, a scaffold, do not count).
+4. **Comprehensive** - coverage spans the major service layers (the average
+   of the posture matrix's four layers: infrastructure, platform,
+   application, user experience); met when that average reaches 50 in 100.
 
 ### Trust - Can We Trust What The Signals Show?
 
-5. **Chaos-validated** - recovery has fault-injection evidence.
-6. **Drift-free** - declared artifacts match live state.
-7. **Fresh** - the live signal was verified recently.
+5. **Chaos-validated** - declared experiments earn a quarter (a scaffold
+   does not count); full credit needs a recent passing run of every one, from
+   its `last_result` or the live run feed, within the window its schedule
+   sets. A failed newest run earns nothing
+   ([`CHAOS_EXPERIMENTS.md`](CHAOS_EXPERIMENTS.md)).
+6. **Drift-free** - declared artifacts match live state. It earns partial
+   credit: the integrity of the declared requirement chains is the points
+   (0.85 of a point at 85 in 100), and the criterion is met at the bar of 85;
+   without chains, the weighted share of declared artifacts confirmed live
+   (what runs live undeclared costs a little); with no comparison, the share
+   of live probes that answered; with nothing live, nothing.
+7. **Fresh** - the live signal was verified recently: within 24 hours. A live
+   picture that does not say when it was taken does not count as recent.
+
+Chaos-validated, in full (`chaosProof`, `studio/diagnostic-grade.mjs`):
+
+| State | Score |
+|---|---|
+| no experiment declared | 0 |
+| declared, never run (an aborted run counts here) | 0.25 |
+| stale: the newest pass is past its window | 0.25 |
+| failed: the newest run of any experiment failed | 0 |
+| proven | 0.25 + 0.75 × fresh passes ÷ declared |
+
+- The windows come from the experiment's `schedule`: daily 2 days, weekly 8,
+  monthly 35, on-demand and ci 90.
+- A run is the live run feed on Pack B (`mcp.chaos.runs`, measured) or the
+  pack's own `last_result` (recorded in the repository); the live one wins.
+- The scan reads experiments from code (a scenario table in a file with
+  `chaos` in its path), from Chaos Mesh and Litmus resources (a Litmus
+  `ChaosExperiment` is a template, never declared) and from the repository's
+  own `.observability/*.yaml`.
+- The live side never holds an experiment's definition: a live pack keeps
+  `observogram.unobserved.chaos`, with what the feed reported, and the
+  screens say the live side cannot observe chaos experiments.
+- An experiment sits on the layer of its target, else of its steady-state
+  SLO, never of the words in its name. The posture matrix's chaos column
+  counts presence (*declared*); proof lives in this criterion alone.
+
+A scaffold earns nothing (since grade schema 3). The MTTD/MTTR baselines
+every scan writes as defaults (`crawler.scaffold.baselines`, and the live
+fetcher's `mcp.scaffold.baselines`) do not make a pack Calibrated, and a
+library experiment still on its generic fault does not make it
+Chaos-validated. In the conformance rubric, a check the crawler or the live
+fetcher invented (the health check written when a repository has none)
+satisfies no clause, while a library placeholder (`library.todo.*`) still
+represents its requirement and is listed as passing on a placeholder.
 
 ### Operability - Can Oncall Act On What It Sees? (informational, not scored)
 
@@ -139,70 +235,327 @@ Failed criteria still render as evidence. A score can pass while drift remains
 visible. That is intentional: the grade answers whether the posture is
 diagnostic-grade overall; the drill-down tells the team what to fix next.
 
+The repository alone grades without its live side: with nothing live
+checked, Drift-free and Fresh score nothing, and the source line says
+*Graded from the repository alone.* Checked against live, the same pack can
+grade higher while differences are found: the grade says how well the
+service is observed and verified, and a declaration nobody checked cannot
+score on verification.
+
+On Overview, *Why this grade* gives the seven criteria as seven plain lines,
+each with *Yes*, *Partly* or *No*, the yeses first, and the sum with the next
+band (*3.8 of 7 points. B starts at 4.4.*). Five lines read the repository
+alone; *holds up live* and *checked against live* come from the run that
+graded the letter, or say that nothing live was checked. The list is offered
+only when it adds up to the letter on screen (within two points of a hundred),
+only for a run graded under the current schema, and only when that run scored
+Drift-free on the declared requirement chains; a run recorded under an
+earlier schema explains nothing until the next check.
+
 ## Pack Roles
 
 | Role | Meaning |
 |---|---|
-| Pack A | The declared posture, usually generated from the service repo. |
-| Pack B | The verified/live posture, usually generated from MCP. |
+| Pack A | The declared posture. In a service's Run, the scan of its repository: the service's own pack, registered as `<name> · <env> · repository`, replaced by the next Run's scan. |
+| Pack B | The verified/live posture, read through the environment's MCP endpoint. The live side a journey's last run read is kept as `<service> · <env> · live` (else `<journey> · live`), never a primary, replaced by the next run. |
 | Reference pack | A curated target posture used for benchmarking, not the default dry-run path. |
 
 The dry-run path is **repo vs live**, not repo vs aspirational reference.
 
 ## Required UI Invariants
 
-1. **The first screen must be useful.** Discover is the entry point and must let
-   a user create or load a pack immediately.
+1. **The first screen must be useful.** Where the services table has rows,
+   the first run opens on Overview's Services list, every row with its last
+   check and its Run. An empty list says how a service is checked and offers
+   **Add a service**; where the table has no rows, the studio opens on
+   Expert's home, which lets a user create or load a pack immediately
+   (*Check an existing service or pack* · *Build or update a pack*).
 
-2. **The three primary tabs are the workflow.** Do not add another first-class
+2. **A service is its repository plus a live endpoint.** The record holds
+   where the repository is — GitHub, Azure DevOps, a folder on the server, or
+   an upload from the person's own machine — and each environment holds the
+   MCP endpoint that reads what runs there. A Run reads both again and grades
+   the one against the other. A row missing a place says which (*Add the
+   repository*, *Choose the MCP endpoint*, *Add an environment*), and its Run,
+   drawn unavailable, says why when pressed.
+
+3. **Repository access is the person's.** A GitHub or Azure DevOps repository
+   is read as the person who runs it: their own token, which the server uses
+   for that one read only (the studio holds it in the tab's memory and sends
+   it with this tab's Runs of that host's repositories), or their sign-in to
+   the host; an upload's files came from their own machine. The server's own
+   token reads only on a server without sign-in. The server never stores,
+   logs or sends back a person's token, and a sign-in's token stays in a
+   cookie the page cannot read. A schedule, **Check now** and **Check again**
+   never read the repository: they check live against the last scan a
+   person's Run made.
+
+4. **The scan says what it left out.** Every door — a GitHub or Azure DevOps
+   read, a Folder, an Upload, the CLI, Expert's folder, drop and .zip — reads
+   files by the crawler's one rule. The local doors honour the folder's
+   `.gitignore` files. No door reads a YAML or JSON file whose name holds
+   `secret`; each names it instead. A Run keeps its scan report in the run
+   record (`packA.scan`); the Run's toast counts what was not read, what fell
+   past the file cap, what the environment's scope left out and what was
+   recognised as nothing, and the board lists those files with why. A grade
+   never rests on files nobody was told were missing.
+
+5. **The board never claims what nobody checked.** Numbers are withheld with
+   the reason, never drawn as zeros: when nothing live was checked, when the
+   live side did not answer, and when it showed less than the check before
+   (a probe family newly failed). The letter then falls back to the
+   repository's and says why. *Why this grade* appears only when its lines
+   add up to the letter. A check whose Pack B is a recording is graded
+   *against a live recording* and has no Check button: re-reading a file
+   proves nothing about production. The chaos line says what the experiments
+   prove: proven on a date and by what (measured live or recorded in the
+   repository), the experiment that failed and the alerts that did not fire,
+   a pass older than its window, or declared and never recorded as run. With
+   none declared it says what each side could not see, never that recovery
+   is unproven. Each line counts what the engine counted, so the seven lines
+   still add up to the letter.
+
+6. **Overview speaks plainly, with one primary button.** Four status words
+   on the board and no others — *Never checked · Unchanged · Changed ·
+   Unreachable*; the Services list's last check reads *Checked 2 hours ago*,
+   *Never checked*, *Unreachable*, or *Not known* when the checks could not
+   be read. No sentence the model returns carries a percentage, a layer code,
+   an artefact id or an engine state word (declared only, scaffold,
+   candidate, recorded live); a number is drawn as a picture — the ring, the
+   bars — and the renderer puts the sign on it. At most one primary button
+   on the screen: exactly one wherever there is something to do from here
+   (**Add a service**, **Save and run**, the next step or **Check again**),
+   none over the start's cards or where nothing can be done. Colour says
+   which layer; the pill beside it says how well.
+
+7. **The three primary tabs are the workflow.** Do not add another first-class
    navigation layer that competes with Discover, Diagnose, Remediate. The
    service page is the home's second level — a card opens it, its actions
-   open the three tabs bound to the service — not a fourth tab.
+   open the three tabs bound to the service — not a fourth tab. Overview is a
+   face of the same journey, not a fourth tab: its stages use the same
+   words, and each column ends in the link to its Expert view, bound to the
+   service.
 
-3. **Pack identity must be explicit.** Uploaded/crawled/drafted pack selectors
+8. **Pack identity must be explicit.** Uploaded/crawled/drafted pack selectors
    must show enough source context to prevent stale or typo uploads from being
-   mistaken for the dry-run input.
+   mistaken for the dry-run input. The header names **Pack A** and **Pack B**,
+   each with its environment, on every workspace screen.
 
-4. **Pack B means comparison.** When a live pack is loaded as Pack B, Diagnose
+9. **Pack B means comparison.** When a live pack is loaded as Pack B, Diagnose
    must be able to answer repo-vs-live drift without another conceptual mode.
+   Expert opened from the board binds the live pack the board graded as Pack
+   B, so Diagnose shows the board's letter; when the board graded the
+   repository alone, it opens with no Pack B.
 
-5. **Diagnostic heading stays focused.** The heading is `DIAGNOSTIC GRADE`
-   plus PASS/FAIL. The live target belongs in the drift section, not in the
-   grade title.
+10. **The Assessment heading stays focused.** Diagnose's decision header
+    carries the grade letter, its plain name and one sentence; its context
+    line names both packs (*Declared* and *Live*, or the pack and its
+    *Baseline*). The live target belongs in the context and the comparison,
+    not in the grade title. The formal term, the ladder and the scoring rules
+    sit behind *How the grade is calculated*; the measures under the header
+    name the target (grade A, above 85%) and whether it is met.
 
-6. **Drift remains evidence, not decoration.** Declared-not-live, drifted, and
-   live-only signals must stay visible even when the overall grade passes.
+11. **Drift remains evidence, not decoration.** Declared-not-live, drifted, and
+    live-only signals must stay visible even when the overall grade passes.
 
-7. **Remediate separates deployable from manual.** Source-backed artifacts may
-   be selected for deploy. Inferred guidance must be labelled and kept out of
-   default deploy selections.
+12. **Remediate separates deployable from manual.** Source-backed artifacts may
+    be selected for deploy. Inferred guidance must be labelled and kept out of
+    default deploy selections.
 
-8. **State must not create false confidence.** Persisted local state is useful,
-   but reset and source labels must make stale comparisons easy to clear.
+13. **State must not create false confidence.** Persisted local state is useful,
+    but reset and source labels must make stale comparisons easy to clear.
+    From the board, Pack B is the board's comparison or none: a Pack B left
+    from an earlier Expert visit is cleared.
 
-9. **Services are records.** The home and the SERVICE selector read the
-   services table (`GET /api/services`); a service page binds Discover ·
-   Diagnose · Remediate · Build to a service and an environment through one
-   pack resolver (the newest primary); a pack-derived tile appears only where
-   the table is unavailable (the static bundle) or for a registered pack whose
-   service row was deleted, and behaves as before.
+14. **Services are records.** The home and the SERVICE selector read the
+    services table (`GET /api/services`); a service page binds Discover ·
+    Diagnose · Remediate · Build to a service and an environment through one
+    pack resolver (the newest primary); a pack-derived tile appears only where
+    the table is unavailable (the static bundle) or for a registered pack whose
+    service row was deleted, and behaves as before. Overview's Services list
+    reads the same table; where there is none (the static bundle), Overview
+    keeps the board and draws no list.
 
-10. **Settings is entered from a menu, not a tab** (Advanced → Settings; the
+15. **Settings is entered from a menu, not a tab** (Advanced → Settings; the
     account menu); it never competes with Discover · Diagnose · Remediate.
 
 ## What Belongs In Each Step
 
+### Overview: the Services list
+
+Overview's front door. One row per service and environment, in the columns
+*Service · Repository · Live · Last check*, the rows a person can run first.
+Each one is checked where it is declared — its repository — against where it
+runs, read through its live MCP endpoint.
+
+Belongs here:
+
+- the service's name and its environment as a pill;
+- the repository: its kind (*GitHub · Azure DevOps · Folder · Upload*) over
+  `owner/repo`, `project/repo` or the folder's name, the branch or the full
+  path beneath; an upload's name with *uploaded 2 days ago · 12 files*;
+- the live endpoint: *MCP* over the endpoint's name and host;
+- the last check: the grade letter, *Checked 2 hours ago*, how much matches
+  live — or *Never checked · Run it to check*, *Unreachable* with *the live
+  side did not answer*, or *Not known* when the checks could not be read;
+- **Run** (*Running… Scanning the repository, then checking live*), **Open →**
+  (the board, offered when the service has a pack of its own or a check) and
+  **Change** (where it is declared or where it runs);
+- **Add a service**, the one primary button: four numbered answers — *1
+  Service*, *2 Environment* (prod by default), *3 Repository — where it is
+  declared*, *4 Live — where it runs* (one of the org's endpoints, or *A new
+  MCP endpoint…* with *Endpoint URL*, *Its name* and an optional *Token
+  variable* when this reader may register one) — then **Save and run**,
+  **Save** or **Cancel**. A name that keys an existing record completes it,
+  never a second one;
+- the Repository answer's kinds: GitHub or Azure DevOps with an optional
+  branch; **Folder**, its full path on the server, typed or picked with
+  **Browse…** (the server's folders by name — *Up*, each repository marked,
+  *Use this folder*, *Close* — drawn only where the server would take a folder
+  from this reader); **Upload**, *Choose a folder*, *Choose a .zip* or a drop,
+  read in the browser by the scan's rule and sent with Save, each Run scanning
+  the kept copy again;
+- the toast a Run ends with: *… checked: 200 of 396 files from … (196 past the
+  file cap, 62 recognised as nothing), grade …, …% matches live.*;
+- a missing answer marked where it goes once a save was tried; the server's
+  refusal shown as its sentence; a Run that did not finish says why on its
+  row, in the server's words;
+- for a rank that cannot write (a viewer), **Add a service** and **Run**
+  drawn unavailable, each saying why when pressed, the form's **Save and
+  run** and **Save** disabled, and no **Browse…**, upload buttons or token
+  ask: drawn, never removed;
+- the services a live draft saw with no repository yet, counted under the
+  list (*3 more services were seen live with no repository yet. Show them*);
+- *Already have the packs? Upload one or compare two instead* — Expert's home.
+
+Does not belong here:
+
+- the grade's explanation, the layers, the counts (the board's);
+- a token's value — a typed token sits in a password field and, once sent,
+  in the tab's memory only;
+- a repository read with the server's own access on a server with sign-in;
+- members and the org's MCP endpoint records beyond registering a new one
+  here (Settings).
+
+### Overview: repository access
+
+Where a host would not show the repository without the person's own access,
+the row that ran asks, and runs again once answered.
+
+Belongs here:
+
+- **Sign in to GitHub** or **Sign in to Azure DevOps**, where the server is
+  set up for the host and has sign-in: the host's own sign-in in a window
+  that reports back, after which every Run of that host's repositories reads
+  as that account in this browser (a token typed in this tab still wins; an
+  Azure DevOps Server repository still takes a personal access token);
+- or *Your GitHub token* (*Your Azure DevOps token*) and **Run with it**,
+  sent with this tab's Runs of that host's repositories and never kept on
+  the server; a token the host refuses is dropped, and the row says so;
+- above the list, under its heading, each token the tab holds with **Forget
+  it**, and each host the person is signed in to (*Signed in to GitHub as …*)
+  with **Sign out of GitHub**;
+- the sentence the row asks with, naming whose access was refused: the
+  token, or the account signed in, or a sign-in that has ended.
+
+Does not belong here:
+
+- the host's token on any page: it comes back to the person's browser
+  sealed in an HttpOnly cookie the page cannot read, bound to their login and
+  session, and ends with the host's token, the session, signing out of the
+  host or of Observogram;
+- a sign-in on a server without sign-in (`OBSERVOGRAM_AUTH=off`), where the
+  server's own token reads instead.
+
+Expert's GitHub scan has a field for the person's token, sent with that scan
+only, and its error offers the same sign-in button.
+
+### Overview: the board
+
+One service at a time. The header has **← Services**, the service picker
+and the environment; under it the three stages, *1 Discover · 2 Diagnose · 3
+Remediate*, each over its column in a 30 / 40 / 30 rhythm.
+
+Belongs here:
+
+- **Discover — Layers** (*The stack, top down, as the repository declares
+  it*):
+  - *In the repository*, the pack's own layers as Discover names them
+    (*SLI/SLO*, *Metrics/Logs/Traces* …), each with its count;
+  - behind *Show the layers*, the stack — user experience, application,
+    platform, infrastructure — each layer with its ten kinds of signal
+    (*SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*), lit
+    where the repository declares that kind and carrying the count, and a
+    pill such as *7 of 10 kinds*;
+  - three stats — *Declared*, *Coverage*, *Unplaced* — where the layers plus
+    *Unplaced* are *Declared*, each artefact once;
+  - the scan line, *Read 200 of 396 files from … — 196 past the file cap, …*,
+    amber when files the rule takes were lost, and behind it each group:
+    *Not read* with each file and why, *Past the file cap* (a count: the read
+    takes the likely artefacts first), *The host cut its file list short*
+    when it did, *Left out by the prod scope* and *Read, recognised as
+    nothing* with their files, and the scan's warnings;
+  - **Open in Discover**;
+- **Diagnose**:
+  - one status strip for the column (*Graded against live · checked 2 hours
+    ago · live side partial: dashboards not read · checks run when you
+    click*);
+  - **A — Are the right signals in place?** (*The repository against what
+    good looks like*): the grade letter in a shield, its ladder name in plain
+    words (*Field grade*), the verdict word, the required rules (*11 / 15
+    required rules met · tier 2*) and *Why this grade*, closed until the
+    reader opens it;
+  - **B — Can you trust what the signals show?** (*The repository against
+    live*): the alignment as a ring, four counts — *match · run differently ·
+    not running live · live only* — the promises (*5 of 18 promises hold end
+    to end, 1 in part.*), then the status word, one sentence with a time and
+    **Check again**;
+  - **Open in Diagnose**;
+- **Remediate — Changes to apply** (*Between the repository and live*): *to
+  add · to update · to review*, each with its note (*review* never reads as
+  removal); the next step, one sentence and one button — **See the
+  differences** (Neuron, on the run whose numbers the board showed), **See
+  what to fix** (Expert's Diagnose, with the assessment's first three causes
+  behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
+  when the check reads a recording; with nothing to change, the sentence
+  alone (*Nothing to do right now: live matches what the repository
+  declares.*); **Open in Remediate**;
+- where there is no Services list (the static bundle), or for a service with
+  a check but no pack yet, the drift check started here in three steps —
+  *Scan a repo* (Pack A: **Scan a repository** or **Upload a pack**),
+  *Generate from live* (Pack B: **Generate live from MCP** or **Upload a
+  pack**, waiting for Pack A), *Diagnose drift* (automatic: the pair is saved
+  as the service's check, `<service>-repo-vs-live`, and run on the board;
+  should the server refuse to save it, the comparison opens in Expert's
+  Diagnose and the toast says why); under it, *Already have packs?* **Open
+  Expert mode**. On a server, a new service starts with **Add a service**;
+- the simple layout, the three sentences alone, as the fallback
+  (`&layout=simple`), drawn by the renderer itself should the board fail, and
+  for a service without a pack of its own (one only a live draft has seen),
+  whose next step is **Open Expert mode**.
+
+Does not belong here:
+
+- a count drawn as zero, or a letter graded against a smaller live picture;
+- anything without an engine behind it: cost and ingestion, a quality trend,
+  a 3-D tomogram;
+- a second primary button;
+- editing the pack, compile or deploy (Expert's, one click away).
+
 ### Home and the service page
 
-The home is the org's services table, one card per record, and a card opens
-the service page: the environments as tabs, each with the verdict the pack is
-graded to at the record's tier (a base grade is named as such when the pack
-declares no overlay for that environment; "no verdict yet" is said, never a
-zero), the MCP endpoint it is checked through, and the four actions —
-Discover · Diagnose · Remediate · Build — bound to the service and the
-environment through one pack resolver. Catalogue packs are listed apart; the
-affordances are drawn from the effective role the server reports for the
-active org (`GET /api/orgs`).
+Expert's home. When the services table has rows it is the org's services, one
+card per record, and a card opens the service page: the environments as tabs,
+each with the verdict the pack is graded to at the record's tier (a base grade
+is named as such when the pack declares no overlay for that environment; "no
+verdict yet" is said, never a zero), the MCP endpoint it is checked through,
+and the four actions — Discover · Diagnose · Remediate · Build — bound to the
+service and the environment through one pack resolver. Catalogue packs are
+listed apart; the affordances are drawn from the effective role the server
+reports for the active org (`GET /api/orgs`). On an empty workspace the home
+is the hero. Both landings open with the same first decision: *Check an
+existing service or pack* or *Build or update a pack* (*Start a new pack* ·
+*Update a pack you have*).
 
 Belongs here:
 
@@ -213,14 +566,19 @@ Belongs here:
 - the MCP endpoint as its name and origin only;
 - the four actions, worded for the rank that reads them (a control a role
   cannot use is drawn disabled with its reason, never as usable);
-- the record editor (name, owners, tier, description) for operators;
+- the record editor (name, owners, tier, description) for operators, and
+  *Add environment* · *Edit environment*, which open Settings' environment
+  editor;
 - catalogue packs, apart from the records.
 
 Does not belong here:
 
 - a URL or a token (the endpoint's safe form is all the page shows);
-- environment CRUD, members, MCP endpoint records (Settings);
-- journeys (Neuron) and the deploy history.
+- members and MCP endpoint records (Settings);
+- journeys (Neuron) and the deploy history; the page says that drift runs
+  are Neuron's, not part of this verdict;
+- the service's repository and its Run (Overview's Services list: **Change**,
+  **Run**).
 
 ### Settings
 
@@ -256,21 +614,25 @@ Belongs here:
 
 Does not belong here:
 
-- services themselves (Build and the service page write them);
+- services themselves (Overview's Add a service, Build and the service page
+  write them);
 - a secret's value — a token anywhere on the page, a password outside the
   one dialog that shows a new temporary password once;
 - an email in a member row;
 - a journey tab.
 
-### Build (no pack yet)
+### Build or update a pack
 
-A parallel journey for a service that has no pack, in the same visual language
-as the three steps below and ending in Discover
-([`BUILD_JOURNEY.md`](BUILD_JOURNEY.md)). It is reached from the home hero, the
-service gate and the upload popover, never from the three primary tabs, and it
-does not change what Discover, Diagnose or Remediate show. Both landings open with
-the first decision — check an existing service or pack, or build a new one — and
-both paths join at Discover.
+A parallel journey for a service that has no pack (Build), or for a pack made
+in Build that needs its next version (Update), in the same visual language as
+the three steps below and ending in Discover
+([`BUILD_JOURNEY.md`](BUILD_JOURNEY.md)). Build is reached from the home hero,
+the service gate, the upload popover and the service page's *Build a pack for
+<env>*; Update from the home's *Update a pack you have* and the header's
+**update**; neither from the three primary tabs, and neither changes what
+Discover, Diagnose or Remediate show. Both landings open with the first
+decision — *Check an existing service or pack* or *Build or update a pack* —
+and both paths join at Discover.
 
 Belongs here:
 
@@ -319,6 +681,16 @@ Belongs here:
   each one, the compiled artefacts, the hand-off ("Ready to continue?": resolve
   or adjust at Define, or continue with visible gaps, which registers the pack
   as an upload)
+- Update ([`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md), slices 1 and 2): the
+  header's **update** (beside **export**, while a pack is open) or the home's
+  *Update a pack you have* reopens a pack made in Build on Build's screen;
+  Compile names source and destination (*Updating v0.1.0 → saves as v0.2.0*),
+  adds **+ SLI · + SLO · + Route · + Alert rule** and lists *Changes since
+  v0.1.0*, each with *undo*; Verify shows the saved pack beside the pack with
+  the changes, and **Save as <pack> v0.2.0** registers the next version of the
+  same pack, keeping the earlier one under it. A scan, a live draft, an
+  uploaded pack and a shipped example have no definition to reopen and say
+  so
 
 Does not belong here:
 
@@ -333,21 +705,34 @@ Does not belong here:
   artefacts Discover will show, id for id — never a Build-only drawing of the
   canonical
 - deploy actions (Remediate's, on the registered pack)
+- what the update journey has not built: Remediate's *Open as the next
+  version* and upload's *Save as the next version*, the live check of new
+  expressions before saving, and slice 3 (keeping a scan or a live draft as
+  one's own pack, changing what Build generated beyond its inputs)
 
 ### Discover
 
+Discover is a catalogue: it lists what the open pack holds, layer by layer,
+and judges nothing.
+
 Belongs here:
 
-- repo scan
+- repo scan (a folder, a drop, a .zip or a GitHub URL; the staged panel lists
+  *N files not read, and why*)
 - live MCP generation
 - YAML/JSON upload
 - pack catalog selection
 - layered artifact inventory
 - source metadata and crawler summary
+- an empty group that says why when its producer could not look (*None
+  declared — the live side cannot observe chaos experiments*), else *None in
+  this pack*
 
 Does not belong here:
 
 - final diagnostic verdict
+- a decision sentence, evidence or attention counts: with one pack there is
+  nothing to judge against
 - deploy actions
 - benchmark marketing copy
 
@@ -355,13 +740,19 @@ Does not belong here:
 
 Belongs here:
 
-- Diagnostic Grade
+- the Assessment: the decision header (the grade letter and its plain name,
+  one sentence, one next action, the top causes), the measures (overall
+  assessment, coverage, trust, the audit gate, live signals, checks passed,
+  requirement chains) and *How the grade is calculated*, collapsed
 - score, coverage, trust, verified status
+- the sections behind one sticky index: Summary, Gaps, Comparison, Evidence,
+  Requirements, Response path, Layer scores
 - evidence table
 - drift drill
 - traceability to explain why an artifact matters
 - the response path: which alert each declared remediation answers to, and
   whether that alert is live (read-only here; the fixes are on Remediate)
+- Compare: Pack A and Pack B side by side, paired by behaviour, name or id
 - comparison and atlas analysis as advanced diagnostics
 
 Does not belong here:
@@ -370,15 +761,40 @@ Does not belong here:
 - compile output as the main surface
 - unrelated reference browsing
 
+### Neuron (Advanced)
+
+Where the board's **See the differences** leads, on the journey whose run the
+board showed, and where the service page sends drift runs: every saved check
+(journey) read as one instrument, run after run.
+
+Belongs here:
+
+- one sentence about the journey in focus, from its newest record, with **Run
+  now** and the causes behind it;
+- the saved journeys and their runs over time: outcomes, alignment and grade,
+  the requirement chains and their causes, the schedule;
+- the newest record opened up, and the saved-journey cards.
+
+Does not belong here:
+
+- a grade of its own: it reads the run records the engine wrote;
+- editing the pack, compile or deploy (Remediate's).
+
 ### Remediate
 
 Belongs here:
 
 - A minus B delta
+- the reconciliation plan, each strategy named by its effect and saying
+  source → destination: *Deploy repository changes to live* (changes live
+  systems), *Update the repository from live* (changes the repository),
+  *Review differences individually* (preview only), *Sync in both directions*
 - deployable rows
 - manual follow-up rows
 - compile preview
 - deploy modal
+- **export** (in the header while a pack is open): the pack.yaml and every
+  compiled artefact as a ZIP, to commit to the repository
 - validation status
 - rollback/dry-run affordances
 - the response path's next steps: deploy a missing burn alert, reconcile a
@@ -392,27 +808,61 @@ Does not belong here:
 
 ## Dry-Run Golden Path
 
-For the Krystaline dry run:
+The path a person takes today, end to end:
 
-1. Clear stale uploads if needed.
-2. Load the supplied `krystaline.service.repo.yaml` repo pack as Pack A.
-3. Load the generated or supplied `production-live.pack.yaml` as Pack B.
-4. Open Diagnose.
-5. Confirm Diagnostic Grade renders PASS when score is greater than 85%.
-6. Explain remaining drift from the drill-down.
-7. Open Traceability for SLO-to-artifact evidence.
-8. Open Remediate.
-9. Compile the settlement latency remediation artifacts.
-10. Deploy only when the MCP write target and token are ready.
-11. Re-run live generation and compare again.
+1. Start the studio (`npm run dev`, `http://127.0.0.1:8000`) and sign in (a
+   first boot seeds `admin` and asks for a new password at sign-in;
+   `OBSERVOGRAM_AUTH=off` runs without sign-in). Until a face is picked, the
+   studio opens on Overview's **Services** when the table has rows, and on
+   Expert's home when it has none; **Overview** in the switch (or
+   `?mode=overview`) opens the list.
+   (`npm run demo` starts a populated studio on port 8010:
+   [`OVERVIEW_DEMO.md`](OVERVIEW_DEMO.md).)
+2. **Add a service**: the service, the environment, the repository (GitHub,
+   Azure DevOps, a Folder or an Upload), the live MCP endpoint. A Folder is
+   taken only under the folders `OBSERVOGRAM_REPO_ROOTS` lists or, where it
+   lists none, on the server's own machine while it runs without sign-in on
+   loopback; **Browse…** shows only what the server would take. Press **Save
+   and run**. For a row already listed, press **Run**, or **Change** to say
+   where it is.
+3. If the row asks, **Sign in to GitHub** (or Azure DevOps), or give your own
+   token and press **Run with it**.
+4. Read the toast: the files read, of how many, from where, what was left
+   out, the grade and how much matches live.
+5. Press **Open →**. On the board, read what the scan left out under
+   *Layers*; the grade and *Why this grade*; the four counts and the
+   promises; the status strip, which names any probe family the live side
+   could not read.
+6. If the board reads *Unreachable*, or *the live side showed less than the
+   check before*, press **Check again** before reading any count.
+7. **Open in Diagnose**: Expert's Assessment of the scan against the live
+   pack the board graded, with the same letter. Explain the remaining drift
+   from the drift drill under Comparison and the requirement chains;
+   Advanced → Traceability shows the SLO-to-artifact evidence.
+8. **Open in Remediate**: choose the strategy, select the source-backed
+   artefacts and compile them.
+9. Deploy only when the MCP write target is ready: writes enabled, a client
+   key, the backend's token on the MCP server ([`DRY_RUN.md`](DRY_RUN.md),
+   *Deploy Gate*).
+10. Press **Overview**, then **Open →** on the row; on the board **Check
+    again** checks live against the last scan, and **Run** on the Services
+    list reads the repository again too. Compare again.
 
-See [`DRY_RUN.md`](DRY_RUN.md) for the executable checklist.
+[`DRY_RUN.md`](DRY_RUN.md) is the runbook of the first dry run (June 2026),
+which loaded supplied pack files as Pack A and Pack B in Expert; that path
+still works through the header's **upload**.
 
 ## See Also
 
+- [`UX_SCREEN_GRAMMAR.md`](UX_SCREEN_GRAMMAR.md) - the screen contract, and "Two faces: Overview and Expert"
+- [`OVERVIEW_DEMO.md`](OVERVIEW_DEMO.md) - the board in ninety seconds, on the seeded demo
 - [`BUILD_JOURNEY.md`](BUILD_JOURNEY.md) - building a new pack: Define, Compile, Verify
-- [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) - proposal: changing a pack that already exists
+- [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) - changing a pack that already exists: slices 1 and 2 built as *Build or update a pack*, slice 3 a proposal
+- [`CHAOS_EXPERIMENTS.md`](CHAOS_EXPERIMENTS.md) - declared versus proven, grade schema 4
+- [`DIAGNOSTIC_GRADE_FRAMEWORK.md`](DIAGNOSTIC_GRADE_FRAMEWORK.md) - what "diagnostic grade" means
 - [`DIFF.md`](DIFF.md) - structural drift model
 - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) - live scan and write-back path
 - [`CONFORMANCE.md`](CONFORMANCE.md) - maturity rubric scoring
 - [`USER_STORY_CRAWLER_PROVENANCE.md`](USER_STORY_CRAWLER_PROVENANCE.md) - provenance for deployable artifacts
+- [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) - how a studio view is built
+- README, *A Service's Run* and *Whose access reads a repository* - the Run, the repository kinds and the sign-in configuration

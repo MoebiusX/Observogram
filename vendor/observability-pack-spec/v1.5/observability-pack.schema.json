@@ -465,7 +465,7 @@
               "additionalProperties": false,
               "properties": {
                 "id":     { "$ref": "#/$defs/Slug" },
-                "engine": { "type": "string", "enum": ["chaos-mesh","litmus","gremlin"] },
+                "engine": { "type": "string", "enum": ["chaos-mesh","litmus","gremlin","in-process","custom"] },
                 "target": { "type": "string" },
                 "steady_state_hypothesis": { "$ref": "#/$defs/Ref" },
                 "fault":  { "type": "object", "required": ["kind"], "additionalProperties": true,
@@ -474,8 +474,9 @@
                                             "fraction": { "type": "number", "minimum": 0, "maximum": 1 } } },
                 "expected_alerts": { "type": "array", "minItems": 1, "items": { "type": "string" } },
                 "expected_mttd":   { "$ref": "#/$defs/Duration" },
-                "schedule":        { "type": "string", "enum": ["daily","weekly","monthly"] },
-                "environment":     { "$ref": "#/$defs/Slug" }
+                "schedule":        { "type": "string", "enum": ["daily","weekly","monthly","on-demand","ci"] },
+                "environment":     { "$ref": "#/$defs/Slug" },
+                "last_result":     { "$ref": "#/$defs/ChaosRunResult" }
               } } },
         "synthetic_checks": { "type": "array", "items": { "type": "object",
               "required": ["id","kind","target","interval","on_fail_severity"],
@@ -489,6 +490,21 @@
                 "assertions":          { "type": "array", "items": { "type": "object", "additionalProperties": true } },
                 "on_fail_severity":    { "$ref": "#/$defs/Severity" }
               } } }
+      }
+    },
+
+    "ChaosRunResult": {
+      "type": "object",
+      "required": ["at","outcome"],
+      "additionalProperties": false,
+      "description": "The newest recorded run of a chaos experiment (spec 1.5, RFC-0004). A pack keeps the newest run only; the history stays with whatever measured it.",
+      "properties": {
+        "at":            { "type": "string", "format": "date-time" },
+        "outcome":       { "type": "string", "enum": ["pass","fail","aborted"] },
+        "environment":   { "$ref": "#/$defs/Slug" },
+        "observed_mttd": { "$ref": "#/$defs/Duration" },
+        "alerts_fired":  { "type": "array", "items": { "type": "string" } },
+        "evidence":      { "type": "string" }
       }
     },
 
