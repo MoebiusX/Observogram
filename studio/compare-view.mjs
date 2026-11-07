@@ -4543,6 +4543,9 @@ function renderCompareReview(digest, cmp, ctx) {
     const i = targets.push([art, { id: L, num: L, name: L }, art._sub || null, side]) - 1;
     return `<button type="button" class="ux-link-btn compare-open" data-cmp-open="${i}">${escapeHtml(label)}</button>`;
   };
+  // A metric name may break after its underscores and colons, so a card too narrow for it (one a row, on a
+  // phone) breaks it between words: kube_deployment_status_ready_|replicas, not …ready_repli|cas.
+  const breakableName = (name) => escapeHtml(name).replace(/([_:])/g, '$1<wbr>');
   const MAX_MISSING = 60;
   const MAX_CHANGED = 40;
   const MAX_FIELDS = 8;
@@ -4569,7 +4572,7 @@ function renderCompareReview(digest, cmp, ctx) {
           return `
           <li class="compare-missing-item ux-tone-fail">
             <span class="drift-row-num" title="${escapeHtml(diagUx.layerTitle(L))}">${escapeHtml(L)}</span>
-            <span class="compare-missing-label">${escapeHtml(diffEntryLabel(e))}${readBy ? `<span class="compare-missing-readers">${escapeHtml(readBy)}</span>` : ''}</span>
+            <span class="compare-missing-label">${breakableName(diffEntryLabel(e))}${readBy ? `<span class="compare-missing-readers">${escapeHtml(readBy)}</span>` : ''}</span>
             ${art?.id ? `<code class="compare-missing-id">${escapeHtml(art.id)}</code>` : ''}
             ${openBtn(art, L, missingSide, 'Open')}
           </li>`;

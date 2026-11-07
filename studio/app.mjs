@@ -1524,14 +1524,17 @@ function installObservaChrome(chrome) {
             <span class="observa-adv-caret">▾</span>
           </button>
           <div class="observa-adv-menu" id="observa-adv-menu" role="menu" aria-label="Advanced tools" hidden>
-            <div class="observa-adv-menu-head">Alien Observability · deep tools</div>
+            <div class="observa-adv-group" role="group" aria-labelledby="observa-adv-h-tools">
+            <div class="observa-adv-menu-head" id="observa-adv-h-tools">Alien Observability · deep tools</div>
             ${OBSERVA_ADV.map(a => `
               <button type="button" class="observa-adv-item" role="menuitem" data-view="${a.id}">
                 <span class="observa-adv-item-label">${escapeHtml(a.label)}</span>
                 <span class="observa-adv-item-sub">${escapeHtml(a.sub)}</span>
               </button>
             `).join('')}
-            <div class="observa-adv-menu-head">Administration</div>
+            </div>
+            <div class="observa-adv-group" role="group" aria-labelledby="observa-adv-h-admin">
+            <div class="observa-adv-menu-head" id="observa-adv-h-admin">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
               <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
@@ -1560,6 +1563,7 @@ function installObservaChrome(chrome) {
               <span class="observa-adv-item-label">${escapeHtml(chrome.aboutLabel)}</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1585,23 +1589,29 @@ function installObservaChrome(chrome) {
     advToggle?.setAttribute('aria-expanded', 'false');
     if (ownedFocus) advToggle?.focus();
   };
+  // The menu hangs under its toggle, never over it: its two groups side by
+  // side where the window has the width (both fit under the chrome of a
+  // 900 px window), stacked where it has not, and whatever the window cannot
+  // hold below the toggle scrolls inside the menu. (Lifted to fit, the
+  // single column covered the toggle and still ran past a 900 px window.)
   const positionAdv = () => {
     if (!advToggle || !advMenu) return;
     const gap = 10;
     const pad = 12;
     const rect = advToggle.getBoundingClientRect();
-    const width = Math.min(280, Math.max(180, window.innerWidth - pad * 2));
+    const room = window.innerWidth - pad * 2;
+    const twoCols = room >= 600;
+    const width = twoCols ? 580 : Math.min(280, Math.max(180, room));
     const left = Math.min(
       Math.max(pad, rect.right - width),
       Math.max(pad, window.innerWidth - width - pad),
     );
-    const top = Math.min(
-      rect.bottom + gap,
-      Math.max(pad, window.innerHeight - pad - advMenu.offsetHeight),
-    );
+    const top = rect.bottom + gap;
+    advMenu.classList.toggle('is-two-col', twoCols);
     advMenu.style.width = `${width}px`;
     advMenu.style.left = `${left}px`;
     advMenu.style.top = `${top}px`;
+    advMenu.style.maxHeight = `${Math.max(120, window.innerHeight - top - pad)}px`;
   };
   advToggle?.addEventListener('click', (e) => {
     e.stopPropagation();

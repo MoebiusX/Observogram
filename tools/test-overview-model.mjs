@@ -1053,6 +1053,10 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.equal(countOf(html, 'class="ov-cell"'), 26, 'the rest dark');
   assert.ok(html.includes('<span class="ov-cell ov-cell--on" title="37 metrics">37</span>') && html.includes('<span class="ov-cell" title="no runbooks"></span>'));
   assert.ok(html.includes('<span class="og-pill og-pill--ok ov-layer__n">7 of 10 kinds</span>') && html.includes('<span class="og-pill og-pill--fail ov-layer__n">0 of 10 kinds</span>'), 'the health pill');
+  // The hint is the name's sibling, not inside it: it runs under the pill as well as the name (studio/overview.css,
+  // the head's grid areas), so it is never cut; and with nothing cut, no tooltip repeats it.
+  assert.match(html, /<span class="ov-layer__name">User experience<\/span>\s*<span class="ov-layer__hint">front end · journeys · business outcomes<\/span>/, 'the layer\'s hint beside its name');
+  assert.ok(!html.includes('ov-layer__hint" title='), 'no tooltip repeats a hint that is never cut');
   assert.ok(html.includes('<span class="ov-layer__total" title="declared on this layer"><b>80</b><small>declared</small></span>'), 'the count');
   assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards and panels · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
   assert.ok(html.includes('<div class="ov-stat" title="600 things declared in the repository."><dt>Declared</dt><dd>600</dd></div>') && html.includes('<dt>Coverage</dt><dd>35<small>%</small></dd>') && html.includes('<div class="ov-stat" title="7 things could not be placed on a layer."><dt>Unplaced</dt><dd>7</dd></div>'), 'the three stats');

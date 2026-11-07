@@ -792,6 +792,10 @@ const gateBits = (gate) => Object.entries(gate || {}).map(([k, v]) => `${k}=${v 
 const scheduleText = (s) => (!s ? 'no schedule: declared (run on demand)' : `${s.cron ? `cron ${s.cron}` : s.every ? `every ${s.every}` : 'schedule'}${s.timezone ? ` (${s.timezone})` : ''}${s.cadenceMs ? ` · ${fmtCadence(s.cadenceMs)}` : s.cadenceNote ? ` · ${s.cadenceNote}` : ''}`);
 const val = (v) => (v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
 const kv = (pairs) => `<dl class="nrn-kv">${pairs.filter(([, v]) => v !== undefined).map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(val(v))}</dd>`).join('')}</dl>`;
+// A sampled value as a person reads it: whole numbers stay whole, anything
+// else keeps three significant digits (0.0033333333333333335 → 0.00333,
+// 0.586 → 0.586); from 100 up it is rounded to a whole number.
+export const evidenceNumber = (x) => (Number.isInteger(x) || Math.abs(x) >= 100 ? String(Math.round(x)) : String(Number(x.toPrecision(3))));
 const tbl = (headers, rows) => (rows.length
   ? `<table class="nrn-table"><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`
   : '<p class="nrn-muted">none</p>');
@@ -1025,13 +1029,17 @@ function renderLatestDetails(d) {
     ])));
   }
 
-  // Stack evidence of the newest record.
+  // Stack evidence of the newest record. The table fits its panel: a sampled
+  // value is read to three significant digits (0.0033333333333333335 printed
+  // whole was 164 px), a reference SLI may break after its slashes, and the
+  // reason — a sentence that names metrics — wraps in what is left (its
+  // longest metric name had held the table at 1443 px in a 1354 px panel).
   if (last.stackEvidence) {
     const se = last.stackEvidence;
     const rows = se.rows.map((r) => [
       `<code>${escapeHtml(r.id)}</code>`, escapeHtml(r.family || ''), escapeHtml(r.product || ''),
-      r.outcome === 'data' && typeof r.value === 'number' ? escapeHtml(`${r.value}${r.unit ? ` ${r.unit}` : ''}`) : '—',
-      escapeHtml(r.direction || ''), escapeHtml(r.outcome || ''), r.hint ? `<em>${escapeHtml(r.hint)}</em>` : '', escapeHtml(r.referenceSli || ''), escapeHtml(r.reason || ''),
+      r.outcome === 'data' && typeof r.value === 'number' ? `<span class="nrn-nowrap">${escapeHtml(`${evidenceNumber(r.value)}${r.unit ? ` ${r.unit}` : ''}`)}</span>` : '—',
+      escapeHtml(r.direction || ''), escapeHtml(r.outcome || ''), r.hint ? `<em>${escapeHtml(r.hint)}</em>` : '', escapeHtml(r.referenceSli || '').replaceAll('/', '/<wbr>'), r.reason ? `<span class="nrn-wrap">${escapeHtml(r.reason)}</span>` : '',
     ]);
     const am = se.alertmanager, gf = se.grafana;
     parts.push(details(`Stack evidence <span class="nrn-muted">${escapeHtml(se.status || '?')}${se.reason ? ` — ${escapeHtml(se.reason)}` : ''} · ${se.rows.length} row${se.rows.length === 1 ? '' : 's'} · point-in-time, signal not verdict</span>`,

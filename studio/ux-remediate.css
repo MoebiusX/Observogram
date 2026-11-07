@@ -181,9 +181,13 @@
 
 /* ---------- the deploy modal: plain lede, and the review beside Deploy ---------- */
 .deploy-modal .deploy-modal-lede { font: 14px/1.5 var(--sans); font-style: normal; color: var(--ux-ink-2); }
+/* The review is bounded (four facts, the changed artefacts capped, the checks), so it shows whole above the action
+   bar: at 38vh it was 342 px for 363 px of review at 1440 × 900, and its last line sat under the bar. The form above
+   it gives way and scrolls, never below 120 px; on a short window the review scrolls too. */
+.deploy-modal .deploy-modal-body { min-height: 120px; }
 .deploy-review {
   flex: 0 0 auto;
-  max-height: 38vh; overflow: auto;
+  max-height: min(60vh, 520px); overflow: auto;
   padding: 10px 22px 12px;
   border-top: 1px solid var(--line);
   background: var(--card);

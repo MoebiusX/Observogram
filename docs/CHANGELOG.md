@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.8.10 — 2026-11-06
+
+**More layout fixes from the studio walkthrough.** The 0.8.7 walkthrough, 477 screenshots of krystaline's real data, logged these as rendered at 1440 × 900. Each is fixed at its source and checked the same way, in both themes and at 400 px, with real scrollbars.
+
+### Fixed: the layout defects the second walkthrough found
+- **Every page.** The footer sits on the window's bottom edge instead of 19 px under it. The page is a column as tall as the window, and the view takes the height the chrome, the context bar and the footer leave (`body.chrome-observa` in `studio/app.css`). Before, `#layer-view` guessed `100vh - 96px`, and the chrome and the footer alone take 115 px.
+- **The Expert header.**
+  - **The stage tabs.** Their titles and taglines are whole beside the SERVICE chip at 1440 px. The bar's gaps are 20 px and each step's padding 10 px (`studio/reskin.css`); before, each step had 150 px for a 167 px title. A bar crowded further (signed in with a chip, or both the ORG and SERVICE chips) gives way above 1280 px as it does at a laptop width: the chips' keys and the Advanced label leave the eye but stay for assistive technology, the account name is held to ten characters, and with both chips the wordmark goes too. A step that still cannot fit its words wraps them onto two lines; none is cut with an ellipsis (`studio/ux.css`).
+  - **The Advanced menu.** It opens under its toggle and never over it. Where the window has the width, its two groups, the deep tools and the administration, sit side by side and both fit under the chrome of a 900 px window. Elsewhere they stack, and whatever the window cannot hold below the toggle scrolls inside the menu (`positionAdv` in `studio/app.mjs`). Before, one 961 px column was lifted to fit and still ran past the window.
+- **The Overview board.**
+  - **The kind legend.** Each label is centred over its column at its own width, so CHAOS is no longer cut to CHAO. Where the stack is narrow (a phone, a 1101–1280 px window) the labels are set smaller, so no two touch.
+  - **The layer plates.** A layer's hint runs under its pill as well as its name, so no hint is cut. Where the stack is narrow the pill moves under the name and the hint under both, so a name like Infrastructure is no longer cut either. The stack reads its own width through a container query (`studio/overview.css`); the hint is now the name's sibling (`studio/overview-view.mjs`).
+  - **The change tiles.** Their headings and numbers line up when one tile's note wraps to two lines.
+- **The artefact drawers.** An alert's EXPR is a code box like the drawer's other queries, and every code box wraps inside itself with its indentation kept, as tall as its text. The drawer scrolls down, never sideways. Before, the EXPR widened the drawer's content to 783 px in a 559 px drawer, and the Canonical source cut its long lines and stopped at 60vh.
+- **Advanced → Neuron.** The Stack evidence table fits its panel. Before, it was 1443 px in a 1339 px panel. A sampled value reads to three significant digits, so 0.0033333333333333335 per-second is now 0.00333 per-second, on one line (`evidenceNumber` in `studio/neuron-view.mjs`). A reference SLI may break after its slashes, and the reason wraps in what is left.
+- **Diagnose.**
+  - **Changes needing review.** A card gives its name the card's width and puts the id on its own line, three cards a row at 1440 px. No name or id breaks mid-token. Before, 58 of the 66 names and ids on krystaline's 33 cards did, such as `kube_deployment_status_r|eady_replicas` and `METRIC-|SRC-03`. On a phone, one card a row, a name too long for its card breaks after an underscore or a colon (`breakableName` in `studio/compare-view.mjs`).
+  - **The drift table.** The four outcome columns share the width. "Live, not declared" and "+2179 out of scope" now fit on one line; before, the column had about 95 px.
+- **Remediate.**
+  - **Proposed changes by layer.** A layer lists its first 50 rows, then "Show all N" (`REMEDIATE_ROWS_SHOWN` in `studio/compile-view.mjs`). Rows not shown keep their ticks, and every count still counts them. Updating the repository from all of live drew 2179 rows, about 74,000 px; it now draws 50, 1830 px.
+  - **The field column.** Each layer's rows are one table (a subgrid), so the fields that differ keep one column. Before, they started anywhere from 666 to 768 px, wherever the name ended.
+  - **The deploy review.** It shows whole above the action bar. Its cap is `min(60vh, 520px)`, and the form above it gives way and scrolls, never below 120 px. Before, a 342 px cap held a 363 px review, and its last line sat under the bar.
+- **Settings.**
+  - **The audit filters.** They sit in rows of equal fields, so the labels share a line and so do the inputs, and Apply starts the last row. Before, bottom-aligned in a wrapping row, a field with a help line sat higher than its neighbours.
+  - **Segmented controls.** The options share the whole track, whatever their number. Before, a fixed four-column grid left half of a two-option control empty, and a quarter of a three-option one.
+  - **An unavailable primary.** It is drawn as a secondary, outlined on the card and as wide as its words, with its reason under the label. Before, New organisation filled the section in the accent although it could not be used.
+- **Tests**:
+  - `tools/test-studio-layout.mjs` gains three: the page column, the Advanced menu's placement and groups, and the rules that keep drawers, cards, columns, rows and controls from being cut.
+  - `tools/test-neuron-model.mjs` gains one, for `evidenceNumber`.
+  - `tools/test-overview-model.mjs` now also checks that a layer's hint is its name's sibling, with no tooltip repeating it.
+  - Suite total 1753 → 1757.
+
 ## 0.8.9 — 2026-11-06
 
 **Wrong numbers and wrong packs from the 0.8.7 walkthrough.** The walkthrough on krystaline's real data found ten screens that showed a wrong count, a wrong pack or a sentence that was not meant for a person. They were there before the open PRs. Each fix is at its source and was shown on a real studio (`npm run demo -- --port 8030`, a Folder Run of the krystalinex-core clone, a restart).

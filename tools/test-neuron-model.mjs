@@ -457,3 +457,11 @@ test('notify hints name the org\'s hook variables — <KEY>, said so, when the o
     setActiveOrg(null);
   }
 });
+
+test('Stack evidence reads a sampled value to three significant digits and keeps whole numbers whole', async () => {
+  const { evidenceNumber } = await import('../studio/neuron-view.mjs');
+  assert.deepEqual(
+    [0.0033333333333333335, 0.586, 39805, 1, 0, 2.5, 123.4, -0.012345].map(evidenceNumber),
+    ['0.00333', '0.586', '39805', '1', '0', '2.5', '123', '-0.0123'],
+  );
+});
