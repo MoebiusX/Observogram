@@ -65,8 +65,8 @@ now*, and the right column *38 to add · 5 to update · 30 to review*. Say:
 *"Same answer as last night. The moment it stops being the same, this card
 says so first — that is the monitor of the monitors."*
 
-**0:55 — point at the promises bar.** *5 of 18 promises hold end to end, 1
-in part.* Say: *"A promise is an objective with everything it needs to be
+**0:55 — point at the promises bar.** *5 of 18 promises hold in every link,
+1 in part, 12 broken.* Say: *"A promise is an objective with everything it needs to be
 true — the metric, the rule, the dashboard, the alert. Twelve are broken
 somewhere along that chain, and that is the one thing in this grade that
 moves with drift."*

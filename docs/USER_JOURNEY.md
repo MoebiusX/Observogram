@@ -507,8 +507,8 @@ Belongs here:
     reader opens it;
   - **B — Can you trust what the signals show?** (*The repository against
     live*): the alignment as a ring, four counts — *match · run differently ·
-    not running live · live only* — the promises (*5 of 18 promises hold end
-    to end, 1 in part.*), then the status word, one sentence with a time and
+    not running live · live only* — the promises (*5 of 18 promises hold in every
+    link, 1 in part, 12 broken.*), then the status word, one sentence with a time and
     **Check again**;
   - **Open in Diagnose**;
 - **Remediate — Changes to apply** (*Between the repository and live*): *to
