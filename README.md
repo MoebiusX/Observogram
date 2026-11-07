@@ -1199,6 +1199,14 @@ A schedule and **Check now** never read the repository: they check live
 against the last scan a person's Run made, so a scheduled check needs no one's
 token. An upload needs none either: its files came from the person's machine.
 
+These reads are checked against the real hosts, not only stubs:
+`npm run test:live:repos` (`tools/test-live-repos.mjs`, weekly in
+`.github/workflows/live-repos.yml`) reads a private GitHub and a private
+Azure DevOps test repository with sign-in on, once those repositories exist;
+until then those checks skip and name the missing value. It checks the
+refusals the row shows word for word, then the read itself, file for file.
+[docs/LIVE_REPO_TESTS.md](docs/LIVE_REPO_TESTS.md) says what to create.
+
 ##### Signing in to GitHub or Azure DevOps
 
 `server/repo-sign-in.mjs` runs each host's own web sign-in (OAuth 2.0
@@ -1446,8 +1454,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.12 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.12
+docker build -t observogram:0.8.13 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.13
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
