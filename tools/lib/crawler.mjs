@@ -34,6 +34,8 @@ import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
 import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
+import { detectChaos, chaosExperimentsFrom, chaosControlSummary, chaosPassReads } from './chaos-detect.mjs';
+import { isRepoPackPath, readRepoPack } from './repo-pack.mjs';
 import {
   DYNAMIC_FAMILY_LIMITS, compileMetricFamilyPattern, isMetricsManifestPath, isExpositionSnapshotPath, isTestOrFixturePath, parseExposition, readMetricsManifest, safeSourceUrl,
   resolveExporterCatalogue, asResolvedCatalogue, mayBeExporterConfig, matchExporterConfig, inferExporterFamilies,
@@ -350,6 +352,12 @@ export function detectArtefactKind(relPath, content, opts) {
   // YAML — could be many things; look at shape.
   if (!/\.ya?ml$/i.test(lower)) return 'unknown';
 
+  // A repository's own pack (`.observability/*.yaml`, `kind:
+  // ObservabilityPack`): what code cannot say — the chaos experiments a team
+  // runs and their newest runs — declared where the service lives
+  // (repo-pack.mjs), merged into the drafted pack by id.
+  if (isRepoPackPath(lower) && /^kind:\s*ObservabilityPack\s*$/m.test(content)) return 'observability-pack';
+
   // Helm values file — the chart's concrete image references live here
   // (`<svc>.image.repository`), even though the templates that consume them
   // are Go-templated. Detected by the Helm `values[...].yaml` convention and
@@ -411,6 +419,19 @@ export function detectArtefactKind(relPath, content, opts) {
     return 'k8s-workload';
   }
   return 'unknown';
+}
+
+/**
+ * Whether a scan reads this file at all: it is an artefact
+ * (detectArtefactKind), or the chaos pass reads it beside the artefacts
+ * (chaos-detect.mjs chaosPassReads: a scenario table or chaos control in
+ * code, a Chaos Mesh / Litmus resource). A door that sends the server only
+ * what the scan uses (the Expert panel, studio/app.mjs finalizeStaging)
+ * sends exactly these, so its pack is the pack of the whole folder.
+ * `kind`, when the caller already classified the file, saves a second parse.
+ */
+export function scanUsesFile(relPath, content, kind = detectArtefactKind(relPath, content)) {
+  return kind !== 'unknown' || chaosPassReads(relPath, content);
 }
 
 function normalizeRepoPath(relPath) {
@@ -516,6 +537,9 @@ function shouldIncludeForEnvironment(relPath, profile, surfaces) {
   // What an exporter exposes is the exporter's, not a deployment surface's:
   // a metrics manifest and a saved exposition are read in every environment.
   if (isMetricsManifestPath(p) || isExpositionSnapshotPath(p)) return true;
+  // The repository's own pack (.observability/*.yaml) is the service's, not a
+  // deployment surface's: read in every environment.
+  if (isRepoPackPath(p)) return true;
 
   if (profile === 'local-docker') {
     if (!surfaces.docker) return true;
@@ -706,6 +730,7 @@ export function crawlFiles(filesInput, opts = {}) {
   const collectorState = newCollectorState();
   const dashboards = [];
   const alertingRoutes = [];
+  const repoPacks = [];        // the repository's own packs (.observability/*.yaml): their declared chaos experiments
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
   // symbol → why the crawler could not know it. An ARTEFACT symbol (exactly an
   // id adapter.mjs passes to sourceOf: `baselines`, `dashboards.<id>`,
@@ -771,6 +796,7 @@ export function crawlFiles(filesInput, opts = {}) {
         // live in the templated manifests (handled as 'helm-template'). We
         // record the chart only as a signal that this is a Helm-packaged repo.
         case 'helm-chart':       summary.discovered.helmCharts = (summary.discovered.helmCharts || 0) + 1; break;
+        case 'observability-pack': repoPacks.push({ relPath: f.relPath, read: readRepoPack(f.relPath, f.content) }); break;
       }
     } catch (e) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
@@ -990,6 +1016,59 @@ export function crawlFiles(filesInput, opts = {}) {
   scaffoldSymbols.push('baselines');
   summary.inferred.baselines = true;
 
+  // ----- chaos experiments (spec 1.5; chaos-detect.mjs) -----
+  // Read from the repository in a pass of their own over every in-scope file
+  // — a file has one kind, and a chaos controller that also exports metrics
+  // would otherwise lose its scenarios to `metric-source-code`. Each
+  // experiment found carries its evidence path (Declared, never Scaffold);
+  // the fields code cannot supply are filled and field-marked. The
+  // repository's own pack (.observability/*.yaml) then wins by id.
+  const valuesInOrder = classified.filter(f => f.kind === 'helm-values')
+    .sort((a, b) => (/(^|\/)values\.ya?ml$/i.test(a.relPath) ? 0 : 1) - (/(^|\/)values\.ya?ml$/i.test(b.relPath) ? 0 : 1));
+  const chaosFound = detectChaos(files, { valuesFiles: valuesInOrder });
+  const sloOfAlertName = new Map(burnRateAlerts.map(a => [a.alertName, a.slo]));
+  const chaos = chaosExperimentsFrom(chaosFound, {
+    repoName,
+    alertRules: alertRules.map(({ rule }) => {
+      const name = rule.alert || rule.title || rule.name || '';
+      const expr = typeof rule.expr === 'string' ? rule.expr : '';
+      return { name, for: rule.for, slo: recordedSloForExpr(expr, (id) => sloMap.has(id)) || sloOfAlertName.get(name) || null };
+    }),
+    slos: [...sloMap.values()],
+    slis: sliMap,
+    mttdFallback: baselines.mttd_target_p50,
+  });
+  const chaosExperiments = chaos.experiments;
+  const chaosMarks = new Map(chaos.marks);
+  const chaosDiscovered = chaos.discovered;
+  Object.assign(evidence, chaos.evidence);
+  for (const { relPath, read } of repoPacks) {
+    if (!read) continue;
+    for (const { id, reason } of read.refused) {
+      summary.warnings.push(`${relPath}: chaos experiment ${id ?? '(no id)'} is not a valid spec 1.5 experiment and is left out (${reason}).`);
+    }
+    for (const { entry, source } of read.chaos) {
+      const at = chaosExperiments.findIndex(e => e.id === entry.id);
+      const was = at >= 0 ? chaosDiscovered.find(d => d.id === entry.id) : null;
+      if (was?.from === 'repo-pack') summary.warnings.push(`${relPath}: chaos experiment ${entry.id} is declared again; the later declaration (${source}) wins over ${was.source}.`);
+      if (at >= 0) chaosExperiments[at] = entry; else chaosExperiments.push(entry);
+      for (const symbol of [...chaosMarks.keys()]) if (symbol.startsWith(`validation.chaos_experiments.${entry.id}.`)) chaosMarks.delete(symbol);
+      evidence[`validation.chaos_experiments.${entry.id}`] = source;
+      const row = { id: entry.id, engine: entry.engine, source, from: 'repo-pack', ...(was && was.from !== 'repo-pack' ? { replaces: was.source } : {}) };
+      if (was) chaosDiscovered.splice(chaosDiscovered.indexOf(was), 1, row); else chaosDiscovered.push(row);
+    }
+  }
+  for (const [symbol, note] of chaosMarks) markInvented(symbol, note);
+  summary.discovered.chaosExperiments = chaosExperiments.length;
+  summary.discovered.chaosSources = [...new Set(chaosDiscovered.map(d => d.source.split('#')[0]))].sort();
+  summary.warnings.push(...chaos.notes);
+  if (chaosExperiments.length) {
+    const from = (kind) => chaosDiscovered.filter(d => d.from === kind).length;
+    const parts = [['code', 'from code'], ['resource', 'from Chaos Mesh / Litmus resources'], ['repo-pack', 'declared in .observability/']]
+      .filter(([k]) => from(k)).map(([k, label]) => `${from(k)} ${label}`);
+    summary.warnings.push(`${chaosExperiments.length} chaos experiment(s) in spec.validation.chaos_experiments (${parts.join(', ')}): ${chaosExperiments.slice(0, 8).map(e => e.id).join(', ')}${chaosExperiments.length > 8 ? ', …' : ''}. A declared experiment is not a proven one: no run is recorded unless an experiment carries last_result.`);
+  }
+
   // ----- source-backed deployability guard -----
   // Older crawler builds emitted one synthetic recording rule per SLO to
   // satisfy the conformance rubric. Those rows were useful hints, but they
@@ -1022,6 +1101,10 @@ export function crawlFiles(filesInput, opts = {}) {
   const realAlerting  = summary.discovered.alertingRoutes > 0;
   let tier = 'tier-3';
   if (realRules && realDashboards && realAlerting) tier = 'tier-2';
+  // The chaos the tier-1 line names: an experiment the repository holds (from
+  // code, a Chaos Mesh / Litmus resource or its own pack), declared, proven
+  // or not — the grade, not the tier, tells those apart.
+  if (tier === 'tier-2' && chaosExperiments.length) tier = 'tier-1';
   summary.inferred.tier = tier;
   const criticality = opts.criticality && !criticalityIgnored ? opts.criticality : tier;
   const l2x = materializeL2XFromBackends(backends);
@@ -1118,11 +1201,10 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
         'crawler.scaffoldCount':   String(scaffoldMarks.size),
-        // What this scan has no way to look at, with why: the grade says so
-        // instead of reading "none declared" as "none exists"
-        // (studio/diagnostic-grade.mjs Chaos-validated). Drop the key when
-        // the scan learns to detect chaos experiments.
-        'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector',
+        // `crawler.unobserved.chaos` is gone: the scan detects chaos
+        // experiments (chaos-detect.mjs), so "none declared" here means it
+        // looked. A pack scanned before still carries the key, and the grade
+        // still reads it there.
         // An input that was not a spec Slug or not in a spec vocabulary — the
         // original name and environment are kept here (owners only in the
         // summary: an owner string may be an address).
@@ -1144,6 +1226,12 @@ export function crawlFiles(filesInput, opts = {}) {
             .map(u => `${u.severity || '?'}:${u.value}${u.source ? ` (${u.source})` : ''}`).join(' · '),
         } : {}),
         ...(sdkLanguages.length ? { 'crawler.discovered.sdk_languages': annotationJson(sdkLanguages) } : {}),
+        // The chaos experiments and where each was read from (code, a
+        // resource, the repository's own pack); how an in-process system is
+        // triggered and gated, and whether this environment switches it off.
+        ...(chaosDiscovered.length ? { 'crawler.discovered.chaos_experiments': annotationJson(chaosDiscovered) } : {}),
+        ...(chaosFound.scenarios.length && chaosControlSummary(chaosFound) ? { 'crawler.chaos.control': chaosControlSummary(chaosFound) } : {}),
+        ...(chaosFound.scenarios.length && chaosFound.toggle?.enabled === false ? { 'crawler.chaos.disabled': `${chaosFound.toggle.path}: false (${chaosFound.toggle.file})` } : {}),
         ...metricAnnotations,
         ...scrapeAnnotations,
         ...exporterAnnotations,
@@ -1173,6 +1261,7 @@ export function crawlFiles(filesInput, opts = {}) {
       },
       baselines,
       validation: {
+        ...(chaosExperiments.length ? { chaos_experiments: chaosExperiments } : {}),
         synthetic_checks: [{
           id: syntheticCheckId,
           kind: 'blackbox-exporter',

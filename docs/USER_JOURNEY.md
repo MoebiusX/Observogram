@@ -88,7 +88,7 @@ Re-run live scan and compare again
 ## Diagnostic Grade Contract
 
 The Diagnostic Grade is the top-level answer. It is scored from seven
-criteria (grade schema 3), plus one informational operability check:
+criteria (grade schema 4), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
@@ -101,9 +101,10 @@ criteria (grade schema 3), plus one informational operability check:
 
 ### Trust - Can We Trust What The Signals Show?
 
-5. **Chaos-validated** - at least one chaos experiment is declared (a
-   scaffold does not count). The specification holds no result for an
-   experiment, so this is a declaration, not proof that recovery works.
+5. **Chaos-validated** - declared experiments earn a quarter (a scaffold
+   does not count); full credit needs a recent passing run of every one, from
+   its `last_result` or the live run feed, within the window its schedule
+   sets. A failed newest run earns nothing (docs/CHAOS_EXPERIMENTS.md).
 6. **Drift-free** - declared artifacts match live state.
 7. **Fresh** - the live signal was verified recently.
 

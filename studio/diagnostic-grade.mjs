@@ -95,13 +95,108 @@ const REPOSITORY_UNOBSERVED_CHAOS = 'crawler.unobserved.chaos';
 const LIVE_UNOBSERVED_CHAOS = 'observogram.unobserved.chaos';
 const textOrNull = (v) => (typeof v === 'string' && v.trim() ? v : null);
 
-// The Chaos-validated detail: what is declared, and when nothing is, what
-// each side could not see — never a claim about recovery nobody checked.
-function chaosDetail(declared, scaffolds, unobserved) {
+// ---------- chaos: declared is not proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md) ----------
+//
+// An experiment proves recovery only through a recorded run that passed, and
+// only while that run is recent for the experiment's own cadence. The run is
+// the live side's (the MCP's run feed, `mcp.chaos.runs` on Pack B: measured)
+// or the pack's `last_result` (recorded in the repository); the live one wins.
+
+/** How many days a recorded pass stays proof, by the experiment's `schedule`. */
+export const CHAOS_PROOF_WINDOW_DAYS = Object.freeze({ daily: 2, weekly: 8, monthly: 35, 'on-demand': 90, ci: 90 });
+/** What a declared experiment earns before a run proves it. */
+export const CHAOS_DECLARED_CREDIT = 0.25;
+// The live run feed on Pack B: JSON `{ <experiment id>: { at, outcome, observed_mttd?, alerts_fired? } }`
+// (tools/fetch-live-pack.mjs, the chaos_run_evidence capability).
+const LIVE_CHAOS_RUNS = 'mcp.chaos.runs';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const isRunRecord = (r) => !!r && typeof r === 'object' && typeof r.at === 'string' && ['pass', 'fail', 'aborted'].includes(r.outcome);
+const dayOf = (iso) => String(iso || '').slice(0, 10);
+
+/** The live run feed out of its annotation, or null (absent, or not the shape). */
+export function liveChaosRuns(annotationValue) {
+  if (typeof annotationValue !== 'string' || !annotationValue.trim()) return null;
+  try {
+    const parsed = JSON.parse(annotationValue);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+
+/**
+ * What the experiments prove. `experiments` are spec entries (scaffolds
+ * already left out); `liveRuns` the live feed by experiment id.
+ * → { state, score, pass, declared, fresh, provenAt, source, failed, stale, never }
+ *   state  none | declared | stale | failed | proven
+ *   score  0 none or failed; CHAOS_DECLARED_CREDIT declared or stale;
+ *          CHAOS_DECLARED_CREDIT + the rest × (fresh passes ÷ declared) proven
+ *   pass   every declared experiment has a fresh pass
+ *   failed [{ id, at, missing, expectedMttd, source }] — newest run failed
+ *   stale  the newest pass outside its window, { id, at, windowDays, source }, or null
+ *   never  how many have no pass or fail on record (aborted counts here)
+ */
+export function chaosProof(experiments, { nowMs = Date.now(), liveRuns = null } = {}) {
+  const rows = (experiments || []).map((e) => {
+    const live = liveRuns && Object.prototype.hasOwnProperty.call(liveRuns, e.id) ? liveRuns[e.id] : null;
+    const run = isRunRecord(live) ? { ...live, source: 'measured' } : isRunRecord(e.last_result) ? { ...e.last_result, source: 'recorded' } : null;
+    const windowDays = CHAOS_PROOF_WINDOW_DAYS[e.schedule] ?? CHAOS_PROOF_WINDOW_DAYS['on-demand'];
+    const atMs = run ? Date.parse(run.at) : NaN;
+    const ageDays = Number.isFinite(atMs) ? (nowMs - atMs) / DAY_MS : null;
+    return { id: e.id, run, windowDays, fresh: ageDays !== null && ageDays <= windowDays, expected: e.expected_alerts || [], expectedMttd: e.expected_mttd || null };
+  });
+  const declared = rows.length;
+  const passes = rows.filter(r => r.run?.outcome === 'pass');
+  const freshPasses = passes.filter(r => r.fresh);
+  const failed = rows.filter(r => r.run?.outcome === 'fail').map(r => ({
+    id: r.id, at: r.run.at, expectedMttd: r.expectedMttd, source: r.run.source,
+    missing: r.expected.filter(a => !(Array.isArray(r.run.alerts_fired) ? r.run.alerts_fired : []).includes(a)),
+  }));
+  const newest = (list) => list.slice().sort((a, b) => Date.parse(b.run.at) - Date.parse(a.run.at))[0] || null;
+  const latestFresh = newest(freshPasses);
+  const latestStale = newest(passes.filter(r => !r.fresh));
+  const never = rows.filter(r => !r.run || r.run.outcome === 'aborted').length;
+  const state = declared === 0 ? 'none'
+    : failed.length ? 'failed'
+      : freshPasses.length ? 'proven'
+        : passes.length ? 'stale' : 'declared';
+  const score = state === 'none' || state === 'failed' ? 0
+    : state === 'proven' ? CHAOS_DECLARED_CREDIT + (1 - CHAOS_DECLARED_CREDIT) * (freshPasses.length / declared)
+      : CHAOS_DECLARED_CREDIT;
+  return {
+    state,
+    score,
+    pass: declared > 0 && !failed.length && freshPasses.length === declared,
+    declared,
+    fresh: freshPasses.length,
+    provenAt: latestFresh ? latestFresh.run.at : null,
+    source: latestFresh ? (freshPasses.some(r => r.run.source === 'measured') ? 'measured' : 'recorded') : null,
+    failed,
+    stale: latestStale ? { id: latestStale.id, at: latestStale.run.at, windowDays: latestStale.windowDays, source: latestStale.run.source } : null,
+    never,
+  };
+}
+
+const SOURCE_WORDS = { measured: 'measured by the live run feed', recorded: 'recorded in the repository' };
+
+// The Chaos-validated detail: what is declared and what its runs prove, and
+// when nothing is declared, what each side could not see — never a claim
+// about recovery nobody checked.
+function chaosDetail(proof, scaffolds, unobserved) {
   const excluded = scaffolds ? `; ${scaffolds} scaffold excluded` : '';
-  if (declared > 0) {
-    return `${declared} chaos experiment${declared === 1 ? '' : 's'} declared; none has a recorded result${excluded}`;
+  const n = proof.declared;
+  const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;
+  if (proof.state === 'proven') {
+    return `recovery proven ${dayOf(proof.provenAt)} by fault injection: ${proof.fresh} of ${exps} passed a run within its window (${SOURCE_WORDS[proof.source]})${excluded}`;
   }
+  if (proof.state === 'failed') {
+    const f = proof.failed[0];
+    const why = f.missing.length ? `: ${f.missing.join(', ')} did not fire${f.expectedMttd ? ` within ${f.expectedMttd}` : ''}` : '';
+    const more = proof.failed.length > 1 ? `; ${proof.failed.length - 1} more failed` : '';
+    return `${f.id} failed on ${dayOf(f.at)}${why}${more}${excluded}`;
+  }
+  if (proof.state === 'stale') {
+    return `${exps} declared; the last recorded pass, ${dayOf(proof.stale.at)} (${proof.stale.id}), is older than ${proof.stale.windowDays} days${excluded}`;
+  }
+  if (n > 0) return `${exps} declared, never recorded as run${excluded}`;
   const blind = [
     unobserved.repository && 'the repository scan cannot detect chaos tooling',
     unobserved.live && 'the live side cannot observe it',
@@ -406,10 +501,14 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   // stamps crawler.unobserved.chaos while it has no chaos detector, the live
   // fetcher observogram.unobserved.chaos (no MCP tool exposes chaos); a
   // pack graded alone, or a live pack, carries the latter on its own meta.
+  // Grade schema 4: a declared experiment earns CHAOS_DECLARED_CREDIT; the
+  // rest needs a recent passing run (chaosProof).
   const chaosArtefacts = L5.filter(a => /^CHAOS-/.test(a.id || ''));
   const chaosScaffolds = chaosArtefacts.filter(isScaffoldArtefact).length;
   const chaosCount = chaosArtefacts.length - chaosScaffolds;
-  const chaosValidated = chaosCount > 0;
+  const chaosExperiments = chaosArtefacts.filter(a => !isScaffoldArtefact(a)).map(a => ({ ...(a.spec || {}), id: a.spec?.id || a.title }));
+  const chaosRunsLive = liveChaosRuns(annB[LIVE_CHAOS_RUNS]) || liveChaosRuns(ann[LIVE_CHAOS_RUNS]);
+  const proof = chaosProof(chaosExperiments, { nowMs, liveRuns: chaosRunsLive });
   const chaosUnobserved = {
     repository: textOrNull(ann[REPOSITORY_UNOBSERVED_CHAOS]),
     live: textOrNull(annB[LIVE_UNOBSERVED_CHAOS]) || textOrNull(ann[LIVE_UNOBSERVED_CHAOS]),
@@ -534,17 +633,20 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   }
 
   const trustCriteria = [
-    { key: 'chaos-validated', label: 'Chaos-validated', sub: 'fault-injection experiments declared',
-      pass: chaosValidated,
-      detail: chaosDetail(chaosCount, chaosScaffolds, chaosUnobserved),
+    { key: 'chaos-validated', label: 'Chaos-validated', sub: 'fault injection declared, and proven by a recent passing run',
+      pass: proof.pass,
+      score: proof.score,
+      detail: chaosDetail(proof, chaosScaffolds, chaosUnobserved),
       // Additive (vendored): the experiments counted, the scaffolds left
       // out, why each side could not look (a reason, or null), and whether
       // Pack A is the repository scan's output — an experiment added to it
-      // by hand is gone at the next scan.
+      // by hand is gone at the next scan; `proof` is chaosProof's answer
+      // (state, fresh passes, the newest, failures, the stale pass).
       declared: chaosCount,
       scaffolds: chaosScaffolds,
       unobserved: chaosUnobserved,
       fromScan: !!ann['crawler.discoveredAt'],
+      proof,
     },
     { key: 'drift-free',      label: 'Drift-free',      sub: 'declarations match live state',
       pass: driftFree,
@@ -584,7 +686,10 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // Chaos-validated skip them — and a chaos experiment's layer on the
     // posture matrix (Comprehensive) is its target's or its steady-state
     // SLO's, never its name's. Same 7 criteria; scores can fall.
-    gradeSchema: 3,
+    // Schema 4 (2026-11-06): Chaos-validated tells declared from proven
+    // (spec 1.5) — a declared experiment earns 0.25, the rest needs a
+    // recent passing run, a failed newest run earns 0. Same 7 criteria.
+    gradeSchema: 4,
     coverage: {
       criteria: coverageCriteria,
       passed:   coveragePassed,

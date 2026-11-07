@@ -3,7 +3,7 @@
 *(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
 
 **Observogram is the observability compiler and diagnostic workspace for
-ObservabilityPack spec v1.4.**
+ObservabilityPack spec v1.5.**
 
 It answers one operational question:
 
@@ -35,7 +35,7 @@ The gap between those two packs is the diagnostic finding.
 The canonical specification lives at
 [MoebiusX/otel-observability-pack](https://github.com/MoebiusX/otel-observability-pack).
 A checksummed copy is vendored under
-[`vendor/observability-pack-spec/v1.4/`](vendor/observability-pack-spec/v1.4/).
+[`vendor/observability-pack-spec/v1.5/`](vendor/observability-pack-spec/v1.5/).
 
 ## Why It Exists
 
@@ -264,7 +264,7 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 3):
+The checks are (grade schema 4):
 
 | Area | Criteria | Scored |
 |---|---|---|
@@ -274,9 +274,14 @@ The checks are (grade schema 3):
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated, and a placeholder chaos
-experiment does not make it Chaos-validated. Chaos-validated means an
-experiment is declared; the specification holds no result for one, so the
-grade never says recovery was proven. A chaos experiment sits on the layer of
+experiment does not make it Chaos-validated. Chaos-validated tells declared
+from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
+a quarter of the point, and the rest needs a recent passing run of every
+experiment — its `last_result` in the repository, or the live run feed — within
+the window its schedule sets (daily 2 days, weekly 8, monthly 35, on-demand
+and ci 90). A failed newest run earns nothing. The scan reads experiments from
+code, from Chaos Mesh and Litmus resources and from the repository's own
+`.observability/*.yaml`. A chaos experiment sits on the layer of
 its target (or of its steady-state SLO), never of the words in its name.
 
 Runbooks measure response readiness of the overall solution, not diagnostic
@@ -1440,8 +1445,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.6 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.6
+docker build -t observogram:0.8.7 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.7
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1549,7 +1554,7 @@ The crawler reads source files such as:
   its `dynamicFamilies` declare by pattern the names an exporter mints at
   runtime ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
 
-It emits a canonical v1.4 pack plus crawler annotations describing what was
+It emits a canonical v1.5 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
 upconversion; `npm run pack-conformance -- repo.pack.yaml` lists what it had to
 stub. Names (`--name`, `--env`, `--owners`) must be spec Slugs — 2-64 lowercase
@@ -2199,7 +2204,7 @@ npm ci
 
 # One file: every module, every stylesheet, the packs it names.
 npm run build:studio -- \
-  --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
+  --pack vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml --label "Payment service" \
   --pack my-service.pack.yaml --id my-service --description "Checkout, orders and the ledger" \
   --out dist/studio/index.html
 
@@ -2354,7 +2359,7 @@ rebuilding).
 
 For a service that has no pack yet: pick the products it runs on (or an archetype
 for a service built from scratch), a criticality tier and a name, and `packc init`
-instantiates the library entries into a canonical v1.4 pack that validates,
+instantiates the library entries into a canonical v1.5 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
@@ -2404,7 +2409,7 @@ todos (20) — placeholders only the team can fill:
   - telemetry.backends.metrics-prom: version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — … · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
   - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
   …
-schema: valid (spec v1.4)
+schema: valid (spec v1.5)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
@@ -3438,7 +3443,7 @@ examples/
   target-advanced.pack.yaml
   demo-skeleton.pack.yaml
 
-vendor/observability-pack-spec/v1.4/examples/
+vendor/observability-pack-spec/v1.5/examples/
   payment-service.pack.yaml
 
 reference-packs/

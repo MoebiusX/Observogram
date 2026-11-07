@@ -63,7 +63,7 @@ const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 
-const PAYMENT = parseYaml(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.4', 'examples', 'payment-service.pack.yaml'), 'utf8'));
+const PAYMENT = parseYaml(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.5', 'examples', 'payment-service.pack.yaml'), 'utf8'));
 const PAYMENT_V2 = { ...PAYMENT, metadata: { ...PAYMENT.metadata, version: '1.5.1' } };
 const TOKEN = 'services-studio-token-secret';
 const UNCHECKED = 'The service row was not checked (the table did not refresh).';

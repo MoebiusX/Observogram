@@ -289,7 +289,7 @@ test('S3 — the static texts, exact for five products (no article picked by the
   // The compiler's generated board (row 29): the compile catalogue's subtitle for a board the pack does not declare
   // ends by telling the reader to declare it to deploy and verify it — the clause the static posture replaces, its
   // last; the clauses before it say what the board is, name no server action and stay.
-  const generated = compileCatalog(parseYaml(read('vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml'))).groups.flatMap((g) => g.items.filter((it) => it.generated));
+  const generated = compileCatalog(parseYaml(read('vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml'))).groups.flatMap((g) => g.items.filter((it) => it.generated));
   assert.deepEqual(generated.map((it) => it.subtitle.split(' · ')), [['Unified Observability', 'generated for every pack', 'declare it in spec.dashboards[] to deploy and verify it']], 'one generated board, its way out the last clause');
   assert.match(generated[0].subtitle.split(' · ').at(-1), SERVER_ACTION, 'a bundle reader declares nothing, and declaring deploys nothing without a server');
   assert.doesNotMatch(generated[0].subtitle.split(' · ').slice(0, -1).join(' · '), SERVER_ACTION, 'what the board is');
@@ -323,7 +323,7 @@ test('S3 — the static texts, exact for five products (no article picked by the
   // set of markers gives the default model once each marker is read back as the live text.
   const probe = Object.fromEntries(Object.entries(LIVE_ACTION_TEXT).map(([k, v]) => [k, typeof v === 'function' ? (m) => `«${k}:${m}»` : `«${k}»`]));
   const seen = new Set();
-  for (const rel of ['vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml', 'examples/krystaline-repo-carlos.pack.yaml', 'tools/fixtures/golden/snapshot/snapshot.pack.json']) {
+  for (const rel of ['vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml', 'examples/krystaline-repo-carlos.pack.yaml', 'tools/fixtures/golden/snapshot/snapshot.pack.json']) {
     const pack = packOf(rel);
     const live = JSON.stringify(readTraceability(pack));
     assert.equal(JSON.stringify(readTraceability(pack, { actions: LIVE_ACTION_TEXT })), live, `${rel}: the default is LIVE_ACTION_TEXT`);
@@ -346,7 +346,7 @@ test('S3 — the static texts, exact for five products (no article picked by the
   assert.equal(traceIssue('missing_scrape_evidence', { actions: staticTraceActions('Acme Watch') }).fix, TRACE_TEXTS('the Acme Watch server').scrapeEvidenceFix);
   assert.deepEqual(traceIssue('missing_sli', { actions: staticTraceActions('Acme Watch') }), traceIssue('missing_sli'), 'an issue whose fix is no live-evidence text is the same');
   // computeDiagnosticGrade's noLiveHint: the drift-free check's detail when nothing live backs the pack.
-  const payment = packOf('vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml');
+  const payment = packOf('vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml');
   const driftDetail = (opts) => computeDiagnosticGrade(payment, null, null, null, null, opts).trust.criteria.find((c) => c.key === 'drift-free').detail;
   assert.equal(driftDetail(), 'declared-only - no live signal to verify against (connect MCP or scan live)', 'the default, today\'s');
   assert.equal(driftDetail({ noLiveHint: '' }), driftDetail(), 'an empty hint is the default');

@@ -14,6 +14,7 @@ import {
   LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS,
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
+import { refResolves } from './symbol-refs.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, savedOrgBy, orgChipModel, deniedError, deployRefusal,
@@ -737,25 +738,12 @@ export function buildSymbolTable(pack) {
     for (const a of layers.L4?.[sg.key] || []) walk(a, 'L4', sg.key);
   }
 
-  // Classify each ref
+  // Classify each ref (studio/symbol-refs.mjs: `ref:slos.x` is `slos.x`, an
+  // import is outside the pack, any alert name resolves but the chaos scan's
+  // placeholder) — the drawer's links read the same rule.
   const broken = new Map();  // cardKey -> string[] of unresolved refs
   for (const [key, refs] of refsFrom) {
-    const unresolved = [];
-    for (const ref of refs) {
-      if (!ref) continue;
-      // External imports (ref:platform/..., ref:something/...) — treat as resolved.
-      if (/^ref:[A-Za-z0-9_./-]+/.test(ref) && !defined.has(ref)) {
-        // accept any ref:platform/... as external import
-        if (/^ref:[A-Za-z0-9_-]+\//.test(ref)) continue;
-      }
-      // Alert references — there's no first-class alert symbol yet, accept all alert:*
-      if (/^alert:[a-z]/.test(ref)) continue;
-      // Internal symbol — must resolve
-      if (defined.has(ref)) continue;
-      // Bare `slos.<id>` / `slis.<id>` style
-      if (/^(slis|slos)\.[a-z]/.test(ref) && defined.has(ref)) continue;
-      unresolved.push(ref);
-    }
+    const unresolved = refs.filter(ref => !refResolves(ref, defined));
     if (unresolved.length) broken.set(key, unresolved);
   }
 
@@ -1125,7 +1113,7 @@ async function handleFile(file) {
     renderTabs();
     renderMainView();
     if (res.legacy) {
-      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.4: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.5: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
     } else {
       toast(`Loaded ${file.name}`);
     }
@@ -1364,7 +1352,7 @@ const OBSERVA_ADV = [
   { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
-  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.4 validation' },
+  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.5 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
   { id: 'traceability', label: 'Traceability', sub: 'requirements · proof chain · repo vs live' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
@@ -5790,7 +5778,7 @@ function renderDiscoverEmpty(view) {
         <button type="button" class="discover-load-card" data-load="upload">
           <span class="discover-load-glyph" aria-hidden="true">▤</span>
           <span class="discover-load-label">Upload a pack</span>
-          <span class="discover-load-sub">an existing canonical v1.4 YAML or JSON manifest</span>
+          <span class="discover-load-sub">an existing canonical v1.5 YAML or JSON manifest</span>
         </button>
       </div>
 
@@ -5911,7 +5899,7 @@ function renderHomeView() {
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
             <span class="home-alt-label">Upload a pack file</span>
-            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.4) — or drop it anywhere on the page</span>
+            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.5) — or drop it anywhere on the page</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
@@ -7359,9 +7347,17 @@ async function finalizeStaging() {
     let kind = 'unknown';
     try { kind = lib.detectArtefactKind(path, content); }
     catch (_) { kind = 'unknown'; }
+    // The chaos pass reads files that are no artefact (a scenario table or
+    // chaos control in code, a Chaos Mesh / Litmus resource): they go too,
+    // so this door's pack is the whole folder's (crawler.mjs scanUsesFile).
     if (kind === 'unknown') {
-      crawlState.skipped.push({ relPath: path, reason: 'not an observability artefact' });
-      continue;
+      let used = false;
+      try { used = lib.scanUsesFile(path, content, kind); } catch (_) { used = false; }
+      if (!used) {
+        crawlState.skipped.push({ relPath: path, reason: 'not an observability artefact' });
+        continue;
+      }
+      kind = 'chaos-source';
     }
     crawlState.classified.set(path, kind);
     totalBytes += content.length;
@@ -7591,7 +7587,7 @@ function renderCrawlResult(out) {
   vBox.innerHTML = `
     <h4>schema validation</h4>
     ${out.validation.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.5</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${out.validation.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${out.validation.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -9044,7 +9040,7 @@ function renderDraftMcpResult(out) {
   $('#draft-mcp-result-validation').innerHTML = `
     <h4>schema validation</h4>
     ${v.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.5</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${v.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${v.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;

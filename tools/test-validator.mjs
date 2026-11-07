@@ -5,12 +5,14 @@
  * Spec 1.3 (RFC-0002) adds `good_when: below | above` to threshold and distribution SLIs and forbids
  * it on ratio and custom ones with a `not` sub-schema, the form this walker enforces. Spec 1.4
  * (RFC-0003) adds `alerting.rules[]`, the operational (non-SLO) alert rules: name and expr required,
- * engine a closed enum, routes still the only required key. This suite pins: the version constants
+ * engine a closed enum, routes still the only required key. Spec 1.5 (RFC-0004) lets a chaos experiment
+ * say how it is run (engine in-process | custom, schedule on-demand | ci) and what its newest run showed
+ * (last_result: at and outcome required, closed). This suite pins: the version constants
  * agree with the vendored manifest and the one directory on disk; the schema accepts good_when where
  * the spec allows it and rejects it where it does not, naming the error; it accepts alerting.rules
- * and names a rule missing expr, an unknown engine, a non-SEV severity; and every pack the repo ships
- * or tests with — all 1.3-shaped, none carries alerting.rules — validates unchanged, so a 1.3 pack
- * reaches the same verdict. Then the drift guard: no code, studio text, workflow or current-version
+ * and names a rule missing expr, an unknown engine, a non-SEV severity; it accepts the 1.5 chaos fields
+ * and names a run missing at or outcome; and every pack the repo ships or tests with validates
+ * unchanged, so an older pack reaches the same verdict. Then the drift guard: no code, studio text, workflow or current-version
  * doc names another spec version.
  */
 
@@ -30,15 +32,15 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 const example = () => parseYaml(readFileSync(EXAMPLE, 'utf8'));
 const errorsOf = (pack) => validateCanonical(pack, SCHEMA);
 
-test('the version constants, the vendored manifest and the one directory on disk agree (spec 1.4)', () => {
-  assert.equal(SPEC_VERSION, '1.4');
-  assert.equal(SPEC_DIR, 'vendor/observability-pack-spec/v1.4');
-  assert.equal(SPEC_SCHEMA_PATH, 'vendor/observability-pack-spec/v1.4/observability-pack.schema.json');
+test('the version constants, the vendored manifest and the one directory on disk agree (spec 1.5)', () => {
+  assert.equal(SPEC_VERSION, '1.5');
+  assert.equal(SPEC_DIR, 'vendor/observability-pack-spec/v1.5');
+  assert.equal(SPEC_SCHEMA_PATH, 'vendor/observability-pack-spec/v1.5/observability-pack.schema.json');
   const manifest = JSON.parse(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec/VERSIONS.json'), 'utf8'));
   assert.equal(manifest.schema, SPEC_VERSION, 'VERSIONS.json names the spec version the validator serves');
   assert.ok(Object.keys(manifest.files).every(f => f.startsWith(`v${SPEC_VERSION}/`)), 'every vendored file sits under the current version directory');
   const dirs = readdirSync(resolve(ROOT, 'vendor/observability-pack-spec')).filter(n => /^v\d+\.\d+$/.test(n) && statSync(join(ROOT, 'vendor/observability-pack-spec', n)).isDirectory());
-  assert.deepEqual(dirs, [`v${SPEC_VERSION}`], 'one version directory: 1.4 validates every 1.3 pack (as 1.3 did every 1.2 pack), so 1.3 is history (git keeps it)');
+  assert.deepEqual(dirs, [`v${SPEC_VERSION}`], 'one version directory: 1.5 validates every 1.4 pack (as 1.4 did every 1.3 pack), so 1.4 is history (git keeps it)');
   for (const f of ['observability-pack.schema.json', 'spec.md', 'examples/payment-service.pack.yaml', 'docs/maturity-model.md']) assert.ok(existsSync(resolve(ROOT, SPEC_DIR, f)), f);
   // The schema carries 1.3's good_when on the SLI, forbidden by `not` on ratio and custom.
   const sli = SCHEMA.$defs.SLI;
@@ -59,7 +61,18 @@ test('the version constants, the vendored manifest and the one directory on disk
   assert.deepEqual(Object.keys(rule.properties).sort(), ['annotations', 'engine', 'expr', 'for', 'labels', 'name', 'severity', 'source']);
   assert.deepEqual(rule.properties.engine, { $ref: '#/$defs/AlertEngine' });
   assert.deepEqual(SCHEMA.$defs.AlertEngine.enum, ['prometheus', 'mimir', 'thanos', 'victoriametrics', 'loki', 'grafana', 'alertmanager']);
-  assert.match(readFileSync(resolve(ROOT, SPEC_DIR, 'spec.md'), 'utf8'), /^\| Spec version \| 1\.4 \|/m);
+  // And 1.5's chaos fields: two more engines, two more schedules, and last_result (ChaosRunResult: at and outcome required, closed).
+  const chaos = SCHEMA.$defs.Validation.properties.chaos_experiments.items;
+  assert.deepEqual(chaos.properties.engine.enum, ['chaos-mesh', 'litmus', 'gremlin', 'in-process', 'custom']);
+  assert.deepEqual(chaos.properties.schedule.enum, ['daily', 'weekly', 'monthly', 'on-demand', 'ci']);
+  assert.deepEqual(chaos.properties.last_result, { $ref: '#/$defs/ChaosRunResult' });
+  assert.deepEqual(chaos.required, ['id', 'engine', 'target', 'steady_state_hypothesis', 'expected_alerts', 'expected_mttd', 'schedule'], 'the required fields stay required');
+  const run = SCHEMA.$defs.ChaosRunResult;
+  assert.deepEqual(run.required, ['at', 'outcome']);
+  assert.equal(run.additionalProperties, false);
+  assert.deepEqual(Object.keys(run.properties).sort(), ['alerts_fired', 'at', 'environment', 'evidence', 'observed_mttd', 'outcome']);
+  assert.deepEqual(run.properties.outcome.enum, ['pass', 'fail', 'aborted']);
+  assert.match(readFileSync(resolve(ROOT, SPEC_DIR, 'spec.md'), 'utf8'), /^\| Spec version \| 1\.5 \|/m);
   // package.json validates the vendored example through the same directory.
   const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts.validate, `node tools/validate-pack.mjs ${SPEC_DIR}/examples/payment-service.pack.yaml`);
@@ -150,15 +163,45 @@ test('alerting.rules (spec 1.4): the example declares three operational rules; n
   assert.deepEqual(errorsOf(pack), [], 'a Grafana title with spaces and punctuation is a valid name');
 });
 
+test('chaos experiments (spec 1.5): the example records a run; in-process / custom engines and on-demand / ci schedules validate; a run needs at and outcome', () => {
+  const pack = example();
+  const [podKill, latency] = pack.spec.validation.chaos_experiments;
+  assert.equal(podKill.id, 'api-pod-kill');
+  assert.deepEqual(podKill.last_result, { at: '2026-11-02T06:00:00Z', outcome: 'pass', environment: 'staging', observed_mttd: '1m24s', alerts_fired: ['payment-api-pod-down'], evidence: 'chaos-mesh workflow run api-pod-kill-29364120' });
+  assert.equal(latency.last_result, undefined, 'the other experiments are 1.4-shaped');
+  for (const engine of ['in-process', 'custom']) for (const schedule of ['on-demand', 'ci']) {
+    Object.assign(latency, { engine, schedule });
+    assert.deepEqual(errorsOf(pack), [], `${engine} · ${schedule}`);
+  }
+  latency.engine = 'toxiproxy';
+  assert.deepEqual(errorsOf(pack), ['$.spec.validation.chaos_experiments[1].engine: not in enum ["chaos-mesh","litmus","gremlin","in-process","custom"], got "toxiproxy"']);
+  latency.engine = 'in-process';
+  latency.schedule = 'hourly';
+  assert.deepEqual(errorsOf(pack), ['$.spec.validation.chaos_experiments[1].schedule: not in enum ["daily","weekly","monthly","on-demand","ci"], got "hourly"']);
+  latency.schedule = 'on-demand';
+  latency.last_result = { at: '2026-11-01T10:00:00Z', outcome: 'fail', alerts_fired: [] };
+  assert.deepEqual(errorsOf(pack), [], 'at and outcome alone suffice');
+  latency.last_result = { outcome: 'pass' };
+  assert.deepEqual(errorsOf(pack), ["$.spec.validation.chaos_experiments[1].last_result: missing required key 'at'"]);
+  latency.last_result = { at: '2026-11-01T10:00:00Z' };
+  assert.deepEqual(errorsOf(pack), ["$.spec.validation.chaos_experiments[1].last_result: missing required key 'outcome'"]);
+  latency.last_result = { at: 'last Tuesday', outcome: 'pass' };
+  assert.deepEqual(errorsOf(pack), ['$.spec.validation.chaos_experiments[1].last_result.at: not a valid date-time']);
+  latency.last_result = { at: '2026-11-01T10:00:00Z', outcome: 'passed' };
+  assert.deepEqual(errorsOf(pack), ['$.spec.validation.chaos_experiments[1].last_result.outcome: not in enum ["pass","fail","aborted"], got "passed"']);
+  latency.last_result = { at: '2026-11-01T10:00:00Z', outcome: 'pass', history: [] };
+  assert.equal(errorsOf(pack).length, 1, 'an unknown key in a run is refused');
+});
+
 // Every schema-valid pack the repo ships or tests with, 1.3-shaped (none carries alerting.rules; none carries good_when
-// either, 1.2-shaped as they were): the 1.4 schema accepts each unchanged. (tools/fixtures/compile/ holds the compiler's SHAPE fixtures — partial packs and hostile names,
+// either, 1.2-shaped as they were; none carries a 1.5 chaos field): the 1.5 schema accepts each unchanged. (tools/fixtures/compile/ holds the compiler's SHAPE fixtures — partial packs and hostile names,
 // never schema-valid under any version — so they are not here.)
 const yamlPacks = (dir) => (existsSync(resolve(ROOT, dir)) ? readdirSync(resolve(ROOT, dir)).filter(f => f.endsWith('.pack.yaml')).map(f => `${dir}/${f}`) : []);
 const FIXTURES = [
   ...yamlPacks('examples'), ...yamlPacks('reference-packs'), ...yamlPacks('tools/fixtures/library'),
   'tools/fixtures/site/fixture.pack.yaml', 'tools/fixtures/golden-crawl.pack.json',
 ];
-test('every 1.3-shaped pack of the repo validates unchanged against the 1.4 schema', () => {
+test('every older-shaped pack of the repo validates unchanged against the 1.5 schema', () => {
   assert.ok(FIXTURES.length >= 12, `fixtures found: ${FIXTURES.length}`);
   for (const rel of FIXTURES) {
     const text = readFileSync(resolve(ROOT, rel), 'utf8');
@@ -188,9 +231,10 @@ const SCANNED = [
 // The workflow is scanned by its own test: an export copy has none (export-ignore), and that test skips there.
 const WORKFLOW = resolve(ROOT, '.github/workflows/ci.yml');
 // Lines that name an older version on purpose: the spec's own lineage, RFC-0001 (a 1.2 sibling layer), RFC-0002 (1.3's
-// good_when — every mention of the direction of a bound dates it), the layered JSON that predates the canonical manifest,
-// the VersionSpec history.
-const HISTORY = /RFC-0001|RFC-0002|good_when|[Tt]he direction of|since spec 1\.3|has a direction|carries a direction|its direction|the direction of|side of (?:a|the|its) [^.]*bound|the bound|a floor|a ceiling|1\.3 → 1\.4|1\.3 -> 1\.4|v1\.3\/ → v1\.4\/|remove v1\.3\/|1\.3 pack|1\.3 packs|1\.3-shaped|1\.3 example|every 1\.3|a 1\.3 |develop\) 1\.3|develop` 1\.3|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
+// good_when — every mention of the direction of a bound dates it), RFC-0003 (1.4's alerting.rules — every mention of
+// an operational or symptom alert rule, AlertEngine or AlertRule dates it), a services fixture's own pack version
+// (svc-env-pack), the layered JSON that predates the canonical manifest, the VersionSpec history.
+const HISTORY = /RFC-0001|RFC-0002|RFC-0003|alerting\.rules|AlertEngine|AlertRule|[Oo]perational (?:\(non-SLO\) )?alert|operational rules|operational alerts|symptom alert|absent means prometheus|since spec 1\.4|svc-env-pack|good_when|[Tt]he direction of|since spec 1\.3|has a direction|carries a direction|its direction|the direction of|side of (?:a|the|its) [^.]*bound|the bound|a floor|a ceiling|1\.3 → 1\.4|1\.3 -> 1\.4|v1\.3\/ → v1\.4\/|remove v1\.3\/|1\.3 pack|1\.3 packs|1\.3-shaped|1\.3 example|every 1\.3|a 1\.3 |develop\) 1\.3|develop` 1\.3|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
 // `(?!\.\d|\d)`: not a longer version (1.2.3, 1.23) — a sentence-final "v1.2." still counts.
 const OTHER_VERSION = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?!\\.\\d|\\d)|vendor/observability-pack-spec/v1\\.\\d(?!\\.\\d|\\d)|\\bv1\\.\\d(?!\\.\\d|\\d)\\b`, 'g');
 function otherVersionsIn(files) {
@@ -206,14 +250,14 @@ function otherVersionsIn(files) {
   return offenders;
 }
 test('no scanned file names a spec version other than the current one', () => {
-  assert.deepEqual(otherVersionsIn(SCANNED), [], 'every current-version mention follows SPEC_VERSION (1.4)');
+  assert.deepEqual(otherVersionsIn(SCANNED), [], 'every current-version mention follows SPEC_VERSION (1.5)');
 });
 test('the CI workflow names no spec version other than the current one', { skip: isExportCopy(ROOT) && EXPORT_COPY_SKIP.workflow }, () => {
-  assert.deepEqual(otherVersionsIn([WORKFLOW]), [], 'a workflow step that names a spec version follows SPEC_VERSION (1.4)');
+  assert.deepEqual(otherVersionsIn([WORKFLOW]), [], 'a workflow step that names a spec version follows SPEC_VERSION (1.5)');
 });
 
-// The studio's links to upstream: the footer's "spec v1.4", the Schema view's "ObservabilityPack v1.4 JSON Schema"
-// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.4), main
+// The studio's links to upstream: the footer's "spec v1.5", the Schema view's "ObservabilityPack v1.5 JSON Schema"
+// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop, main
 // stopped at the 1.2 commit, so a link labelled with the version must open the commit VERSIONS.json vendored — never
 // a branch, which serves whatever it serves that day. After a re-vendor (node tools/sync-spec.mjs) the hrefs follow
 // upstream.commit; this test names the ones that do not.

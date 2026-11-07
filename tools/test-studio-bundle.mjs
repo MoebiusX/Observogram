@@ -74,7 +74,7 @@ import { renderBoard, familiesOf, boardGroupCounts } from './test-golden-board.m
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
-const PAYMENT = 'vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml';
+const PAYMENT = 'vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml';
 const GOLDEN = 'tools/fixtures/golden-crawl.pack.json';
 const LIBRARY_BUILT = 'tools/fixtures/build/orders-api.tier-2.instantiate.json';
 // The seams' fixtures: the taxonomy override, the canonical pack with seven declared
@@ -343,7 +343,9 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   for (const [name, entry] of ESM_ENTRIES) assert.equal(decodeModule(map.imports[name]), read(`node_modules/${name}/${entry}`), `${name}: the import map's module is the installed ES module entry`);
   // A ceiling: an unexpected dependency entering the graph is caught where it lands (raising it is a reviewed change).
   // 6,250,000 since Overview's service list (2026-11-04: the studio's own code, +45 KB as data: modules; no dependency).
-  assert.ok(built.bytes < 6_250_000, `the two-pack bundle is under 6,250,000 bytes (${built.bytes})`);
+  // 6,400,000 since the 0.8.7 walkthrough fixes (2026-11-06: the studio's own code reached 6,255,083 with
+  // studio/chaos-copy.mjs and studio/symbol-refs.mjs; no dependency).
+  assert.ok(built.bytes < 6_400_000, `the two-pack bundle is under 6,400,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

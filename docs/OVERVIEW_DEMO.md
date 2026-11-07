@@ -140,6 +140,11 @@ either way.
   defaults the scan writes (grade schema 3, 2026-11-06; the seed read B
   under schema 2), and the chaos line says the scan cannot detect chaos
   tooling and the live side cannot observe it — not that recovery is unproven.
+  The seed's pack (`examples/krystaline-repo-carlos.pack.yaml`) was scanned
+  on 2026-06-11, before the scan read chaos (0.8.7): it declares no
+  experiment, and schema 4 grades it as schema 3 did. A fresh scan of
+  krystalinex-core declares five in-process experiments and reads
+  "5 chaos experiments declared, never recorded as run."
 - **"The check found 43 differences and the grade went *up*?"** Yes. The
   repository alone grades D (2 of 7): with nothing live checked, the two
   live criteria score nothing. Checked against production it earns *checked

@@ -2,8 +2,8 @@
   "case": "payment-service.self",
   "opts": null,
   "taxonomy": null,
-  "sha256": "891888aea9cb1a999541724578502142a7426d8ea8d8d127a54b2028f69bff71",
-  "bytes": 73629,
+  "sha256": "645d8b30892470dd46da9319650feddb3968f435cc02e9308d4e93fa60ac79c1",
+  "bytes": 74045,
   "keys": [
     "a",
     "b",

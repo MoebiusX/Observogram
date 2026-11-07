@@ -32,7 +32,7 @@
 
 export const REQUIRED_API_VERSION = 'observability.platform/v1';
 export const REQUIRED_KIND = 'ObservabilityPack';
-export const SPEC_VERSION = '1.4';
+export const SPEC_VERSION = '1.5';
 /** The vendored spec directory and its schema, relative to the repo root (Node callers resolve them; plain strings, browser-safe). */
 export const SPEC_DIR = `vendor/observability-pack-spec/v${SPEC_VERSION}`;
 export const SPEC_SCHEMA_PATH = `${SPEC_DIR}/observability-pack.schema.json`;

@@ -67,6 +67,7 @@ import { validateResponseShape, locateObjectPayload } from './lib/contracts/resp
 import {
   STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
 } from './lib/contracts/stack-self-metrics.mjs';
+import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-run-evidence.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
@@ -111,6 +112,8 @@ const TOOL = {
   grafanaDatasources:      capabilityTool('grafana_datasources'),
   grafanaDatasourceHealth: capabilityTool('grafana_datasource_health'),
   grafanaContactPoints:    capabilityTool('grafana_contact_points'),
+  // The chaos run feed (spec 1.5): evidence for the grade's Chaos-validated.
+  chaosRunEvidence:        capabilityTool('chaos_run_evidence'),
 };
 
 function annotationJson(value) {
@@ -909,6 +912,41 @@ export async function sampleStackSelfMetrics({
   return { status: 'sampled', reason: null, rows: out, callsMade, inventory: inventoryInfo };
 }
 
+// The chaos run feed (spec 1.5; tools/lib/contracts/chaos-run-evidence.mjs):
+// each feed's instant queries through `metricsQueryTool`, every call through
+// `quiet` under the family name 'chaos_run_evidence'; the first feed whose
+// answers name an experiment wins. Sampled evidence for one criterion (the
+// grade's Chaos-validated), never a declaration and never a Verified stamp.
+// → { status: 'sampled' | 'not-attempted', outcome: data | empty | failed |
+//     unsupported, feed, runs: { <id>: { at, outcome, … } }, reason, callsMade }
+export async function sampleChaosRuns({
+  callTool, quiet, metricsQueryTool, discoveredToolNames = null, hasToolsList = false, feeds = CHAOS_RUN_PROBES,
+} = {}) {
+  const advertised = !!metricsQueryTool && (!hasToolsList || (discoveredToolNames?.has?.(metricsQueryTool) ?? false));
+  if (!advertised) {
+    return { status: 'not-attempted', outcome: 'unsupported', feed: null, runs: {}, reason: `this MCP offers no ${metricsQueryTool || 'metrics query'} tool`, callsMade: 0 };
+  }
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch (e) { rethrowHook(e); return null; } });
+  let callsMade = 0;
+  let last = null;
+  for (const feed of feeds) {
+    const answers = {};
+    let failure = null;
+    for (const [key, query] of Object.entries(feed.queries)) {
+      callsMade += 1;
+      let err = null;
+      answers[key] = await quietly('chaos_run_evidence', async () => {
+        try { return await callTool(metricsQueryTool, { query }); }
+        catch (e) { err = e; throw e; }
+      });
+      if (answers[key] == null && key === 'pass') { failure = trimError(err?.message || 'tool returned no response'); break; }
+    }
+    last = { feed: feed.id, ...(failure ? { outcome: 'failed', runs: {}, reason: failure } : chaosRunsFromAnswers(answers)) };
+    if (last.outcome === 'data') break;
+  }
+  return { status: 'sampled', outcome: last?.outcome ?? 'empty', feed: last?.feed ?? null, runs: last?.runs ?? {}, reason: last?.reason ?? null, callsMade };
+}
+
 const asString = (v) => (typeof v === 'string' && v.length ? v.slice(0, OBSERVED_ERROR_LENGTH) : null);
 
 // The payload object of an object shape — the SAME document the shape
@@ -1149,6 +1187,8 @@ export function buildCanonicalPack({
   stackSamples = null,
   alertmanagerObserved = null,
   grafanaObserved = null,
+  // sampleChaosRuns' answer — null when the caller predates it.
+  chaosRuns = null,
   packName = PACK_NAME,
 } = {}) {
   // Destructuring defaults only fire for `undefined`. The MCP probe
@@ -2092,7 +2132,25 @@ export function buildCanonicalPack({
   }
   unobserved(['storage_metrics', 'storage_logs', 'storage_traces'], noTool('storage settings'));
   unobserved('baselines', noTool('MTTD / MTTR measurements'));
-  unobserved('chaos', noTool('chaos experiments'));
+  // Chaos: the live side never holds an experiment's definition, so the
+  // family stays unobserved whatever the run feed says — dropping the key
+  // would read every declared experiment as missing live (diff.mjs). What
+  // the feed answered rides beside it: `mcp.chaos.feed`, and on data
+  // `mcp.chaos.runs`, the newest run per experiment id (the grade's
+  // Chaos-validated reads it; studio/diagnostic-grade.mjs chaosProof).
+  if (chaosRuns && typeof chaosRuns === 'object' && chaosRuns.status === 'sampled') {
+    annotations['mcp.chaos.feed'] = `${chaosRuns.feed || 'none'}:${chaosRuns.outcome}`;
+    if (chaosRuns.outcome === 'data') {
+      annotations['mcp.chaos.runs'] = annotationJson(chaosRuns.runs);
+      unobserved('chaos', `no MCP tool exposes chaos experiment definitions; the ${chaosRuns.feed} run feed reports ${Object.keys(chaosRuns.runs).length} experiment run(s)`);
+    } else if (chaosRuns.outcome === 'failed') {
+      unobserved('chaos', `no MCP tool exposes chaos experiments; the chaos run feed got no answer: ${chaosRuns.reason}`);
+    } else {
+      unobserved('chaos', `no MCP tool exposes chaos experiments, and no chaos run feed is published (${chaosRuns.reason || 'nothing answered'})`);
+    }
+  } else {
+    unobserved('chaos', noTool('chaos experiments'));
+  }
   unobserved('synthetic', noTool('synthetic checks'));
   unobserved('remediation', noTool('remediation automation'));
   unobserved('derived_view', noTool('derived views'));
@@ -3294,6 +3352,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     datasourceHealthTool: TOOL.grafanaDatasourceHealth,
     contactPointsTool: TOOL.grafanaContactPoints,
   });
+  // The chaos run feed (spec 1.5): evidence for Chaos-validated, never a declaration.
+  const chaosRuns = snapshot ? null : await sampleChaosRuns({
+    callTool, quiet, metricsQueryTool: TOOL.chaosRunEvidence, discoveredToolNames, hasToolsList,
+  });
   checkAbort();
 
   // ----------------------------------------------------------------
@@ -3425,6 +3487,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     stackSamples,               // { status, reason, rows, callsMade } — stack self-metric samples (signals)
     alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
     grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
+    chaosRuns,                  // { status, outcome, feed, runs, reason, callsMade } — the chaos run feed, or null
     // A snapshot only: what buildSnapshotPack records — the scope applied,
     // each gapped stage with its reason, the families the scope narrowed
     // and the folder titles the answers named, the per-stage counts.

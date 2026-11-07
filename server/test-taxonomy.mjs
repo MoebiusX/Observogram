@@ -127,7 +127,7 @@ test('schema v2: a file with a glossary boots, the log line counts its terms, an
 
 test('schema v3: a file with toolLabels boots, the log line counts them, GET /api/taxonomy serves them verbatim, and the server adapts with them (POST /api/validate) while a server without one does not', async () => {
   const { parse } = await import('../tools/lib/mini-yaml.mjs');
-  const canonical = parse(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.4', 'examples', 'payment-service.pack.yaml'), 'utf8'));
+  const canonical = parse(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.5', 'examples', 'payment-service.pack.yaml'), 'utf8'));
   const doc = { ...V2_JSON, version: 3, toolLabels: { 'Grafana alerting': 'PrometheusRule' } };
   const v3 = file('taxonomy.v3.json', JSON.stringify(doc));
   const ws = workspace();

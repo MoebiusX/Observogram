@@ -2,6 +2,117 @@
 
 ## Unreleased
 
+## 0.8.7 — 2026-11-06
+
+**Chaos experiments are seen, and declared is told apart from proven.** The scan used to drop every chaos source, the live side could not observe chaos at all, and spec 1.4 had nowhere to record a run. Spec 1.5 (RFC-0004, MoebiusX/otel-observability-pack#11) adds the engines `in-process` and `custom`, the schedules `on-demand` and `ci`, and `last_result`, the newest run. The scan now reads experiments from code, from Chaos Mesh and Litmus resources and from the repository's own `.observability/*.yaml`. A live check reads the certification run feed. The grade gives a declared experiment a quarter of the point, and the rest only for a recent passing run. A fresh scan of krystalinex-core declares its five in-process scenarios, and the Overview reads "5 chaos experiments declared, never recorded as run." The design and the owner's eight decisions are in `docs/CHAOS_EXPERIMENTS.md`. This PR is stacked on #222 and #223 and cut after them.
+
+### Changed: spec 1.5 vendored (`vendor/observability-pack-spec/v1.5/`, `tools/lib/validator.mjs`)
+- `SPEC_VERSION` is `'1.5'`, at upstream `adea3bf3`, the RFC-0004 branch, until it merges. `v1.4/` is removed: 1.5 validates every 1.4 pack unchanged.
+- `validation.chaos_experiments[]` gains:
+  - `engine` values `in-process` and `custom`;
+  - `schedule` values `on-demand` and `ci`;
+  - an optional `last_result`: `at` (date-time) and `outcome` (`pass`, `fail` or `aborted`) required; `environment`, `observed_mttd`, `alerts_fired` and `evidence` optional.
+- Every current-version mention follows: brand and studio texts, package.json, the docs, and the three studio links into upstream. Lines dating `alerting.rules` to 1.4 stay as history.
+
+### Added: the chaos detector (`tools/lib/chaos-detect.mjs`, new module)
+A pass of its own over every in-scope file in `crawlFiles`. A file has one kind, so a chaos controller that also exports metrics would otherwise lose its scenarios.
+- **In-process.** A file with `chaos` in its path, holding a scenario table: entries keyed by a slug, each with `durationSeconds` at its own level and `delayMs` or `errorRate` in its body (snake_case too). One experiment per entry, with `engine: in-process` and `schedule: on-demand`.
+- **Chaos Mesh and Litmus.**
+  - Chaos Mesh: every `*Chaos` kind; a `Schedule`, its cron read as daily, weekly or monthly; a `Workflow`.
+  - Litmus: `ChaosEngine` and `ChaosSchedule` experiments. A `ChaosExperiment` is counted as a template, never declared.
+- **Corroboration** declares nothing. The `/chaos/(start|stop|status)` routes, the `X-Chaos-Key` header, `CHAOS_API_KEY` and a `chaos.enabled` toggle (overlays win) land in `crawler.chaos.control` and `crawler.chaos.disabled`.
+- **Provenance.** Each experiment carries its evidence path, so it is Declared, never Scaffold. The fields code cannot supply are filled and get field marks:
+  - `expected_alerts`: the alert rules the scenario's own text names, as whole names, else `unresolved:not-in-code`;
+  - `expected_mttd`: the slowest match's `for:` plus one minute, else the baselines target;
+  - `steady_state_hypothesis`: the SLO a matched burn-rate alert protects, else the SLO that fits the fault.
+- `crawler.discovered.chaos_experiments` lists each experiment with its source. `summary.discovered.chaosExperiments` / `chaosSources` count them.
+- **Tier.** A tier-2 repository that holds an experiment now infers tier-1, the "rules + dashboards + alertmanager + chaos" line the tier rule always named. krystaline infers tier-1.
+- Exports: `CHAOS_ENGINES`, `CHAOS_SCHEDULES`, `CHAOS_RUN_OUTCOMES`, `CHAOS_REQUIRED`, `CHAOS_PATTERNS`, `UNRESOLVED_EXPECTED_ALERT`, `chaosExperimentErrors`, `chaosRunErrors`, `durationSeconds`, `formatDuration`, `isChaosCodePath`, `scenarioTablesIn`, `chaosControlIn`, `chaosToggleIn`, `chaosResourcesIn`, `scheduleOfCron`, `detectChaos`, `chaosExperimentsFrom`, `chaosControlSummary`.
+
+### Added: the repository's own pack (`tools/lib/repo-pack.mjs`, new module; `tools/lib/crawler.mjs`)
+- `.observability/*.yaml` holding `kind: ObservabilityPack` is the new `observability-pack` kind. It is read in every environment scope.
+- Its `spec.validation.chaos_experiments` merge by id. The declared entry wins, and its field marks go. Each entry is checked alone against the spec 1.5 item, mirrored by hand for the browser. A failing entry is left out with a warning, never a failed scan.
+- **`server/github-crawl.mjs`**: `isCrawlerFile` names `.observability/*.yaml` and `chaos` code paths first.
+- Exports: `isRepoPackPath`, `repoPackDocuments`, `readRepoPack`.
+- `crawler.unobserved.chaos` (0.8.5) is no longer stamped: the scan looks now.
+
+### Changed: Chaos-validated tells declared from proven; grade schema 3 → 4 (`studio/diagnostic-grade.mjs`, `studio/overview-model.mjs`)
+- **`chaosProof`** (exported, pure) grades the experiments:
+
+  | State | Score |
+  |---|---|
+  | none | 0 |
+  | declared, never run (an aborted run counts here) | 0.25 |
+  | stale: the newest pass is past its window | 0.25 |
+  | failed: the newest run of any experiment failed | 0 |
+  | proven | 0.25 + 0.75 × fresh passes ÷ declared |
+
+- **Windows** come from the schedule (`CHAOS_PROOF_WINDOW_DAYS`): daily 2 days, weekly 8, monthly 35, on-demand and ci 90.
+- **Runs** come from `last_result` (recorded) or `mcp.chaos.runs` on Pack B (measured, and it wins).
+- **The criterion.** A pass needs every experiment proven. Chaos-validated gains `score` and `proof`, and its detail names the date, the failed alerts or the stale pass.
+- **The Overview's chaos line** reads `proof`:
+  - "Recovery proven <date> by fault injection: k of N … passed a recent run (recorded in the repository | measured live)";
+  - "Chaos experiment <id> failed on <date>: <alerts> did not fire within <mttd>";
+  - the stale pass and its window;
+  - "N chaos experiments declared, never recorded as run."
+
+  Each line counts what the engine counted (its `score`), so a *partly* line keeps the seven lines adding up to the letter. A real Run on krystaline drew no list until it did.
+- **Schema 4** keeps the seven criteria. A declared-only pack loses 0.75 of a point, and a schema-3 run explains nothing until the next check.
+- **Unchanged.** The posture matrix still counts presence: its chaos column reads *declared*, and proof lives in the criterion.
+- New exports (vendored unit, imports nothing): `chaosProof`, `liveChaosRuns`, `CHAOS_PROOF_WINDOW_DAYS`, `CHAOS_DECLARED_CREDIT`.
+
+### Added: the chaos run feed, live (`tools/lib/contracts/chaos-run-evidence.mjs`, new module; `chaos_run_evidence` in `tools/lib/contracts/mcp-capabilities.mjs`; `tools/fetch-live-pack.mjs`)
+- **The capability** is new, carried by the metrics query tool. `CHAOS_RUN_PROBES` holds the MQ lab certification feed: `mq_cert_experiment_pass`, `mq_cert_run_timestamp_seconds` and `mq_cert_mttd_seconds`.
+- **The live pack** gains:
+  - `mcp.chaos.feed`, as `<feed>:<outcome>`;
+  - on data, `mcp.chaos.runs`, the newest run per experiment id;
+  - nothing on a snapshot.
+- **`observogram.unobserved.chaos` stays**, with what the feed reported: the live side never holds an experiment's definition, and dropping the key would make the diff read every declared experiment as missing live.
+- **Exports**: `CHAOS_RUN_PROBES`, `chaosRunsFromAnswers`; and `sampleChaosRuns` from the fetcher.
+
+### Fixed: what the 0.8.7 walkthrough found on these screens
+- **The Expert folder scan sees chaos experiments** (`studio/app.mjs`; `tools/lib/crawler.mjs`, `tools/lib/chaos-detect.mjs`). The *Scan a repo* panel sent the server only the files the browser classified as artefacts, so a chaos controller, its middleware and a scenario script never reached the chaos pass. On krystaline it sent 121 of 535 files and found no experiment, while an Overview Run of the same folder found all five.
+  - `scanUsesFile(relPath, content, kind?)` in the crawler and `chaosPassReads(relPath, content)` in the detector name every file a scan reads: an artefact, or a file the chaos pass reads.
+  - The panel sends exactly those, and lists the extra files as `chaos-source`.
+- **Diagnose's Chaos-validated gap card follows the proof** (`studio/chaos-copy.mjs`, new; `studio/compare-view.mjs`). It read *No chaos experiment is declared* beside its own evidence, *5 chaos experiments declared, never recorded as run*. `chaosBlockerCopy` now words each state:
+  - none: on a scanned pack, what the scan looked for;
+  - declared, never run: *No chaos experiment has a recorded run*, the quarter it earns, and how to record a run (`last_result` in `.observability/pack.yaml`, or the live feed);
+  - stale: *The last chaos pass is too old*;
+  - failed: *A chaos experiment failed its last run*;
+  - partly proven: *Not every chaos experiment has a recent pass*.
+
+  The evidence row's expectation names the run and the window.
+- **A scanned experiment's references resolve** (`studio/symbol-refs.mjs`, new; the symbol table in `studio/app.mjs`, `studio/drawer.mjs`). latency-spike's `ref:slos.slo_latency_99` and `alert:HighLatencyP99` were listed as broken although the pack declares both. The symbol table knew `slos.x` and not the spec's own Ref form `ref:slos.x`, and it took only alert names that start lowercase.
+  - `refResolves` and `refSymbol` are now the one rule, and the drawer's links read it too.
+  - Any alert name resolves, except the scan's `unresolved:not-in-code` placeholder, which names no alert. The studio mirrors that name as `UNRESOLVED_ALERT_PLACEHOLDER`, and a test pins it to the detector's.
+  - On krystaline, latency-spike and error-burst show no unresolved reference. The three experiments whose code names no alert show one: their placeholder.
+- **The static bundle's ceiling** (`tools/test-studio-bundle.mjs` T3) rises from 6,250,000 to 6,400,000 bytes. With the two new studio modules the two-pack bundle came to 6,255,083 bytes, all of it the studio's own code and no new dependency.
+
+### Docs
+- `docs/CHAOS_EXPERIMENTS.md`: decided, built, and what the build changed.
+- `docs/MCP_INTEGRATION.md`: the feed and its two annotations.
+- README, `docs/USER_JOURNEY.md`, `docs/RELEASE_READINESS.md` and `docs/VENDORING.md` describe schema 4.
+- The pending ladder-integrity proposal moves to schema 5.
+- `docs/OVERVIEW_DEMO.md` says why the seed reads the same.
+
+### Tests and goldens
+- **New suites.**
+  - `tools/test-chaos-detect.mjs` (18 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end. Three of its tests cover the walkthrough's fixes: the Expert door's files, a scanned experiment's references, and the blocker copy state by state.
+  - `tools/test-chaos-run-evidence.mjs` (5 tests) covers the feed, from the registry row to a proven grade.
+- **Updated suites.**
+  - `tools/test-validator.mjs` pins 1.5 (one new test).
+  - `tools/test-diagnostic-grade.mjs` gains a schema-4 block. Its base fixture's experiment carries a fresh pass, so every earlier sum holds.
+  - `tools/test-overview-model.mjs` is re-stamped to schema 4 and adds one test.
+  - `tools/test-journey.mjs` and `tools/test-crawl.mjs` follow schema 4 and the dropped stamp.
+- **Goldens, each change explained.**
+  - Compile: 46 banners, v1.4 → v1.5.
+  - Audit report: three footers.
+  - Conformance-view capture: the rubric link.
+  - Build fixture: its header.
+  - Diff: eight whole-diff hashes. The vendored example records a run that a self-diff carries twice; a script confirmed the diff is otherwise identical.
+  - Crawl: the `crawler.unobserved.chaos` line goes.
+- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1721 → 1746.
+
 ## 0.8.6 — 2026-11-06
 
 **Every way into the scan reads by the crawler's own rule, and says what it left out.** The GitHub and Azure DevOps reads used to download only files with an observability-sounding name, and a Folder walk had its own extension list and caps. Both now take every file the crawler reads, and the name list only orders them under the 200-file cap. A Run now keeps what its scan saw: the files it did not read and why, the files past the cap, the files the environment's profile left out, the files it read and recognised as nothing, and its warnings. It answers with them and keeps them in the run record, and the Overview board and the Run's toast show them. Local scans (Folder, Upload, the CLI, Expert's folder, drop and .zip) honour the folder's `.gitignore` files. No door reads a YAML or JSON values file named `*secret*`; each names it instead.
