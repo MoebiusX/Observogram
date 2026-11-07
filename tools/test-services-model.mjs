@@ -164,6 +164,18 @@ test('three entry points, one pack: the record (card, page, selector) and the de
   assert.deepEqual(newestPack([], () => true), { pack: null, how: 'none' });
 });
 
+test('newestPack: the newest REGISTERED pack, not the one the catalogue lists last (a restart lists them in the order they were last read)', () => {
+  const older = { id: 'uploaded-krystaline-a37d2521', ok: true, registeredAt: '2026-11-06T09:00:00.000Z' };
+  const newer = { id: 'uploaded-krystaline-46245ab3', ok: true, registeredAt: '2026-11-06T18:20:00.000Z' };
+  assert.equal(newestPack([newer, older], () => true).pack.id, newer.id, 'the older pack was read last: it is listed last and still not the newest');
+  assert.equal(newestPack([older, newer], () => true).pack.id, newer.id);
+  const twin = { ...older, id: 'uploaded-krystaline-0000aaaa', registeredAt: newer.registeredAt };
+  assert.equal(newestPack([twin, newer], () => true).pack.id, newer.id, 'a tie goes to the later entry');
+  assert.equal(newestPack([newer, { id: 'x', ok: true }], () => true).pack.id, 'x', 'a candidate without the stamp (the static bundle): catalogue order, as before');
+  const service = { packs: [{ id: older.id, role: 'primary' }, { id: newer.id, role: 'primary' }] };
+  assert.equal(packForService(service, [newer, older]).pack.id, newer.id, 'the service record opens the newest registered primary');
+});
+
 // ---------- the card ----------
 
 test('serviceCardModel: tier, owners, packs, one verdict per environment through the resolver, the opened line per org, the search text', () => {

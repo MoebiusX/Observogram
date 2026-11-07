@@ -17,6 +17,7 @@ import { staticTraceActions } from './static-remedies.mjs';
 import { classifyArtefact } from './taxonomy.mjs';
 import { verdictPanel } from './verdicts.mjs';
 import { glossaryEntryFor, glossaryLabelHtml, glossaryMarkFor, wireGlossary } from './glossary.mjs';
+import { refResolves, refSymbol } from './symbol-refs.mjs';
 
 // The requirement trace's live-evidence texts: the static posture's (a bundle,
 // where no server drafts or deploys; studio/static-remedies.mjs), the trace
@@ -155,20 +156,19 @@ function renderRefList(refs) {
   return span;
 }
 
-function isRefResolved(ref) {
-  if (!ref) return true;
-  if (/^alert:/.test(ref)) return true;             // alerts are external
-  if (/^ref:[A-Za-z0-9_-]+\//.test(ref) && !state.symbolTable.defined.has(ref)) return true;  // external import
-  return state.symbolTable.defined.has(ref);
-}
+// The symbol table's own rule (studio/symbol-refs.mjs), so a link is marked
+// broken exactly when the Broken references panel lists it.
+const isRefResolved = (ref) => refResolves(ref, state.symbolTable.defined);
 
-function jumpToRef(symbol) {
-  // Find any artefact whose `defines` matches `symbol`, switch to its layer, open its drawer.
+function jumpToRef(ref) {
+  // Find any artefact whose `defines` matches the symbol `ref` names
+  // (`ref:slos.x` names `slos.x`), switch to its layer, open its drawer.
   if (!state.pack) return;
+  const symbol = refSymbol(ref);
   const layers = state.pack.layers;
   const findIn = (items, layerId, sublayerKey) => {
     for (const a of items || []) {
-      if (a.defines === symbol) return { a, layerId, sublayerKey };
+      if (a.defines === symbol || a.defines === ref) return { a, layerId, sublayerKey };
     }
     return null;
   };

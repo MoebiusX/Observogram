@@ -105,6 +105,14 @@ test('reskin.css, the studio adapter, decides no colour and reads no token that 
   assert.ok(!/position:\s*(fixed|sticky|absolute)/.test(css), 'it restyles; it moves nothing');
 });
 
+test('reskin.css paints a toast lime only when it is a clean result: a toast of no kind (a Run that left files out) is neutral', () => {
+  const byRule = new Map(rules(read('reskin.css')).map((r) => [r.selector, Object.fromEntries(declarations(r.body).map((d) => [d.prop, d.value]))]));
+  const plain = byRule.get('body.chrome-observa .toast');
+  assert.ok(plain && !/accent/.test(plain.background), `the plain toast is not the accent: ${plain?.background}`);
+  assert.equal(byRule.get('body.chrome-observa .toast.is-ok')?.background, 'var(--og-accent-solid)', 'toast(…, \'ok\') is lime');
+  assert.equal(byRule.get('body.chrome-observa .toast.is-error')?.background, 'var(--og-fail)');
+});
+
 test('no stylesheet reads a token that is not defined, and the page loads the four files in order', () => {
   for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.css'))) {
     for (const ref of tokenRefs(read(file)).filter(r => r.startsWith(TOKEN_PREFIX))) assert.ok(defined.has(ref), `${file} reads ${ref}, which design-tokens.css does not define`);

@@ -14,6 +14,7 @@ import {
   LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS,
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
+import { refResolves } from './symbol-refs.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
   api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, savedOrgBy, orgChipModel, deniedError, deployRefusal,
@@ -54,7 +55,7 @@ import {
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
 import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord, uploadServiceRepository } from './services-api.mjs';
-import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, isZipName } from './repository-files.mjs';
+import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, gitignoreOfFileList, isZipName, walkDropped } from './repository-files.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
   pingResultModel, rebuildNoteText, durationText, liveTargetKey, stepTwoVisible, preselectedKind, scopeFormModel, scopeFromForm,
@@ -117,7 +118,7 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList } from './overview-view.mjs';
 
@@ -737,25 +738,12 @@ export function buildSymbolTable(pack) {
     for (const a of layers.L4?.[sg.key] || []) walk(a, 'L4', sg.key);
   }
 
-  // Classify each ref
+  // Classify each ref (studio/symbol-refs.mjs: `ref:slos.x` is `slos.x`, an
+  // import is outside the pack, any alert name resolves but the chaos scan's
+  // placeholder) — the drawer's links read the same rule.
   const broken = new Map();  // cardKey -> string[] of unresolved refs
   for (const [key, refs] of refsFrom) {
-    const unresolved = [];
-    for (const ref of refs) {
-      if (!ref) continue;
-      // External imports (ref:platform/..., ref:something/...) — treat as resolved.
-      if (/^ref:[A-Za-z0-9_./-]+/.test(ref) && !defined.has(ref)) {
-        // accept any ref:platform/... as external import
-        if (/^ref:[A-Za-z0-9_-]+\//.test(ref)) continue;
-      }
-      // Alert references — there's no first-class alert symbol yet, accept all alert:*
-      if (/^alert:[a-z]/.test(ref)) continue;
-      // Internal symbol — must resolve
-      if (defined.has(ref)) continue;
-      // Bare `slos.<id>` / `slis.<id>` style
-      if (/^(slis|slos)\.[a-z]/.test(ref) && defined.has(ref)) continue;
-      unresolved.push(ref);
-    }
+    const unresolved = refs.filter(ref => !refResolves(ref, defined));
     if (unresolved.length) broken.set(key, unresolved);
   }
 
@@ -1125,7 +1113,7 @@ async function handleFile(file) {
     renderTabs();
     renderMainView();
     if (res.legacy) {
-      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.4: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.5: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
     } else {
       toast(`Loaded ${file.name}`);
     }
@@ -1364,7 +1352,7 @@ const OBSERVA_ADV = [
   { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
-  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.4 validation' },
+  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.5 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
   { id: 'traceability', label: 'Traceability', sub: 'requirements · proof chain · repo vs live' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
@@ -2015,7 +2003,10 @@ function serviceListModelNow() {
 }
 
 function serviceFormModelNow() {
-  return serviceFormModel(listForm, { endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now() });
+  return serviceFormModel(listForm, {
+    endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now(),
+    repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
+  });
 }
 
 // Upload (overview-model.mjs uploadReading / uploadStaged / uploadFailed):
@@ -2249,7 +2240,12 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   if (error) { announce(`${row.name} · ${row.env}: the run did not finish.`); return; }
   const g = out?.record?.grade;
   const pct = out?.record?.drift?.alignmentPct;
-  toast(`${row.name} · ${row.env} checked: ${out?.scan?.files ?? '?'} files from ${out?.scan?.source || 'the repository'}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, 'ok');
+  // What the scan left out rides in the toast (and on the board, from the
+  // run record): never a grade over files nobody was told were missing.
+  const scan = out?.scan;
+  const of = Number(scan?.candidates) > Number(scan?.files) ? ` of ${scan.candidates}` : '';
+  const lost = scanLossText(scan);
+  toast(`${row.name} · ${row.env} checked: ${scan?.files ?? '?'}${of} files from ${scan?.source || 'the repository'}${lost ? ` (${lost})` : ''}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
 }
 
 // Signing in to a repository host (server/repo-sign-in.mjs): a window of the
@@ -5795,7 +5791,7 @@ function renderDiscoverEmpty(view) {
         <button type="button" class="discover-load-card" data-load="upload">
           <span class="discover-load-glyph" aria-hidden="true">▤</span>
           <span class="discover-load-label">Upload a pack</span>
-          <span class="discover-load-sub">an existing canonical v1.4 YAML or JSON manifest</span>
+          <span class="discover-load-sub">an existing canonical v1.5 YAML or JSON manifest</span>
         </button>
       </div>
 
@@ -5916,7 +5912,7 @@ function renderHomeView() {
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
             <span class="home-alt-label">Upload a pack file</span>
-            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.4) — or drop it anywhere on the page</span>
+            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.5) — or drop it anywhere on the page</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
@@ -7126,6 +7122,7 @@ const crawlState = {
   classified: new Map(),  // relPath → kind (only files that match an artefact)
   skipped: [],            // [{relPath, reason}] for the "what was skipped" disclosure
   ignored: 0,             // files under folders a scan never enters (node_modules, dist, dot-folders…): not read
+  notRead: new Map(),     // relPath → why: a file the rule would read and the staging did not (git ignores it, a secrets file, too large)
   rootName: null,
   lastResult: null,
 };
@@ -7222,32 +7219,27 @@ function setupCrawlPanel() {
   }
 }
 
-// Read a single FileSystemEntry recursively into the staged map. The dropped
-// folder itself (no prefix yet) is the user's choice whatever its name; below
-// it the scan rule decides.
+// Read a dropped FileSystemEntry into the staged map — a folder walked by
+// the shared drop walker (studio/repository-files.mjs walkDropped: the scan
+// rule on each entry, each folder's .gitignore honoured, a secrets file
+// never read), a .zip anywhere in the drop staged as one. The dropped folder
+// itself is the user's choice whatever its name.
 async function readEntry(entry, prefix, lib) {
   if (!entry) return;
   if (entry.isFile && isZipName(entry.name)) {
     await stageZip(await new Promise((res, rej) => entry.file(res, rej)));
     return;
   }
-  if (entry.isFile) {
-    if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
-    const file = await new Promise((res, rej) => entry.file(res, rej));
-    if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
-    const rel = (prefix ? `${prefix}/` : '') + entry.name;
-    const text = await file.text();
-    crawlState.files.set(rel, text);
-    if (!crawlState.rootName) crawlState.rootName = entry.fullPath?.split('/')[1] || null;
-  } else if (entry.isDirectory) {
-    if (prefix && lib.scanSkipsName(entry.name, { dir: true })) { crawlState.ignored++; return; }
-    const reader = entry.createReader();
-    let batch;
-    do {
-      batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
-    } while (batch.length > 0);
-  }
+  await walkDropped(entry, lib, {
+    onFile: async (rel, file) => {
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); return; }
+      crawlState.files.set(rel, await file.text());
+      if (!crawlState.rootName && rel.includes('/')) crawlState.rootName = rel.split('/')[0];
+    },
+    onSkip: (rel, why) => { crawlState.notRead.set(rel, why); },
+    onIgnored: (dir) => { if (dir) crawlState.ignored++; },
+    onZip: (file) => stageZip(file),
+  });
 }
 
 // "pick a folder". Where the browser can hand over the folder itself
@@ -7279,10 +7271,10 @@ async function stageFolderHandle(dir) {
   try {
     crawlState.ignored += await lib.walkScanFolder(dir, async (rel, handle) => {
       const file = await handle.getFile();
-      if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); return; }
       crawlState.files.set(rel, await file.text());
       if (++read % 25 === 0) say(read);
-    });
+    }, undefined, { onSkip: (rel, why) => { crawlState.notRead.set(rel, why); } });
   } catch (e) {
     // A file removed or locked mid-walk: what was read is still staged.
     toast(`Stopped reading the folder: ${e.message}`, 'error');
@@ -7298,6 +7290,8 @@ async function stageFileList(fileList, _rootHint) {
   const list = $('#crawl-staged-files');
   const total = files.length;
   let seen = 0;
+  // The folder's .gitignore files, read before any other file is.
+  const gitignore = await gitignoreOfFileList(files.filter((f) => !!f.webkitRelativePath), lib);
   for (const f of files) {
     // The folder picker lists every file under the folder — node_modules,
     // build output, agent worktrees — so the scan rule is applied to the
@@ -7306,11 +7300,13 @@ async function stageFileList(fileList, _rootHint) {
     const rel = f.webkitRelativePath || f.name;
     if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
     if (!f.webkitRelativePath && isZipName(f.name)) { await stageZip(f); continue; }
+    const why = lib.scanRefusal(rel, { skipRoot: !!f.webkitRelativePath, gitignore: f.webkitRelativePath ? gitignore : null });
+    if (why) { crawlState.notRead.set(rel, why); continue; }
     if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
       if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
       continue;
     }
-    if (f.size > lib.SCAN_MAX_FILE_BYTES) continue;
+    if (f.size > lib.SCAN_MAX_FILE_BYTES) { crawlState.notRead.set(rel, lib.SCAN_WHY.tooLarge()); continue; }
     crawlState.files.set(rel, await f.text());
     if (!crawlState.rootName && f.webkitRelativePath) {
       crawlState.rootName = f.webkitRelativePath.split('/')[0];
@@ -7328,6 +7324,7 @@ async function stageZip(file) {
     const read = await filesFromZip(file);
     for (const [path, text] of Object.entries(read.files)) crawlState.files.set(path, text);
     if (!crawlState.rootName) crawlState.rootName = read.name || null;
+    for (const s of read.skipped) crawlState.notRead.set(s.path, s.why);
     if (read.skipped.length) toast(`${file.name}: ${read.skipped.length} file${read.skipped.length === 1 ? '' : 's'} not read (${read.skipped[0].path}: ${read.skipped[0].why}${read.skipped.length > 1 ? '; …' : ''})`);
   } catch (e) {
     toast(`${file.name}: ${e.message}`, 'error');
@@ -7363,9 +7360,17 @@ async function finalizeStaging() {
     let kind = 'unknown';
     try { kind = lib.detectArtefactKind(path, content); }
     catch (_) { kind = 'unknown'; }
+    // The chaos pass reads files that are no artefact (a scenario table or
+    // chaos control in code, a Chaos Mesh / Litmus resource): they go too,
+    // so this door's pack is the whole folder's (crawler.mjs scanUsesFile).
     if (kind === 'unknown') {
-      crawlState.skipped.push({ relPath: path, reason: 'not an observability artefact' });
-      continue;
+      let used = false;
+      try { used = lib.scanUsesFile(path, content, kind); } catch (_) { used = false; }
+      if (!used) {
+        crawlState.skipped.push({ relPath: path, reason: 'not an observability artefact' });
+        continue;
+      }
+      kind = 'chaos-source';
     }
     crawlState.classified.set(path, kind);
     totalBytes += content.length;
@@ -7407,6 +7412,15 @@ function renderStagedList(totalBytes) {
     </div>
     ${kindCounts ? `<div class="crawl-staged-kinds">${kindCounts}</div>` : ''}
     <div class="crawl-staged-sample">${sampleHtml}</div>
+    ${crawlState.notRead.size ? `
+      <details class="crawl-staged-skipped crawl-staged-notread">
+        <summary>${crawlState.notRead.size} file${crawlState.notRead.size === 1 ? '' : 's'} not read, and why</summary>
+        <div class="crawl-skipped-list">${
+          [...crawlState.notRead].slice(0, 40)
+            .map(([path, why]) => `<code title="${escapeHtml(why)}">${escapeHtml(path)}</code> <em>${escapeHtml(why)}</em>`).join('<br>')
+          + (crawlState.notRead.size > 40 ? `<br><em>… and ${crawlState.notRead.size - 40} more</em>` : '')
+        }</div>
+      </details>` : ''}
     ${crawlState.ignored ? `<div class="crawl-staged-ignored">${crawlState.ignored} ${crawlState.ignored === 1 ? 'entry' : 'entries'} under dependency, build or hidden folders (node_modules, dist, .git, .claude …) ${crawlState.ignored === 1 ? 'was' : 'were'} not read.</div>` : ''}
     ${skipped ? `
       <details class="crawl-staged-skipped">
@@ -7425,6 +7439,7 @@ function resetCrawlStaged() {
   crawlState.classified.clear();
   crawlState.skipped = [];
   crawlState.ignored = 0;
+  crawlState.notRead.clear();
   crawlState.rootName = null;
   crawlState.lastResult = null;
   finalizeStaging();
@@ -7585,7 +7600,7 @@ function renderCrawlResult(out) {
   vBox.innerHTML = `
     <h4>schema validation</h4>
     ${out.validation.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.5</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${out.validation.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${out.validation.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -7601,6 +7616,8 @@ function renderCrawlResult(out) {
       <tr><td>environment scope</td><td>${escapeHtml(env.profile || 'none')}${env.scoped ? ` · ${f.excludedByEnvironment || 0} excluded` : ''}</td></tr>
       <tr><td>live scope</td><td>${escapeHtml(comparison.diffScopeMode || 'service')}</td></tr>
       <tr><td>files used</td><td>${f.included ?? f.scanned ?? 0} / ${f.scanned ?? 0}</td></tr>
+      ${Array.isArray(out.summary.skipped) && out.summary.skipped.length ? `<tr><td>not read</td><td>${out.summary.skipped.length}: ${out.summary.skipped.slice(0, 5).map((x) => `<code>${escapeHtml(x?.path ?? x)}</code>${x?.why ? ` (${escapeHtml(x.why)})` : ''}`).join(', ')}${out.summary.skipped.length > 5 ? ', …' : ''}</td></tr>` : ''}
+      ${f.unclassified ? `<tr><td>recognised as nothing</td><td>${f.unclassified}${Array.isArray(f.unknown) && f.unknown.length ? `: ${f.unknown.slice(0, 5).map((p) => `<code>${escapeHtml(p)}</code>`).join(', ')}${f.unclassified > 5 ? ', …' : ''}` : ''}</td></tr>` : ''}
       <tr><td>backends</td><td>${s.backends}</td></tr>
       <tr><td>metric definitions</td><td>${s.metricDefinitions || 0}</td></tr>
       <tr><td>telemetry sources</td><td>${s.scrapeJobs || 0}</td></tr>
@@ -9036,7 +9053,7 @@ function renderDraftMcpResult(out) {
   $('#draft-mcp-result-validation').innerHTML = `
     <h4>schema validation</h4>
     ${v.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.4</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.5</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${v.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${v.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;

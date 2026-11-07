@@ -201,6 +201,16 @@ html[data-theme="light"] .ov-page {
 .ov-stat dt { font: 500 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
 .ov-stat dd { margin: 0; font: 650 22px/1.1 var(--og-font); letter-spacing: -0.02em; color: var(--og-text); }
 .ov-stat dd small { font: 600 12px/1 var(--og-font); color: var(--og-muted); margin-left: 1px; }
+/* What the last Run's scan read: one line, the files it left out behind it. */
+.ov-scan { margin: 0; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel-2); font: 400 12px/1.4 var(--og-font); color: var(--og-text-2); }
+.ov-scan--warn { border-color: var(--og-warn-line); background: var(--og-warn-bg); }
+.ov-scan__sum { display: block; padding: 8px 10px; cursor: pointer; overflow-wrap: anywhere; }
+p.ov-scan__sum { cursor: default; }
+.ov-scan__sum:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-scan__body { display: grid; gap: 8px; padding: 0 10px 10px; max-height: 320px; overflow: auto; }
+.ov-scan__h { margin: 0; font-weight: 600; color: var(--og-text); }
+.ov-scan__files { margin: 2px 0 0; padding-left: 16px; display: grid; gap: 2px; }
+.ov-scan__files code { font-size: 11.5px; overflow-wrap: anywhere; }
 /* The summary card: In the repository, one row per kind; a click opens the layers. */
 .ov-repo { display: grid; gap: 8px; }
 .ov-repo__sum { list-style: none; display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel-2); cursor: pointer; }

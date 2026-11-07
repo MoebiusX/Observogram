@@ -31,7 +31,7 @@ import {
   uploadReading, uploadStaged, uploadFailed,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
-import { loadServiceListFacts, loadRepositoryFolders } from '../studio/overview-api.mjs';
+import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 
 // ---------- fixtures ----------
@@ -40,7 +40,13 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/overview/$
 const services = fixture('services').services;
 const packs = fixture('packs').packs;
 const journeys = fixture('journeys').journeys;
-const run = fixture('krystaline-run');
+// The recorded runs carry grade schema 2; the board explains a run of the
+// engine's current schema only (studio/overview-model.mjs GRADE_SCHEMA), so
+// the tests read them re-stamped as schema 4 — a schema-2 run explains
+// nothing, pinned in the gradeWhy test below.
+const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: 4 } });
+const recordedRun = fixture('krystaline-run');
+const run = restamp(recordedRun);
 
 const KRYSTALINE = services.find((s) => s.slug === 'krystaline');
 const krystalinePack = packs.find((p) => p.id === 'uploaded-krystaline-a37d2521');
@@ -55,9 +61,9 @@ const HOUR = 3600e3;
 // The pack-alone diagnostic (computeDiagnosticGrade on Pack A) and the decision (buildAssessmentDecision), minimal.
 const diagnostic = { overall: { instrumentGrade: { letter: 'C', tier: 'c', label: 'Field Grade', blurb: '…' }, verdict: { word: 'Not yet diagnostic-grade' }, audit: { scorePctExact: 43 } } };
 const decision = { causes: [{ title: 'Nothing live has been checked' }, { title: 'Not every signal type is declared' }, { title: 'Whole layers are unobserved' }, { title: 'a fourth' }] };
-// The same diagnostic with the engine's criteria (grade schema 2), as computeDiagnosticGrade writes them for the demo pack alone.
+// The same diagnostic with the engine's criteria (grade schema 4), as computeDiagnosticGrade writes them for the demo pack alone.
 const diagnosticFull = {
-  ...diagnostic, gradeSchema: 2,
+  ...diagnostic, gradeSchema: 4,
   coverage: { criteria: [
     { key: 'multi-modal', label: 'Multi-modal', pass: true, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
     { key: 'correlated', label: 'Correlated', pass: true, detail: 'tracecontext propagator declared' },
@@ -65,7 +71,7 @@ const diagnosticFull = {
     { key: 'comprehensive', label: 'Comprehensive', pass: false, detail: '35% average observed across infra · platform · app · ux' },
   ] },
   trust: { criteria: [
-    { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiments - recovery procedures are theoretical' },
+    { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiment declared - the repository scan cannot detect chaos tooling', declared: 0, scaffolds: 0, unobserved: { repository: 'the repository scan has no chaos-experiment detector', live: null }, fromScan: true },
     { key: 'drift-free', label: 'Drift-free', pass: false, score: 0, detail: 'declared-only - no live signal to verify against (connect MCP or scan live)' },
     { key: 'fresh', label: 'Fresh', pass: false, detail: 'no mcp.refreshedAt annotation - pack has never been verified against live state' },
   ] },
@@ -77,7 +83,7 @@ const unchangedRun = withDrift({ declaredNotLive: 0, drifted: 0, liveNotDeclared
 const lostRun = { ...run, outcome: 'vantage-lost' };
 // The record the night before the first demo: the stack behind the MCP was restarting, the metric names
 // probe newly failed, and the engine read C · 30 % alignment · 86 declared-not-live — a smaller live picture.
-const partialRun = fixture('krystaline-run-partial');
+const partialRun = restamp(fixture('krystaline-run-partial'));
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
 
@@ -334,12 +340,12 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   ];
   const lacks = [
     ['no', 'Coverage reaches only 35 in 100 across infrastructure, platform, application and user experience.'],
-    ['no', 'Recovery has never been proven by fault injection.'],
+    ['no', 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.'],
   ];
   const rows = (why) => why.map((w) => [w.ok, w.text]);
   // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
   const live = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }));
-  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up live; the bar is 85.'], ...lacks]);
+  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85."], ...lacks]);
   assert.equal(live.points, '4.8 of 7 points. B+ starts at 5.3.');
   // The repository alone: the two live criteria say so, and score nothing.
   const alone = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: null, now: NOW }));
@@ -347,7 +353,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   assert.equal(alone.points, '3 of 7 points. B starts at 4.4.');
   // Against a recording: the words say so.
   const recorded = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey: fileJourney, now: NOW }));
-  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', 'Of what the repository promises, 84 in 100 holds up in the recording; the bar is 85.']]);
+  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up in the recording; the bar is 85."]]);
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
   assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
@@ -976,7 +982,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
-  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold end to end, 1 in part.' });
+  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold in every link, 1 in part, 12 broken.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
@@ -1004,8 +1010,16 @@ test('decideOverviewLayout: the query wins, then the saved preference, else the 
 test('buildOverviewModel: the board from the same facts — layers, rules, fidelity, changes; nothing while the facts are read, nothing for a service without a pack of its own; the layout rides on the model and the renderer decides', () => {
   const m = keep(board());
   assert.deepEqual([m.layout, m.board.layers.declared, m.board.rules.pct, m.board.fidelity.alignmentPct, m.board.changes.total, m.grade.letter, m.still.status, m.primary], ['board', 600, 80, 78, 73, 'B', 'changed', 'next']);
-  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
-  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
+  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  assert.equal(m.board.scan, null, 'a record that carries no scan says nothing of one');
+  const scanned = keep(board({ run: { ...run, packA: { ...run.packA, scan: { source: 'the folder /src/shop', files: 40, candidates: 40, skipped: 1, skippedFiles: [{ path: 'k8s/values-secrets.yaml', why: 'its name says it holds secrets, which a scan never reads' }], unclassified: 3, unknownFiles: ['notes/a.json'], environment: { profile: 'prod', excluded: 0, excludedFiles: [] }, warnings: [] } } } }));
+  assert.deepEqual([scanned.board.scan.sentence, scanned.board.scan.tone, scanned.board.scan.groups.map((g) => g.key)],
+    ['Read 40 files from the folder /src/shop — 1 not read, 3 recognised as nothing.', 'warn', ['skipped', 'unknown']], 'the last Run\'s scan beside the layers');
+  const shown = overviewContainer();
+  renderOverview(shown, scanned, {});
+  assert.ok(shown.innerHTML.includes('<details class="ov-scan ov-scan--warn"><summary class="ov-scan__sum">Read 40 files from the folder /src/shop — 1 not read, 3 recognised as nothing.</summary>')
+    && shown.innerHTML.includes('<code>k8s/values-secrets.yaml</code>'), 'drawn in Discover, the files it left out behind it');
   const bare = keep(board({ cells: null, conformance: null }));
   assert.deepEqual([bare.board.layers, bare.board.rules, bare.board.fidelity.known], [null, null, true], 'no matrix and no conformance cost their pieces, not the others');
   const never = keep(board({ run: null, journeys: [] }));
@@ -1069,7 +1083,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
   for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
   assert.ok(html.includes('<span class="ov-chains__seg ov-chains__seg--ok" style="flex-grow:5"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--warn" style="flex-grow:1"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--fail" style="flex-grow:12"></span>'));
-  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold end to end, 1 in part.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
+  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold in every link, 1 in part, 12 broken.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
   assert.ok(html.includes('<span class="og-pill og-pill--warn ov-live__pill">Changed</span>') && html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — 43 things differ from what the repository declares.</p>') && html.includes('<button type="button" class="og-btn ov-check" data-ux-action="ov-check">Check again</button>'));
   // Remediate: three tiles with their icons, then the one next step.
   assert.ok(html.includes('<div class="ov-change ov-change--fail" title="declared in the repository, not running live"><svg class="ov-ic ov-change__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false">') && html.includes('<span class="ov-change__l">to add</span><span class="ov-change__n">38</span><span class="ov-change__note og-muted">declared, not live</span></div>'));
@@ -1203,11 +1217,65 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   const atBar = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
   const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBar, journey, now: NOW }));
   assert.equal(g.why.length, 7, 'offered: 3 + 0.85 + 1 = 4.85 of 7 is the letter\'s 69');
-  assert.equal(g.why.find((w) => w.text.startsWith('Of what the repository promises'))?.ok, 'yes', 'at the bar the mark is a yes');
-  assert.ok(g.why.some((w) => w.text === 'Of what the repository promises, 85 in 100 holds up live; the bar is 85.'));
+  assert.equal(g.why.find((w) => w.text.startsWith('Of the links in the repository'))?.ok, 'yes', 'at the bar the mark is a yes');
+  assert.ok(g.why.some((w) => w.text === "Of the links in the repository's 18 promises, 85 in 100 hold up live; the bar is 85."));
   assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
+});
+
+test('gradeWhy, grade schema 3 (krystaline audit 2026-11-06): the scan\'s default baselines and a placeholder chaos experiment earn nothing, and the chaos line says what each side could see — never that recovery was or was not proven; a schema-2 run explains nothing', () => {
+  const layered = (L5, annotations = {}) => ({ id: 'kx', meta: { name: 'kx', annotations }, layers: { L1: [{ id: 'SLO-01', title: 'kx_availability', spec: { objective: 0.999 } }], L2: [], L5 } });
+  const SCAN = { 'crawler.discoveredAt': '2026-11-06T00:00:00Z', 'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector' };
+  const SCAFFOLD_BASE = { id: 'BASE-01', title: 'MTTD / MTTR baselines', source: 'Scaffold' };
+  const REAL_BASE = { id: 'BASE-01', title: 'MTTD / MTTR baselines' };
+  const CHAOS = (n, source) => ({ id: `CHAOS-0${n}`, title: `pod-kill-${n}`, spec: { target: 'deployment/kx' }, ...(source ? { source } : {}) });
+  // score NaN: the lines are read alone, not held to a letter (null would read as 0).
+  const why = (pack, r = null) => gradeWhy({ diagnostic: computeOverviewDiagnostic(pack), run: r, letter: 'D', score: NaN, now: NOW }).why;
+  const line = (w, re) => w.find((x) => re.test(x.text)) || null;
+  const chaos = (w) => line(w, /chaos/i);
+  const normal = (w) => line(w, /^Normal is/);
+
+  // The repository scan's pack, nothing live checked.
+  const scanned = why(layered([SCAFFOLD_BASE, CHAOS(2, 'Scaffold')], SCAN));
+  assert.equal(scanned.length, 7);
+  assert.deepEqual(chaos(scanned), { ok: 'no', text: 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.' }, 'a placeholder experiment is none; the scan says why it cannot see more');
+  assert.deepEqual(normal(scanned), { ok: 'no', text: 'Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.' }, 'the scan\'s baselines are defaults, not a pass');
+  // Checked against live: the run's Pack B says it could not look at chaos.
+  const liveRun = { ...run, packB: { ...run.packB, unobserved: ['baselines', 'chaos', 'synthetic'] } };
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE], SCAN), liveRun)).text, 'No chaos experiment is declared — the repository scan cannot detect chaos tooling and the live side cannot observe it.');
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE], SCAN), run)).text, 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.', 'a record without packB.unobserved claims nothing about the live side');
+  assert.equal(chaos(why(layered([SCAFFOLD_BASE]), liveRun)).text, 'No chaos experiment is declared — the live side cannot observe it.', 'a pack the scan did not write');
+  assert.equal(chaos(why(layered([REAL_BASE]))).text, 'No chaos experiment is declared in this pack.', 'no stamp on either side: only what the pack holds');
+  // Declared (grade schema 4): partly — never a yes, and never "proven".
+  assert.deepEqual(chaos(why(layered([REAL_BASE, CHAOS(1)]))), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
+  assert.equal(chaos(why(layered([REAL_BASE, CHAOS(1), CHAOS(3), CHAOS(2, 'Scaffold')]))).text, '2 chaos experiments declared, never recorded as run.', 'the scaffold is not counted');
+  assert.equal(normal(why(layered([REAL_BASE, CHAOS(1)]))).ok, 'yes', 'a declared baseline still makes normal defined');
+  for (const w of [scanned, why(layered([REAL_BASE, CHAOS(1)]))]) assert.ok(w.every((x) => !/proven|never been/i.test(x.text)), 'no line without a passing run says recovery was or was not proven');
+  // A run graded under schema 2 explains nothing on a schema-4 board.
+  assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: recordedRun, letter: recordedRun.grade.letter, score: recordedRun.grade.score, now: NOW }), { why: [], points: '' });
+  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, 4);
+});
+
+test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never recorded as run, proven <date>, failed or stale, from the engine\'s proof', () => {
+  const layered = (L5) => ({ id: 'kx', meta: { name: 'kx', annotations: {} }, layers: { L1: [{ id: 'SLO-01', title: 'kx_availability', spec: { objective: 0.999 } }], L2: [], L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }, ...L5] } });
+  // computeOverviewDiagnostic grades on the real clock: the runs are dated from it.
+  const ago = (days) => new Date(Date.now() - days * 86400e3).toISOString();
+  const exp = (n, last_result, schedule = 'weekly') => ({ id: `CHAOS-0${n}`, title: `fault-${n}`, spec: { id: `fault-${n}`, target: 'deployment/kx', schedule, expected_alerts: ['KxDown'], expected_mttd: '3m', ...(last_result ? { last_result } : {}) } });
+  const chaos = (L5) => gradeWhy({ diagnostic: computeOverviewDiagnostic(layered(L5)), run: null, letter: 'D', score: NaN, now: NOW }).why.find((x) => /chaos|Recovery/i.test(x.text));
+  assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' })]), { ok: 'yes', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 1 chaos experiment passed a recent run (recorded in the repository).` });
+  assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' }), exp(2)]), { ok: 'partly', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 2 chaos experiments passed a recent run (recorded in the repository).` }, 'one of two: partly');
+  assert.deepEqual(chaos([exp(1, { at: ago(2), outcome: 'fail', alerts_fired: [] })]), { ok: 'no', text: `Chaos experiment fault-1 failed on ${ago(2).slice(0, 10)}: KxDown did not fire within 3m.` });
+  assert.deepEqual(chaos([exp(1, { at: ago(20), outcome: 'pass' })]), { ok: 'partly', text: `1 chaos experiment declared; the last recorded pass, ${ago(20).slice(0, 10)}, is older than 8 days.` });
+  assert.deepEqual(chaos([exp(1)]), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
+  // Each line counts what the engine counted, so a declared experiment never
+  // stops the seven lines adding up to the letter (a real Run on krystaline,
+  // 2026-11-06, drew no list: the partly line counted 0 against the engine's 0.25).
+  for (const L5 of [[exp(1)], [exp(1, { at: ago(1), outcome: 'pass' }), exp(2)], [exp(1, { at: ago(20), outcome: 'pass' })]]) {
+    const diagnostic = computeOverviewDiagnostic(layered(L5));
+    const g = gradeWhy({ diagnostic, run: null, letter: diagnostic.overall.instrumentGrade.letter, score: diagnostic.overall.audit.scorePctExact, now: NOW });
+    assert.equal(g.why.length, 7, `the list adds up to the letter (${diagnostic.overall.audit.scorePctExact}%)`);
+  }
 });
 
 // ---------- the service list: Overview's front door ----------
@@ -1578,7 +1646,7 @@ test('Upload\'s steps: a change of kind swaps the location (an upload\'s is its 
   for (const step of [(f) => uploadReading(f, 'x'), (f) => uploadStaged(f, READ), (f) => uploadFailed(f, 'x')]) assert.equal(step(FORM_CLOSED), FORM_CLOSED);
 
   const plan = savePlan(staged.values, { services: [svcRow()], upload: staged.upload.staged });
-  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files }], 'created with no repository; the upload points it at its copy');
+  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files, skipped: READ.skipped }], 'created with no repository; the upload points it at its copy, and names what was not read');
   const kept = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] });
   const keptPlan = savePlan(kept.values, { services: [uploadRow()], serviceId: 5 });
   assert.deepEqual([keptPlan.service, keptPlan.upload], [{ id: 5, patch: null }, null], 'nothing new chosen: nothing patched, nothing sent');
@@ -1631,6 +1699,20 @@ test('a Run its host would not read without the person\'s own token asks for it 
     'A public repository, or a private one read with your own GitHub token, asked for when you run it.',
     'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.',
   ], 'no hint says the server reads with its own token');
+  // A server that offers Sign in to GitHub says so where the repository is typed.
+  const hintFor = (kind, repoSignIn) => formModel({ ...formOpened([], { endpoints: [EP] }), values: { ...formOpened([], { endpoints: [EP] }).values, kind } }, { endpoints: [EP], repoSignIn }).kind.hint;
+  assert.equal(hintFor('github', null), REPOSITORY_KINDS[0].hint, 'no sign-in offered (or no one signed in to the studio): the token hint, as before');
+  assert.equal(hintFor('github', { github: { available: false }, ado: { available: true } }), REPOSITORY_KINDS[0].hint);
+  assert.equal(hintFor('github', { github: { available: true, signedIn: false, account: null } }),
+    'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token, when you run it.');
+  assert.equal(hintFor('github', { github: { available: true, signedIn: true, account: 'octo' } }),
+    'A public repository, or a private one read as you (you are signed in to GitHub as octo): sign in to GitHub, or give your own GitHub token, when you run it.');
+  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), when you run it.');
+  assert.equal(hintFor('path', { github: { available: true } }), REPOSITORY_KINDS[2].hint, 'a folder has no sign-in');
+  const opened = formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP], repoSignIn: { github: { available: true } } });
+  assert.equal(opened.kind.kind, 'github', 'a new service opens on GitHub');
+  assert.equal(opened.kinds.find((k) => k.kind === 'github').hint, opened.kind.hint, 'the kind buttons carry the same hint');
+  assert.match(opened.kind.hint, /sign in to GitHub/);
 });
 
 test('renderServiceList: the row\'s token field (a password input, Run with it) and the held-token line with Forget it; both proxied to host.overview; nothing typed is kept in the markup', () => {

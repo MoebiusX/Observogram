@@ -422,6 +422,19 @@ test('a board group draws its artefacts as buttons that open the record, and cap
   assert.ok(!/missing|required|fail|attention/i.test(l4), 'the board judges nothing');
 });
 
+test('an empty chaos group says why when the pack\'s producer could not look (the repository scan, the live fetcher), else "None in this pack"', () => {
+  const syn = [{ a: { id: 'SYN-01', title: 'synthetic: canary', spec: { kind: 'blackbox-exporter' } }, key: 'L5//SYN-01' }];
+  const chaosGroup = (html) => (/data-group="chaos"[^>]*>([\s\S]*?)<\/section>/.exec(html) || [])[1] || '';
+  assert.ok(chaosGroup(boardGroupsHtml('L5', syn)).includes('None in this pack'), 'no annotations: as before');
+  assert.ok(chaosGroup(boardGroupsHtml('L5', syn, { annotations: { 'crawler.unobserved.chaos': 'the repository scan has no chaos-experiment detector' } }))
+    .includes('None declared — the repository scan cannot detect chaos tooling'), 'the scan says it could not look');
+  assert.ok(chaosGroup(boardGroupsHtml('L5', syn, { annotations: { 'observogram.unobserved.chaos': 'no MCP tool exposes chaos experiments' } }))
+    .includes('None declared — the live side cannot observe chaos experiments'), 'the live fetcher says it could not look');
+  const other = boardGroupsHtml('L5', [], { annotations: { 'crawler.unobserved.chaos': 'x' } });
+  assert.ok((/data-group="syn"[^>]*>([\s\S]*?)<\/section>/.exec(other) || [])[1].includes('None in this pack'), 'only the chaos group reads the stamp');
+  assert.ok(!/proven|never been tested/i.test(other), 'the board claims nothing about recovery');
+});
+
 test('an objective reads as a percentage whatever its scale', () => {
   assert.equal(objectivePct(0.99), '99%');
   assert.equal(objectivePct(0.999), '99.9%');

@@ -88,7 +88,7 @@ export function packIdOf(canonical, source) {
 // the request's org (currentOrg()) within a store handle, so a suite that
 // re-points the workspace (and so the store) between boots in one process
 // never sees the previous workspace's packs.
-let UPLOAD_REGISTRIES = new WeakMap();   // store handle → Map(orgId → Map(id → { canonical, source, label, createdAt }))
+let UPLOAD_REGISTRIES = new WeakMap();   // store handle → Map(orgId → Map(id → { canonical, source, label, createdAt, registeredAt }))
 // A WeakMap cannot be iterated: the handles seen are remembered here for
 // the test hooks alone (a server process holds one).
 const trackedStores = new Set();
@@ -117,10 +117,13 @@ export function ensureOrgLoaded(db = currentStore()) {
   let restored = 0;
   try {
     // Entries arrive oldest lastUsedAt first, preserving the map's LRU
-    // insertion order.
+    // insertion order. That order is when each pack was last READ, not
+    // registered: registeredAt (what GET /api/packs serves, and the studio's
+    // "newest pack" reads) is the row's createdAt — a re-register of the same
+    // pack in this process moves it on (registerPack), the row keeps the first.
     for (const p of loadPacks(db)) {
       if (m.has(p.id)) continue;
-      m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
+      m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt, registeredAt: p.createdAt });
       restored++;
     }
   } catch (e) {
@@ -204,7 +207,9 @@ export function registerPack(db, actor, { canonical, source, label }) {
   // user's pick alive when they are actively working with that pack.
   for (const otherId of [...replaced, ...evicted]) uploads.delete(otherId);
   uploads.delete(id);
-  uploads.set(id, { canonical, source, label, createdAt: pack.createdAt });
+  // registeredAt: this register's time (the row's lastUsedAt, which every
+  // register sets) — a re-registered pack is the newest again.
+  uploads.set(id, { canonical, source, label, createdAt: pack.createdAt, registeredAt: pack.lastUsedAt || pack.createdAt });
   return id;
 }
 

@@ -7,13 +7,13 @@ in §5.
 
 ## 1. What changes
 
-| Today (gradeSchema 2) | Proposed (gradeSchema 3) |
+| Today (gradeSchema 3) | Proposed (gradeSchema 4) |
 |---|---|
 | `studio/diagnostic-grade.mjs` Drift-free reads `diff.traceabilityGraph.rollup.integrityMean` | Drift-free reads `rollup.ladder.integrityMean` (same 0–1 scale, same `DRIFT_FIDELITY_TRUST_THRESHOLD` ≈ 85%) |
 | an aligned node earns full credit whether or not it is doing its job | a node that is present but `present_unhealthy` / `present_stale` earns 0.25 (the drift-credit floor); healthy / alive / exists keep 1 |
 | a declared node the vantage could not look for is `declared_only` and penalised as missing | an `unobserved` node (probe family failed or not exposed) leaves the denominator, exactly as `unverifiable` kinds do today |
 | a scrape job the fetcher observed down but withheld from Pack B is scored absent | it is scored present-but-unhealthy (0.25) — on the wire beats absent |
-| `gradeSchema: 2` | `gradeSchema: 3`, with the schema comment naming this switch and its date |
+| `gradeSchema: 4` | `gradeSchema: 5`, with the schema comment naming this switch and its date |
 
 Everything else — limb weights, drift credit, missing-role weights, the
 branch verdict labels, `rollup.integrityMean`, `intact / partial / broken /
@@ -63,8 +63,8 @@ that cannot show scrape configs loses 5 points it did nothing to earn.
 
 ## 4. Risks
 
-- **Score discontinuity on existing journeys.** Runs recorded under schema 2
-  and 3 are not comparable; the `gradeSchema` bump exists so the record can
+- **Score discontinuity on existing journeys.** Runs recorded under schema 4
+  and 5 are not comparable; the `gradeSchema` bump exists so the record can
   say so, and the journey transition logic should treat a schema change as a
   reason, not a regression. (Since slices 3–4 the run record carries
   `transition` and `causes` — `tools/lib/chain-history.mjs` — but neither
@@ -107,7 +107,7 @@ proposal. To apply it:
 
 1. Maintainer review of this document by PR — no direct push to `develop`.
 2. One commit that (a) switches the Drift-free input in
-   `studio/diagnostic-grade.mjs`, (b) bumps `gradeSchema` to 3 with a dated
+   `studio/diagnostic-grade.mjs`, (b) bumps `gradeSchema` to 4 with a dated
    comment, (c) extends `tools/test-diagnostic-grade.mjs` with the four rows of
    §3 and (d) updates `docs/DIAGNOSTIC_GRADE_FRAMEWORK.md` / CHANGELOG. No other scoring
    arithmetic changes in that commit.

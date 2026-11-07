@@ -151,7 +151,7 @@ test('fetchRepositoryFiles: an Azure DevOps tree, the crawler\'s files downloade
   const ado = await fetchRepositoryFiles({ kind: 'ado', location: 'https://dev.azure.com/acme/Shop/_git/checkout', ref: 'release' }, { fetchImpl });
   assert.deepEqual(Object.keys(ado.files).sort(), ['dashboards/api.json', 'prometheus/rules/api.rules.yml'], 'the crawler\'s files only (README is not one)');
   assert.equal(ado.files['dashboards/api.json'], '# /dashboards/api.json\n');
-  assert.deepEqual([ado.ref, ado.candidates, ado.skipped, ado.source], ['release', 2, [], 'Shop/checkout on Azure DevOps']);
+  assert.deepEqual([ado.ref, ado.candidates, ado.capped, ado.truncated, ado.skipped, ado.source], ['release', 2, 0, false, [], 'Shop/checkout on Azure DevOps']);
   assert.ok(urls.every((u) => new URL(u).searchParams.get('versionDescriptor.version') === 'release'), 'every call on the branch');
 
   const api = [];
@@ -164,9 +164,10 @@ test('fetchRepositoryFiles: an Azure DevOps tree, the crawler\'s files downloade
   const raw = [];
   const rawFn = async (owner, repo, ref, path) => { raw.push([owner, repo, ref, path]); return new Response(`# ${path}`); };
   const gh = await fetchRepositoryFiles({ kind: 'github', location: 'https://github.com/acme/shop', ref: null }, { ghFetchFn, rawFn });
-  assert.deepEqual([gh.ref, Object.keys(gh.files), gh.source], ['develop', ['alerts/api.rules.yaml'], 'acme/shop on GitHub']);
+  assert.deepEqual([gh.ref, Object.keys(gh.files), gh.source], ['develop', ['alerts/api.rules.yaml', 'src/app.py'], 'acme/shop on GitHub'], 'the crawler\'s own rule: a source file no keyword names is read too');
+  assert.deepEqual([gh.candidates, gh.capped, gh.truncated, gh.skipped], [2, 0, false, []]);
   assert.deepEqual(api, ['/repos/acme/shop', '/repos/acme/shop/git/trees/develop?recursive=1'], 'two API calls — the contents come from raw');
-  assert.deepEqual(raw, [['acme', 'shop', 'develop', 'alerts/api.rules.yaml']]);
+  assert.deepEqual(raw.map((x) => x.join(' ')).sort(), ['acme shop develop alerts/api.rules.yaml', 'acme shop develop src/app.py']);
   // With a token the contents API is used instead (rawFn null).
   const viaApi = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, {
     rawFn: null,
@@ -288,6 +289,12 @@ test('POST /api/services/:id/run: the folder scanned and registered as the servi
   const j = journeys.find((x) => x.name === 'shop-api.prod');
   assert.deepEqual([j.scope.service, j.scope.env], ['shop-api', 'prod']);
   assert.match(j.packA, new RegExp(`${r.json.pack.id}\\.pack\\.yaml$`));
+  // Pack A is named by the pack (the Neuron and the journeys list show its
+  // label), and saved beside the journey, not at this workspace's absolute
+  // path: a moved or copied workspace checks its own copy.
+  assert.deepEqual(j.packARef, { id: r.json.pack.id, label: 'Shop API · prod · repository' });
+  assert.equal(j.packBRef, null, 'a live Pack B is no registered pack');
+  assert.match(readFileSync(join(WORKSPACE, 'journeys', 'shop-api.prod.journey.yaml'), 'utf8'), new RegExp(`packA:\\s*\\{?\\s*file: \\.\\./packs/${r.json.pack.id}\\.pack\\.yaml`));
   assert.match(String(j.packB), /^mcp:/, 'Pack B is the live endpoint, re-drafted on every run');
   assert.equal(j.lastRun.outcome, r.json.record.outcome);
   const capture = auditRows('journey.capture');
@@ -433,6 +440,78 @@ test('a Run scans the upload as the repository and registers it as the service\'
   assert.equal(existsSync(copyOf(ids.uploaded)), false, 'deleted: the copy goes');
 });
 
+// ---------- what a scan left out, said and kept ----------
+//
+// The Run answers with what its scan saw (tools/lib/crawler.mjs scanReport)
+// and the run record keeps it (packA.scan): a folder's .gitignore files are
+// honoured and a secrets file is never read — both named — and the files read
+// and recognised as nothing are listed. A Check now on the same scan keeps it.
+
+const { SCAN_WHY } = await import('../tools/lib/crawler.mjs');
+
+test('a Run names what the scan left out — a file git ignores and a secrets file, never read — and the files it recognised as nothing; the record keeps it as packA.scan, and a Check now keeps it', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'observogram-service-run-ignored-'));
+  const files = {
+    ...walkRepoFiles(REPO),
+    '.gitignore': 'values-local.yaml\n',
+    'values-local.yaml': 'password: hunter2-local\n',
+    'k8s/values-secrets.yaml': 'password: hunter2-secrets\n',
+    'notes/unrelated.json': '{ "a": 1 }\n',
+  };
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(folder, rel)), { recursive: true });
+    writeFileSync(join(folder, rel), text);
+  }
+  try {
+    assert.equal((await call('PATCH', `/api/services/${ids.bare}`, { repository: { kind: 'path', location: folder } })).status, 200);
+    const r = await call('POST', `/api/services/${ids.bare}/run`, {});
+    assert.equal(r.status, 200, r.text);
+    const { scan } = r.json;
+    assert.deepEqual([scan.skipped, scan.skippedFiles], [2, [
+      { path: 'k8s/values-secrets.yaml', why: SCAN_WHY.secret },
+      { path: 'values-local.yaml', why: SCAN_WHY.gitignored },
+    ]]);
+    assert.ok(scan.unknownFiles.includes('notes/unrelated.json') && scan.unclassified >= 1, JSON.stringify(scan.unknownFiles));
+    assert.ok(scan.classified > 0 && Object.keys(scan.byKind).length > 0 && Array.isArray(scan.warnings));
+    assert.equal(scan.files, Object.keys(walkRepoFiles(REPO)).length + 1, 'the repository\'s files and the unrecognised one');
+    assert.deepEqual(r.json.record.packA.scan, scan, 'the record keeps what the scan saw');
+    const pack = (await call('GET', `/api/packs/${r.json.pack.id}`)).text;
+    assert.ok(!/hunter2/.test(pack), 'nothing of either file reached the pack');
+    const check = await call('POST', `/api/journeys/${r.json.journey}/run`, {});
+    assert.equal(check.status, 200, check.text);
+    assert.deepEqual(check.json.record.packA.scan, scan, 'Check now on the same scan keeps it');
+    const listed = (await call('GET', `/api/journeys/${r.json.journey}/runs?limit=1`)).json.runs[0];
+    assert.deepEqual(listed.packA.scan, scan, 'and the runs the board reads carry it');
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+test('an upload never keeps a secrets file and keeps what the browser did not read; the Run names both', async () => {
+  const created = await call('POST', '/api/services', { name: 'Uploaded Ledger' });
+  assert.equal(created.status, 201, created.text);
+  const id = created.json.service.id;
+  assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const browserSkipped = [{ path: 'operational-alerts/values-local.yaml', why: SCAN_WHY.gitignored }];
+  const up = await call('PUT', `/api/services/${id}/repository-upload`, {
+    name: 'operational-alerts', skipped: browserSkipped,
+    files: { ...UPLOADED, 'operational-alerts/k8s/values-secrets.yaml': 'password: hunter2\n' },
+  });
+  assert.equal(up.status, 200, up.text);
+  assert.equal(up.json.upload.files, Object.keys(UPLOADED).length, 'the secrets file is not kept');
+  assert.ok(!readFileSync(copyOf(id), 'utf8').includes('hunter2'), 'not a byte of it on the server');
+  const r = await call('POST', `/api/services/${id}/run`, {});
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(r.json.scan.skippedFiles, [
+    { path: 'operational-alerts/k8s/values-secrets.yaml', why: SCAN_WHY.secret },
+    { path: 'operational-alerts/values-local.yaml', why: SCAN_WHY.gitignored },
+  ]);
+  assert.throws(() => parseUpload({ name: 'only', files: { 'secrets.yaml': 'x' } }), { message: UPLOAD_WAYS.none }, 'an upload of a secrets file alone holds nothing');
+  const bounded = parseUpload({ name: 'b', files: { 'a.yaml': 'x' }, skipped: [{ path: 'p', why: 'w' }, { path: 7 }, 'x', ...Array.from({ length: UPLOAD_LIMITS.skipped + 5 }, () => ({ path: 'q', why: 'w' }))] });
+  assert.equal(bounded.skipped.length, UPLOAD_LIMITS.skipped - 2, 'the browser\'s list is bounded, and an entry that is not { path, why } strings is dropped');
+  assert.equal((await call('DELETE', `/api/services/${id}`)).status, 200);
+});
+
 // ---------- a repository read as the person who asked ----------
 //
 // server/repo-auth.mjs: a GitHub or Azure DevOps repository is read with the
@@ -486,7 +565,8 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
     if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
     const auth = init.headers?.Authorization ?? null;
     seen.push({ url: u, auth });
-    if (auth !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    // GitHub's own 404 body, word for word: the sentence keeps its message only.
+    if (auth !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found', documentation_url: 'https://docs.github.com/rest/repos/repos#get-a-repository', status: '404' }), { status: 404 });
     if (u.endsWith('/repos/acme/private-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
     if (u.includes('/repos/acme/private-shop/git/trees/main')) return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] }));
     if (u.includes('/repos/acme/private-shop/contents/')) return new Response(RULES);
@@ -503,6 +583,8 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
     assert.equal(without.status, 404, without.text);
     assert.deepEqual(without.json.repoAuth, { kind: 'github', label: 'GitHub token', refused: false });
     assert.ok(without.json.error.endsWith(` — ${REPO_AUTH_WAYS.needed('github')}`), without.json.error);
+    assert.ok(without.json.error.startsWith('the repository could not be read: GitHub 404 on /repos/acme/private-shop: Not Found — '), without.json.error);
+    assert.ok(!/[{}]|documentation_url/.test(without.json.error), 'a sentence for a person, not the JSON GitHub sent');
     assert.ok(seen.length > 0 && seen.every((s) => s.auth === null), 'no token at all: none sent');
 
     seen.length = 0;

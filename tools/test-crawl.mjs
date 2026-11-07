@@ -399,6 +399,29 @@ try {
   assert(conf.clauses.some(c => c.id === 'L2X.MUST.extended_backend_refs_resolve' && c.pass === true),
          'conformance checks L2X backend references');
 
+  // The krystaline audit (2026-11-06): L5.MUST.synthetic_probe passed on the
+  // health canary the crawler invents (https://<repo>.example.com/health,
+  // marked crawler.scaffold.validation.synthetic_checks.<id>). A value a
+  // scanner invented satisfies no clause; the same probe declared by
+  // someone does, and a library placeholder still does (onPlaceholder).
+  const probeClause = (pack) => evaluateConformance(pack).clauses.find(c => c.id === 'L5.MUST.synthetic_probe');
+  const [canary] = canonical.spec.validation.synthetic_checks;
+  const canaryMark = `crawler.scaffold.validation.synthetic_checks.${canary.id}`;
+  assert(/\.example\.com\/health$/.test(canary.target) && canonical.metadata.annotations[canaryMark],
+         'the crawler still writes its schema-forced canary, marked a scaffold');
+  assert(probeClause(canonical).pass === false, 'the invented canary is no synthetic probe (L5.MUST.synthetic_probe fails)');
+  const declaredProbe = structuredClone(canonical);
+  delete declaredProbe.metadata.annotations[canaryMark];
+  assert(probeClause(declaredProbe).pass === true, 'the same probe, declared by someone, passes');
+  const fetchedProbe = structuredClone(declaredProbe);
+  fetchedProbe.metadata.annotations[`mcp.scaffold.validation.synthetic_checks.${canary.id}`] = 'schema-forced';
+  assert(probeClause(fetchedProbe).pass === false, 'the live fetcher\'s placeholders are scanner-invented too');
+  const libraryProbe = structuredClone(declaredProbe);
+  libraryProbe.metadata.annotations[`library.todo.validation.synthetic_checks.${canary.id}`] = 'point it at the endpoint';
+  assert(probeClause(libraryProbe).pass === true, 'a library placeholder still represents the requirement');
+  assert(!('crawler.unobserved.chaos' in canonical.metadata.annotations),
+         'the scan detects chaos experiments now (tools/lib/chaos-detect.mjs): it no longer says it cannot look');
+
   const sameLive = structuredClone(canonical);
   const aligned = diffPacks(adapted, adapt(sameLive));
   assert(aligned.layers.L2X.inBoth.length >= 6 && aligned.layers.L2X.onlyInA.length === 0,
@@ -664,6 +687,32 @@ assert(helm.canonical.spec.slis.some(s => s.id === 'slo_http_requests'),
 assert(helm.canonical.spec.dashboards.some(d => d.id === 'checkout-overview'),
   'grafana dashboard lifted from embedded ConfigMap JSON');
 assert(validateCanonical(helm.canonical, SCHEMA).length === 0, 'helm chart crawl validates against the vendored schema');
+
+// A string-literal action prints its string: {{ "{{" }} … {{ "}}" }} (and the
+// backtick form) is how a chart writes an alert's own {{ $value }}, and Helm
+// renders the two braces — the text live serves. One brace would read as
+// drift against live.
+{
+  const chart = {
+    'charts/checkout/Chart.yaml': 'apiVersion: v2\nname: checkout\nversion: 0.1.0\n',
+    'charts/checkout/templates/configmaps.yaml': [
+      '{{- if .Values.prometheus.enabled }}',
+      'apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "checkout.fullname" . }}-rules', 'data:',
+      '  recording-rules.yml: |', '    groups:', '      - name: checkout.slo', '        rules:',
+      '          - record: slo:http_requests:good_5m', '            expr: sum(rate(http_requests_total{code!~"5.."}[5m]))',
+      '          - record: slo:http_requests:total_5m', '            expr: sum(rate(http_requests_total[5m]))',
+      '  alerting-rules.yml: |', '    groups:', '      - name: checkout.alerts', '        rules:',
+      '          - alert: CheckoutDown', '            expr: up{job="checkout"} == 0', '            for: 2m',
+      '            labels:', '              severity: critical', '            annotations:',
+      '              summary: "down for {{ "{{" }} $value {{ "}}" }} checks"',
+      '              description: "{{ `{{ $labels.instance }}` }} is down"',
+      '{{- end }}',
+    ].join('\n'),
+  };
+  const rule = crawlFiles(chart, { repoName: 'checkout-helm', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.alerting?.rules?.find((r) => r.name === 'CheckoutDown');
+  assert(rule?.annotations?.summary === 'down for {{ $value }} checks', 'a Helm literal-brace escape keeps both braces, as Helm renders it', rule?.annotations);
+  assert(rule?.annotations?.description === '{{ $labels.instance }} is down', 'so does a backtick string literal', rule?.annotations);
+}
 
 // ---------- environment-scoped extraction ----------
 process.stdout.write('\n--- environment scoped extraction ---\n');
@@ -988,15 +1037,21 @@ assert(['yaml', 'yml', 'json', 'ts', 'py', 'go', 'java'].every(e => SCAN_EXT.tes
   'the extensions and the ignore list are the library\'s, shared');
 // The three ways in all use it: the CLI walker and both studio paths.
 const cliSrc = readFileSync(new URL('./crawl-repo.mjs', import.meta.url), 'utf8');
-assert(/scanSkipsName\(ent\.name, \{ dir: ent\.isDirectory\(\) \}\)/.test(cliSrc) && !/IGNORE_DIRS = new Set/.test(cliSrc),
-  'the CLI walker applies the shared rule and keeps no list of its own');
+assert(/readRepoFolder\(opts\.repoPath\)/.test(cliSrc) && !/IGNORE_DIRS = new Set|SCAN_EXT\.test/.test(cliSrc),
+  'the CLI walker is the shared folder read (tools/lib/repo-folder.mjs) and keeps no list of its own');
+const folderSrc = readFileSync(new URL('./lib/repo-folder.mjs', import.meta.url), 'utf8');
+assert(/scanSkipsName\(e\.name, \{ dir: true \}\)/.test(folderSrc) && /SCAN_EXT\.test\(e\.name\)/.test(folderSrc) && !/new Set\(\[/.test(folderSrc),
+  'and the shared folder read applies the crawler\'s rule');
 const studioSrc = readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
 const stage = studioSrc.slice(studioSrc.indexOf('async function stageFileList'), studioSrc.indexOf('async function finalizeStaging'));
 assert(/lib\.scanReadsPath\(rel, \{ skipRoot: !!f\.webkitRelativePath \}\)/.test(stage),
   'the folder picker applies the rule to each path');
 assert(stage.indexOf('scanReadsPath') < stage.indexOf('f.text()'), 'and before it reads the file, not after');
 const drop = studioSrc.slice(studioSrc.indexOf('async function readEntry'), studioSrc.indexOf('async function stageFileList'));
-assert(/lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(drop), 'the drop zone applies the same rule to each folder');
+const filesSrc = readFileSync(new URL('../studio/repository-files.mjs', import.meta.url), 'utf8');
+const dropped = filesSrc.slice(filesSrc.indexOf('export async function walkDropped'), filesSrc.indexOf('export async function filesFromEntries'));
+assert(/await walkDropped\(entry, lib,/.test(drop) && /lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(dropped),
+  'the drop zone walks with the shared drop walker, which applies the same rule to each folder');
 assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no list of its own');
 
 // ---------- the folder handed over as a handle: skipped folders are never listed ----------

@@ -1,28 +1,28 @@
 {
-  "schema": "1.4",
+  "schema": "1.5",
   "upstream": {
     "repo": "MoebiusX/otel-observability-pack",
-    "ref": "develop",
-    "commit": "c34196b7a48f4f8b0829f26f2944fa7803dffd5e"
+    "ref": "adea3bf3cefeb74dd281fa9d088e513899f67fc2",
+    "commit": "adea3bf3cefeb74dd281fa9d088e513899f67fc2"
   },
-  "fetchedAt": "2026-11-02T11:28:47Z",
+  "fetchedAt": "2026-11-06T15:22:39Z",
   "files": {
-    "v1.4/spec.md": {
+    "v1.5/spec.md": {
       "sourcePath": "spec/ObservabilityPack-Spec.md",
-      "sha256": "9837ba253e05f7f40bc1e39f31d7055443420b78245bca32d55a10e52a0a5acb",
-      "bytes": 36950
+      "sha256": "3bbf676ac70b43b877ff0a2ca603adfd8a86ce572906435145598ac8186628eb",
+      "bytes": 39743
     },
-    "v1.4/observability-pack.schema.json": {
+    "v1.5/observability-pack.schema.json": {
       "sourcePath": "schema/observability-pack.schema.json",
-      "sha256": "9326f14f71e22672002562e79ee008bf0e28a0e24dabd80a63a6880d74761164",
-      "bytes": 32275
+      "sha256": "8d5b821cf30ec6484f0739378b717b0f19f3994fc33ffc53b6739b979e6bb466",
+      "bytes": 33102
     },
-    "v1.4/examples/payment-service.pack.yaml": {
+    "v1.5/examples/payment-service.pack.yaml": {
       "sourcePath": "examples/payment-service.pack.yaml",
-      "sha256": "938f1d68391511651a4fd922826923754a0506130e2f9b0aed0ce4370dfbe44b",
-      "bytes": 24052
+      "sha256": "3c0134c283e08a2abfcc14c315802fd69138cd4f82fbc615d99f33930bbfb572",
+      "bytes": 24374
     },
-    "v1.4/docs/maturity-model.md": {
+    "v1.5/docs/maturity-model.md": {
       "sourcePath": "docs/maturity-model.md",
       "sha256": "def23e1f9c1ace2cb9ef702c58e234c047197aef9aeba1742e31c6bb2da37de4",
       "bytes": 13763

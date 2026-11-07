@@ -10,7 +10,7 @@ import { render as renderAtlas, VARIANTS as ATLAS_VARIANTS, ATLAS_META } from '.
 import { escapeHtml } from './util.mjs';
 import { api } from './api.mjs';
 import { openDrawer } from './drawer.mjs';
-import { renderComparePicker, loadDiff } from './compare-view.mjs';
+import { renderComparePicker, loadDiff, diffMatchesSelection } from './compare-view.mjs';
 import { CROSS_PACK_VARIANTS } from './app.mjs';
 import { host as appHost } from './host.mjs';
 
@@ -111,7 +111,7 @@ export function renderAtlasView(view) {
     stage.innerHTML = '<div class="placeholder">Loading pack B…</div>';
     Promise.all([
       state.packB ? Promise.resolve() : appHost.loadPackB(),
-      state.diff  ? Promise.resolve() : loadDiff(),
+      dataset.diff ? Promise.resolve() : loadDiff(),
     ]).then(() => {
       renderAtlas(state.atlasVariant, stage, datasetFor(), atlasOpts);
     }).catch((e) => {
@@ -119,10 +119,20 @@ export function renderAtlasView(view) {
     });
   } else {
     renderAtlas(state.atlasVariant, stage, dataset, atlasOpts);
+    // Pack B was loaded before the comparison was (a picker, another view):
+    // the atlas is drawn now, saying it is not compared yet, and again when
+    // the diff arrives — never with no diff read as "no gaps".
+    if (!dataset.diff && state.compareBId) {
+      loadDiff().then(() => {
+        if (stage.isConnected && datasetFor().diff) renderAtlas(state.atlasVariant, stage, datasetFor(), atlasOpts);
+      });
+    }
   }
 }
 
+// The diff only when it is the comparison of the packs on screen (a diff of
+// another selection would put another pair's gaps on these strata).
 function datasetFor() {
-  return { a: state.pack, b: state.packB, diff: state.diff };
+  return { a: state.pack, b: state.packB, diff: state.diff && diffMatchesSelection(state.diff) ? state.diff : null };
 }
 

@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "6d3c8bf001a931e27e96135e0832b0a2768d58ea2944fbfac5d2d1e6247900a8",
-      "bytes": 39275,
+      "sha256": "92a26ad620c81f7da6c48225f0903c0c674ab0f5f9ef1543eb457e9c20835184",
+      "bytes": 39414,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -214,7 +214,7 @@
       "changedSinceRelease": false
     },
     "tools/lib/brand.mjs": {
-      "sha256": "f4161401e29e48ebb23cc56b8858972e976c935ffad89221b1f8350a70765c7d",
+      "sha256": "d3372f81351e252e9614bbd5496e42ba318b2b8dd40f5a3d5ceab5bce0163a36",
       "bytes": 12914,
       "exports": [
         "DEFAULT_BRAND",
@@ -303,6 +303,37 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/chaos-detect.mjs": {
+      "sha256": "72029b34698e351f5a2e54f0e594dadf905f99f98c39b8d510a29a2f8cba4956",
+      "bytes": 29396,
+      "exports": [
+        "CHAOS_ENGINES",
+        "CHAOS_PATTERNS",
+        "CHAOS_REQUIRED",
+        "CHAOS_RUN_OUTCOMES",
+        "CHAOS_SCHEDULES",
+        "UNRESOLVED_EXPECTED_ALERT",
+        "chaosControlIn",
+        "chaosControlSummary",
+        "chaosExperimentErrors",
+        "chaosExperimentsFrom",
+        "chaosPassReads",
+        "chaosResourcesIn",
+        "chaosRunErrors",
+        "chaosToggleIn",
+        "detectChaos",
+        "durationSeconds",
+        "formatDuration",
+        "isChaosCodePath",
+        "scenarioTablesIn",
+        "scheduleOfCron"
+      ],
+      "imports": [
+        "tools/lib/mini-yaml.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": false
+    },
     "tools/lib/compile.mjs": {
       "sha256": "4be1a0b282448a73d9026da45ff4c0bc43ad104d0bf860b52fe355c48157e67a",
       "bytes": 86839,
@@ -344,10 +375,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/conformance.mjs": {
-      "sha256": "a234869139b1b096d8f2e23f5e5122da6cc163f1d352e9b3f2df244e9f12a8ff",
-      "bytes": 18711,
+      "sha256": "515f6cbf5b9be6a0ba8633f29c22b4d3b1b6425e1e2dc12673e0f3fffacadde4",
+      "bytes": 19945,
       "exports": [
         "RUBRIC",
+        "SCANNER_SCAFFOLD_PREFIXES",
         "SUBJECT_CLAUSES",
         "TIER_RANK",
         "clauseSubjects",
@@ -357,9 +389,20 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/contracts/chaos-run-evidence.mjs": {
+      "sha256": "652d1ed5f5a1ad337278bc430640efa5b72e8f00131ee279746ba86c5a900033",
+      "bytes": 4531,
+      "exports": [
+        "CHAOS_RUN_PROBES",
+        "chaosRunsFromAnswers"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": false
+    },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "fe84faaecf29d4da08baac7b51766edc71c89301c750bff766e9a8f93106e97e",
-      "bytes": 18338,
+      "sha256": "0a11a835cbb7260ae3410123cd6dd9976dec979dc0dcca53efd81b863db9f2ad",
+      "bytes": 18871,
       "exports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
@@ -409,28 +452,41 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "08e156a1f1b582dbbec85059843066da32e3771a054c59b76c253e2ad795583d",
-      "bytes": 140651,
+      "sha256": "05b4eb3088635caa748249c912290ea7e961c2d30c58703f62b8d7e2e6911bb3",
+      "bytes": 156445,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
         "SCAN_MAX_FILE_BYTES",
+        "SCAN_REPORT_SHOWN",
+        "SCAN_SECRET_FILE",
+        "SCAN_WHY",
         "crawlFiles",
         "crawlToYaml",
+        "createGitignore",
         "dashboardSpecId",
         "detectArtefactKind",
+        "gitignoreOf",
+        "scanHonoursGitignore",
         "scanReadsPath",
+        "scanRefusal",
+        "scanRefusesName",
+        "scanReport",
         "scanSkipsName",
+        "scanUsesFile",
         "walkScanFolder"
       ],
       "imports": [
         "tools/lib/alert-routes.mjs",
         "tools/lib/backend-products.mjs",
+        "tools/lib/chaos-detect.mjs",
         "tools/lib/exporter-metrics.mjs",
+        "tools/lib/gitignore.mjs",
         "tools/lib/l2x.mjs",
         "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
         "tools/lib/promql.mjs",
+        "tools/lib/repo-pack.mjs",
         "tools/lib/sli-inference.mjs",
         "tools/lib/slug.mjs"
       ],
@@ -581,6 +637,17 @@
         "tools/lib/artefact-classify.mjs",
         "tools/lib/exporter-catalogue.mjs"
       ],
+      "npm": [],
+      "changedSinceRelease": false
+    },
+    "tools/lib/gitignore.mjs": {
+      "sha256": "e9f44bf0e4952e9fc4bb0f54a5aba5cde9eea8981643a727477c54605aa7f9cd",
+      "bytes": 5697,
+      "exports": [
+        "createGitignore",
+        "parseGitignore"
+      ],
+      "imports": [],
       "npm": [],
       "changedSinceRelease": false
     },
@@ -863,8 +930,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/neuron-model.mjs": {
-      "sha256": "cc1d8fb43e7daca624e692185eab76d0d8e1cf764cc319c16a8bd88659bec337",
-      "bytes": 28584,
+      "sha256": "04b16c2f551c009cf6c45ec16f789aca29ed229c2661a0791dc47a2d16d7323f",
+      "bytes": 28812,
       "exports": [
         "ATTENTION_REASONS",
         "BLAST_FIELDS",
@@ -1059,6 +1126,21 @@
       ],
       "imports": [
         "tools/lib/artefact-model.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": false
+    },
+    "tools/lib/repo-pack.mjs": {
+      "sha256": "2441bc9355a887239a5a4ec2bcf13ceb2f7442b5d64c0dbc2b87bb71038f5fe2",
+      "bytes": 3044,
+      "exports": [
+        "isRepoPackPath",
+        "readRepoPack",
+        "repoPackDocuments"
+      ],
+      "imports": [
+        "tools/lib/chaos-detect.mjs",
+        "tools/lib/mini-yaml.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
@@ -1350,7 +1432,7 @@
       "changedSinceRelease": false
     },
     "tools/lib/validator.mjs": {
-      "sha256": "15daf2541cca0553a62594aa05c826d369b4627c93d5d79e14921fc7ad356fb7",
+      "sha256": "a52bda15fae4ffdd4c8e1c5e6c7faaaef217fe26734f1ff1d4410f9202faf283",
       "bytes": 11038,
       "exports": [
         "REQUIRED_API_VERSION",
@@ -1414,6 +1496,7 @@
     "tools/lib/grafana-mcp-bridge.mjs": "node:http server and network fetch at call time; a bridge process, not a library",
     "tools/lib/harness.mjs": "process.stdout/process.exit; the repo's own test harness, not product code",
     "tools/lib/journey.mjs": "node:fs/path/url/util imports, import-time schema read, imports ../../studio/diagnostic-grade.mjs and ../../studio/verify-deploy.mjs, dynamic import of ../fetch-live-pack.mjs; the server-side journey runner, the documented browser-safety exception",
+    "tools/lib/repo-folder.mjs": "node:fs/path imports; the folder read the server and the CLI share (the crawler rule, the folder .gitignore files honoured), not a browser library",
     "tools/lib/retrofeed.mjs": "imports ../../studio/verify-deploy.mjs — its import graph leaves tools/lib"
   },
   "removedSinceRelease": []

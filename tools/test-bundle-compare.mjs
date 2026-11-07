@@ -199,7 +199,7 @@ const { diffPacks } = diffLib;
 
 const ROOT = DEFAULT_ROOT;
 const TOOL = resolve(ROOT, 'tools/build-studio-bundle.mjs');
-const PAYMENT = 'vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml';
+const PAYMENT = 'vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml';
 const GOLDEN = 'tools/fixtures/golden-crawl.pack.json';
 const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
 const VERSION = JSON.parse(read('package.json')).version;

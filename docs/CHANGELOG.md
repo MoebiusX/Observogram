@@ -32,7 +32,296 @@
   - `tools/test-studio-layout.mjs` gains three: the page column, the Advanced menu's placement and groups, and the rules that keep drawers, cards, columns, rows and controls from being cut.
   - `tools/test-neuron-model.mjs` gains one, for `evidenceNumber`.
   - `tools/test-overview-model.mjs` now also checks that a layer's hint is its name's sibling, with no tooltip repeating it.
-  - Suite total 1704 → 1708.
+  - Suite total 1753 → 1757.
+
+## 0.8.9 — 2026-11-06
+
+**Wrong numbers and wrong packs from the 0.8.7 walkthrough.** The walkthrough on krystaline's real data found ten screens that showed a wrong count, a wrong pack or a sentence that was not meant for a person. They were there before the open PRs. Each fix is at its source and was shown on a real studio (`npm run demo -- --port 8030`, a Folder Run of the krystalinex-core clone, a restart).
+
+### Fixed
+- **The service's current pack after a restart.** "Newest" means registered last, whatever was read last. After a restart the registry comes back in the order the packs were last read, so a pack someone opened after a newer scan was listed last and opened as the service's pack. Expert's service page, its Discover / Diagnose / Remediate buttons and the derived tile now open the Run's scan.
+  - `GET /api/packs` stamps each uploaded entry with `registeredAt`: when it was registered (a re-register in the same process moves it on; after a restart, the row's `createdAt`).
+  - `newestPack` (`studio/services-model.mjs`) reads the stamp; a list without it (the static bundle) keeps catalogue order.
+- **SLO objectives print every digit.** An objective of 0.9 read "9% over 30d" and 0.5 read "5%". `adapt` (`tools/lib/adapter.mjs`) now writes 90% and 50%; 0.999 is still 99.9%.
+- **Helm's literal braces.** A chart writes an alert's own `{{ $value }}` as `{{ "{{" }} $value {{ "}}" }}`, and Helm renders the two braces. The crawler turned them into one, so every such alert read as drifted against live. `crawlFiles` (`tools/lib/crawler.mjs`) now keeps an action that is only a string literal (`{{ "…" }}` or ``{{ `…` }}``) as the string it prints. On krystalinex-core, 46 of 58 alert rules keep `{{ … }}`, and no rule drifts on its annotations any more.
+- **The board's two promises numbers.** *Why this grade* said "93 in 100 holds up live" and group B said "7 of 18 promises hold end to end". Both were right, but they counted different things. They now say so: "Of the links in the repository's 18 promises, 93 in 100 hold up live" and "7 of 18 promises hold in every link, 11 broken".
+- **Strata.**
+  - It no longer says "0 gaps" beside "+2488 new". The notches, a ribbon's "+N to add" and the bridge are one number: the diff's "only in B" (what B has in the families and service scope A declares).
+  - The bridge's second figure is how many of B's artefacts are outside A's scope (2175 for krystaline: the rest of the platform). Before, the size difference of the two stacks was shown as artefacts to add.
+  - Atlas loads the comparison when Pack B was already loaded. Until it arrives, Strata says "not compared yet" and draws no notch, never "no gaps". A diff for another selection is not used. The footnote describes notches only when there are some.
+- **Atlas and Discover count the same pack.** The strata, periodic, transit and arbor atlases left out the sibling layer L2X (RFC-0001), so krystaline read 741 in Atlas and 742 in Discover. L2X now rides in the Metrics/Logs/Traces band, as Overview's Layers count it. The drawer still names its own layer.
+- **The Neuron names Pack A by its pack.** It printed the absolute server path of the workspace where the journey was first saved.
+  - `GET /api/journeys` gives `packARef` / `packBRef` (`{ id, label }`) for a source that is a registered pack. The Neuron and the journeys list show the label, with the id and the file in its title (`packSourceHtml` in `studio/util.mjs`; `buildJourneyDetail` in `tools/lib/neuron-model.mjs` carries both).
+  - A service's Run and a captured journey save a workspace pack journey-relative (`../packs/<id>.pack.yaml`), so a moved or copied workspace checks its own copy. A journey saved before keeps its path until its next Run.
+- **The Run's toast is lime only when the check is clean.** In the reskin, every toast of no kind was lime. Now a plain toast is a neutral panel and `toast(…, 'ok')` is lime, so the Run's toast that names lost files (#223) no longer looks like a clean success.
+- **A private GitHub repository's answer is a sentence.** A failed GitHub call kept GitHub's JSON body (`{"message":"Not Found","documentation_url":…}`). It now keeps only the message: "GitHub 404 on /repos/MoebiusX/krystalinex-core: Not Found". This holds on the service row and in Expert's scan (`ghFetch` in `server/github-crawl.mjs`).
+- **The Add a service hint names sign-in.** Where the server offers Sign in to GitHub (or Azure DevOps) and the person is signed in to the studio, the repository hint says to sign in or give a token. Before, it mentioned only a token. A server without it reads as before (`formModel`'s `repoSignIn` in `studio/overview-model.mjs`).
+
+### Tests
+- `server/test-workspace.mjs`: the newest pack survives a restart that lists it first, and a re-register makes a pack the newest again.
+- `tools/test-services-model.mjs` gains one, for `newestPack` by registration.
+- `tools/test-adapt.mjs`: objectives of 0.9, 0.99, 0.999, 0.9995 and 0.5 print every digit.
+- `tools/test-crawl.mjs`: a Helm literal-brace escape and a backtick literal keep both braces.
+- `tools/test-overview-model.mjs`: the two promises sentences, and the hint with and without sign-in offered.
+- `tools/test-atlases.mjs` is new (four tests): L2X in the band, Strata's one number, the scope figure, and Strata without a diff.
+- `tools/test-neuron-model.mjs` gains one, for the pack named by its label.
+- `tools/test-design-system.mjs` gains one, for the toast colours.
+- `server/test-service-run.mjs`: the listing's `packARef`, the journey-relative save, and GitHub's real 404 body read as a sentence.
+- `tools/test-studio-bundle.mjs`: the catalogue's `registeredAt` is the server's alone.
+- Suite total 1746 → 1753.
+
+## 0.8.8 — 2026-11-06
+
+**docs/USER_JOURNEY.md describes the studio as it is.** It was last rewritten on 2026-10-07, before the Overview face, a service's Run, repository sign-in and grade schemas 3 and 4. Docs only; no code changes. This PR is stacked on #221 and cut after it.
+
+### Changed: `docs/USER_JOURNEY.md`
+- **Two faces over the same three steps.** Overview (`?mode=overview`: the Services list, then the board; `&layout=simple` as the fallback) and Expert (`?mode=expert`: the full studio). The switch, which face a first visit opens, and what Overview hides.
+- **A service is two places.** Its repository, and per environment the live MCP endpoint. The Run scans the repository as Pack A, reads live as Pack B, and saves the check as the journey `<slug>.<env>`. Repositories can declare about themselves in `.observability/*.yaml` (spec 1.5).
+- **The north-star flow** starts at the Services list and runs through the Run and the board into Expert, bound to the service. Expert's own doors stay for packs already in hand.
+- **The Diagnostic Grade at schema 4.** What each criterion needs, as the engine checks it. Chaos-validated's states and scores, with the windows by schedule and where a run comes from. Scaffolds earn nothing. How the repository alone grades. When Overview's *Why this grade* is offered.
+- **Fifteen invariants, up from ten.** New ones:
+  - a service is its repository plus a live endpoint;
+  - repository access is the person's;
+  - the scan says what it left out;
+  - the board never claims what nobody checked;
+  - Overview speaks plainly, with one primary button.
+
+  The old "DIAGNOSTIC GRADE plus PASS/FAIL" heading is replaced by the Assessment's decision header.
+- **What belongs in each step** gains:
+  - Overview's Services list, repository access and the board;
+  - Neuron;
+  - the Update half of *Build or update a pack*;
+  - Remediate's four strategies and export.
+- **The golden path** is the path a person takes today: Add a service, Run, the board, Diagnose, Remediate, Check again. The old one named pack files that are not in the repository. `DRY_RUN.md` is kept as the June 2026 runbook.
+- Every claim was checked against the code by two independent reviews; all 38 findings were applied.
+
+### Fixed: four stale lines in other docs
+- `docs/UPDATE_JOURNEY.md`'s status line said nothing in it was built. Slices 1 and 2 shipped in 0.6.2.
+- `README.md` (Overview's services) and `docs/UX_SCREEN_GRAMMAR.md` (the Repository column) now list Upload as a repository kind.
+- `docs/OVERVIEW_DEMO.md`'s 1:15 beat: **Overview** now returns to the Services list, and **Open →** draws the board.
+
+### Version
+- 0.8.8: package.json and its lock, the Dockerfile, the image tags under `deploy/` and the README, and the footer fallback. `VENDOR-MANIFEST.json` regenerated.
+- Suite total 1746 → 1746 (no test changes).
+
+## 0.8.7 — 2026-11-06
+
+**Chaos experiments are seen, and declared is told apart from proven.** The scan used to drop every chaos source, the live side could not observe chaos at all, and spec 1.4 had nowhere to record a run. Spec 1.5 (RFC-0004, MoebiusX/otel-observability-pack#11) adds the engines `in-process` and `custom`, the schedules `on-demand` and `ci`, and `last_result`, the newest run. The scan now reads experiments from code, from Chaos Mesh and Litmus resources and from the repository's own `.observability/*.yaml`. A live check reads the certification run feed. The grade gives a declared experiment a quarter of the point, and the rest only for a recent passing run. A fresh scan of krystalinex-core declares its five in-process scenarios, and the Overview reads "5 chaos experiments declared, never recorded as run." The design and the owner's eight decisions are in `docs/CHAOS_EXPERIMENTS.md`. This PR is stacked on #222 and #223 and cut after them.
+
+### Changed: spec 1.5 vendored (`vendor/observability-pack-spec/v1.5/`, `tools/lib/validator.mjs`)
+- `SPEC_VERSION` is `'1.5'`, at upstream `adea3bf3`, the RFC-0004 branch, until it merges. `v1.4/` is removed: 1.5 validates every 1.4 pack unchanged.
+- `validation.chaos_experiments[]` gains:
+  - `engine` values `in-process` and `custom`;
+  - `schedule` values `on-demand` and `ci`;
+  - an optional `last_result`: `at` (date-time) and `outcome` (`pass`, `fail` or `aborted`) required; `environment`, `observed_mttd`, `alerts_fired` and `evidence` optional.
+- Every current-version mention follows: brand and studio texts, package.json, the docs, and the three studio links into upstream. Lines dating `alerting.rules` to 1.4 stay as history.
+
+### Added: the chaos detector (`tools/lib/chaos-detect.mjs`, new module)
+A pass of its own over every in-scope file in `crawlFiles`. A file has one kind, so a chaos controller that also exports metrics would otherwise lose its scenarios.
+- **In-process.** A file with `chaos` in its path, holding a scenario table: entries keyed by a slug, each with `durationSeconds` at its own level and `delayMs` or `errorRate` in its body (snake_case too). One experiment per entry, with `engine: in-process` and `schedule: on-demand`.
+- **Chaos Mesh and Litmus.**
+  - Chaos Mesh: every `*Chaos` kind; a `Schedule`, its cron read as daily, weekly or monthly; a `Workflow`.
+  - Litmus: `ChaosEngine` and `ChaosSchedule` experiments. A `ChaosExperiment` is counted as a template, never declared.
+- **Corroboration** declares nothing. The `/chaos/(start|stop|status)` routes, the `X-Chaos-Key` header, `CHAOS_API_KEY` and a `chaos.enabled` toggle (overlays win) land in `crawler.chaos.control` and `crawler.chaos.disabled`.
+- **Provenance.** Each experiment carries its evidence path, so it is Declared, never Scaffold. The fields code cannot supply are filled and get field marks:
+  - `expected_alerts`: the alert rules the scenario's own text names, as whole names, else `unresolved:not-in-code`;
+  - `expected_mttd`: the slowest match's `for:` plus one minute, else the baselines target;
+  - `steady_state_hypothesis`: the SLO a matched burn-rate alert protects, else the SLO that fits the fault.
+- `crawler.discovered.chaos_experiments` lists each experiment with its source. `summary.discovered.chaosExperiments` / `chaosSources` count them.
+- **Tier.** A tier-2 repository that holds an experiment now infers tier-1, the "rules + dashboards + alertmanager + chaos" line the tier rule always named. krystaline infers tier-1.
+- Exports: `CHAOS_ENGINES`, `CHAOS_SCHEDULES`, `CHAOS_RUN_OUTCOMES`, `CHAOS_REQUIRED`, `CHAOS_PATTERNS`, `UNRESOLVED_EXPECTED_ALERT`, `chaosExperimentErrors`, `chaosRunErrors`, `durationSeconds`, `formatDuration`, `isChaosCodePath`, `scenarioTablesIn`, `chaosControlIn`, `chaosToggleIn`, `chaosResourcesIn`, `scheduleOfCron`, `detectChaos`, `chaosExperimentsFrom`, `chaosControlSummary`.
+
+### Added: the repository's own pack (`tools/lib/repo-pack.mjs`, new module; `tools/lib/crawler.mjs`)
+- `.observability/*.yaml` holding `kind: ObservabilityPack` is the new `observability-pack` kind. It is read in every environment scope.
+- Its `spec.validation.chaos_experiments` merge by id. The declared entry wins, and its field marks go. Each entry is checked alone against the spec 1.5 item, mirrored by hand for the browser. A failing entry is left out with a warning, never a failed scan.
+- **`server/github-crawl.mjs`**: `isCrawlerFile` names `.observability/*.yaml` and `chaos` code paths first.
+- Exports: `isRepoPackPath`, `repoPackDocuments`, `readRepoPack`.
+- `crawler.unobserved.chaos` (0.8.5) is no longer stamped: the scan looks now.
+
+### Changed: Chaos-validated tells declared from proven; grade schema 3 → 4 (`studio/diagnostic-grade.mjs`, `studio/overview-model.mjs`)
+- **`chaosProof`** (exported, pure) grades the experiments:
+
+  | State | Score |
+  |---|---|
+  | none | 0 |
+  | declared, never run (an aborted run counts here) | 0.25 |
+  | stale: the newest pass is past its window | 0.25 |
+  | failed: the newest run of any experiment failed | 0 |
+  | proven | 0.25 + 0.75 × fresh passes ÷ declared |
+
+- **Windows** come from the schedule (`CHAOS_PROOF_WINDOW_DAYS`): daily 2 days, weekly 8, monthly 35, on-demand and ci 90.
+- **Runs** come from `last_result` (recorded) or `mcp.chaos.runs` on Pack B (measured, and it wins).
+- **The criterion.** A pass needs every experiment proven. Chaos-validated gains `score` and `proof`, and its detail names the date, the failed alerts or the stale pass.
+- **The Overview's chaos line** reads `proof`:
+  - "Recovery proven <date> by fault injection: k of N … passed a recent run (recorded in the repository | measured live)";
+  - "Chaos experiment <id> failed on <date>: <alerts> did not fire within <mttd>";
+  - the stale pass and its window;
+  - "N chaos experiments declared, never recorded as run."
+
+  Each line counts what the engine counted (its `score`), so a *partly* line keeps the seven lines adding up to the letter. A real Run on krystaline drew no list until it did.
+- **Schema 4** keeps the seven criteria. A declared-only pack loses 0.75 of a point, and a schema-3 run explains nothing until the next check.
+- **Unchanged.** The posture matrix still counts presence: its chaos column reads *declared*, and proof lives in the criterion.
+- New exports (vendored unit, imports nothing): `chaosProof`, `liveChaosRuns`, `CHAOS_PROOF_WINDOW_DAYS`, `CHAOS_DECLARED_CREDIT`.
+
+### Added: the chaos run feed, live (`tools/lib/contracts/chaos-run-evidence.mjs`, new module; `chaos_run_evidence` in `tools/lib/contracts/mcp-capabilities.mjs`; `tools/fetch-live-pack.mjs`)
+- **The capability** is new, carried by the metrics query tool. `CHAOS_RUN_PROBES` holds the MQ lab certification feed: `mq_cert_experiment_pass`, `mq_cert_run_timestamp_seconds` and `mq_cert_mttd_seconds`.
+- **The live pack** gains:
+  - `mcp.chaos.feed`, as `<feed>:<outcome>`;
+  - on data, `mcp.chaos.runs`, the newest run per experiment id;
+  - nothing on a snapshot.
+- **`observogram.unobserved.chaos` stays**, with what the feed reported: the live side never holds an experiment's definition, and dropping the key would make the diff read every declared experiment as missing live.
+- **Exports**: `CHAOS_RUN_PROBES`, `chaosRunsFromAnswers`; and `sampleChaosRuns` from the fetcher.
+
+### Fixed: what the 0.8.7 walkthrough found on these screens
+- **The Expert folder scan sees chaos experiments** (`studio/app.mjs`; `tools/lib/crawler.mjs`, `tools/lib/chaos-detect.mjs`). The *Scan a repo* panel sent the server only the files the browser classified as artefacts, so a chaos controller, its middleware and a scenario script never reached the chaos pass. On krystaline it sent 121 of 535 files and found no experiment, while an Overview Run of the same folder found all five.
+  - `scanUsesFile(relPath, content, kind?)` in the crawler and `chaosPassReads(relPath, content)` in the detector name every file a scan reads: an artefact, or a file the chaos pass reads.
+  - The panel sends exactly those, and lists the extra files as `chaos-source`.
+- **Diagnose's Chaos-validated gap card follows the proof** (`studio/chaos-copy.mjs`, new; `studio/compare-view.mjs`). It read *No chaos experiment is declared* beside its own evidence, *5 chaos experiments declared, never recorded as run*. `chaosBlockerCopy` now words each state:
+  - none: on a scanned pack, what the scan looked for;
+  - declared, never run: *No chaos experiment has a recorded run*, the quarter it earns, and how to record a run (`last_result` in `.observability/pack.yaml`, or the live feed);
+  - stale: *The last chaos pass is too old*;
+  - failed: *A chaos experiment failed its last run*;
+  - partly proven: *Not every chaos experiment has a recent pass*.
+
+  The evidence row's expectation names the run and the window.
+- **A scanned experiment's references resolve** (`studio/symbol-refs.mjs`, new; the symbol table in `studio/app.mjs`, `studio/drawer.mjs`). latency-spike's `ref:slos.slo_latency_99` and `alert:HighLatencyP99` were listed as broken although the pack declares both. The symbol table knew `slos.x` and not the spec's own Ref form `ref:slos.x`, and it took only alert names that start lowercase.
+  - `refResolves` and `refSymbol` are now the one rule, and the drawer's links read it too.
+  - Any alert name resolves, except the scan's `unresolved:not-in-code` placeholder, which names no alert. The studio mirrors that name as `UNRESOLVED_ALERT_PLACEHOLDER`, and a test pins it to the detector's.
+  - On krystaline, latency-spike and error-burst show no unresolved reference. The three experiments whose code names no alert show one: their placeholder.
+- **The static bundle's ceiling** (`tools/test-studio-bundle.mjs` T3) rises from 6,250,000 to 6,400,000 bytes. With the two new studio modules the two-pack bundle came to 6,255,083 bytes, all of it the studio's own code and no new dependency.
+
+### Docs
+- `docs/CHAOS_EXPERIMENTS.md`: decided, built, and what the build changed.
+- `docs/MCP_INTEGRATION.md`: the feed and its two annotations.
+- README, `docs/USER_JOURNEY.md`, `docs/RELEASE_READINESS.md` and `docs/VENDORING.md` describe schema 4.
+- The pending ladder-integrity proposal moves to schema 5.
+- `docs/OVERVIEW_DEMO.md` says why the seed reads the same.
+
+### Tests and goldens
+- **New suites.**
+  - `tools/test-chaos-detect.mjs` (18 tests) pins the mirrors against the vendored `$defs` and, entry for entry, against `validateCanonical`, plus every reader and the crawl end to end. Three of its tests cover the walkthrough's fixes: the Expert door's files, a scanned experiment's references, and the blocker copy state by state.
+  - `tools/test-chaos-run-evidence.mjs` (5 tests) covers the feed, from the registry row to a proven grade.
+- **Updated suites.**
+  - `tools/test-validator.mjs` pins 1.5 (one new test).
+  - `tools/test-diagnostic-grade.mjs` gains a schema-4 block. Its base fixture's experiment carries a fresh pass, so every earlier sum holds.
+  - `tools/test-overview-model.mjs` is re-stamped to schema 4 and adds one test.
+  - `tools/test-journey.mjs` and `tools/test-crawl.mjs` follow schema 4 and the dropped stamp.
+- **Goldens, each change explained.**
+  - Compile: 46 banners, v1.4 → v1.5.
+  - Audit report: three footers.
+  - Conformance-view capture: the rubric link.
+  - Build fixture: its header.
+  - Diff: eight whole-diff hashes. The vendored example records a run that a self-diff carries twice; a script confirmed the diff is otherwise identical.
+  - Crawl: the `crawler.unobserved.chaos` line goes.
+- Cut as 0.8.7, after #222's 0.8.5 and #223's 0.8.6: package.json and its lock, the image tags and the footer fallback, with VENDOR-MANIFEST.json regenerated. Suite total 1721 → 1746.
+
+## 0.8.6 — 2026-11-06
+
+**Every way into the scan reads by the crawler's own rule, and says what it left out.** The GitHub and Azure DevOps reads used to download only files with an observability-sounding name, and a Folder walk had its own extension list and caps. Both now take every file the crawler reads, and the name list only orders them under the 200-file cap. A Run now keeps what its scan saw: the files it did not read and why, the files past the cap, the files the environment's profile left out, the files it read and recognised as nothing, and its warnings. It answers with them and keeps them in the run record, and the Overview board and the Run's toast show them. Local scans (Folder, Upload, the CLI, Expert's folder, drop and .zip) honour the folder's `.gitignore` files. No door reads a YAML or JSON values file named `*secret*`; each names it instead.
+
+### Changed: the GitHub and Azure DevOps reads take every file the crawler reads
+- **`server/github-crawl.mjs`** has a new `planCrawlerFetch(tree, caps)`. A blob is read when `scanReadsPath` says so, the rule a folder, an upload and the CLI apply. `isCrawlerFile` and `isExporterCandidateFile` only order the files under the 200-file cap: the artefact names first, the exporter candidates next, then the rest, then tests, fixtures and lock files. Each group stays in tree order.
+  - It answers `{ selected, candidates, capped, skipped }`. `candidates` counts every blob the rule reads, taken before the cap, so a cap's loss is no longer hidden. `capped` is how many the cap left out. `skipped` names a file over 5 MB (the scan's `SCAN_MAX_FILE_BYTES`, up from 1 MB), a file past the 16 MB total, and a secrets file.
+  - `selectCrawlerFiles` is the plan's `selected`.
+  - On github.com/MoebiusX/KrystalineX the old filter fetched 120 of the 394 files the rule reads. `scripts/chaos-scenarios.js` and `server/middleware/chaos.ts` were among those never fetched.
+  - `chaos` joins the source names read first, so those two fall inside the cap there. The other 194 files still fall past it, and the Run now says so.
+- **`settleFetched`** (new) settles the downloads in the plan's order, then hands the files on in path order. Before, they reached `crawlFiles` in the order the downloads finished. A failed download is named with its error.
+- **`fetchGithubFiles`** answers `{ ref, candidates, capped, files, skipped: [{ path, why }], truncated }`. `skipped` used to be strings.
+  - `server/repo-sources.mjs` now passes GitHub's `truncated` and the cap on. Before, it dropped both.
+  - `POST /api/crawl-github` puts `candidates`, `capped`, `truncated` and a warning for each in its summary.
+- **Azure DevOps** (`server/repo-sources.mjs`) uses the same plan and the same settling.
+
+### Changed: a Run keeps what its scan saw
+- **`scanReport(read, summary)`** (`tools/lib/crawler.mjs`, new) is what a scan saw, with every list bounded (`SCAN_REPORT_SHOWN`, 50):
+  - `files`, `candidates`, `capped`, `truncated`;
+  - `skipped` and `skippedFiles` (`{ path, why }`);
+  - `classified` and `byKind`;
+  - `unclassified` and `unknownFiles`;
+  - `environment: { profile, excluded, excludedFiles }`;
+  - `warnings`.
+- **`POST /api/services/:id/run`** answers `scan` as that report. Before, it kept the source, the ref and two counts, and dropped the crawl's summary. `skipped` stays a count.
+  - On the krystaline scan, the old answer dropped the crawl's 5 warnings, its `byKind`, the 14 files the prod profile excludes and the 62 of 120 files recognised as nothing.
+- **The run record keeps it as `packA.scan`.** `runJourney` takes a `scan` option. A `crawl:` Pack A carries its own. A run told nothing (Check now on the last scan) keeps the scan of the newest record whose Pack A is the same file. Another file claims no scan.
+- **`crawlFiles`' summary** names the files it read and recognised as nothing: `files.unclassified` counts them all, `files.unknown` lists the first 200. Before, they were dropped without a word.
+- **The Overview board** shows the scan under the layers in Discover (`studio/overview-model.mjs`: `scanModel`, `scanLossText`; `board.scan`). One line says how many files were read, and of how many, with what was lost. Behind it, each group lists its files and why: not read, past the file cap, a cut file list, left out by the environment's profile, recognised as nothing, and the warnings. The line is amber when files the rule takes were lost.
+- **The Run's toast** adds the losses: *… checked: 200 of 396 files from … (196 past the file cap, 62 recognised as nothing), grade …*.
+
+### Changed: the Folder walk, the Upload and the CLI use the crawler's rule
+- **`tools/lib/repo-folder.mjs`** (new, Node-only, excluded from the vendorable set) has `readRepoFolder(root, { refuse, maxTotalBytes })`. It returns `{ files, skipped, bytes, notEntered }` and applies the crawler's rule (`scanSkipsName`, `SCAN_EXT`, `SCAN_MAX_FILE_BYTES`, `scanRefusesName`).
+  - Entries are read in name order, so a total cap falls on the same files every time.
+  - A file the rule would read and the walk did not is named: git ignores it, a secrets file, over 5 MB, past the total, unreadable, or refused by the caller's scope.
+- **`tools/lib/journey.mjs`** gains `scanRepoFolder(root, { scope })`, which is `readRepoFolder` under the crawl scope, with `REPO_FOLDER_TOTAL_BYTES` at 16 MB. `walkRepoFiles` is now its `files`.
+  - The walk's own rules are gone: no `.cjs` or `.jsx`, every dot-folder skipped (`.observability` too), 1 MB a file, and a silent `continue`.
+  - A Folder repository's Run now names what it skipped. Before, `skipped` was always `[]`.
+- **`tools/crawl-repo.mjs`** walks with `readRepoFolder`. Its summary prints `files not read` with each path and why, and `not recognised`. Before, it skipped a file over 5 MB without a word.
+- **The Upload**: `PUT /api/services/:id/repository-upload` takes `skipped` (what the browser did not read, at most 500 entries) and keeps it with the copy. It never keeps a secrets file and names it instead. `studio/services-api.mjs` and `savePlan` send `skipped`. The Run's `skipped` for an upload is the browser's list plus the server's. A copy kept before this release is filtered as it is read.
+
+### Added: local scans honour `.gitignore`; a secrets values file is never read
+- **`tools/lib/gitignore.mjs`** (new, browser-safe) has `parseGitignore` and `createGitignore()`, a matcher with `add(base, text)`, `ignores(path, { dir })` and `ignoredAt(path)`. It follows git's patterns: anchoring, `**`, folder-only patterns, `!`, character classes and escapes. A deeper `.gitignore` comes after its parents', and a file under an ignored folder stays ignored. Only the `.gitignore` files inside the scanned folder count.
+- **`tools/lib/crawler.mjs`** gains:
+  - `SCAN_SECRET_FILE` and `scanRefusesName(name)`: a YAML or JSON file whose name holds `secret`. `scanReadsPath` is now false for it.
+  - `scanRefusal(path, { skipRoot, gitignore })`: why a file the folder and extension rule takes is still left out, or null.
+  - `SCAN_WHY`: one wording for every door's skipped list.
+  - `scanHonoursGitignore` and `gitignoreOf(pairs, { skipRoot })`: the matcher for a flat list.
+  - `createGitignore`, re-exported.
+  - `walkScanFolder(dir, onFile, prefix, { onSkip })`: honours each folder's `.gitignore` and hands every file or folder it leaves out to `onSkip`.
+- **The studio's readers** (`studio/repository-files.mjs`) honour `.gitignore` and name each file they leave out: the folder handle, the folder input (`gitignoreOfFileList`), the drop (`walkDropped`) and the .zip. A secrets file in a .zip is never inflated. Expert's folder, drop and file-list staging go through the same readers, and its staged panel lists *N files not read, and why*.
+
+- **Tests**: `tools/test-scan-coverage.mjs` (new, 12 tests) covers:
+  - the matcher's patterns;
+  - the secrets rule and the handle walker;
+  - the crawl's unknown files and `scanReport`;
+  - the plan, the cap and the ordering on a tree shaped like KrystalineX's;
+  - path order whatever order the downloads finish in, and `truncated`;
+  - the folder read, its caps and the crawl scope;
+  - `packA.scan` kept, and carried by Check now;
+  - the board's scan line and the toast's words.
+
+  `server/test-service-run.mjs` gains two Run tests. One is a Folder whose `.gitignore`'d file and secrets file are named and never reach the pack, with the scan in the record, in the runs the board reads and after a Check now. The other is an Upload whose secrets file is never kept, with the browser's list kept and both named. Updated: the GitHub read now takes `src/app.py`; a fixture snapshot is fetched last, not never; the CLI's and the drop's source checks name the shared walkers; the board's keys include `scan`. Cut as 0.8.6, after #220's 0.8.4 and #222's 0.8.5: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated. Suite total 1707 → 1721.
+
+## 0.8.5 — 2026-11-06
+
+**Scaffolds earn nothing, and the chaos line says only what is known (grade schema 3).** The grade stops crediting values the scanner invented, and stops saying recovery was, or was never, proven by fault injection: nothing checked either. krystaline · prod, graded against its last live snapshot, goes from B at 69.8% to C at 55.5%, and its conformance from 77% to 71% (MUST 80% → 73%).
+
+### Changed: the diagnostic grade, schema 2 → 3 (`studio/diagnostic-grade.mjs`)
+Same seven criteria, same weights. Scores can fall, never rise, on the same packs. The run record's `grade.schema` says 3, so a step in a score history is explained as a re-scoring.
+- **Calibrated** counts only baselines someone declared. The MTTD/MTTR block the repository scan always writes (`crawler.scaffold.baselines`; the live fetcher's `mcp.scaffold.baselines` too) is a scaffold, and so earns no pass. The detail then reads `no MTTD/MTTR baselines declared - the one present is a scaffold (defaults, never measured)`. The posture's pack-level baselines row reads the same way.
+- **Chaos-validated** counts declared experiments and skips scaffolds (a library experiment still on its generic fault, `library.todo.*`).
+  - Its sub reads *fault-injection experiments declared* (was *recovery proven by fault injection*).
+  - A pass reads `N chaos experiment(s) declared; none has a recorded result`: the specification has no results field.
+  - A fail says what each side could see, never *recovery procedures are theoretical*:
+    - `no chaos experiment declared - the repository scan cannot detect chaos tooling and the live side cannot observe it`, from `crawler.unobserved.chaos` on Pack A and `observogram.unobserved.chaos` on Pack B;
+    - either clause alone when only one side is stamped;
+    - `… in this pack` when neither is.
+- **Comprehensive**: a chaos experiment's layer on the posture matrix is its `spec.target`'s, else its steady-state hypothesis' SLO's, else none. Before, it came from the experiment's id and title, so four experiments named after the four layers lit the chaos row of every layer, whatever they faulted.
+- **New optional keys** (vendored; docs/VENDORING.md): Calibrated's `baselines` (`{ declared, scaffolds }`); Chaos-validated's `declared`, `scaffolds`, `unobserved` (`{ repository, live }`) and `fromScan`.
+
+### Changed: the synthetic-probe clause skips the crawler's invented canary (`tools/lib/conformance.mjs`)
+`L5.MUST.synthetic_probe` passed on the `https://<repo>.example.com/health` check the crawler writes when a repository has none. A check marked `crawler.scaffold.` or `mcp.scaffold.` now satisfies no clause; the weekly-production-chaos clause's instrumented probe reads the same way. A library placeholder (`library.todo.*`) still passes: the pack represents the requirement, and the server lists it under `onPlaceholder`.
+- **`SCANNER_SCAFFOLD_PREFIXES`** is exported, the marks that make a value scanner-invented.
+- **The Conformance view** (`studio/conformance-view.mjs`) says so. Its Scoring rules read *Template values count as passes, with one exception*, the invented synthetic check. A failing synthetic clause names the check it left out (*The synthetic check `krystaline-health-canary` is a placeholder the scan wrote…*). Before, the text said every placeholder passes, beside a clause that failed on one.
+  - The view mirrors the prefixes as `SCANNER_INVENTED_PREFIXES`, and a test pins the two lists equal. The live server serves tools/lib at `/lib` only, so a static `../tools/lib/` import there loads the HTML shell and the studio does not start. `tools/test-studio-bundle.mjs` T1 now refuses such an import in any live studio module.
+
+### Added: what the scan and the live check could not look at
+- **`tools/lib/crawler.mjs`** stamps `crawler.unobserved.chaos: the repository scan has no chaos-experiment detector` on every crawled pack. The key goes when the scan learns to detect chaos experiments.
+- **`tools/lib/journey.mjs`**: the run record's `packB.unobserved` lists the families Pack B says it could not observe (its `observogram.unobserved.<kind>` keys, sorted; `[]` when none).
+
+### Changed: the chaos sentences on screen
+- **Overview** (`studio/overview-model.mjs`): *Why this grade* explains schema-3 runs only; a run recorded under schema 2 explains nothing until the next check.
+  - Chaos: `No chaos experiment is declared — the repository scan cannot detect chaos tooling and the live side cannot observe it.` (the live clause from the run's `packB.unobserved`), or `N chaos experiments are declared; none has a recorded result.` Never *Recovery has never been proven by fault injection.*
+  - Calibrated on scaffold baselines: `Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.`
+- **Diagnose** (`studio/compare-view.mjs`):
+  - The chaos blocker is titled *No chaos experiment is declared* (was *Recovery has never been tested*).
+  - On a pack the repository scan wrote, its fix no longer just says to declare an experiment in L5. It says a Run that scans the repository again rewrites the pack, so a hand edit lasts only until then, and, while the scan carries the stamp, that the scan cannot read chaos experiments from a repository yet.
+  - Calibrated on scaffold baselines says they are defaults.
+  - The briefing line no longer says recovery *hasn't been validated against actual fault injection*.
+- **Discover** (`studio/discover-board.mjs`): `boardGroupsHtml(layerId, entries, { annotations })` gives an empty chaos group the reason when a stamp says the producer could not look (*None declared — the repository scan cannot detect chaos tooling*). Without the third argument it says *None in this pack*, as before.
+- **Docs**: README, docs/USER_JOURNEY.md and docs/RELEASE_READINESS.md describe schema 3. The pending ladder-integrity proposal moves to grade schema 4. docs/OVERVIEW_DEMO.md quotes the demo's schema-3 reading: C at 55, 3.8 of 7 points, D for the repository alone. Its last snapshot read B at 69 under schema 2; the pack's only baselines are the scan's defaults.
+
+### Known limit
+A chaos experiment's layer still comes from words, but from its target's words now. A target the layer patterns do not know (`deployment/orders-api`) falls back to the steady-state SLO. Stating the layer outright needs the `annotations.layer.<id>` override, or a spec field the specification does not have.
+
+- **Tests**: `tools/test-diagnostic-grade.mjs` pins both scaffold false passes, the chaos wording for each stamp, and the chaos layer by target and SLO, never by name. `tools/test-overview-model.mjs` and `tools/test-discover-rows.mjs` add one test each. `tools/test-crawl.mjs` pins the synthetic-probe clause on the invented canary and the stamp; `tools/test-journey.mjs` pins `packB.unobserved`. `tools/test-library.mjs` renders the Conformance view over an invented and a library canary (one test). The crawl golden gains the stamp, and the conformance-view capture gains the new Scoring rules sentence (that bullet only); the compile goldens are byte-identical. Suite total 1704 → 1707.
 
 ## 0.8.4 — 2026-11-06
 

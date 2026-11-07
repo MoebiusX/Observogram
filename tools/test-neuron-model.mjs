@@ -101,6 +101,19 @@ test('buildJourneyDetail: latest record blocks, notify null vs absent, vantage-l
   assert.deepEqual(d.alignment.map(x => x.v), [90, 88, null]);
 });
 
+test('buildJourneyDetail and packSourceHtml: a registered Pack A is named by its label, never by a server path', async () => {
+  const { packSourceHtml } = await import('../studio/util.mjs');
+  const file = 'C:/Users/someone/elsewhere/ws/packs/uploaded-krystaline-46245ab3.pack.yaml';
+  const ref = { id: 'uploaded-krystaline-46245ab3', label: 'krystaline · prod · repository' };
+  const d = buildJourneyDetail({ name: 'krystaline.prod', packA: file, packARef: ref, packB: 'mcp: https://mcp.example/x', packBRef: null }, []);
+  assert.deepEqual([d.packARef, d.packBRef], [ref, null]);
+  const html = packSourceHtml(d.packA, d.packARef);
+  assert.equal(html, '<code title="uploaded-krystaline-46245ab3 · C:/Users/someone/elsewhere/ws/packs/uploaded-krystaline-46245ab3.pack.yaml">krystaline · prod · repository</code>');
+  assert.equal(packSourceHtml(d.packB, d.packBRef), '<code>mcp: https://mcp.example/x</code>', 'a source that is no registered pack reads as the definition gives it');
+  assert.equal(packSourceHtml(null, null), '<code>?</code>');
+  assert.equal(buildJourneyDetail({ name: 'old' }, []).packARef, null, 'a listing without the field (an older server): null');
+});
+
 test('buildNeuronModel: fleet counts, paired deltas, chains, exposure, delivery, stack signal', () => {
   const A = [run(0), run(1), run(2)];                        // latest 88, previous 89 → delta -1
   const B = [run(0, { drift: { alignmentPct: 60 }, grade: { score: 40 } }), lost(1)]; // latest is a gap; previous 60

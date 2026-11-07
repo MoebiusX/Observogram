@@ -1,6 +1,6 @@
 // studio/conformance-view.mjs
 //
-// The Conformance view — how MATURE is the focused pack against the v1.4
+// The Conformance view — how MATURE is the focused pack against the v1.5
 // maturity rubric (MUST/SHOULD per tier). Self-contained; returns the
 // rendered <section> for the caller to append.
 //
@@ -39,7 +39,7 @@ import {
   wireSectionNav, wireUxActions,
 } from './ux-kit.mjs';
 
-const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/c34196b7a48f4f8b0829f26f2944fa7803dffd5e/docs/maturity-model.md';
+const RUBRIC_URL = 'https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/docs/maturity-model.md';
 
 const DIMENSIONS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5'];
 
@@ -117,6 +117,22 @@ function templateValues(pack) {
   return { todos, scaffolds, byLayer, any: todos + scaffolds > 0 };
 }
 
+// The two clauses that leave out a synthetic check a scanner invented (the
+// crawler's health canary). When one fails, its row names the checks it left
+// out, so "No synthetic check" never stands unexplained next to a check the
+// pack shows. The prefixes mirror tools/lib/conformance.mjs
+// SCANNER_SCAFFOLD_PREFIXES: the live server serves tools/lib at /lib only,
+// so a view cannot import it, and tools/test-library.mjs pins the two equal.
+export const SCANNER_INVENTED_PREFIXES = Object.freeze(['crawler.scaffold.', 'mcp.scaffold.']);
+const SKIPS_INVENTED_SYNTHETIC = new Set(['L5.MUST.synthetic_probe', 'L5.MUST.tier1_weekly_prod_chaos']);
+function inventedSyntheticChecks(pack) {
+  const ann = pack?.meta?.annotations || pack?.metadata?.annotations || {};
+  const invented = (symbol) => SCANNER_INVENTED_PREFIXES.some(p => !!ann[`${p}${symbol}`]);
+  return layerItemsFor(pack, 'L5')
+    .filter(a => a?.tags?.includes('synthetic') && typeof a?.spec?.id === 'string' && invented(`validation.synthetic_checks.${a.spec.id}`))
+    .map(a => a.spec.id);
+}
+
 // The report's waivers block when it carries one (an object), else null.
 const waiversOf = (c) => (c?.waivers && typeof c.waivers === 'object' && !Array.isArray(c.waivers) ? c.waivers : null);
 const EXPIRING_DAYS = 30;
@@ -136,11 +152,13 @@ const EXPIRING_DAYS = 30;
 export function readConformance(c, pack = null) {
   const ph = placeholderEntries(c);
   const templates = templateValues(pack);
+  const invented = inventedSyntheticChecks(pack);
   const wv = waiversOf(c)?.clauses || null;
   const groups = { blocking: [], recommended: [], waived: [], placeholder: [], passed: [], notApplicable: [] };
   for (const cl of c?.clauses || []) {
     const fix = CLAUSE_FIX[cl.id] || { reason: cl.description, action: `Review ${layerTitle(cl.dimension)}` };
     const row = { ...cl, ...fix, name: cap(clauseGhostLabel(cl.id)), placeholderTodos: ph?.get(cl.id)?.todos || [], waiver: wv?.[cl.id] || null };
+    if (cl.applies && cl.pass === false && SKIPS_INVENTED_SYNTHETIC.has(cl.id) && invented.length) row.inventedChecks = invented;
     if (!cl.applies) groups.notApplicable.push(row);
     else if (!cl.pass) {
       if (row.waiver?.status === 'waived') groups.waived.push(row);
@@ -237,6 +255,15 @@ function waiverCaveatHtml(r) {
   return `<p class="conf-row-caveat">${statusChipHtml('assessment', 'waived', { label })} ${escapeHtml(text)}${remaining}</p>${(w.waivers || []).map(x => waiverLine(x, w.status === 'expired' ? 'Lapsed' : 'Waived')).join('')}`;
 }
 
+// A failing synthetic clause over checks a scanner invented: which ones it left out, and why.
+function inventedCaveatHtml(r) {
+  const ids = r.inventedChecks || [];
+  if (!ids.length) return '';
+  const one = ids.length === 1;
+  const text = `${one ? 'is a placeholder' : 'are placeholders'} the scan wrote because the schema needs one; nothing in the repository probes the service, so ${one ? 'it does' : 'they do'} not count here.`;
+  return `<p class="conf-row-caveat">${statusChipHtml('completion', 'needsInput', { label: 'Template value' })} ${one ? 'The synthetic check' : 'The synthetic checks'} ${ids.map(id => `<code>${escapeHtml(id)}</code>`).join(', ')} ${escapeHtml(text)}</p>`;
+}
+
 function rowHtml(r, kind, model) {
   const tier = tierLabel(model.tier);
   if (kind === 'blocking' || kind === 'recommended') {
@@ -249,7 +276,7 @@ function rowHtml(r, kind, model) {
         <div class="conf-row-body">
           <p class="conf-row-title">${escapeHtml(r.reason)}</p>
           <p class="conf-row-desc">${escapeHtml(r.description)}</p>
-          ${fixLine(r)}${waiverCaveatHtml(r)}
+          ${fixLine(r)}${waiverCaveatHtml(r)}${inventedCaveatHtml(r)}
           ${metaLine(r)}
         </div>
       </li>`;
@@ -361,7 +388,7 @@ function scoringHtml(model) {
             (${must.passed} + 0.5 × ${should.passed}) ÷ (${must.total} + 0.5 × ${should.total}) = ${escapeHtml(denom ? `${numer} ÷ ${denom}` : 'nothing to score')} = <strong>${escapeHtml(String(model.scorePercent))}%</strong>.
             Required clauses alone: ${must.passed} of ${must.total} = ${escapeHtml(String(model.mustPercent))}%.</li>
           <li><strong>Not applicable</strong> clauses apply only at a more critical tier. They are excluded from both the score and conformance, and listed for reference.</li>
-          <li><strong>Template values count as passes.</strong> The rubric reads the pack’s declarations: a placeholder satisfies a clause like a real value would, and nothing here checks live evidence. Conformance says nothing about deployment readiness.</li>${waiversBulletHtml(model)}
+          <li><strong>Template values count as passes, with one exception.</strong> The rubric reads the pack’s declarations: a placeholder satisfies a clause like a real value would, and nothing here checks live evidence. The exception is a synthetic check the repository scan or the live check had to invent: nothing probes the service, so it satisfies neither synthetic-check clause. Conformance says nothing about deployment readiness.</li>${waiversBulletHtml(model)}
         </ul>
         <p>Scored against the <a href="${RUBRIC_URL}" target="_blank" rel="noopener">maturity rubric</a> (spec §8).</p>
       </div>

@@ -646,8 +646,8 @@ data:
   assert(picked.length === 200 && picked.slice(0, 4).join() === 'monitoring/alertmanager.yml,monitoring/slo.rules.yaml,otel/otel-collector-config.yaml,mq/metrics-manifest.json',
     'the established files and the manifest come first; the exporter candidates fill what is left', picked.slice(0, 5));
   const all = selectCrawlerFiles(tree, { maxFiles: 1000, fileCapBytes: 1e6 }).map(n => n.path);
-  assert(all.includes('snap/ibm-mq.prom') && all.includes('charts/c/files/collector.yaml') && !all.includes('test/fixtures/x.prom') && !all.includes('big/config.yaml') && !all.includes('apps'),
-    'with room, a snapshot and a chart\'s files/ collector are fetched; a fixture snapshot, an oversized file and a tree never');
+  assert(all.includes('snap/ibm-mq.prom') && all.includes('charts/c/files/collector.yaml') && all.at(-1) === 'test/fixtures/x.prom' && !all.includes('big/config.yaml') && !all.includes('apps'),
+    'with room, a snapshot and a chart\'s files/ collector are fetched; a fixture snapshot last (the crawler\'s rule reads it); an oversized file and a tree never');
   assert(!isExporterCandidateFile('src/componentTest/resources/node.prom') && !isExporterCandidateFile('src/smokeTest/a.prom') && isExporterCandidateFile('snap/a.prom'),
     'the GitHub crawl skips a camelCase test source set\'s snapshot, as the crawler does');
   assert(isCrawlerFile('mq/metrics-manifest.json') && !isCrawlerFile('apps/x/config.yaml') && isExporterCandidateFile('apps/x/config.yaml')

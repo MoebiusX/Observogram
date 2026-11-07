@@ -85,7 +85,7 @@ const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 
-const PAYMENT = parseYaml(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.4', 'examples', 'payment-service.pack.yaml'), 'utf8'));
+const PAYMENT = parseYaml(readFileSync(join(ROOT, 'vendor', 'observability-pack-spec', 'v1.5', 'examples', 'payment-service.pack.yaml'), 'utf8'));
 const TOKEN = 'settings-studio-token-secret';
 const NO_ORG = '403: no org membership — ask an admin to add you';
 const TOKEN_REASON = 'needs the operator role — this server takes mutations with its API token only, not from a browser';

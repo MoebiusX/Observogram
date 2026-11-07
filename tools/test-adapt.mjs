@@ -398,4 +398,21 @@ assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'service',
   }
 }
 
+// ---------- an SLO's objective as a percentage ----------
+// Only the zeros after a decimal point go: 0.9 is "90%", not "9%"; 1 is
+// "100%", not "1%".
+{
+  const objectives = [0.9, 1, 0.99, 0.999, 0.9995, 0.5];
+  const layered = adapt({
+    apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack',
+    metadata: { name: 'pct', version: '1.0.0' },
+    spec: {
+      slis: [{ id: 'avail', type: 'ratio', good: 'sum(rate(ok[5m]))', total: 'sum(rate(all[5m]))' }],
+      slos: objectives.map((objective, i) => ({ id: `slo_${i}`, sli: 'avail', objective, window: '30d' })),
+    },
+  });
+  const descs = layered.layers.L1.filter((a) => a.tool === 'SLO').map((a) => a.desc.split(' over ')[0]);
+  assert(JSON.stringify(descs) === JSON.stringify(['90%', '100%', '99%', '99.9%', '99.95%', '50%']), 'an SLO objective prints every digit of its percentage', descs);
+}
+
 report('adapter');

@@ -60,6 +60,7 @@ const { listServices } = await import('./store/services.mjs');
 const { listServicesForPack } = await import('./store/pack-services.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { runWithOrg } = await import('./tenancy.mjs');
+const { newestPack } = await import('../studio/services-model.mjs');
 
 const db = await openStore();
 createOrg(db, 'test', { id: 'default', name: 'Default', root: '.' });
@@ -346,6 +347,29 @@ try {
   assert(same(actions(seq10), [['pack.clear', 'unit', null, { dropped: MAX_UPLOADS }]]), 'one pack.clear row', actions(seq10));
   assert(same(listServices(db).map((s) => s.slug), servicesBefore) && servicesBefore.length > 0, 'the services the packs named stay');
   assert(readDeployRecords().length === 2, 'deploy audit survives a registry clear — reset is not amnesia');
+
+  // --- the newest pack is the newest REGISTERED, whatever was read last ---
+  // A restart rehydrates the map in lastUsedAt order: a pack opened after a
+  // newer scan comes back last. registeredAt (GET /api/packs) keeps the
+  // registration order, and newestPack (the studio's "current pack") reads it.
+  const pause = () => new Promise((r) => setTimeout(r, 5));
+  const olderId = registerPack(db, 'unit', { canonical: { ...canonical, metadata: { ...canonical.metadata, name: 'scan-older' } }, label: 'scan older', source: 'unit' });
+  await pause();
+  const newerId = registerPack(db, 'unit', { canonical: { ...canonical, metadata: { ...canonical.metadata, name: 'scan-newer' } }, label: 'scan newer', source: 'unit' });
+  await pause();
+  touchPack(db, olderId);   // someone opens the older one after the newer scan
+  flushPackTouches();
+  const stamp = (m) => [...m].map(([id, rec]) => ({ id, ok: true, registeredAt: rec.registeredAt }));
+  assert(same([...uploadsMap().keys()], [olderId, newerId]) && newestPack(stamp(uploadsMap()), () => true).pack.id === newerId, 'in one process: the newer scan is the newest');
+  resetPackRegistry();
+  const restarted = uploadsMap();
+  assert(same([...restarted.keys()], [newerId, olderId]), 'after a restart the map comes back in the order the packs were last read', [...restarted.keys()]);
+  assert(restarted.get(olderId).registeredAt === getPack(db, olderId).createdAt && restarted.get(olderId).registeredAt < restarted.get(newerId).registeredAt, 'registeredAt comes back as the rows\' createdAt', stamp(restarted));
+  assert(newestPack(stamp(restarted), () => true).pack.id === newerId, 'and the newest is still the newer scan, not the one read last');
+  await pause();
+  registerPack(db, 'unit', { canonical: { ...canonical, metadata: { ...canonical.metadata, name: 'scan-older' } }, label: 'scan older', source: 'unit' });
+  assert(newestPack(stamp(uploadsMap()), () => true).pack.id === olderId, 'a re-register of the older scan makes it the newest again');
+  clearPacks(db, 'unit');
 
   // --- the org's live pack: <org root>/live/, replaced atomically ---
   assert(readLivePack() === null, 'readLivePack: null before the first refresh');

@@ -16,7 +16,7 @@
 
 import { state } from './state.mjs';
 import { api, getActiveOrg } from './api.mjs';
-import { escapeHtml, toast } from './util.mjs';
+import { escapeHtml, toast, packSourceHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
 
@@ -327,8 +327,8 @@ export function renderJourneyCards(host, { journeys = [], runsByName = {}, stack
           <button type="button" class="ctrl-btn journey-run-btn" data-journey="${escapeHtml(j.name)}">▶ run now</button>
         </div>
         <div class="journey-card-meta">
-          <span title="Pack A source">A: <code>${escapeHtml(j.packA || '?')}</code></span>
-          <span title="Pack B source">B: <code>${escapeHtml(j.packB || '?')}</code></span>
+          <span title="Pack A source">A: ${packSourceHtml(j.packA, j.packARef)}</span>
+          <span title="Pack B source">B: ${packSourceHtml(j.packB, j.packBRef)}</span>
           <span title="Gate">gate: ${escapeHtml(gateBits)}</span>
         </div>
         ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}

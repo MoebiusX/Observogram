@@ -3,7 +3,7 @@
 *(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
 
 **Observogram is the observability compiler and diagnostic workspace for
-ObservabilityPack spec v1.4.**
+ObservabilityPack spec v1.5.**
 
 It answers one operational question:
 
@@ -35,7 +35,7 @@ The gap between those two packs is the diagnostic finding.
 The canonical specification lives at
 [MoebiusX/otel-observability-pack](https://github.com/MoebiusX/otel-observability-pack).
 A checksummed copy is vendored under
-[`vendor/observability-pack-spec/v1.4/`](vendor/observability-pack-spec/v1.4/).
+[`vendor/observability-pack-spec/v1.5/`](vendor/observability-pack-spec/v1.5/).
 
 ## Why It Exists
 
@@ -60,7 +60,8 @@ declared, its **repository**, and where it runs, read through its **live MCP
 endpoint**.
 
 **1. The services.** Overview opens on the list: one row per service and
-environment, with its repository (GitHub, Azure DevOps or a folder), its live
+environment, with its repository (GitHub, Azure DevOps, a folder or an
+upload), its live
 endpoint and its last check — the grade letter and how much matches live.
 **Run** scans the repository and checks it against live, **Open** draws the
 service's board and **Change** edits where it is. Services a live draft has
@@ -264,13 +265,25 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 2):
+The checks are (grade schema 4):
 
 | Area | Criteria | Scored |
 |---|---|---|
 | Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
 | Trust | Chaos-validated, Drift-free, Fresh | yes |
 | Operability | Actionable | no — informational |
+
+A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
+platform defaults do not make a pack Calibrated, and a placeholder chaos
+experiment does not make it Chaos-validated. Chaos-validated tells declared
+from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
+a quarter of the point, and the rest needs a recent passing run of every
+experiment — its `last_result` in the repository, or the live run feed — within
+the window its schedule sets (daily 2 days, weekly 8, monthly 35, on-demand
+and ci 90). A failed newest run earns nothing. The scan reads experiments from
+code, from Chaos Mesh and Litmus resources and from the repository's own
+`.observability/*.yaml`. A chaos experiment sits on the layer of
+its target (or of its steady-state SLO), never of the words in its name.
 
 Runbooks measure response readiness of the overall solution, not diagnostic
 capability — a perfectly diagnostic system tells you what is wrong even when
@@ -1235,8 +1248,20 @@ for that id, and otherwise goes back to `return`), `GET /auth/repo/:kind/callbac
 it is the flow this person started, by a signed flow cookie and the state the
 host echoes) and `POST /auth/repo/:kind/sign-out` (the CSRF header).
 
-The answer is `{ ok, record, pack: { id, label }, journey, scan: { source,
-ref, files, candidates, skipped } }`. A service or environment that is not
+The answer is `{ ok, record, pack: { id, label }, journey, scan }`. `scan`
+says what the scan saw (`tools/lib/crawler.mjs` `scanReport`): the files read
+and how many the crawler's rule takes (`files`, `candidates`), how many a
+GitHub or Azure DevOps read's 200-file cap left out (`capped`) and whether
+GitHub cut its tree short (`truncated`), each file the rule would read and
+the read did not, with why (`skipped`, `skippedFiles`: git ignores it, a
+secrets values file, too large, a failed download), what the crawler
+recognised (`classified`, `byKind`) and the files it read and recognised as
+nothing (`unclassified`, `unknownFiles`), the files the environment's
+deployment profile left out (`environment`) and the crawl's `warnings`. The
+run record keeps it as `packA.scan`, the Overview board shows it under the
+layers and the Run's toast says what was lost. Every door reads by the
+crawler's rule, and a local one — a folder, an upload, the CLI — honours
+the folder's `.gitignore` files. A service or environment that is not
 there is 404; a record that says nowhere to look — no repository, no
 endpoint — is 409 naming what to add; a scan that read nothing, or made no
 valid pack, is 422; a repository or live side that did not answer is 502
@@ -1530,7 +1555,7 @@ The crawler reads source files such as:
   its `dynamicFamilies` declare by pattern the names an exporter mints at
   runtime ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
 
-It emits a canonical v1.4 pack plus crawler annotations describing what was
+It emits a canonical v1.5 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
 upconversion; `npm run pack-conformance -- repo.pack.yaml` lists what it had to
 stub. Names (`--name`, `--env`, `--owners`) must be spec Slugs — 2-64 lowercase
@@ -2180,7 +2205,7 @@ npm ci
 
 # One file: every module, every stylesheet, the packs it names.
 npm run build:studio -- \
-  --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
+  --pack vendor/observability-pack-spec/v1.5/examples/payment-service.pack.yaml --label "Payment service" \
   --pack my-service.pack.yaml --id my-service --description "Checkout, orders and the ledger" \
   --out dist/studio/index.html
 
@@ -2335,7 +2360,7 @@ rebuilding).
 
 For a service that has no pack yet: pick the products it runs on (or an archetype
 for a service built from scratch), a criticality tier and a name, and `packc init`
-instantiates the library entries into a canonical v1.4 pack that validates,
+instantiates the library entries into a canonical v1.5 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
@@ -2385,7 +2410,7 @@ todos (20) — placeholders only the team can fill:
   - telemetry.backends.metrics-prom: version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — … · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
   - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
   …
-schema: valid (spec v1.4)
+schema: valid (spec v1.5)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
@@ -3419,7 +3444,7 @@ examples/
   target-advanced.pack.yaml
   demo-skeleton.pack.yaml
 
-vendor/observability-pack-spec/v1.4/examples/
+vendor/observability-pack-spec/v1.5/examples/
   payment-service.pack.yaml
 
 reference-packs/

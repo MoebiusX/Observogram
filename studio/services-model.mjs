@@ -77,21 +77,34 @@ function withRank(access) {
 // ---------- the pack a service opens ----------
 
 // One rule for every entry point (the card, the page, the header selector, the
-// derived tile): among `entries` (catalogue order, oldest → newest — the
-// registry appends, and a re-registered id moves to the end), the NEWEST
-// declared one wins; failing that the newest aggregate; failing that nothing.
-// `isDeclared(entry)` says which entries count as declared.
+// derived tile): among `entries`, the NEWEST declared one wins; failing that
+// the newest aggregate; failing that nothing. `isDeclared(entry)` says which
+// entries count as declared.
+//
+// Newest means registered last: GET /api/packs stamps each uploaded entry
+// with `registeredAt` (server/pack-registry.mjs). The catalogue's ORDER is
+// not that: after a restart the registry comes back in the order the packs
+// were last read, so a pack someone opened after the newer scan would sit
+// last. When every candidate carries the stamp it decides (a tie goes to the
+// later entry); a list without it (the static bundle) keeps catalogue order.
 export function newestPack(entries, isDeclared) {
   const list = Array.isArray(entries) ? entries.filter((p) => p && p.ok !== false) : [];
   const declared = list.filter((p) => isDeclared(p));
-  if (declared.length) return { pack: declared[declared.length - 1], how: 'primary' };
-  if (list.length) return { pack: list[list.length - 1], how: 'aggregate' };
+  if (declared.length) return { pack: lastRegistered(declared), how: 'primary' };
+  if (list.length) return { pack: lastRegistered(list), how: 'aggregate' };
   return { pack: null, how: 'none' };
+}
+
+const registeredMs = (p) => (typeof p?.registeredAt === 'string' ? Date.parse(p.registeredAt) : NaN);
+
+function lastRegistered(list) {
+  if (!list.every((p) => Number.isFinite(registeredMs(p)))) return list[list.length - 1];
+  return list.reduce((best, p) => (registeredMs(p) >= registeredMs(best) ? p : best));
 }
 
 // The service record's pack: its primary links (several — one per pack that
 // named it; `packs[]` is sorted by id string, not by age) that are in the
-// catalogue, the newest in catalogue order first; else the newest member
+// catalogue, the newest registered first (newestPack); else the newest member
 // link that is a live aggregate (today's tile fallback); else none.
 // `primaries` lists every primary id — those in the catalogue in its order,
 // then the rest in the record's order.

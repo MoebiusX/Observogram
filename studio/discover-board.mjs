@@ -214,11 +214,27 @@ export function boardGroups(layerId, entries) {
   return { flow: !!def.flow, groups: [...groups, other].filter(g => g.entries.length || !g.optional) };
 }
 
-function groupHtml(g, layerId) {
+// What an empty group says when the pack's producer had no way to look for
+// its family: the repository scan stamps crawler.unobserved.<kind>, the live
+// fetcher observogram.unobserved.<kind>. Chaos experiments only, for now —
+// the one family a reader takes "none" for "none exists" (the grade's
+// Chaos-validated reads the same two stamps).
+const UNOBSERVED_GROUPS = {
+  chaos: [
+    ['crawler.unobserved.chaos', 'None declared — the repository scan cannot detect chaos tooling'],
+    ['observogram.unobserved.chaos', 'None declared — the live side cannot observe chaos experiments'],
+  ],
+};
+function emptyText(groupId, annotations) {
+  const hit = (UNOBSERVED_GROUPS[groupId] || []).find(([key]) => typeof annotations?.[key] === 'string' && annotations[key]);
+  return hit ? hit[1] : 'None in this pack';
+}
+
+function groupHtml(g, layerId, annotations) {
   const n = g.entries.length;
   let body;
   if (!n) {
-    body = '<p class="dvb-none">None in this pack</p>';
+    body = `<p class="dvb-none">${escapeHtml(emptyText(g.id, annotations))}</p>`;
   } else if (g.draw === 'inventory') {
     // A long inventory (every metric, every panel): its size and a few names.
     const names = g.entries.slice(0, 3).map(e => `<span class="dvb-inv-name">${escapeHtml(shortTitle(e.a))}${badge(e)}</span>`).join('');
@@ -239,11 +255,15 @@ function groupHtml(g, layerId) {
     </section>`;
 }
 
-/** The groups of one layer band, as HTML. */
-export function boardGroupsHtml(layerId, entries) {
+/**
+ * The groups of one layer band, as HTML. `annotations` is the pack's
+ * meta.annotations: an empty group whose family the pack's producer could
+ * not look for says so (see UNOBSERVED_GROUPS) instead of "None in this pack".
+ */
+export function boardGroupsHtml(layerId, entries, { annotations = null } = {}) {
   const { flow, groups } = boardGroups(layerId, entries);
   if (!groups.length) return '<div class="dv-groups"><p class="dvb-none">Nothing on this layer</p></div>';
-  return `<div class="dv-groups${flow ? ' is-flow' : ''}">${groups.map(g => groupHtml(g, layerId)).join('')}</div>`;
+  return `<div class="dv-groups${flow ? ' is-flow' : ''}">${groups.map(g => groupHtml(g, layerId, annotations)).join('')}</div>`;
 }
 
 // ---------- the board's head: which pack this is ----------

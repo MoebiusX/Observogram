@@ -565,6 +565,13 @@ spec:
         expected_mttd: 2m
         schedule: weekly
         environment: staging
+        last_result:                           # the newest recorded run (spec 1.5)
+          at: "2026-11-02T06:00:00Z"
+          outcome: pass
+          environment: staging
+          observed_mttd: 1m24s
+          alerts_fired: [ payment-api-pod-down ]
+          evidence: chaos-mesh workflow run api-pod-kill-29364120
 
       - id: api-network-latency
         engine: chaos-mesh

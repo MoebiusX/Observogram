@@ -205,6 +205,10 @@ export function buildJourneyDetail(journey, runs) {
     loadError: journey?.loadError ?? null,
     packA: journey?.packA ?? null,
     packB: journey?.packB ?? null,
+    // The registered pack each file source is ({ id, label }), as GET
+    // /api/journeys names it; null for a crawl:, an mcp: or another file.
+    packARef: journey?.packARef ?? null,
+    packBRef: journey?.packBRef ?? null,
     scope: journey?.scope ?? null,
     gate: journey?.gate ?? {},
     schedule: journey?.schedule ?? null,

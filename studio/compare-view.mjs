@@ -8,6 +8,7 @@
 // (host.mjs); a couple of pack helpers are still imported back from app.mjs
 // and the card opener from drawer.mjs (safe call-time cycles).
 
+import { chaosBlockerCopy } from './chaos-copy.mjs';
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
@@ -1789,7 +1790,7 @@ export function renderPostureNarrative(posture) {
 
   const crossFindings = [];
   if (totalRunbooks === 0) crossFindings.push(`<li>⚠ <strong>Zero runbooks linked</strong> across any layer — your biggest operational risk. When an alert fires, oncall has no scripted response path.</li>`);
-  if (totalChaos === 0) crossFindings.push(`<li>⚠ <strong>No chaos experiments declared</strong> — recovery procedures haven't been validated against actual fault injection.</li>`);
+  if (totalChaos === 0) crossFindings.push(`<li>⚠ <strong>No chaos experiments declared</strong> in this pack — nothing here records how recovery behaves under a fault.</li>`);
   if (sliCount > 0 && sloCount === 0) crossFindings.push(`<li>⚠ ${sliCount} SLI${sliCount === 1 ? '' : 's'} defined but <strong>no matching SLO</strong> — measurement without a target.</li>`);
   if (sliCount > sloCount && sloCount > 0) crossFindings.push(`<li>${sliCount} SLIs vs ${sloCount} SLOs — ${sliCount - sloCount} SLI${sliCount - sloCount === 1 ? '' : 's'} unbound to a target.</li>`);
   if (!posture.platformWide.baselines) crossFindings.push(`<li>No <strong>MTTD/MTTR baselines</strong> declared — without targets, incident response can't be benchmarked.</li>`);
@@ -1832,7 +1833,7 @@ export function renderPostureNarrative(posture) {
 //   2B — TRUST (signal integrity)
 //        "Can we trust what the signals show?"
 //        Three criteria evaluated on Pack A's live evidence:
-//          5. Chaos-validated — chaos experiments declared
+//          5. Chaos-validated — chaos experiments declared, and proven by a recent passing run
 //          6. Drift-free      — declared artefacts match live state
 //                               (MCP probe success / total ratio)
 //          7. Fresh           — mcp.refreshedAt within staleness window
@@ -1936,10 +1937,10 @@ function renderDiagnosticGradeVerdict(diagnostic) {
   });
   evidenceRows.push(rowFor('multi-modal', 'spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)'));
   evidenceRows.push(rowFor('correlated', 'spec.otel.sdk.propagators', 'includes tracecontext'));
-  evidenceRows.push(rowFor('calibrated', 'spec.slos[].objective + spec.baselines', '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared'));
+  evidenceRows.push(rowFor('calibrated', 'spec.slos[].objective + spec.baselines', '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared (a scaffold does not count)'));
   evidenceRows.push(rowFor('comprehensive', 'posture matrix · 4 layers × 10 mechanisms', 'average ≥ 50% observed'));
   evidenceRows.push(rowFor('actionable', 'spec.remediation[]', '≥ 1 remediation runbook declared (informational — not scored)', { informational: true }));
-  evidenceRows.push(rowFor('chaos-validated', 'spec.validation.chaos_experiments[]', '≥ 1 chaos experiment declared'));
+  evidenceRows.push(rowFor('chaos-validated', 'spec.validation.chaos_experiments[] · last_result / the live run feed', 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)'));
   evidenceRows.push(rowFor('drift-free', 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded'));
   evidenceRows.push(rowFor('fresh', 'metadata.annotations.mcp.refreshedAt', 'within last 24h'));
   const scoredRows = evidenceRows.filter(r => !r.informational);
@@ -2980,7 +2981,7 @@ function renderCoveragePopoverBody(pack) {
         <td class="cv-val"><strong>${total}</strong></td>
       </tr>
     </table>
-    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.4 manifest.</div>
+    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.5 manifest.</div>
   `;
 }
 
@@ -3761,9 +3762,11 @@ const CRITERION_COPY = {
     why: 'Fewer than half of the expected mechanisms are observed across infrastructure, platform, application and user experience, so failures there go unseen.',
     fix: 'Start with the darkest layers in Layer scores.',
   },
+  // The copy for no experiment at all; chaosBlockerCopy words the other
+  // states of the engine's proof (declared, stale, failed, part-proven).
   'chaos-validated': {
-    title: 'Recovery has never been tested',
-    why: 'No chaos experiment shows that alerts fire and recovery works under a real fault; the response path is theoretical.',
+    title: 'No chaos experiment is declared',
+    why: 'Without a chaos experiment the grade cannot say whether alerts fire and recovery works under a fault; it says nothing about experiments run outside the pack.',
     fix: `Declare at least one chaos experiment in L5 ${LAYER_NAMES.L5}.`,
   },
   'drift-free': {
@@ -3825,6 +3828,13 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
   } else if (c.key === 'comprehensive') {
     b.actionLabel = 'View layer scores';
     b.actionId = 'diag-goto:diag-layers';
+  } else if (c.key === 'chaos-validated') {
+    Object.assign(b, chaosBlockerCopy(c));
+  } else if (c.key === 'calibrated' && c.baselines?.scaffolds > 0 && !c.baselines.declared) {
+    // The only baselines are the scaffold every scan writes (platform
+    // defaults): nothing measured them, and the next scan writes them again.
+    b.why = 'The detection and repair baselines in this pack are defaults the scan wrote, never measured, so nobody can tell whether a response was fast or slow.';
+    b.fix = 'Measure MTTD and MTTR and declare them as baselines. A pack the repository scan writes keeps its default baselines until the scan can read measured ones.';
   }
   return b;
 }
