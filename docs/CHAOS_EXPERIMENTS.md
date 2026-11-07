@@ -2,8 +2,8 @@
 
 **Status: decided 2026-11-06, built in 0.8.7.** The owner accepted all eight
 recommendations at the end. Spec 1.5 is RFC-0004 in
-MoebiusX/otel-observability-pack#11. Observogram vendors it from that branch's
-commit `adea3bf3` and moves the pin to `develop` once it merges. The build
+MoebiusX/otel-observability-pack#11, merged into upstream `develop` on
+2026-11-07 (`5be3baa7`); Observogram vendors it from there (0.8.11). The build
 differs from the text below in four places:
 
 - **The live side keeps `observogram.unobserved.chaos`** (§5 said it goes when

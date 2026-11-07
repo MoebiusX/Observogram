@@ -77,13 +77,13 @@ export function renderSchemaView(host) {
       <span class="schema-validation-pip">✓</span>
       <span class="schema-validation-msg">
         Validates against the canonical
-        <a href="https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/schema/observability-pack.schema.json" target="_blank" rel="noopener">ObservabilityPack v1.5 JSON Schema</a>.
+        <a href="https://github.com/MoebiusX/otel-observability-pack/blob/5be3baa7b3c354d84aabe60aaac23f9be5f8b702/schema/observability-pack.schema.json" target="_blank" rel="noopener">ObservabilityPack v1.5 JSON Schema</a>.
         Packs that fail validation never appear in the catalog.
       </span>
     </div>
     <div class="schema-validation-meta">
       Schema source: <code>vendor/observability-pack-spec/v1.5/observability-pack.schema.json</code> ·
-      <a href="https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">Spec document</a>
+      <a href="https://github.com/MoebiusX/otel-observability-pack/blob/5be3baa7b3c354d84aabe60aaac23f9be5f8b702/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">Spec document</a>
     </div>
   `;
   wrap.appendChild(validation);
