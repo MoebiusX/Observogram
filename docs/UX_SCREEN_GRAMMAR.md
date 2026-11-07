@@ -204,7 +204,7 @@ actions:
 | Column | What is drawn | Where it comes from |
 | --- | --- | --- |
 | Service | the name and the environment as a pill; *Add an environment* when it has none | `GET /api/services` |
-| Repository | the kind in small caps (*GitHub · Azure DevOps · Folder*) over `owner/repo`, `project/repo` or the folder's name, the branch or the full path beneath; *Add the repository* when there is none | the service's `repository` |
+| Repository | the kind in small caps (*GitHub · Azure DevOps · Folder · Upload*) over `owner/repo`, `project/repo`, the folder's name or the upload's, the branch, the full path or *uploaded 2 days ago · 12 files* beneath; *Add the repository* when there is none | the service's `repository` |
 | Live | *MCP* over the endpoint's name and host; *Choose the MCP endpoint* when there is none | the environment's `mcpEndpoint` |
 | Last check | the grade letter in a tile, *Checked 2 hours ago*, *75% matches live* — or *Never checked · Run it to check*, *Unreachable* | the journey `<slug>.<env>` in `GET /api/journeys` (`lastRun`); a journey of another environment is never this row's |
 | (actions) | **Run** (scan the repository again and check it against live), *Open →* (the board), *Change* | `POST /api/services/:id/run` |
