@@ -38,6 +38,9 @@
 - `tools/test-studio-bundle.mjs`: the catalogue's `registeredAt` is the server's alone.
 - Suite total 1746 → 1753.
 
+### Docs
+- `docs/USER_JOURNEY.md`, `docs/OVERVIEW_DEMO.md` and `docs/UX_SCREEN_GRAMMAR.md` quote the promises sentence as the board now says it: *5 of 18 promises hold in every link, 1 in part, 12 broken.*
+
 ## 0.8.8 — 2026-11-06
 
 **docs/USER_JOURNEY.md describes the studio as it is.** It was last rewritten on 2026-10-07, before the Overview face, a service's Run, repository sign-in and grade schemas 3 and 4. Docs only; no code changes. This PR is stacked on #221 and cut after it.
