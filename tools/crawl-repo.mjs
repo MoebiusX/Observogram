@@ -10,9 +10,10 @@
 //   node tools/crawl-repo.mjs <path> [--name foo] [--env prod] [--criticality tier-2]
 // ============================================================
 
-import { readFile, readdir, stat } from 'node:fs/promises';
-import { join, relative, basename } from 'node:path';
-import { crawlToYaml, SCAN_EXT, SCAN_MAX_FILE_BYTES, scanSkipsName } from './lib/crawler.mjs';
+import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { crawlToYaml } from './lib/crawler.mjs';
+import { readRepoFolder } from './lib/repo-folder.mjs';
 import { validate, validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { readFileSync } from 'node:fs';
@@ -25,32 +26,11 @@ function argValue(a, prefix) {
   return a.startsWith(`${prefix}=`) ? a.slice(prefix.length + 1) : null;
 }
 
-async function walk(root) {
-  const out = new Map();
-  async function visit(dir) {
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); }
-    catch { return; }
-    for (const ent of entries) {
-      // The one rule every way into the scanner shares (tools/lib/crawler.mjs).
-      if (scanSkipsName(ent.name, { dir: ent.isDirectory() })) continue;
-      const abs = join(dir, ent.name);
-      if (ent.isDirectory()) {
-        await visit(abs);
-      } else if (ent.isFile() && SCAN_EXT.test(ent.name)) {
-        // Cap per-file size at 5 MB so a stray big binary won't OOM us.
-        try {
-          const st = await stat(abs);
-          if (st.size > SCAN_MAX_FILE_BYTES) continue;
-          const rel = relative(root, abs).replace(/\\/g, '/');
-          out.set(rel, await readFile(abs, 'utf8'));
-        } catch (_) { /* unreadable; skip */ }
-      }
-    }
-  }
-  await visit(root);
-  return out;
-}
+// The walk is the one every way into the scanner shares
+// (tools/lib/repo-folder.mjs on tools/lib/crawler.mjs's rule): the folder's
+// .gitignore files honoured, a secrets file never read, and every file the
+// rule would read but this walk did not named on stderr.
+const SKIPPED_SHOWN = 40;
 
 const USAGE = `\
 crawl-repo — Path A of pack creation.
@@ -185,8 +165,8 @@ async function main() {
     }
   }
 
-  const files = await walk(opts.repoPath);
-  const { yaml, canonical, summary, evidence } = crawlToYaml(files, opts);
+  const read = readRepoFolder(opts.repoPath);
+  const { yaml, canonical, summary, evidence } = crawlToYaml(read.files, opts);
 
   // Tripwire: the crawler's contract is that its output validates against
   // the spec it crawls for. Check it HERE, before anyone downstream has to
@@ -201,12 +181,16 @@ async function main() {
     '',
     `# crawler summary`,
     `#   files scanned    : ${summary.files.scanned}`,
+    `#   files not read   : ${read.skipped.length}`,
+    ...read.skipped.slice(0, SKIPPED_SHOWN).map(s => `#     · ${s.path}: ${s.why}`),
+    ...(read.skipped.length > SKIPPED_SHOWN ? [`#     · … and ${read.skipped.length - SKIPPED_SHOWN} more`] : []),
     `#   name             : ${canonical.metadata.name}${summary.normalized?.name ? ` (normalized from '${summary.normalized.name.from}')` : ''}`,
     `#   files included   : ${summary.files.included}`,
     `#   env scope        : ${summary.environment.profile || 'none'}${summary.environment.scoped ? ` (${summary.files.excludedByEnvironment} excluded)` : ''}`,
     `#   diff scope       : ${summary.comparison?.diffScopeMode || 'service'}`,
     `#   files classified : ${summary.files.classified}`,
     `#   by kind          : ${JSON.stringify(summary.files.byKind)}`,
+    `#   not recognised   : ${summary.files.unclassified}${summary.files.unknown.length ? ` (${summary.files.unknown.slice(0, 12).join(', ')}${summary.files.unclassified > 12 ? ', …' : ''})` : ''}`,
     `#   backends         : ${summary.discovered.backends}`,
     `#   recording rules  : ${summary.discovered.recordingRules}`,
     ...(summary.discovered.recordingRulesOmitted ? [`#   rules omitted    : ${summary.discovered.recordingRulesOmitted} (name not <service>:<metric>:<op>)`] : []),

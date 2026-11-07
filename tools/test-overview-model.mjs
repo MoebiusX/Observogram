@@ -1010,8 +1010,16 @@ test('decideOverviewLayout: the query wins, then the saved preference, else the 
 test('buildOverviewModel: the board from the same facts — layers, rules, fidelity, changes; nothing while the facts are read, nothing for a service without a pack of its own; the layout rides on the model and the renderer decides', () => {
   const m = keep(board());
   assert.deepEqual([m.layout, m.board.layers.declared, m.board.rules.pct, m.board.fidelity.alignmentPct, m.board.changes.total, m.grade.letter, m.still.status, m.primary], ['board', 600, 80, 78, 73, 'B', 'changed', 'next']);
-  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
-  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
+  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  assert.equal(m.board.scan, null, 'a record that carries no scan says nothing of one');
+  const scanned = keep(board({ run: { ...run, packA: { ...run.packA, scan: { source: 'the folder /src/shop', files: 40, candidates: 40, skipped: 1, skippedFiles: [{ path: 'k8s/values-secrets.yaml', why: 'its name says it holds secrets, which a scan never reads' }], unclassified: 3, unknownFiles: ['notes/a.json'], environment: { profile: 'prod', excluded: 0, excludedFiles: [] }, warnings: [] } } } }));
+  assert.deepEqual([scanned.board.scan.sentence, scanned.board.scan.tone, scanned.board.scan.groups.map((g) => g.key)],
+    ['Read 40 files from the folder /src/shop — 1 not read, 3 recognised as nothing.', 'warn', ['skipped', 'unknown']], 'the last Run\'s scan beside the layers');
+  const shown = overviewContainer();
+  renderOverview(shown, scanned, {});
+  assert.ok(shown.innerHTML.includes('<details class="ov-scan ov-scan--warn"><summary class="ov-scan__sum">Read 40 files from the folder /src/shop — 1 not read, 3 recognised as nothing.</summary>')
+    && shown.innerHTML.includes('<code>k8s/values-secrets.yaml</code>'), 'drawn in Discover, the files it left out behind it');
   const bare = keep(board({ cells: null, conformance: null }));
   assert.deepEqual([bare.board.layers, bare.board.rules, bare.board.fidelity.known], [null, null, true], 'no matrix and no conformance cost their pieces, not the others');
   const never = keep(board({ run: null, journeys: [] }));
@@ -1613,7 +1621,7 @@ test('Upload\'s steps: a change of kind swaps the location (an upload\'s is its 
   for (const step of [(f) => uploadReading(f, 'x'), (f) => uploadStaged(f, READ), (f) => uploadFailed(f, 'x')]) assert.equal(step(FORM_CLOSED), FORM_CLOSED);
 
   const plan = savePlan(staged.values, { services: [svcRow()], upload: staged.upload.staged });
-  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files }], 'created with no repository; the upload points it at its copy');
+  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files, skipped: READ.skipped }], 'created with no repository; the upload points it at its copy, and names what was not read');
   const kept = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] });
   const keptPlan = savePlan(kept.values, { services: [uploadRow()], serviceId: 5 });
   assert.deepEqual([keptPlan.service, keptPlan.upload], [{ id: 5, patch: null }, null], 'nothing new chosen: nothing patched, nothing sent');

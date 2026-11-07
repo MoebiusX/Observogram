@@ -39,6 +39,7 @@ export const EXCLUDED = Object.freeze({
   'tools/lib/grafana-mcp-bridge.mjs': 'node:http server and network fetch at call time; a bridge process, not a library',
   'tools/lib/harness.mjs': 'process.stdout/process.exit; the repo\'s own test harness, not product code',
   'tools/lib/retrofeed.mjs': 'imports ../../studio/verify-deploy.mjs — its import graph leaves tools/lib',
+  'tools/lib/repo-folder.mjs': 'node:fs/path imports; the folder read the server and the CLI share (the crawler rule, the folder .gitignore files honoured), not a browser library',
 });
 
 // ---------------------------------------------------------------------------

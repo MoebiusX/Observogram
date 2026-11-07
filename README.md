@@ -1242,8 +1242,20 @@ for that id, and otherwise goes back to `return`), `GET /auth/repo/:kind/callbac
 it is the flow this person started, by a signed flow cookie and the state the
 host echoes) and `POST /auth/repo/:kind/sign-out` (the CSRF header).
 
-The answer is `{ ok, record, pack: { id, label }, journey, scan: { source,
-ref, files, candidates, skipped } }`. A service or environment that is not
+The answer is `{ ok, record, pack: { id, label }, journey, scan }`. `scan`
+says what the scan saw (`tools/lib/crawler.mjs` `scanReport`): the files read
+and how many the crawler's rule takes (`files`, `candidates`), how many a
+GitHub or Azure DevOps read's 200-file cap left out (`capped`) and whether
+GitHub cut its tree short (`truncated`), each file the rule would read and
+the read did not, with why (`skipped`, `skippedFiles`: git ignores it, a
+secrets values file, too large, a failed download), what the crawler
+recognised (`classified`, `byKind`) and the files it read and recognised as
+nothing (`unclassified`, `unknownFiles`), the files the environment's
+deployment profile left out (`environment`) and the crawl's `warnings`. The
+run record keeps it as `packA.scan`, the Overview board shows it under the
+layers and the Run's toast says what was lost. Every door reads by the
+crawler's rule, and a local one — a folder, an upload, the CLI — honours
+the folder's `.gitignore` files. A service or environment that is not
 there is 404; a record that says nowhere to look — no repository, no
 endpoint — is 409 naming what to add; a scan that read nothing, or made no
 valid pack, is 422; a repository or live side that did not answer is 502
@@ -1428,8 +1440,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.5 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.5
+docker build -t observogram:0.8.6 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.6
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
