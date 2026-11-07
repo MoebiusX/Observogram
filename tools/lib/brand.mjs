@@ -39,7 +39,7 @@ const UPSTREAM = Object.freeze({
 
 export const SPEC_LINK = Object.freeze({
   label: 'spec v1.5',
-  href: 'https://github.com/MoebiusX/otel-observability-pack/blob/adea3bf3cefeb74dd281fa9d088e513899f67fc2/spec/ObservabilityPack-Spec.md',
+  href: 'https://github.com/MoebiusX/otel-observability-pack/blob/5be3baa7b3c354d84aabe60aaac23f9be5f8b702/spec/ObservabilityPack-Spec.md',
 });
 
 // The description's tail after "<name> — ".

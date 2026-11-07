@@ -79,6 +79,18 @@
 - Each fix was undone in turn; all 13 undone fixes fail the suites.
 - Suite total 1757 → 1762.
 
+## 0.8.11 — 2026-11-07
+
+**Spec 1.5 is pinned at upstream `develop`.** RFC-0004 merged upstream (MoebiusX/otel-observability-pack#11, merge commit `5be3baa7`), so the vendored copy is re-synced with `node tools/sync-spec.mjs` against the default branch instead of the RFC branch commit `adea3bf3`.
+
+### Changed
+- **`vendor/observability-pack-spec/VERSIONS.json`** records ref `develop` and commit `5be3baa7b3c354d84aabe60aaac23f9be5f8b702`. All four files are byte-identical to the ones vendored from `adea3bf3` (same sha256 and byte counts), so `v1.5/` does not move; only the upstream block and `fetchedAt` do.
+- **The links into the upstream repository** follow `upstream.commit`, as `tools/test-validator.mjs` requires: the footer (`studio/index.html`), the Schema view's schema and spec links (`studio/schema-view.mjs`), the Conformance view's rubric link (`studio/conformance-view.mjs`) and the brand's spec link (`tools/lib/brand.mjs`, exports unchanged).
+- **Goldens.** The three audit-report goldens (`npm run test:golden:audit-report:update`) and the conformance-view capture change in that one href each, and nowhere else.
+- **Docs.** `docs/CHAOS_EXPERIMENTS.md` says spec 1.5 is vendored from upstream `develop`.
+- Cut as 0.8.11: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- **Tests**: no new test. Suite total 1757 → 1757.
+
 ## 0.8.10 — 2026-11-06
 
 **More layout fixes from the studio walkthrough.** The 0.8.7 walkthrough, 477 screenshots of krystaline's real data, logged these as rendered at 1440 × 900. Each is fixed at its source and checked the same way, in both themes and at 400 px, with real scrollbars.
