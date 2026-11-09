@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.8.14 — 2026-11-09
+
+**A service can be deleted from the studio.** Settings → Environments carries Delete… on each service's row, with the consequence spelled out and confirmed first; the route existed, the studio now offers it.
+
+### Added
+- **Settings → Environments: Delete… on each service's row.** An operator deletes a service from the studio, as environments and MCP endpoints already could. The dialog opens on its delete step with the service's facts (slug, environments, pack links, repository) and says what goes with it — its environments, its pack links and waivers, an uploaded repository copy — and what stays: the packs. For a rank that may not, the button is `aria-disabled` with the reason, as the section's other controls. `DELETE /api/services/:id` already existed, audited as `service.delete`; the studio now offers it (`studio/settings-model.mjs`, `settings-view.mjs`, `settings-api.mjs`, `app.mjs`). Suite total 1763 → 1764.
+
 ## 0.8.13 — 2026-11-07
 
 **A Run's repository reads are checked against the real GitHub and Azure DevOps, not only stubs.** The 0.8.12 fault passed every stubbed test: Azure DevOps refuses with a redirect unless asked for its 401, and the stubs sent the 401 unasked. This release adds a suite that asks the hosts themselves, a weekly workflow that runs it, and the guide to the test repositories it reads.
