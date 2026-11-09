@@ -3057,7 +3057,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   // The .set- rules that draw a background and no text, skipped by name and only they: the editor's scrim, an empty
   // aria-hidden layer under the dialog (studio/settings-view.mjs draws it with no content, asserted below), and the
   // head's accent bar, a ::before whose content is ''.
-  const SET_NO_TEXT = new Set(['.set-editor-scrim', '.set-editor-head::before']);
+  const SET_NO_TEXT = new Set(['.set-editor-scrim', '.set-editor-head::before', '.set-switch-track', '.set-switch-knob', '.set-switch[aria-checked="true"] .set-switch-track']);
   // The reason line inside an unavailable primary or Save inherits the button's own text colour, and only it: the
   // button wears the mcp-refresh-btn idiom, whose pair is measured below (the shared .svc-why --ink-3 is drawn for
   // the card; on the lime button under the reskin it read 1.85:1 dark and 4.46:1 light).

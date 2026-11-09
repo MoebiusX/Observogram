@@ -348,24 +348,28 @@ changes. The models are pure; the state (the form, which row runs, whether
 the board or the list is on screen) is the host's:
 
 ```js
-import { serviceListModel, formOpened, formInput, formProblems, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
+import { serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
 import { renderServiceList } from './overview-view.mjs';
-import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys, /api/mcp-endpoints, /api/repository-folders; failures as sentences
+import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys, /api/mcp-endpoints, /api/repository-folders, /api/repository-sources; failures as sentences
 import { createServiceRecord, patchService, runServiceRecord } from './services-api.mjs';
 
-const facts = await loadServiceListFacts();     // { journeys, journeysError, endpoints, endpointsError, register, folders }
+const facts = await loadServiceListFacts();     // { journeys, journeysError, endpoints, endpointsError, register, folders, sources }
+// sources: the org's switches (Settings → Repository sources), or null from a server without them. Every input
+// that takes it is optional: without it the list and the form are as before, and the server still refuses a source switched off.
 let form = FORM_CLOSED;
 const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
   journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
-  access, now: Date.now(), running, results, showAll, heldTokens, repoSignIn });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']; repoSignIn: /auth/me's
-renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders }), host);
+  access, now: Date.now(), running, results, showAll, heldTokens, repoSignIn, sources: facts.sources });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']; repoSignIn: /auth/me's
+renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders,
+  uploads: facts.sources?.upload !== false, sources: facts.sources }), host);
 
 host.overview = {
   ...host.overview,
-  addService() { form = { ...formOpened(services, { endpoints: facts.endpoints }), focus: 'name' }; repaint(); },
-  editService(serviceId, env) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints }), focus: 'location' }; repaint(); },
+  addService() { form = { ...formOpened(services, { endpoints: facts.endpoints, sources: facts.sources }), focus: 'name' }; repaint(); },
+  editService(serviceId, env) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints, sources: facts.sources }), focus: 'location' }; repaint(); },
   formInput(field, value, { redraw } = {}) { form = formInput(form, field, value); if (redraw) repaint(); },
-  async saveService({ run }) {                  // formProblems(form.values) first; then the plan, call by call:
+  async saveService({ run }) {                  // formProblems(form.values, { sources: facts.sources, original: form.original, uploadStaged: !!form.upload?.staged })
+                                                // first, its note formProblemsNote(problems); then the plan, call by call:
     const plan = savePlan(form.values, { services, keyOf: normalizeServiceKey, serviceId: form.serviceId });
     // plan.endpoint.create → POST /api/mcp-endpoints; plan.service.create → POST /api/services (createServiceRecord),
     // plan.service.patch → PATCH /api/services/:id; plan.env.create → POST /api/services/:id/environments,

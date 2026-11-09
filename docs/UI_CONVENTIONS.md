@@ -72,7 +72,7 @@ the testable layer).
   `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
   `closeEditor`, `preview`, `openInDiscover`, …; the services actions `openService`,
   `openIn`, `openBuild`, `openEditor`, `saveService`, …; the Settings actions `open`, `back`,
-  `selectSection`, `retry`, `explain`, `build`, `openService`, `openEditor`, `closeEditor`, `save`,
+  `selectSection`, `retry`, `explain`, `setSource`, `build`, `openService`, `openEditor`, `closeEditor`, `save`,
   `step`, `confirm`, `auditApply`, `auditMore`, `pickMcpTarget`, `openMcpEndpoints`, `copySecret`, `signIn`, `switchTo`) rides them on that argument as a
   namespace (`host.build`, `host.services`, `host.settings`), built by app.mjs's controller and
   handed to the renderer at the call site — never added to `host.mjs`

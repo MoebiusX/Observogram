@@ -26,7 +26,7 @@ import {
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
   START_IDLE, startChoose, startAdopted,
-  REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formModel, savePlan,
+  REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, sourceOffText, ALL_SOURCES_OFF,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed,
 } from '../studio/overview-model.mjs';
@@ -1833,4 +1833,89 @@ test('the Overview board\'s import closure is exactly the one docs/VENDORING.md 
   const selectors = (css.match(/[^{};]+(?=\s*\{)/g) || []).map((s) => s.trim()).filter((s) => s && !s.startsWith('@'));
   const unscoped = selectors.filter((s) => !s.split(',').every((part) => part.includes('.ov-')));
   assert.deepEqual(unscoped, [], 'overview.css styles nothing outside its zone');
+});
+
+// ---------- the org's repository sources (Settings → Repository sources) ----------
+
+test('the service list under the org\'s repository sources: a row whose source is switched off keeps its repository, marked, and its Run waits with the server\'s sentence; every other row runs as before; no sources read, every row as before', () => {
+  const OFF = sourceOffText('github');
+  assert.equal(OFF, 'GitHub is switched off in Settings → Repository sources — an org admin can switch it back on', 'the server\'s words (server/service-admin.mjs WAYS.repositorySourceOff)');
+  const services = [svcRow(), uploadRow()];
+  const rows = (sources) => serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, sources }).rows;
+  const [checkout, ledger] = rows({ github: false, ado: true, path: true, upload: true });
+  assert.deepEqual([checkout.repository.text, checkout.repository.off, checkout.run], ['acme/checkout', true, { enabled: false, reason: `${OFF}.`, running: false }]);
+  assert.equal(checkout.complete, true, 'still a complete record: it sorts with the runnable ones');
+  assert.deepEqual([ledger.repository.off, ledger.run.enabled], [undefined, true], 'an upload, switched on, runs');
+  assert.deepEqual(rows({ upload: false })[1].run.reason, `${sourceOffText('upload')}.`);
+  for (const sources of [null, {}, { github: true }]) assert.deepEqual(rows(sources)[0].run, { enabled: true, reason: null, running: false }, `sources ${JSON.stringify(sources)}: as before`);
+  // The row says so beside its repository.
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, sources: { github: false } });
+  const c = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: {} });
+  assert.equal(c.innerHTML.split('<span class="ov-svc__ref">switched off in Settings</span>').length - 1, 1, 'the one row whose source is off says so beside its repository');
+});
+
+test('the form under the org\'s repository sources: a source switched off is not offered — but for the record\'s own, kept and marked; a new form opens on the first source on; a save on a switched-off source is caught before any call, unless the repository is kept exactly as saved', () => {
+  const OFF = { github: false, ado: true, path: true, upload: true };
+  // Opened blank: the first source on, a folder or an address before Upload.
+  assert.equal(formOpened([svcRow()], { endpoints: [EP], sources: OFF }).values.kind, 'ado');
+  assert.equal(formOpened([svcRow()], { endpoints: [EP], sources: { github: false, ado: false, path: false } }).values.kind, 'upload', 'only Upload on');
+  assert.equal(formOpened([svcRow()], { endpoints: [EP], sources: { github: false, ado: false, path: false, upload: false } }).values.kind, 'github', 'every source off: GitHub, marked off below');
+  assert.equal(formOpened([svcRow()], { endpoints: [EP] }).values.kind, 'github', 'no sources read: as before');
+  const blank = formOpened([svcRow()], { endpoints: [EP], sources: OFF });
+  assert.equal(blank.original, null, 'a new service has no saved repository');
+  const add = formModel(blank, { uploads: true, sources: OFF });
+  assert.deepEqual(add.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['ado', true, false], ['path', false, false], ['upload', false, false]], 'GitHub not offered');
+  assert.equal(add.sourcesNote, 'Switched off in Settings → Repository sources: GitHub.');
+  assert.equal(formModel(blank, { uploads: true }).sourcesNote, null, 'no sources read: no note');
+  // Opened on a GitHub service while GitHub is off: its own kind stays, marked, with the server's sentence as its hint.
+  const edit = formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP], sources: OFF });
+  assert.deepEqual(edit.original, { kind: 'github', location: 'https://github.com/acme/checkout', ref: '' });
+  const em = formModel(edit, { uploads: true, sources: OFF });
+  assert.deepEqual(em.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', true, true], ['ado', false, false], ['path', false, false], ['upload', false, false]]);
+  assert.equal(em.kind.hint, `${sourceOffText('github')}. A service kept on it as it is still saves its other changes.`);
+  assert.equal(em.problems.kind, undefined, 'kept exactly as saved: it saves (the endpoint, say)');
+  // Changed: caught before any call, in the server's words.
+  const CAUGHT = `${sourceOffText('github')}: choose another source.`;
+  assert.equal(formModel(formInput(edit, 'location', 'https://github.com/acme/other'), { sources: OFF }).problems.kind, CAUGHT);
+  assert.equal(formModel(formInput(edit, 'ref', 'main'), { sources: OFF }).problems.kind, CAUGHT, 'a branch is part of the repository');
+  // Another kind chosen, by mistake or to look: the record's own stays offered, to be chosen again and kept.
+  const away = formInput(edit, 'kind', 'ado');
+  assert.deepEqual(formModel(away, { uploads: true, sources: OFF }).kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', false, true], ['ado', true, false], ['path', false, false], ['upload', false, false]]);
+  const back = formInput(formInput(away, 'kind', 'github'), 'location', edit.values.location);
+  assert.equal(formModel(back, { sources: OFF }).problems.kind, undefined, 'chosen again with its address: kept, it saves');
+  assert.equal(formProblems({ ...blank.values, kind: 'github', name: 'B', location: 'https://github.com/acme/b' }, { sources: OFF }).kind, CAUGHT, 'a new service on it');
+  assert.equal(formProblems({ ...blank.values, kind: 'github', name: 'B', location: 'https://github.com/acme/b' }).kind, undefined, 'no sources: as before');
+  // Upload: kept while nothing new is staged; a new upload is caught.
+  const upOff = { upload: false };
+  const upEdit = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP], sources: upOff });
+  assert.equal(formModel(upEdit, { uploads: false, sources: upOff, now: NOW }).problems.kind, undefined, 'the upload as it is');
+  assert.equal(formModel(upEdit, { uploads: false, sources: upOff, now: NOW }).upload.text, 'ledger-main.zip · uploaded 2 days ago · 12 files.', 'Upload switched off: no Choose buttons, so no "choose again"');
+  assert.equal(formProblems(upEdit.values, { sources: upOff, original: upEdit.original, uploadStaged: true }).kind, `${sourceOffText('upload')}: choose another source.`);
+  assert.deepEqual(formModel(upEdit, { uploads: false, sources: upOff, now: NOW }).kinds.map((k) => [k.kind, k.off ?? false]), [['github', false], ['ado', false], ['path', false], ['upload', true]], 'its kind kept, marked off; the host passes uploads off');
+  // Every source off: the one kind drawn is marked off, and the save is caught.
+  const none = { github: false, ado: false, path: false, upload: false };
+  const nm = formModel(formOpened([svcRow()], { endpoints: [EP], sources: none }), { uploads: false, sources: none });
+  assert.deepEqual(nm.kinds.map((k) => [k.kind, k.off]), [['github', true]]);
+  assert.equal(nm.kinds[0].hint, `${sourceOffText('github')}.`, 'a new service: no "kept" hint');
+  assert.equal(nm.sourcesNote, 'Switched off in Settings → Repository sources: GitHub, Azure DevOps, Folder, Upload.');
+  assert.equal(nm.problems.kind, ALL_SOURCES_OFF, 'no other source to choose: said as such');
+  assert.equal(formProblemsNote({ kind: ALL_SOURCES_OFF }), ALL_SOURCES_OFF);
+  // The form's note when the save is stopped: the sentence itself when nothing is missing.
+  assert.equal(formProblemsNote({ kind: CAUGHT }), CAUGHT);
+  assert.equal(formProblemsNote({ kind: CAUGHT, name: 'Name the service.' }), 'Some answers are missing — each is marked where it goes.');
+  assert.equal(formProblemsNote({ name: 'Name the service.' }), 'Some answers are missing — each is marked where it goes.');
+});
+
+test('loadServiceListFacts: `sources` from GET /api/repository-sources — the switches, or null when the server has none (an older one) or refuses', async () => {
+  const fetchWith = (sources) => async (path) => {
+    if (path === '/api/journeys') return { journeys: [] };
+    if (path === '/api/mcp-endpoints') return { endpoints: [], policy: { register: { allowed: true } } };
+    if (path.startsWith('/api/repository-folders')) return { allowed: true, entries: [] };
+    if (path === '/api/repository-sources') return sources();
+    throw new Error(`unexpected ${path}`);
+  };
+  assert.deepEqual((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ok: true, sources: { github: false, ado: true, path: true, upload: true } })) })).sources, { github: false, ado: true, path: true, upload: true });
+  assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => { throw new Error('404: no answer'); }) })).sources, null, 'an older server');
+  assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ok: true })) })).sources, null, 'a body with no switches');
 });

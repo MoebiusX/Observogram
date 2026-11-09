@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+## 0.8.16 — 2026-11-09
+
+**Settings → Repository sources: each organisation switches the sources its services may use.** There is one switch per source the service form offers: GitHub, Azure DevOps, Folder and Upload. Every member reads them, an admin switches them, and every source is on until one is switched off.
+
+### Added
+- **The Settings section "Repository sources"** sits in the org's group, after MCP endpoints.
+  - Each source has a switch (`role="switch"`), its state in words, and what it reads.
+  - An admin's click saves it. The status line says *GitHub switched off.*, and the section is read again.
+  - Any other rank sees every switch unavailable, with the admin reason said once under the list.
+  - While one switch is saved, every switch waits and a click says so. Focus stays on the switch over each repaint.
+  - Every source off says so.
+  - The Advanced → Settings sub-line names the section.
+- **`GET /api/repository-sources`** (viewer) answers `{ sources: { github, ado, path, upload } }`.
+- **`PUT /api/repository-sources`** takes `{ <kind>: true | false }`, at least one, booleans only.
+  - It answers `{ sources, from }`.
+  - The defences match the MCP endpoint changes: an admin's, `X-Observogram-CSRF: 1` in every posture, and closed on an exposed server without sign-in.
+  - It writes one `org.repository_sources` audit row, with the org and the switched-off lists before and after, only when a switch moved. A refusal writes none.
+- **Storage:** a per-org `schema_meta` key, `repository_sources:<org>`, holding the switched-off kinds. There is no migration. An absent key means every source on, and a kind this build does not know is kept when written.
+
+### Changed
+- **A source switched off is refused before anything is read**, with 409 *<source> is switched off in Settings → Repository sources — an org admin can switch it back on*:
+  - a create naming it;
+  - an update that changes the repository to it, or within it, an address it cannot read included (the record kept as it is, and a change to other fields, still save);
+  - an upload (`PUT /api/services/:id/repository-upload`), before the body is read;
+  - a Run of a service declared there, before the folder rule, any read, any MCP call or any audit row;
+  - Browse… (`GET /api/repository-folders`), where Folder off answers the top with `allowed: false` and that sentence, and a `?path=` with 409.
+
+  Switched back on, each works again.
+- **The service list and form (Overview) follow the switches:**
+  - **Add a service** offers only the sources on and opens on the first one. A note names the ones switched off.
+  - A service's own switched-off source stays in its Change form, marked *off*, with the sentence as its hint, even after another kind is chosen, so it can be chosen again and kept.
+  - A save that changes a repository on a switched-off source is caught on the form before any call. When nothing else is missing, the form's note is the sentence, and focus goes to the chosen kind.
+  - With every source off, the form says so: *Every repository source is switched off in Settings → Repository sources — an org admin can switch one on.*
+  - A row on a switched-off source keeps its repository, marked *switched off in Settings*, and its Run waits with the sentence.
+  - Upload is offered only while it is on. An uploaded service's form no longer says *Choose again* while Upload is off.
+- `GET /api/repository-folders` is now org-scoped in `server/test-tenancy.mjs`, since whether Browse… lists depends on the org's switch.
+- The static bundle names `/api/repository-sources` as Settings, and `docs/DOWNSTREAM.md` §10 lists it (`tools/test-studio-bundle.mjs` T3c pins it).
+
+### Tests
+- **`server/test-service-run.mjs`** (+5):
+  - the studio's sentence and labels equal the server's;
+  - the GET default and the store's key;
+  - a PUT, its row and a repeat that writes none; the 400s writing nothing; the rows in the org's audit;
+  - each refusal, with its exact sentence, writing nothing and reading nothing, and the same calls working once switched back on.
+- **`server/test-authz.mjs`:** both routes' classes, defences and probes. The PUT probe with `{}` answers 400 with no row.
+- **`server/test-tenancy.mjs`:** one org's switch never moves another's and writes no row there (18 harness assertions).
+- **`tools/test-settings-model.mjs`** (+4): the section model by rank, the status sentence, the loaders, and the rendered switches with their clicks.
+- **`tools/test-overview-model.mjs`** (+3): the list's Run reason and mark, the form's offer, default and catch, the form's note, and the facts loader.
+- **Checked in the studio, signed in.**
+  - Switching GitHub off in Settings wrote its audit row, took GitHub out of Add a service and marked the GitHub service's row.
+  - Its Run answered 409, and a changed address was caught on the form before any call.
+  - Switching GitHub back on made the row runnable again.
+- Before the push, four independent reviews, each finding checked by a skeptic, raised 11 findings; all are fixed here.
+  - an update within a switched-off source with an address it cannot read answered 400 rather than the switch's 409;
+  - focus was lost on a switch;
+  - a second switch did nothing while one was saved;
+  - a service's own switched-off kind could not be chosen again;
+  - and smaller wording and docs gaps (README, `docs/VENDORING.md`, `docs/DOWNSTREAM.md`, `docs/STORE_PLAN.md`).
+- Suite total 1779 → 1791.
+
 ## 0.8.15 — 2026-11-09
 
 **The server's own requests go through an outbound proxy, set the way Grafana's is.** On a server whose egress is through an HTTP proxy, a read of Azure DevOps or GitHub timed out with *the connection timed out (UND_ERR_CONNECT_TIMEOUT)*. Node's fetch ignores `HTTPS_PROXY` unless the process starts with `NODE_USE_ENV_PROXY=1`, and nothing said so.

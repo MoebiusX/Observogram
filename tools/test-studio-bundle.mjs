@@ -613,8 +613,8 @@ test('T3c every feature the shim denies is named in the README 501 list and the 
   // The two slice 6a routes beside their names in DOWNSTREAM, as every other route there.
   assert.match(cell, /Services \(`\/api\/services`, `\/api\/services\/:id`/);
   assert.match(cell, /Organisations \(`\/api\/orgs`/);
-  // The Settings routes (slice 6b), every one the page calls.
-  assert.match(cell, /Settings \(`\/api\/org`, `\/api\/org\/members`, `\/api\/environments\/:id`, `\/api\/mcp-endpoints`, `\/api\/audit`/);
+  // The Settings routes (slice 6b, and Repository sources), every one the page calls.
+  assert.match(cell, /Settings \(`\/api\/org`, `\/api\/org\/members`, `\/api\/environments\/:id`, `\/api\/mcp-endpoints`, `\/api\/repository-sources`, `\/api\/audit`/);
   assert.ok(cell.indexOf('Services (') < cell.indexOf('sign-in (`/auth/*`)'), 'the order of the shim: sign-in last');
   assert.ok(cell.indexOf('Organisations (') < cell.indexOf('Settings (') && cell.indexOf('Settings (') < cell.indexOf('sign-in (`/auth/*`)'), 'Settings sits before sign-in');
 });

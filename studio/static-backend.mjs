@@ -138,6 +138,7 @@ export const FEATURES = [
   ['/api/org', 'Settings'],                           // members and the org's name (slice 6b); '/api/orgs' stays longer
   ['/api/environments', 'Settings'],                  // an environment's own record (slice 6b)
   ['/api/mcp-endpoints', 'Settings'],                 // the org's MCP endpoints (slice 6b)
+  ['/api/repository-sources', 'Settings'],            // the org's repository sources (Settings → Repository sources)
   ['/api/audit', 'Settings'],                         // the audit rows (slice 6b)
   ['/auth/', 'Sign-in'],
 ];

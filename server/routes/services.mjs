@@ -2,10 +2,13 @@
 // endpoints API (docs/STORE_PLAN.md slice 4, design §7): the request's
 // org's service records under /api/services, their environments under
 // /api/environments and its MCP endpoint records under /api/mcp-endpoints;
-// beside them, the folders a repository can be picked from.
+// beside them, the folders a repository can be picked from, and the org's
+// repository sources (Settings → Repository sources: which repository kinds
+// a save, an upload and a Run may use).
 // Every GET is `viewer` but the folders' (`operator`, as the save it serves),
 // every service and environment mutation `operator`,
-// every MCP endpoint mutation `admin` (server/route-table.mjs). No path
+// every MCP endpoint mutation and the repository sources' switch `admin`
+// (server/route-table.mjs). No path
 // names an org: the org is the one the org middleware resolved, so a
 // member never reaches another org's rows — another org's id is "no
 // service <id>" here.
@@ -17,7 +20,8 @@
 // CSRF header in every posture, closed in the open, exposed posture, a
 // direct loopback request only without sign-in — and its GET shows the
 // URL and the variable to operators and above, the name and origin to
-// every member (mcpEndpointViewOf by rank).
+// every member (mcpEndpointViewOf by rank). The repository sources' switch
+// is durable configuration of the org too, and takes the same defences.
 //
 // Every rule is server/service-admin.mjs's — the vocabulary (a tier is
 // tier-1 | tier-2 | tier-3 | null, "graded by the pack"), the shapes of
@@ -39,9 +43,11 @@ import express from 'express';
 import { rankOf } from '../authz.mjs';
 import {
   WAYS, createEnvironmentFromApi, createMcpEndpointFromApi, createServiceFromApi, deleteEnvironmentFromApi, deleteMcpEndpointFromApi,
-  deleteServiceFromApi, environmentViewOf, listServiceViews, mcpEndpointViewOf, serviceViewOf, updateEnvironmentFromApi,
-  updateMcpEndpointFromApi, updateServiceFromApi,
+  deleteServiceFromApi, environmentViewOf, listServiceViews, mcpEndpointViewOf, repositorySourceRefusal, repositorySourcesView,
+  serviceViewOf, setRepositorySourcesFromApi, updateEnvironmentFromApi, updateMcpEndpointFromApi, updateServiceFromApi,
 } from '../service-admin.mjs';
+import { AdminRefusal } from '../identity-admin.mjs';
+import { currentStore } from '../store/db.mjs';
 import { getEnvironment, listEnvironments } from '../store/environments.mjs';
 import { listMcpEndpoints } from '../store/mcp-endpoints.mjs';
 import { getService } from '../store/services.mjs';
@@ -125,9 +131,13 @@ export function servicesRoutes({ authorize }) {
   // the .zip's name and the text of the files a scan reads, as their browser
   // read them. The copy replaces the service's last one, and the record
   // points at it: { kind: 'upload', location: name, uploadedAt, files, bytes }.
+  // Upload switched off in the org (Settings → Repository sources): 409,
+  // before the body is read or anything kept.
   router.put('/api/services/:id/repository-upload', authorize('PUT /api/services/:id/repository-upload'), handler((req, res, { db, actor }) => {
     const current = pathService(req, res, db);
     if (!current) return;
+    const off = repositorySourceRefusal(db, 'upload');
+    if (off) throw new AdminRefusal(off, 'conflict');
     const upload = parseUpload(bodyOf(req));
     const repository = saveUpload(current.id, upload);
     const { service } = setUploadedRepository(db, actor, current.id, repository);
@@ -138,16 +148,35 @@ export function servicesRoutes({ authorize }) {
   // Browse…): one folder and the folders inside it, under the rule a save
   // applies (server/repository-folders.mjs). Asynchronous (it reads the
   // disk), so it answers its refusals itself; operator, as the save is.
+  // Folder switched off in the org: the top says so (allowed: false, `why`
+  // the sentence), a named folder is 409; no folder is read.
   router.get('/api/repository-folders', authorize('GET /api/repository-folders'), async (req, res, next) => {
     try {
       const path = req.query.path;
       if (path !== undefined && typeof path !== 'string') return res.status(400).json({ ok: false, error: FOLDER_WAYS.pathParam });
-      const listing = await listRepositoryFolders(path, mcpCallerOf(req));
+      const listing = await listRepositoryFolders(path, mcpCallerOf(req), { off: repositorySourceRefusal(currentStore(), 'path') });
       return res.set('Cache-Control', 'no-store').json(listing);
     } catch (e) {
       try { return refused(res, e); } catch (bug) { return next(bug); }
     }
   });
+
+  // ---------- the org's repository sources ----------
+
+  // Settings → Repository sources, read by every member: { github, ado,
+  // path, upload }, true on — every source on until an org admin switches it off.
+  router.get('/api/repository-sources', authorize('GET /api/repository-sources'), handler((req, res, { db }) => {
+    res.json({ ok: true, sources: repositorySourcesView(db) });
+  }));
+
+  // An org admin's switch: { github?, ado?, path?, upload? }, each true or
+  // false, at least one → the switches after (`sources`) and before
+  // (`from`); one org.repository_sources row when a switch moved, none when
+  // nothing did. The records keep their repository.
+  router.put('/api/repository-sources', authorize('PUT /api/repository-sources'), handler((req, res, { db, actor }) => {
+    const { sources, from } = setRepositorySourcesFromApi(db, actor, bodyOf(req));
+    res.json({ ok: true, sources, from });
+  }));
 
   // ---------- environments ----------
 

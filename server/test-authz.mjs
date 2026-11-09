@@ -1004,6 +1004,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /api/services/:id/waivers': 'viewer',
   'GET /api/environments/:id': 'viewer',
   'GET /api/mcp-endpoints': 'viewer',
+  'GET /api/repository-sources': 'viewer',
   'DELETE /api/uploads': 'operator',
   'POST /api/packs/:id/retrofeed': 'operator',
   'POST /api/deploys/:deployId/verify': 'operator',
@@ -1048,6 +1049,7 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/mcp-endpoints': 'admin',
   'PATCH /api/mcp-endpoints/:id': 'admin',
   'DELETE /api/mcp-endpoints/:id': 'admin',
+  'PUT /api/repository-sources': 'admin',
   'GET /api/audit': 'admin',
   'GET /api/admin/users': 'owner',
   'POST /api/admin/users': 'owner',
@@ -1092,19 +1094,25 @@ const EXPECTED_LIVE_MCP = Object.freeze([
 // a server-side request carrying an admin's secret — admin by class, direct
 // without sign-in, closed when exposed, the CSRF header on every request.
 const EXPECTED_MCP_SETTINGS = Object.freeze(['POST /api/mcp-settings/describe', 'POST /api/mcp-settings/submit']);
+// The switch of the org's repository sources (Settings → Repository
+// sources): durable configuration of the org — admin by class, the MCP
+// endpoint changes' defences under its own name.
+const EXPECTED_REPOSITORY_SOURCES = Object.freeze(['PUT /api/repository-sources']);
 // How each direct entry outside the identity API is named by the posture
 // refusals; every other direct entry is 'the identity API'.
 const CLOSED_AS = Object.freeze({
   'the MCP endpoint API': EXPECTED_MCP_ENDPOINT_CHANGES, 'the audit API': EXPECTED_AUDIT_API, 'the live MCP API': EXPECTED_LIVE_MCP,
-  'the MCP server-settings API': EXPECTED_MCP_SETTINGS,
+  'the MCP server-settings API': EXPECTED_MCP_SETTINGS, 'the repository sources API': EXPECTED_REPOSITORY_SOURCES,
 });
 // Every `direct` entry, and every csrf: 'always' entry (the identity
 // mutations, the self route that changes a session, the MCP endpoint
-// changes, the live MCP API's requests).
-const EXPECTED_DIRECT = Object.freeze([...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES, ...EXPECTED_AUDIT_API, ...EXPECTED_LIVE_MCP, ...EXPECTED_MCP_SETTINGS]);
+// changes, the live MCP API's requests, the repository sources' switch).
+const EXPECTED_DIRECT = Object.freeze([
+  ...EXPECTED_IDENTITY_API, ...EXPECTED_MCP_ENDPOINT_CHANGES, ...EXPECTED_AUDIT_API, ...EXPECTED_LIVE_MCP, ...EXPECTED_MCP_SETTINGS, ...EXPECTED_REPOSITORY_SOURCES,
+]);
 const EXPECTED_CSRF_ALWAYS = Object.freeze([
   ...EXPECTED_IDENTITY_API.filter((k) => !k.startsWith('GET ')), 'POST /auth/signout-others', 'POST /auth/repo/:kind/sign-out', ...EXPECTED_MCP_ENDPOINT_CHANGES,
-  ...EXPECTED_LIVE_MCP.filter((k) => !k.startsWith('GET ')), ...EXPECTED_MCP_SETTINGS,
+  ...EXPECTED_LIVE_MCP.filter((k) => !k.startsWith('GET ')), ...EXPECTED_MCP_SETTINGS, ...EXPECTED_REPOSITORY_SOURCES,
 ]);
 
 const { spawnSync } = await import('node:child_process');
@@ -1233,6 +1241,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
   assert.match(intro, /`GET \/api\/audit` is\s+`admin` \([^)]*— see \[The Audit\]\(#the-audit\)\)/, 'the intro states the audit reader\'s class and links The Audit');
   assert.match(intro, /every `\/api\/mcp\/…` route is `operator` \(the live MCP API:/, 'the intro states the live MCP API rule');
   assert.match(intro, /every `\/api\/mcp-settings\/…` route is `admin` \(the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`/, 'the intro states the MCP server-settings API rule');
+  assert.match(intro, /`PUT \/api\/repository-sources` is `admin`/, 'the intro states the repository sources\' switch');
   assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
   assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
   const stated = (method, path) => {
@@ -1243,6 +1252,7 @@ test('the README API Surface: its intro states each row\'s class — public and 
     if (path.startsWith('/api/mcp-endpoints') && method !== 'GET') return 'admin';
     if (path === '/api/audit') return 'admin';
     if (path.startsWith('/api/mcp-settings/')) return 'admin';
+    if (path === '/api/repository-sources' && method !== 'GET') return 'admin';
     if (path.startsWith('/api/mcp/')) return 'operator';
     return method === 'GET' ? 'viewer' : 'operator';
   };
@@ -1550,6 +1560,10 @@ const PROBES = Object.freeze({
   'POST /api/mcp-endpoints': ['POST', '/api/mcp-endpoints'],
   'PATCH /api/mcp-endpoints/:id': ['PATCH', '/api/mcp-endpoints/999999'],
   'DELETE /api/mcp-endpoints/:id': ['DELETE', '/api/mcp-endpoints/999999'],
+  // The repository sources: the read (every member), and a switch naming
+  // none (400) — nothing is written.
+  'GET /api/repository-sources': ['GET', '/api/repository-sources'],
+  'PUT /api/repository-sources': ['PUT', '/api/repository-sources', '{}'],
   // The audit reader: a read (ada and the owners 200; the rest 403 role).
   'GET /api/audit': ['GET', '/api/audit'],
   // The live MCP API (rebadge batch 3): no target named → 400 before any
@@ -2239,6 +2253,12 @@ for (const posture of OPEN) {
         const audit = await call(srv.base, PROBES['GET /api/audit']);
         assert.deepEqual([audit.status, audit.json.denied], [403, 'posture']);
         assert.match(audit.json.error, /^the audit API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        // The repository sources' switch is closed here too, under its own
+        // name; its read is open, every source on.
+        const sources = await call(srv.base, PROBES['PUT /api/repository-sources'], { headers: CSRF_HEADER, body: '{"upload":false}' });
+        assert.deepEqual([sources.status, sources.json.denied], [403, 'posture']);
+        assert.match(sources.json.error, /^the repository sources API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+        assert.deepEqual((await call(srv.base, PROBES['GET /api/repository-sources'])).json, { ok: true, sources: { github: true, ado: true, path: true, upload: true } });
       }
 
       // Open loopback: identity writes from this machine, and their audit (§14.2).
@@ -2304,11 +2324,31 @@ for (const posture of OPEN) {
           ['user.create', 'local', null, 'lena'], ['owner.first-local-user', 'system', null, 'lena'], ['meta.set', 'local', null, 'identity_armed'],
           ['mcp_endpoint.create', 'local', 'default', 'local-mcp'],
         ], 'the reader shows the rows this block wrote, newest first');
+        // The repository sources' switch (Settings → Repository sources):
+        // without the header, its CSRF refusal; a foreign Host, its posture
+        // refusal under its own name, no CLI way out; then `local` switches
+        // Upload off — every member reads it — and back on: two rows in the
+        // default org.
+        const SOURCES = PROBES['PUT /api/repository-sources'];
+        r = await call(srv.base, SOURCES, { body: '{"upload":false}' });
+        assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'csrf',
+          "missing X-Observogram-CSRF: 1 — changes to the repository sources API need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')"]);
+        r = await call(srv.base, SOURCES, { headers: { ...CSRF_HEADER, Host: `rebind.attacker.example:${port}` }, body: '{"upload":false}', raw: true });
+        assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'posture',
+          'on a server without sign-in the repository sources API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+          + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}`]);
+        r = await call(srv.base, SOURCES, { headers: CSRF_HEADER, body: '{"upload":false}' });
+        assert.deepEqual([r.status, r.json], [200, { ok: true, sources: { github: true, ado: true, path: true, upload: false }, from: { github: true, ado: true, path: true, upload: true } }]);
+        assert.deepEqual((await call(srv.base, PROBES['GET /api/repository-sources'])).json.sources, { github: true, ado: true, path: true, upload: false });
+        r = await call(srv.base, SOURCES, { headers: CSRF_HEADER, body: '{"upload":true}' });
+        assert.deepEqual([r.status, r.json.sources.upload], [200, true]);
         writes = async () => assert.deepEqual(await auditRowsAfter(ws, seq), [
           ['user.create', 'local', null, 'lena', { kind: 'local', isOwner: false, sessionEpoch: 1, disabled: false }],
           ['owner.first-local-user', 'system', null, 'lena', { via: 'api', match: null, org: 'default', membership: 'added', from: null }],
           ['meta.set', 'local', null, 'identity_armed', null],
           ['mcp_endpoint.create', 'local', 'default', 'local-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.local.test', readTokenEnv: MCP_BODY.readTokenEnv }],
+          ['org.repository_sources', 'local', 'default', 'default', { from: [], to: ['upload'] }],
+          ['org.repository_sources', 'local', 'default', 'default', { from: ['upload'], to: [] }],
         ], 'actor local, system for the grant; nothing from the refused requests');
       }
     } finally {

@@ -23,11 +23,13 @@ import {
   buildUserCreateBody, userCreateStatus,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, joinRoleModeSentence, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
+  REPOSITORY_SOURCE_ROWS, buildSourcesSectionModel, sourcesStatus,
 } from '../studio/settings-model.mjs';
 import {
   loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment, deleteService,
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
   loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
+  loadRepositorySources, putRepositorySources,
 } from '../studio/settings-api.mjs';
 import { accessModel, TIER_BY_PACK } from '../studio/services-model.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from '../studio/settings-view.mjs';
@@ -126,17 +128,17 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 });
 
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
-  assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role']);
-  assert.deepEqual(BUILT_SECTIONS, SETTINGS_SECTIONS, 'the sections this build draws: the org\'s four and the deployment\'s three');
+  assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'sources', 'members', 'audit', 'users', 'orgs', 'join-role']);
+  assert.deepEqual(BUILT_SECTIONS, SETTINGS_SECTIONS, 'the sections this build draws: the org\'s five and the deployment\'s three');
   assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'service', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'], 'the record editors this build draws: the MCP endpoint, the environment, the service (its delete), the org name, the member editors, the user editors, the organisation editors and the join role');
-  const FOUR = ['environments', 'endpoints', 'members', 'audit'];
+  const FOUR = ['environments', 'endpoints', 'sources', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: OLIVE }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections (an owner\'s)');
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), FOUR, 'a non-owner\'s nav: the org\'s sections — the deployment\'s collapse into one line');
   const ada = buildSettingsFrameModel({ access: ADA, orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
   assert.equal(ada.scope, 'Settings · Acme (acme) · you are admin');
   assert.equal(ada.section, 'environments', 'the first readable section by default');
   assert.deepEqual(ada.nav.map((n) => [n.id, n.label, n.group, n.enabled]), [
-    ['environments', 'Environments', 'org', true], ['endpoints', 'MCP endpoints', 'org', true], ['members', 'Members', 'org', true], ['audit', 'Audit', 'org', true],
+    ['environments', 'Environments', 'org', true], ['endpoints', 'MCP endpoints', 'org', true], ['sources', 'Repository sources', 'org', true], ['members', 'Members', 'org', true], ['audit', 'Audit', 'org', true],
   ]);
   assert.equal(buildSettingsFrameModel({ access: OLIVE, orgName: 'Acme', orgId: 'acme' }).scope, 'Settings · Acme (acme) · you are admin, an owner');
   const oscar = buildSettingsFrameModel({ access: OSCAR, section: 'members', orgName: 'Acme', orgId: 'acme', builtSections: FOUR });
@@ -199,7 +201,7 @@ test('the Advanced → Settings item\'s sub-line names every built section (§3.
   const item = src.match(/data-action="settings">[\s\S]*?<span class="observa-adv-item-sub">([^<]*)<\/span>/);
   assert.ok(item, 'the Settings menu item carries a sub-line');
   const sub = item[1];
-  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/, orgs: /\borganisations\b/, 'join-role': /\bthe join role\b/ };
+  const WORDS = { environments: /\benvironments\b/, endpoints: /\bMCP endpoints\b/, sources: /\brepository sources\b/, members: /\bmembers\b/, audit: /\baudit\b/, users: /\busers\b/, orgs: /\borganisations\b/, 'join-role': /\bthe join role\b/ };
   for (const id of BUILT_SECTIONS) assert.match(sub, WORDS[id] ?? /(?!)/, `the sub-line names the built section ${id}`);
   assert.doesNotMatch(sub, /slice/i, 'no roadmap wording');
 });
@@ -732,6 +734,7 @@ function settingsContainer() {
       if (sel === '[data-user-action]') return [...html.matchAll(/data-user-action="([\w-]+)"/g)].map((m) => get(`uact:${m[1]}`, true, { userAction: m[1] }));
       if (sel === '[data-org-remove]') return [...html.matchAll(/data-org-remove="([\w-]+)"/g)].map((m) => get(`org:${m[1]}`, true, { orgRemove: m[1] }));
       if (sel === '[data-org-act]') return [...html.matchAll(/data-org-act="([\w-]+)"/g)].map((m) => get(`act:${m[1]}`, true, { orgAct: m[1] }));
+      if (sel === '[data-source]') return [...html.matchAll(/data-source="([\w-]+)"/g)].map((m) => get(`src:${m[1]}`, true, { source: m[1] }));
       if (sel === '[data-remove-service]') return [...html.matchAll(/data-remove-service="(\d+)"/g)].map((m) => get(`rmsvc:${m[1]}`, true, { removeService: m[1] }));
       return [];
     },
@@ -752,7 +755,7 @@ test('renderSettings: the head, the banner as served, the nav by rank, the envir
   assert.ok(h.includes('<h1 class="set-title" id="set-title" tabindex="-1">Settings</h1>'));
   assert.ok(h.includes('<p class="set-scope">Settings · Acme (acme) · you are operator</p>'));
   assert.ok(h.includes('<nav class="set-nav" aria-label="Settings sections">'));
-  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false'], ['members', 'false'], ['audit', 'false']], 'the built sections only, the one on screen current');
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)" aria-current="(\w+)"/g)].map((m) => [m[1], m[2]]), [['environments', 'page'], ['endpoints', 'false'], ['sources', 'false'], ['members', 'false'], ['audit', 'false']], 'the built sections only, the one on screen current');
   assert.ok(!h.includes('<img') && h.includes('Pay &lt;img src=x onerror=&quot;window.__x=1&quot;&gt;'), 'a service name is escaped');
   assert.ok(h.includes('tier-1 · MCP: gw — https://mcp.acme.test · 2 bindings · 1 link'));
   assert.ok(h.includes('no environments'), 'a service with none says so');
@@ -974,7 +977,7 @@ test('the members section: no email, "you" by login, Rename…, Add member, Chan
   const c = settingsContainer();
   renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'members', orgName: 'Acme', orgId: 'acme' }), { id: 'members', head: settingsSectionHead('members', { orgName: 'Acme' }), model, status: null }, host);
   const h = c.innerHTML;
-  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)"/g)].map((m) => m[1]), ['environments', 'endpoints', 'members', 'audit'], 'the org\'s four sections');
+  assert.deepEqual([...h.matchAll(/class="set-nav-item" data-section="([\w-]+)"/g)].map((m) => m[1]), ['environments', 'endpoints', 'sources', 'members', 'audit'], 'the org\'s five sections');
   assert.ok(h.includes('<p class="set-section-scope">The members of Acme (acme) and their roles.</p>'), 'the model\'s scope sentence');
   assert.ok(h.includes('<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">Add member</button>'));
   assert.ok(h.includes('id="set-rename">Rename…</button>'));
@@ -2143,4 +2146,90 @@ test('a confirm step the rank lost while it was open (a 403 by role): no danger 
     c.querySelector('#set-editor-confirm')?.fire('click');
     assert.deepEqual(calls, [['explain', reason]], `${tag}: a click explains and sends nothing`);
   }
+});
+
+// ---------- the repository sources (an org's: every member reads, an admin switches) ----------
+
+test('the repository sources section: one row per source in the form\'s order, on unless switched off; an admin switches, any other rank sees each switch unavailable with the admin reason said once; a switch being saved waits; every source off says what it means', () => {
+  assert.deepEqual(REPOSITORY_SOURCE_ROWS.map((r) => [r.kind, r.label]), [['github', 'GitHub'], ['ado', 'Azure DevOps'], ['path', 'Folder'], ['upload', 'Upload']], 'the service form\'s sources, in its order');
+  const doc = { sources: { github: true, ado: false, path: true } };
+  const admin = buildSourcesSectionModel({ doc, access: ADA });
+  assert.deepEqual(admin.rows.map((r) => [r.kind, r.on, r.stateText, r.enabled, r.reason]), [
+    ['github', true, 'On', true, null], ['ado', false, 'Off', true, null], ['path', true, 'On', true, null], ['upload', true, 'On', true, null],
+  ], 'a kind the answer leaves out is on');
+  assert.equal(admin.lockedReason, null);
+  assert.equal(admin.summary, null);
+  assert.equal(admin.error, null);
+  assert.equal(admin.primary, null, 'no editor: each switch is its own control');
+  const viewer = buildSourcesSectionModel({ doc, access: VERA });
+  assert.ok(viewer.rows.every((r) => r.enabled === false && r.reason === VERA.why.admin), 'a viewer sees each switch unavailable with the admin reason');
+  assert.equal(viewer.lockedReason, VERA.why.admin, 'said once for the section');
+  assert.match(VERA.why.admin, /admin/);
+  const operator = buildSourcesSectionModel({ doc, access: OSCAR });
+  assert.ok(operator.rows.every((r) => !r.enabled), 'an operator too');
+  const saving = buildSourcesSectionModel({ doc, access: ADA, pending: 'ado' });
+  assert.deepEqual(saving.rows.map((r) => [r.kind, r.enabled, r.reason]), [['github', false, 'Saving…'], ['ado', false, 'Saving…'], ['path', false, 'Saving…'], ['upload', false, 'Saving…']], 'every switch waits while one is saved: a click explains');
+  assert.equal(saving.lockedReason, 'Saving…', 'said once');
+  const allOff = buildSourcesSectionModel({ doc: { sources: { github: false, ado: false, path: false, upload: false } }, access: ADA });
+  assert.equal(allOff.summary, 'Every source is switched off: no service can be added or run until one is switched on.');
+  const failed = buildSourcesSectionModel({ doc: null, access: ADA, error: '502: no answer' });
+  assert.deepEqual([failed.rows, failed.error], [[], '502: no answer']);
+  assert.equal(buildSourcesSectionModel({ doc: {}, access: ADA }).error, 'the repository sources could not be read');
+  const head = settingsSectionHead('sources', { orgName: 'Acme' });
+  assert.equal(head.title, 'Repository sources');
+  assert.equal(head.loading, 'Reading repository sources…');
+  assert.equal(head.scope, "Where Acme's services may say their repository lives. A source switched off leaves Add a service, and a service declared there is not run until it is switched back on; its record stays.");
+});
+
+test('sourcesStatus: the source and its new state; the state it already had is "Nothing changed."', () => {
+  assert.deepEqual(sourcesStatus({ kind: 'ado', sources: { ado: false }, from: { ado: true } }), { kind: 'saved', text: 'Azure DevOps switched off.' });
+  assert.deepEqual(sourcesStatus({ kind: 'path', sources: { path: true }, from: { path: false } }), { kind: 'saved', text: 'Folder switched on.' });
+  assert.deepEqual(sourcesStatus({ kind: 'upload', sources: { upload: true }, from: {} }), { kind: 'idle', text: 'Nothing changed.' }, 'a missing kind is on');
+  assert.deepEqual(sourcesStatus({ kind: 'github', sources: { github: false } }), { kind: 'saved', text: 'GitHub switched off.' }, 'no "before" in the answer: the state after');
+});
+
+test('the repository sources loaders: GET /api/repository-sources keeps the switches; PUT sends the one switch and keeps the switches after and before', async () => {
+  const seen = [];
+  const fetchFn = async (url, init) => { seen.push([url, init?.method ?? 'GET', init?.body ?? null]); return url === '/api/repository-sources' && !init ? { ok: true, sources: { github: true, ado: false, path: true, upload: true } } : { ok: true, sources: { github: false, ado: false, path: true, upload: true }, from: { github: true, ado: false, path: true, upload: true } }; };
+  assert.deepEqual(await loadRepositorySources({ fetchFn }), { sources: { github: true, ado: false, path: true, upload: true } });
+  assert.deepEqual(await putRepositorySources({ github: false }, { fetchFn }), { sources: { github: false, ado: false, path: true, upload: true }, from: { github: true, ado: false, path: true, upload: true } });
+  assert.deepEqual(seen.map(([u, m]) => [u, m]), [['/api/repository-sources', 'GET'], ['/api/repository-sources', 'PUT']]);
+  assert.deepEqual(JSON.parse(seen[1][2]), { github: false });
+  assert.deepEqual(await loadRepositorySources({ fetchFn: async () => ({ ok: true }) }), { sources: null }, 'an answer without switches is no read');
+});
+
+test('renderSettings, the repository sources: a switch per source with its state in words, escaped; an admin\'s click flips it; a viewer\'s switches are unavailable with one reason line, and a click explains', () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const doc = { sources: { github: true, ado: false, path: true, upload: true } };
+  const c = settingsContainer();
+  renderSettings(c, buildSettingsFrameModel({ access: ADA, section: 'sources', orgName: 'Acme', orgId: 'acme' }), { id: 'sources', head: settingsSectionHead('sources', { orgName: 'Acme' }), model: buildSourcesSectionModel({ doc, access: ADA }), status: null }, host);
+  const h = c.innerHTML;
+  assert.ok(h.includes('<ul class="set-list set-sources" aria-label="Repository sources">'));
+  assert.deepEqual([...h.matchAll(/role="switch" class="set-switch" id="set-source-switch-([\w-]+)" data-source="\1" aria-checked="(\w+)" aria-labelledby="set-source-\1"/g)].map((m) => [m[1], m[2]]),
+    [['github', 'true'], ['ado', 'false'], ['path', 'true'], ['upload', 'true']], 'a switch per source with an id (focus comes back to it over a repaint), its state as aria-checked, named by its row');
+  assert.ok(h.includes('<span class="set-row-name" id="set-source-ado">Azure DevOps</span>'));
+  assert.ok(h.includes('<span class="set-switch-state">Off</span>') && h.includes('<span class="set-switch-state">On</span>'), 'the state in words beside the switch');
+  assert.ok(h.includes('A public repository, or a private one read with the person’s own GitHub token or sign-in.'), 'what each source reads');
+  assert.ok(!h.includes('id="set-primary"'), 'no primary: the switches are the controls');
+  assert.ok(!h.includes('id="set-sources-why"'), 'an admin: no reason line');
+  const [github, ado] = c.querySelectorAll('[data-source]');
+  github.fire('click');
+  ado.fire('click');
+  assert.deepEqual(calls, [['setSource', 'github', false], ['setSource', 'ado', true]]);
+  // A viewer: every switch unavailable, the reason said once under the list; a click explains.
+  calls.length = 0;
+  const v = settingsContainer();
+  renderSettings(v, buildSettingsFrameModel({ access: VERA, section: 'sources', orgName: 'Acme', orgId: 'acme' }), { id: 'sources', head: settingsSectionHead('sources', { orgName: 'Acme' }), model: buildSourcesSectionModel({ doc, access: VERA }), status: null }, host);
+  assert.ok(v.innerHTML.includes('<p class="set-sources-why" id="set-sources-why"></p>'));
+  const switches = v.querySelectorAll('[data-source]');
+  assert.ok(switches.length === 4 && switches.every((b) => b.getAttribute('aria-disabled') === 'true'));
+  assert.ok(switches.every((b) => b.why === null), 'no reason inside a switch');
+  assert.equal(v.querySelector('#set-sources-why').why.textContent, VERA.why.admin, 'one reason line for the section');
+  switches[1].fire('click');
+  assert.deepEqual(calls, [['explain', VERA.why.admin]]);
+  // Every source off: the summary.
+  const off = settingsContainer();
+  renderSettings(off, buildSettingsFrameModel({ access: ADA, section: 'sources' }), { id: 'sources', head: settingsSectionHead('sources'), model: buildSourcesSectionModel({ doc: { sources: { github: false, ado: false, path: false, upload: false } }, access: ADA }), status: null }, host);
+  assert.ok(off.innerHTML.includes('<p class="set-sources-summary" role="note">Every source is switched off: no service can be added or run until one is switched on.</p>'));
 });

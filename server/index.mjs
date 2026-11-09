@@ -85,7 +85,7 @@ import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
 import { RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repoAuthTail, repositoryCredential, signInOn } from './repo-auth.mjs';
@@ -1322,7 +1322,8 @@ function livePacksByJourney() {
 // scope's leftovers, the files read and recognised as nothing, the crawl's
 // warnings), kept in the run record as packA.scan; 400/404 for a service,
 // environment or repository the request cannot use; 409 for a record that
-// says nowhere to look (no repository, no endpoint); 422 for a scan that
+// says nowhere to look (no repository, no endpoint) or names a source the
+// org switched off (Settings → Repository sources); 422 for a scan that
 // read nothing or made no valid pack; 502 when the repository or the live
 // side did not answer (the live side's loss keeps a record, as a journey's).
 // Writes the rows of both packs, a journey.capture row ({ via: 'service' })
@@ -1346,6 +1347,10 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   if (env.mcpEndpointId === null || env.mcpEndpointId === undefined) {
     return res.status(409).json({ ok: false, error: `${service.name} in ${env.name} has no live target yet — choose the MCP endpoint that reads it` });
   }
+  // A source the org switched off (Settings → Repository sources): refused
+  // before the folder rule, any repository read, any MCP call or any row.
+  const sourceOff = repositorySourceRefusal(db, service.repository.kind);
+  if (sourceOff) return res.status(409).json({ ok: false, error: sourceOff });
   if (service.repository.kind === 'path') {
     const why = folderRefusal(service.repository.location, mcpCallerOf(req));
     if (why) return res.status(403).json({ ok: false, error: why });

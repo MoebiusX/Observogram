@@ -65,7 +65,7 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
 const { hashPassword } = await import('./auth.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { currentStore, closeStore } = await import('./store/db.mjs');
-const { getOrg } = await import('./store/orgs.mjs');
+const { getOrg, repositorySourcesOf } = await import('./store/orgs.mjs');
 const { getMeta, getMetaJson } = await import('./store/meta.mjs');
 const { listUsers } = await import('./store/users.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
@@ -74,6 +74,7 @@ const { listPacks } = await import('./store/packs.mjs');
 const { listServices } = await import('./store/services.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { routeEntry } = await import('./route-table.mjs');
+const { WAYS: SERVICE_WAYS } = await import('./service-admin.mjs');
 const { orgChipModel } = await import('../studio/api.mjs');
 const { GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
 const { allKnownToolNames } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
@@ -171,14 +172,14 @@ function apiRoutes() {
 }
 
 // The catalogue and the stateless routes. (The live pack is per org since
-// STORE_PLAN slice 3: its two routes are org-scoped below.) The repository
+// STORE_PLAN slice 3: its two routes are org-scoped below. The repository
 // folders are the server's disk under OBSERVOGRAM_REPO_ROOTS, one list for
-// the deployment — the rule a folder repository's save applies in every org.
+// the deployment, but whether Browse… may list them is the org's Folder
+// switch: org-scoped below too.)
 const DEPLOYMENT_GLOBAL = new Set([
   'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/taxonomy', 'GET /api/mcp-settings', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
-  'GET /api/repository-folders',
 ]);
 
 // The owner routes (STORE_PLAN slice 3b): the deployment's users, orgs and
@@ -361,6 +362,20 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const fetchRows = rows.filter(([action]) => action === 'live.fetch');
   assert(listedFor('POST /api/mcp/jobs', rows) && fetchRows.length === 1 && fetchRows[0][1] === 'alice' && fetchRows[0][2] === org && fetchRows[0][4].jobId === jobId,
     `alice's snapshot job in ${org}: its rows are actions the table lists, one live.fetch by alice in ${org}`, rows);
+  // The org's repository sources (Settings → Repository sources): alice, an
+  // admin, switches Folder and Upload off in this org — one
+  // org.repository_sources row by alice, in this org.
+  seq = auditSeq();
+  r = await fetch(`${root}/api/repository-sources`, {
+    method: 'PUT', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: false, upload: false }),
+  });
+  j = await r.json();
+  assert(r.status === 200 && JSON.stringify(j.sources) === JSON.stringify({ github: true, ado: true, path: false, upload: false }),
+    `alice switches Folder and Upload off in ${org}`, [r.status, j]);
+  rows = rowsAfter(seq);
+  assert(listedFor('PUT /api/repository-sources', rows)
+    && JSON.stringify(rows) === JSON.stringify([['org.repository_sources', 'alice', org, org, { from: [], to: ['path', 'upload'] }]]),
+    `alice's switch in ${org}: exactly one org.repository_sources row by alice in ${org} (an action the table lists)`, rows);
   return { packId, deployId, journey, serviceId, environmentId, mcpEndpointId, fakeEndpointId, waiverId, jobId };
 }
 
@@ -492,6 +507,15 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'POST /api/mcp-endpoints': ['/api/mcp-endpoints', {}, (r) => assert(r.status === 400, `${who}: POST /api/mcp-endpoints {} → 400`, r.status, 400)],
     'PATCH /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, { name: 'renamed' }, is404('PATCH /api/mcp-endpoints/:id')],
     'DELETE /api/mcp-endpoints/:id': [`/api/mcp-endpoints/${mcpEndpointId}`, undefined, is404('DELETE /api/mcp-endpoints/:id')],
+    // The repository sources are the caller's org's: the other org switched
+    // Folder and Upload off, this one reads every source on and Browse… is
+    // not told Folder is off; a switch naming none is a 400.
+    'GET /api/repository-sources': ['/api/repository-sources', undefined, (r) => assert(r.status === 200
+      && JSON.stringify(r.json.sources) === JSON.stringify({ github: true, ado: true, path: true, upload: true }),
+    `${who}: GET /api/repository-sources is ${org}'s — every source on, whatever ${otherOrg} switched off`, r.json)],
+    'PUT /api/repository-sources': ['/api/repository-sources', {}, (r) => assert(r.status === 400, `${who}: PUT /api/repository-sources {} → 400`, r.status, 400)],
+    'GET /api/repository-folders': ['/api/repository-folders', undefined, (r) => assert(r.status === 200 && r.json.why !== SERVICE_WAYS.repositorySourceOff('Folder'),
+      `${who}: GET /api/repository-folders is not refused by ${otherOrg}'s Folder switch`, r.json)],
     // The audit reader (STORE_PLAN slice 5; `who` is an admin or an owner in
     // their org): the org-scoped listing is the sweeper's org's — every row
     // its own, none of the other org's deploy or journey rows, none by alice
@@ -523,6 +547,17 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
   assert(JSON.stringify(tree(dir)) === JSON.stringify(before), `${who}: nothing under ${dir} changed`);
   assert(memberships() === membershipsBefore, `${who}: the other org's user's memberships are unchanged`, memberships(), membershipsBefore);
   assert(otherRows() === otherRowsBefore, `${who}: the sweep wrote no audit row of ${otherOrg}'s`, otherRows(), otherRowsBefore);
+  // A switch of the repository sources moves the caller's org's only: this
+  // org switches GitHub off and back on; the other keeps Folder and Upload
+  // off, as it switched them, and gains no row.
+  const ownSwitch = await call('PUT', '/api/repository-sources', { github: false });
+  assert(ownSwitch.status === 200 && ownSwitch.json.sources.github === false && ownSwitch.json.sources.path === true && ownSwitch.json.from.github === true,
+    `${who}: switches GitHub off in ${org}`, ownSwitch.json);
+  assert(JSON.stringify(repositorySourcesOf(currentStore(), otherOrg)) === JSON.stringify({ github: true, ado: true, path: false, upload: false }),
+    `${who}: ${otherOrg}'s sources stay as ${otherOrg} switched them`, repositorySourcesOf(currentStore(), otherOrg));
+  const ownBack = await call('PUT', '/api/repository-sources', { github: true });
+  assert(ownBack.status === 200 && Object.values(ownBack.json.sources).every(Boolean), `${who}: switches GitHub back on in ${org}`, ownBack.json);
+  assert(otherRows() === otherRowsBefore, `${who}: the switches wrote no audit row of ${otherOrg}'s`, otherRows(), otherRowsBefore);
   // The admin / owner split of GET /api/audit (STORE_PLAN slice 5, design
   // §6): a non-owner's plain listing is its org's (scope org, no deployment
   // row); an owner's scope=all is the deployment's — alice's rows in the

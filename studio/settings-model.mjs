@@ -22,22 +22,23 @@
 
 import { TIERS, TIER_BY_PACK } from './services-model.mjs';
 
-export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
+export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'sources', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The sections this build draws (the nav lists only these — never a
 // placeholder for one that is not built).
-export const BUILT_SECTIONS = ['environments', 'endpoints', 'members', 'audit', 'users', 'orgs', 'join-role'];
+export const BUILT_SECTIONS = ['environments', 'endpoints', 'sources', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
 export const BUILT_EDITORS = ['endpoint', 'environment', 'service', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'];
 
 const SECTION_LABEL = {
-  environments: 'Environments', endpoints: 'MCP endpoints', members: 'Members', audit: 'Audit',
+  environments: 'Environments', endpoints: 'MCP endpoints', sources: 'Repository sources', members: 'Members', audit: 'Audit',
   users: 'Users', orgs: 'Organisations', 'join-role': 'Join role',
 };
-const SECTION_GROUP = { environments: 'org', endpoints: 'org', members: 'org', audit: 'org', users: 'deployment', orgs: 'deployment', 'join-role': 'deployment' };
-// What each section needs: everyone reads environments and endpoints; the
-// members and the audit are an admin's; the deployment group an owner's.
-const SECTION_NEEDS = { environments: null, endpoints: null, members: 'admin', audit: 'admin', users: 'own', orgs: 'own', 'join-role': 'own' };
+const SECTION_GROUP = { environments: 'org', endpoints: 'org', sources: 'org', members: 'org', audit: 'org', users: 'deployment', orgs: 'deployment', 'join-role': 'deployment' };
+// What each section needs: everyone reads environments, endpoints and the
+// repository sources (an admin switches those); the members and the audit
+// are an admin's; the deployment group an owner's.
+const SECTION_NEEDS = { environments: null, endpoints: null, sources: null, members: 'admin', audit: 'admin', users: 'own', orgs: 'own', 'join-role': 'own' };
 
 const RANKS = { viewer: 0, operator: 1, admin: 2 };
 const ORG_FALLBACK = 'this organisation';
@@ -193,6 +194,7 @@ export function settingsSectionHead(id, { orgName = null } = {}) {
   const scope = {
     environments: `Every environment of ${org}'s services — its tier, the MCP endpoint it is checked through, its bindings and links. Build registers a service; each opens on its own page.`,
     endpoints: `The MCP gateways registered in ${org}, and the environments checked through each. A read token stays on the server: a gateway names the variable that holds it, never its value.`,
+    sources: `Where ${org}'s services may say their repository lives. A source switched off leaves Add a service, and a service declared there is not run until it is switched back on; its record stays.`,
     users: 'Every user of this deployment: how they sign in, whether they are an owner, and the organisations they belong to. A new local user gets a temporary password, shown once.',
     orgs: 'Every organisation of this deployment: its members, where its files live, when it was created. A removed one stays listed — its id is never used again.',
     // The join role's scope sentence is the section model's (the sign-in mode the server runs).
@@ -921,6 +923,46 @@ export function joinRoleBody(role, ticked) {
 export function joinRoleStatus({ role = null, from = null } = {}) {
   if ((role ?? null) === (from ?? null)) return { kind: 'idle', text: 'Nothing changed.' };
   return { kind: 'saved', text: `Join role: ${from ?? 'none'} → ${role ?? 'none'}.` };
+}
+
+// ---------- the repository sources (an org's: every member reads, an admin switches) ----------
+
+// The sources the service form offers, in its order (studio/overview-model.mjs
+// REPOSITORY_KINDS), and what each reads.
+export const REPOSITORY_SOURCE_ROWS = Object.freeze([
+  Object.freeze({ kind: 'github', label: 'GitHub', hint: 'A public repository, or a private one read with the person’s own GitHub token or sign-in.' }),
+  Object.freeze({ kind: 'ado', label: 'Azure DevOps', hint: 'Azure DevOps Services or Server, read with the person’s own token or sign-in.' }),
+  Object.freeze({ kind: 'path', label: 'Folder', hint: 'A folder the server can read, under its repository roots.' }),
+  Object.freeze({ kind: 'upload', label: 'Upload', hint: 'A folder or a .zip from the person’s machine, kept for the service.' }),
+]);
+
+// `doc` GET /api/repository-sources minus ok ({ sources: { github, ado,
+// path, upload } }, a missing kind on) — null when the read failed (`error`
+// the thrown `<status>: <sentence>`). `pending` the kind whose switch is
+// being saved: every switch waits until it is. An admin switches; any other
+// rank sees each switch unavailable with the admin reason.
+export function buildSourcesSectionModel({ doc, access, error = null, pending = null } = {}) {
+  const admin = access.can.admin === true;
+  const waiting = !!pending;
+  const reason = waiting ? 'Saving…' : admin ? null : (readWhy(access, 'admin') ?? access.why.admin ?? null);
+  if (!doc || typeof doc.sources !== 'object' || !doc.sources) return { scopeSentence: null, rows: [], primary: null, empty: null, summary: null, lockedReason: null, error: error || 'the repository sources could not be read' };
+  const rows = REPOSITORY_SOURCE_ROWS.map(({ kind, label, hint }) => {
+    const on = doc.sources[kind] !== false;
+    return { kind, label, hint, on, stateText: on ? 'On' : 'Off', enabled: admin && !waiting, reason };
+  });
+  const summary = rows.every((r) => !r.on) ? 'Every source is switched off: no service can be added or run until one is switched on.' : null;
+  // The reason (the rank's, or Saving…) is said once for the section, not on every switch.
+  return { scopeSentence: null, rows, primary: null, empty: null, summary, lockedReason: reason, error: null };
+}
+
+// The status after a PUT: `GitHub switched off.` / `… switched on.`; the
+// state it already had → nothing changed (the server writes no row).
+export function sourcesStatus({ kind, sources = null, from = null } = {}) {
+  const label = REPOSITORY_SOURCE_ROWS.find((r) => r.kind === kind)?.label ?? kind;
+  const now = sources?.[kind] !== false;
+  const before = from?.[kind] !== false;
+  if (from && now === before) return { kind: 'idle', text: 'Nothing changed.' };
+  return { kind: 'saved', text: `${label} switched ${now ? 'on' : 'off'}.` };
 }
 
 // ---------- the editors (design §5) ----------

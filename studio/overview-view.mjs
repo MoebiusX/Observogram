@@ -609,7 +609,7 @@ function svcRepoCell(r) {
     return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Add the repository</button>`;
   }
   const p = r.repository;
-  return `<span class="ov-svc__place" title="${attr(p.title)}">${svcIcon(p.kind)}<span class="ov-svc__place-text"><span class="ov-svc__kind">${escapeHtml(p.kindText)}</span><span class="ov-svc__loc">${escapeHtml(p.text)}</span>${p.detail ? `<span class="ov-svc__ref">${escapeHtml(p.detail)}</span>` : ''}</span></span>`;
+  return `<span class="ov-svc__place" title="${attr(p.title)}">${svcIcon(p.kind)}<span class="ov-svc__place-text"><span class="ov-svc__kind">${escapeHtml(p.kindText)}</span><span class="ov-svc__loc">${escapeHtml(p.text)}</span>${p.detail ? `<span class="ov-svc__ref">${escapeHtml(p.detail)}</span>` : ''}${p.off ? '<span class="ov-svc__ref">switched off in Settings</span>' : ''}</span></span>`;
 }
 
 function svcLiveCell(r) {
@@ -732,7 +732,7 @@ function folderPanelHtml(p) {
 function svcFormHtml(f) {
   const v = f.values;
   const shown = !!f.error;   // the field notes appear once a save was tried
-  const kinds = f.kinds.map((k) => `<button type="button" class="og-btn ov-form__kind" data-ux-action="ov-form-kind" data-kind="${attr(k.kind)}" aria-pressed="${k.selected ? 'true' : 'false'}">${svcIcon(k.kind)}${escapeHtml(k.label)}</button>`).join('');
+  const kinds = f.kinds.map((k) => `<button type="button" class="og-btn ov-form__kind" data-ux-action="ov-form-kind" data-kind="${attr(k.kind)}" aria-pressed="${k.selected ? 'true' : 'false'}">${svcIcon(k.kind)}${escapeHtml(k.label)}${k.off ? '<span class="og-muted"> · off</span>' : ''}</button>`).join('');
   const eps = f.endpoints.map((e) => `<option value="${attr(e.id)}"${e.selected ? ' selected' : ''}>${escapeHtml(e.name)}${e.origin ? ` — ${escapeHtml(e.origin.replace(/^https?:\/\//, ''))}` : ''}</option>`).join('');
   const newOpt = `<option value="new"${f.newEndpoint.selected ? ' selected' : ''}${f.newEndpoint.allowed ? '' : ' disabled'}>A new MCP endpoint…${f.newEndpoint.allowed ? '' : ' (not here)'}</option>`;
   const newFields = f.newEndpoint.selected ? `
@@ -766,7 +766,8 @@ function svcFormHtml(f) {
               <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
-            <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'location', shown)}
+            <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
+            ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}
           </div>
         </li>
         <li class="ov-form__step">
@@ -901,7 +902,10 @@ export function renderServiceList(container, list, form, host = appHost) {
     // 'folders' is the panel's first folder, else its first live button (a listing just drawn);
     // 'upload' (or the location, which Upload has none of) is Upload's state, else its first button.
     const uploading = !!formEl.querySelector('.ov-form__upload');
-    const want = form?.focus === 'folders'
+    // 'kind' (a save stopped by a source switched off) is the chosen kind's button.
+    const want = form?.focus === 'kind'
+      ? (formEl.querySelector('.ov-form__kind[aria-pressed="true"]') || formEl.querySelector('.ov-form__kind'))
+      : form?.focus === 'folders'
       ? (formEl.querySelector('.ov-folders__item:not([disabled])') || formEl.querySelector('.ov-folders button:not([disabled])'))
       : (form?.focus === 'upload' || (form?.focus === 'location' && uploading))
         ? (form.focus === 'upload' ? formEl.querySelector('[data-field-focus="upload"]') : null) || formEl.querySelector('.ov-form__upload button:not([disabled])')

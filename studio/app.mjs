@@ -80,11 +80,13 @@ import {
   buildUsersSectionModel, buildUserCreateBody, userCreateStatus, userActionStatus, temporaryPassword,
   activeOrgChoice, isActingOrg, orgChipEntries, orgChipLabel, actingRecovery,
   buildOrgsSectionModel, buildOrgCreateBody, orgCreateStatus, orgRemoveStatus, buildJoinRoleSectionModel, joinRoleBody, joinRoleStatus,
+  buildSourcesSectionModel, sourcesStatus,
 } from './settings-model.mjs';
 import {
   loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment, deleteService,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
   loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
+  loadRepositorySources, putRepositorySources,
 } from './settings-api.mjs';
 import { renderSettings, renderSettingsEditor, renderMcpTarget, readAuditDrafts } from './settings-view.mjs';
 import { bindTaxonomy } from './taxonomy.mjs';
@@ -116,7 +118,7 @@ import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from 
 import { loadBrand } from './brand.mjs';
 import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
-  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
+  serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, scanLossText } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
@@ -1537,7 +1539,7 @@ function installObservaChrome(chrome) {
             <div class="observa-adv-menu-head" id="observa-adv-h-admin">Administration</div>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="settings">
               <span class="observa-adv-item-label">Settings</span>
-              <span class="observa-adv-item-sub">environments, MCP endpoints, members, the audit, users, organisations, the join role…</span>
+              <span class="observa-adv-item-sub">environments, MCP endpoints, repository sources, members, the audit, users, organisations, the join role…</span>
             </button>
             <button type="button" class="observa-adv-item" role="menuitem" data-action="overview">
               <span class="observa-adv-item-label">Overview</span>
@@ -1981,7 +1983,7 @@ function renderOverviewHost(view) {
 // the form), the form, the rows whose Run is under way — and carries out
 // the form's save plan (savePlan) and a row's Run (POST /api/services/:id/run).
 let overviewScreen = 'list';
-let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, loaded: false };
+let listFacts = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, sources: null, loaded: false };
 let listForm = FORM_CLOSED;
 let listRunning = {};
 let listResults = {};
@@ -1998,13 +2000,14 @@ function serviceListModelNow() {
     services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog, isLiveAggregatePack,
     journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
     access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll, heldTokens: [...repoTokens.keys()],
-    repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
+    repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null, sources: listFacts.sources,
   });
 }
 
 function serviceFormModelNow() {
   return serviceFormModel(listForm, {
-    endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, uploads: true, now: Date.now(),
+    endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, now: Date.now(),
+    uploads: listFacts.sources?.upload !== false, sources: listFacts.sources,
     repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
   });
 }
@@ -2143,7 +2146,7 @@ function enterOverviewList() {
 const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) || null;
 
 function openListForm(serviceId = null, env = null) {
-  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [] });
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources });
   const focus = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
   listForm = { ...opened, focus };
   renderMainView();
@@ -2161,9 +2164,9 @@ function listFormInput(field, value, { redraw = false } = {}) {
 // does not register it twice; the server's sentence is the form's error.
 async function saveListForm({ run = false } = {}) {
   if (!listForm.open || listForm.saving) return;
-  const problems = formProblems(listForm.values);
+  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
   if (Object.keys(problems).length) {
-    listForm = { ...listForm, error: 'Some answers are missing — each is marked where it goes.', focus: Object.keys(problems)[0] };
+    listForm = { ...listForm, error: formProblemsNote(problems), focus: Object.keys(problems)[0] };
     renderMainView();
     return;
   }
@@ -3115,6 +3118,7 @@ function freshSettings() {
   return {
     probe: null, denied: null, deniedAdmin: null, deniedOwn: null, status: {}, members: null, org: null, membersError: null, endpointsError: null, audit: null,
     users: null, usersError: null, orgs: null, orgsError: null, joinRole: null, joinRoleError: null,
+    sources: null, sourcesError: null, sourcesPending: null,
   };
 }
 
@@ -3242,6 +3246,7 @@ async function loadSettingsSection(id, { notice = null } = {}) {
   settings.status[id] = { kind: 'loading', text: settingsSectionHead(id).loading };
   repaintSettings();
   if (id === 'members') return loadMembersSection(settings, gen, notice);
+  if (id === 'sources') return loadSourcesSection(settings, gen, notice);
   if (id === 'audit') return loadAuditSection(settings, gen, notice);
   if (id === 'users') return loadUsersSection(settings, gen, notice);
   if (id === 'orgs' || id === 'join-role') return loadDeploymentSection(id, settings, gen, notice);
@@ -3284,6 +3289,25 @@ async function loadMembersSection(settings, gen, notice) {
   if (adminReadRefused(settings, refusal, gen, 'members')) return;
   settings.status.members = { kind: 'ok', text: notice ?? '' };
   if (gen !== settingsGeneration || state.settingsSection !== 'members') return;
+  repaintSettings();
+}
+
+// The org's repository sources (GET /api/repository-sources, every member's
+// read): its own refusal is the section's status line; one by the gate
+// downgrades the frame first.
+async function loadSourcesSection(settings, gen, notice) {
+  let refusal = null;
+  try {
+    const doc = await loadRepositorySources();
+    if (state.settings === settings) Object.assign(settings, { sources: doc, sourcesError: null });
+  } catch (e) {
+    refusal = e;
+    if (state.settings === settings) Object.assign(settings, { sources: null, sourcesError: e?.message || 'no answer' });
+  }
+  if (state.mode !== 'settings' || state.settings !== settings) return;
+  if (adminReadRefused(settings, refusal, gen, 'sources')) return;
+  settings.status.sources = { kind: 'ok', text: notice ?? '' };
+  if (gen !== settingsGeneration || state.settingsSection !== 'sources') return;
   repaintSettings();
 }
 
@@ -3449,6 +3473,10 @@ function settingsSectionView(id, access) {
   }
   if (id === 'orgs') {
     const model = buildOrgsSectionModel({ orgs: settings.orgs?.orgs ?? null, defaultOrg: settings.orgs?.defaultOrg ?? null, access, activeOrg: state.orgId, error: settings.orgsError, formatTime: auditTime });
+    return { id, head, model, status };
+  }
+  if (id === 'sources') {
+    const model = buildSourcesSectionModel({ doc: settings.sources, access, error: settings.sourcesError, pending: settings.sourcesPending });
     return { id, head, model, status };
   }
   if (id === 'join-role') {
@@ -4269,6 +4297,37 @@ async function saveJoinRoleEditor(ed, draft) {
   return { ok: true };
 }
 
+// A switch in Repository sources (PUT /api/repository-sources { <kind>: on },
+// an admin's): the switch waits while it is saved, the answer is the
+// section's status line and the page's announcement, and the section is read
+// again. A refusal is the server's sentence there; one by the gate takes the
+// admin's controls away first, as any write's.
+async function saveRepositorySource(kind, on) {
+  const settings = state.settings;
+  if (!settings || settings.sourcesPending) return null;
+  settings.sourcesPending = kind;
+  settings.status.sources = { kind: 'loading', text: 'Saving…' };
+  repaintSettings();
+  let answer;
+  try { answer = await putRepositorySources({ [kind]: on }); }
+  catch (e) {
+    if (state.settings !== settings) return null;
+    settings.sourcesPending = null;
+    settings.status.sources = { kind: 'ok', text: `Not saved: ${e?.message || 'no answer'}` };
+    announce(settings.status.sources.text);
+    settingsWriteRefused(e);
+    repaintSettings();
+    return null;
+  }
+  if (state.settings !== settings) return null;
+  settings.sourcesPending = null;
+  settings.sources = { sources: answer.sources };
+  const status = sourcesStatus({ kind, sources: answer.sources, from: answer.from });
+  announce(status.text);
+  await rereadAfterSettingsWrite(status.text);
+  return { ok: true };
+}
+
 // ---------- the environment editor (design §5.1–5.2: one editor, two doors) ----------
 
 // An environment write refused: the server's sentence in the status line; a
@@ -4432,6 +4491,7 @@ const settingsActions = {
   selectSection: (id) => selectSettingsSection(id),
   retry: (id) => loadSettingsSection(id),
   explain: explainUnavailable,
+  setSource: (kind, on) => saveRepositorySource(kind, on),
   build: () => enterBuildMode('define'),
   openService: (id) => { enterServicePage(id); },
   openEditor: ({ kind, id = null, serviceId = null, step = 'edit' } = {}) => openSettingsEditor(kind, id, serviceId, { step }),

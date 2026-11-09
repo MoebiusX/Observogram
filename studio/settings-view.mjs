@@ -159,6 +159,41 @@ function joinRoleHtml(model) {
         </ul>`;
 }
 
+// The repository sources: one switch per source the service form offers —
+// its name, what it reads, and its state in words beside the switch. A
+// switch the rank refuses (or one being saved) is unavailable with its
+// reason, wired below.
+function sourcesHtml(model) {
+  if (!model?.rows?.length) return '';
+  return `
+        <ul class="set-list set-sources" aria-label="Repository sources">
+          ${model.rows.map((r) => `<li class="set-row set-source-row">
+            <span class="set-source-text"><span class="set-row-name" id="set-source-${escapeHtml(r.kind)}">${escapeHtml(r.label)}</span>
+            <span class="set-row-meta">${escapeHtml(r.hint)}</span></span>
+            <button type="button" role="switch" class="set-switch" id="set-source-switch-${escapeHtml(r.kind)}" data-source="${escapeHtml(r.kind)}" aria-checked="${r.on ? 'true' : 'false'}" aria-labelledby="set-source-${escapeHtml(r.kind)}"><span class="set-switch-track" aria-hidden="true"><span class="set-switch-knob"></span></span><span class="set-switch-state">${escapeHtml(r.stateText)}</span></button>
+          </li>`).join('')}
+        </ul>
+        ${model.lockedReason ? '<p class="set-sources-why" id="set-sources-why"></p>' : ''}
+        ${model.summary ? `<p class="set-sources-summary" role="note">${escapeHtml(model.summary)}</p>` : ''}`;
+}
+
+// Each switch: a click flips its source (host.settings.setSource); one the
+// rank refuses explains instead. The rank's reason is said once, under the
+// list; a switch being saved says so in its own row.
+function wireSources(container, model, host) {
+  const rowOf = (kind) => (model?.rows || []).find((r) => r.kind === kind) || null;
+  const shared = container.querySelector('#set-sources-why');
+  container.querySelectorAll('[data-source]').forEach((btn) => {
+    const row = rowOf(btn.dataset.source);
+    if (!row) return;
+    if (!row.enabled) markUnavailable(btn, row.reason, { into: shared && row.reason === model.lockedReason ? shared : (btn.closest?.('.set-row') || btn) });
+    btn.addEventListener('click', () => {
+      if (!row.enabled) { host.settings?.explain?.(row.reason); return; }
+      host.settings?.setSource?.(row.kind, !row.on);
+    });
+  });
+}
+
 // The members section's head line: the org's name and id, and Rename… (an
 // admin's; unavailable with its reason otherwise).
 function membersOrgHtml(model) {
@@ -265,6 +300,7 @@ function sectionHtml(section) {
     ? `<button type="button" class="mcp-refresh-btn set-primary" id="set-primary">${escapeHtml(PRIMARY_LABEL[section.id])}</button>` : '';
   const body = section.id === 'environments' ? environmentsHtml(section.model)
     : section.id === 'endpoints' ? endpointsHtml(section.model)
+      : section.id === 'sources' ? sourcesHtml(section.model)
       : section.id === 'members' ? membersHtml(section.model)
         : section.id === 'audit' ? auditHtml(section.model, section.filters)
           : section.id === 'users' ? usersHtml(section.model)
@@ -352,6 +388,7 @@ export function renderSettings(container, frame, section, host = appHost) {
     });
   });
   if (section.id === 'members') wireMembers(container, section.model, host);
+  if (section.id === 'sources') wireSources(container, section.model, host);
   container.querySelectorAll('[data-user-manage]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
   });

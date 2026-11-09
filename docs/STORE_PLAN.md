@@ -264,7 +264,8 @@ routine and another ad-hoc loader. The store removes that cost for
 ```text
 schema_meta     key PK, value      -- store_id, default_org, identity_armed, oidc_issuer,
                                    -- identity_mode, oidc_join_role, import_done, import_report,
-                                   -- users_file, legacy_hashes, replace_requested, packs_imported
+                                   -- users_file, legacy_hashes, replace_requested, packs_imported;
+                                   -- per org: repository_sources:<orgId> (the kinds switched off)
 users           id PK, kind (local|oidc), login UNIQUE NOT NULL,   -- username, or <issuerKey>#<sub>
                 issuer NULL, sub NULL, email, email_verified,
                 name, password JSON NULL, must_change, seeded_default,
@@ -322,6 +323,12 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
   joins the default org with; absent means no auto-join. It is a
   deployment-level identity policy (who in the IdP gets in), so it lives
   in `schema_meta` and only an owner changes it.
+- **`schema_meta.repository_sources:<orgId>`** is an org's Settings →
+  Repository sources: the JSON array of the repository kinds (`github`,
+  `ado`, `path`, `upload`) its services may no longer name; absent or `[]`
+  is every source on, so a source added later starts on. One key per org,
+  no migration; an org admin changes it (`PUT /api/repository-sources`),
+  and its `org.repository_sources` row carries the org's id.
 - **`mcp_endpoints.read_token_env`** is the *name* of an env var, mirroring
   the journeys' `packB.mcp.authEnv`. **No secret is ever stored**: write
   tokens stay per-request pass-through, and `mcp_endpoints.url` refuses
@@ -1084,7 +1091,7 @@ Stage 3 ships **before** the settings surface.
 |---|---|
 | `viewer` | every `GET` in the org, except `GET /api/audit` |
 | `operator` | plus crawl, draft, register, instantiate, compile, deploy, retrofeed, journeys, refresh-live, and CRUD on services and environments |
-| `admin` | plus the org's name, MCP endpoints, the org's audit (`GET /api/audit`, rows with its `org_id`) and memberships in **its own org**: add an existing user by exact login or verified email, change a role, remove. An admin cannot list the deployment's users. The org's last admin can be removed only by an owner |
+| `admin` | plus the org's name, MCP endpoints, repository sources (`PUT /api/repository-sources`), the org's audit (`GET /api/audit`, rows with its `org_id`) and memberships in **its own org**: add an existing user by exact login or verified email, change a role, remove. An admin cannot list the deployment's users. The org's last admin can be removed only by an owner |
 | owner (`users.is_owner`) | plus users (create, disable, reset another user's password, sign them out everywhere), orgs (create, remove, adopt), `oidc_join_role`, and the deployment audit (rows with `org_id NULL`). The last owner cannot be disabled or demoted |
 
 - **The live pack is per org.** `POST /api/refresh-live` and `GET

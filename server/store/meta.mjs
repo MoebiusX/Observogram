@@ -1,7 +1,10 @@
 // server/store/meta.mjs — schema_meta: deployment-level key/value
 // (store_id, default_org, identity_armed, oidc_join_role, import_done, …;
-// docs/STORE_PLAN.md §2). Values are strings or null; a caller that stores
-// structure stringifies it. store_id is written once, by migration 1.
+// docs/STORE_PLAN.md §2), and one per-org key, repository_sources:<orgId>
+// (the org's repository kinds switched off, read and written by
+// server/store/orgs.mjs, its row carrying the org's id). Values are strings
+// or null; a caller that stores structure stringifies it. store_id is
+// written once, by migration 1.
 
 import { atomic, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
