@@ -20,7 +20,7 @@
 // with versionDescriptor.version=<branch> when the repository names one
 // (else the repository's default branch).
 
-import { READ_TIMEOUT_MS, unreachable } from './fetch-failure.mjs';
+import { readSignal, unreachable } from './fetch-failure.mjs';
 
 const SERVICES_HOST = /^(?:dev\.azure\.com|[a-z0-9][a-z0-9-]*\.visualstudio\.com)$/i;
 const SEGMENT = /^[^/?#\s][^/?#]*$/;
@@ -146,8 +146,10 @@ export function isSignInRedirect(location, base, wwwAuthenticate = null) {
 //   link     the same, and the two tenants when they differ
 //   server   "the token in AZURE_DEVOPS_TOKEN was refused" (no tail: the operator's to fix)
 // A personal access token goes as Basic; the person's Entra ID sign-in
-// ('link', server/repo-sign-in.mjs) as a Bearer token.
-export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSource = token ? 'server' : 'none' } = {}) {
+// ('link', server/repo-sign-in.mjs) as a Bearer token. `signal` is the read's
+// budget when the call is one of a read's files (server/github-crawl.mjs
+// downloadFiles); the 60 s deadline is each call's own either way.
+export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSource = token ? 'server' : 'none', signal = null } = {}) {
   const why = adoHostRefusal(new URL(url).origin);
   if (why) { const err = new Error(`Azure DevOps: ${why}`); err.status = 400; throw err; }
   if (tokenSource === 'link' && !isAdoServices(url)) {
@@ -158,7 +160,7 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
   const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity', 'X-TFS-FedAuthRedirect': 'Suppress' };
   if (token) headers.Authorization = tokenSource === 'link' ? `Bearer ${token}` : `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
   let res;
-  try { res = await fetchImpl(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); }
+  try { res = await fetchImpl(url, { headers, redirect: 'manual', signal: readSignal(signal) }); }
   catch (e) { throw unreachable('Azure DevOps', url, e); }
   const ct = res.headers.get('content-type') || '';
   const www = res.headers.get('www-authenticate');
@@ -217,6 +219,7 @@ const itemsUrl = (repo, params) => {
 
 // The repository's tree as GitHub's tree API shapes it ({ type: 'blob', path }),
 // so selectCrawlerFiles filters both alike; paths lose ADO's leading slash.
+// Called without a signal: the tree keeps its own deadline, not the files' budget.
 export async function adoTree(repo, opts = {}) {
   const doc = await adoFetch(itemsUrl(repo, { scopePath: '/', recursionLevel: 'Full' }), opts);
   return (Array.isArray(doc?.value) ? doc.value : [])
@@ -224,7 +227,7 @@ export async function adoTree(repo, opts = {}) {
     .map((i) => ({ type: 'blob', path: i.path.replace(/^\/+/, '') }));
 }
 
-// One file's text.
+// One file's text; `opts.signal` is the read's budget when it is one of a read's files.
 export async function adoFileText(repo, path, opts = {}) {
   const doc = await adoFetch(itemsUrl(repo, { path: `/${path}`, includeContent: 'true' }), opts);
   return typeof doc?.content === 'string' ? doc.content : '';

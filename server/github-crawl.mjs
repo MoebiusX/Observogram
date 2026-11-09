@@ -8,7 +8,7 @@
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
 import { SCAN_MAX_FILE_BYTES, SCAN_WHY, scanReadsPath, scanRefusal } from '../tools/lib/crawler.mjs';
-import { READ_TIMEOUT_MS, unreachable } from './fetch-failure.mjs';
+import { readSignal, unreachable } from './fetch-failure.mjs';
 
 export function parseGithubUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -161,6 +161,57 @@ export function settleFetched(selected, texts, { fileCapBytes = SCAN_MAX_FILE_BY
 
 // A host read's caps: at most 200 files of the scan's 5 MB each, 16 MB in all.
 export const HOST_READ_CAPS = Object.freeze({ maxFiles: 200, fileCapBytes: SCAN_MAX_FILE_BYTES, totalCapBytes: 16 * 1024 * 1024 });
+// How many of a read's files are fetched at once, GitHub and Azure DevOps
+// alike: a pool, the next file taken as a slot frees.
+export const HOST_READ_PARALLEL = 8;
+// How long all the files of one read may take together, after the tree:
+// 120 s, twice READ_TIMEOUT_MS (server/fetch-failure.mjs). A 200-file read
+// is 25 rounds of 8, so a host that answers a file in under about 5 s fits;
+// a slower one loses the tail of the plan, each file skipped and named — the
+// trade for never sending 200 requests at once, and for an Azure DevOps
+// worst case of 120 s instead of 25 × 60 s. Each file keeps its own 60 s
+// deadline inside it; the repository and tree reads keep theirs apart, not
+// under this budget.
+export const HOST_READ_FILES_BUDGET_MS = 120_000;
+
+// The reason a read's budget aborts its files with: a ReadBudgetError, which
+// unreachable() leaves as it is (neither fetch's failure nor a TimeoutError),
+// so a file the time ran out for is skipped with exactly this sentence.
+export function outOfTime(budgetMs) {
+  return Object.assign(new Error(`the read's ${Math.round(budgetMs / 1000)} s for its files ran out`), { name: 'ReadBudgetError' });
+}
+
+/**
+ * The files of one host read, downloaded `parallel` at a time under one
+ * budget of `budgetMs`: a pool of workers, each taking the next node of
+ * `selected` in order (a slow file holds one slot, never the others), each
+ * file awaited through `fetchText(node, signal)` — the budget's signal, which
+ * the fetcher combines with its own deadline (fetch-failure.mjs readSignal).
+ * When the budget runs out its controller aborts with outOfTime's error as
+ * the reason: fetch(), res.text() and res.json() reject with the signal's
+ * reason, so a file in flight ends with that sentence, and a file not started
+ * by then is stored with it, no call made. Never fatal.
+ * → Map(path → { text } | { error }), what settleFetched takes.
+ */
+export async function downloadFiles(selected, fetchText, { parallel = HOST_READ_PARALLEL, budgetMs = HOST_READ_FILES_BUDGET_MS } = {}) {
+  const texts = new Map();
+  if (!selected.length) return texts;
+  const budget = new AbortController();
+  const reason = outOfTime(budgetMs);
+  const timer = setTimeout(() => budget.abort(reason), budgetMs);
+  let next = 0;
+  const worker = async () => {
+    while (next < selected.length) {
+      const node = selected[next++];
+      if (budget.signal.aborted) { texts.set(node.path, { error: reason.message }); continue; }
+      try { texts.set(node.path, { text: await fetchText(node, budget.signal) }); }
+      catch (e) { texts.set(node.path, { error: e.message }); }
+    }
+  };
+  try { await Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, selected.length)) }, worker)); }
+  finally { clearTimeout(timer); }
+  return texts;
+}
 
 // The JSON a GitHub REST answer carries, an answer that could not be read to
 // the end said as what it is (server/fetch-failure.mjs: the status was read,
@@ -180,7 +231,8 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   let res;
-  try { res = await fetch(`https://api.github.com${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(READ_TIMEOUT_MS) }); }
+  // The caller's signal (a read's budget, a sign-in's shorter wait) combines with the deadline, never replaces it.
+  try { res = await fetch(`https://api.github.com${path}`, { ...init, headers, signal: readSignal(init.signal ?? null) }); }
   catch (e) { throw unreachable('GitHub', 'https://api.github.com', e); }
   if (!res.ok) {
     const said = githubSays(await res.text().catch(() => ''));
@@ -207,11 +259,13 @@ const rawUrl = (owner, repo, ref, path) => `https://raw.githubusercontent.com/${
 
 // A public file's bytes from raw.githubusercontent.com — outside the REST
 // API's quota (60 requests an hour without a token, which a 200-file scan
-// would spend in its first minute). Never sent a token.
-export async function rawFetch(owner, repo, ref, path) {
+// would spend in its first minute). Never sent a token. `signal` is the
+// read's budget when the file is one of a read's (downloadFiles); the 60 s
+// deadline is the fetch's own either way.
+export async function rawFetch(owner, repo, ref, path, { signal = null } = {}) {
   const url = rawUrl(owner, repo, ref, path);
   let res;
-  try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); }
+  try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual', signal: readSignal(signal) }); }
   catch (e) { throw unreachable('GitHub', url, e); }
   // A redirect is read, never followed, and named as what it is.
   if (res.status >= 300 && res.status < 400) {
@@ -230,20 +284,25 @@ export async function rawFetch(owner, repo, ref, path) {
 /**
  * The files a crawl of a GitHub repository reads, fetched: the default
  * branch when `ref` is null; planCrawlerFetch's blobs (HOST_READ_CAPS: at
- * most 200, 5 MB each, 16 MB in all) downloaded in parallel — through the
- * contents API with a `token` (a private repository; repo-auth.mjs says
- * whose), else from raw.githubusercontent.com (rawFetch: a public one, no
- * quota spent). A file that fails or does not fit is skipped and named,
- * never fatal (a connection dropped while it was read is named as that); a
- * tree or repository error throws (err.status is GitHub's; none when the
- * host was not reached or its answer was cut short).
+ * most 200, 5 MB each, 16 MB in all) downloaded by downloadFiles — 8 at a
+ * time (HOST_READ_PARALLEL), each under its own 60 s deadline, all under one
+ * 120 s budget (HOST_READ_FILES_BUDGET_MS); the repository and tree reads
+ * before them keep their own 60 s each, apart — through the contents API
+ * with a `token` (a private repository; repo-auth.mjs says whose), else
+ * from raw.githubusercontent.com (rawFetch: a public one, no quota spent).
+ * A file that fails or does not fit is skipped and named, never fatal (a
+ * connection dropped while it was read is named as that; a file the budget
+ * ran out for reads "it could not be downloaded (the read's 120 s for its
+ * files ran out)"); a tree or repository error throws (err.status is
+ * GitHub's; none when the host was not reached or its answer was cut short).
  * → { ref, candidates, capped, files, skipped: [{ path, why }], truncated }
  * — candidates the blobs the crawler's rule reads, capped how many of them
  * the 200-file cap left out, truncated GitHub's own flag (a tree too large
  * to list whole: files may be missing that nothing here can name). The
- * POST /api/crawl-github route and a service's Run share it.
+ * POST /api/crawl-github route and a service's Run share it. `limits`
+ * ({ parallel, budgetMs }) is a test seam for downloadFiles.
  */
-export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch } = {}) {
+export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch, limits = {} } = {}) {
   let at = ref;
   if (!at) {
     const repoMeta = await apiJson(await fetchFn(`/repos/${owner}/${repo}`));
@@ -251,24 +310,17 @@ export async function fetchGithubFiles({ owner, repo, ref = null }, { token = nu
   }
   const treeResp = await apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`));
   const plan = planCrawlerFetch(treeResp.tree, HOST_READ_CAPS);
-  const texts = new Map();
-  await Promise.all(plan.selected.map(async (node) => {
-    try {
-      const contentRes = rawFn
-        ? await rawFn(owner, repo, at, node.path)
-        : await fetchFn(`/repos/${owner}/${repo}/contents/${encodeURIComponent(node.path).replace(/%2F/g, '/')}?ref=${encodeURIComponent(at)}`, {
-          headers: { Accept: 'application/vnd.github.raw+json' },
-        });
-      // The bytes: the status was read, so an answer that does not finish or
-      // cannot be read to the end is said as that, not as the host not reached.
-      let text;
-      try { text = await contentRes.text(); }
-      catch (e) { throw unreachable('GitHub', rawFn ? rawUrl(owner, repo, at, node.path) : 'https://api.github.com', e, { answered: true }); }
-      texts.set(node.path, { text });
-    } catch (e) {
-      texts.set(node.path, { error: e.message });
-    }
-  }));
+  const texts = await downloadFiles(plan.selected, async (node, signal) => {
+    const contentRes = rawFn
+      ? await rawFn(owner, repo, at, node.path, { signal })
+      : await fetchFn(`/repos/${owner}/${repo}/contents/${encodeURIComponent(node.path).replace(/%2F/g, '/')}?ref=${encodeURIComponent(at)}`, {
+        headers: { Accept: 'application/vnd.github.raw+json' }, signal,
+      });
+    // The bytes: the status was read, so an answer that does not finish or
+    // cannot be read to the end is said as that, not as the host not reached.
+    try { return await contentRes.text(); }
+    catch (e) { throw unreachable('GitHub', rawFn ? rawUrl(owner, repo, at, node.path) : 'https://api.github.com', e, { answered: true }); }
+  }, limits);
   const { files, skipped } = settleFetched(plan.selected, texts, { ...HOST_READ_CAPS, planned: plan.skipped });
   return { ref: at, candidates: plan.candidates, capped: plan.capped, files, skipped, truncated: !!treeResp.truncated };
 }

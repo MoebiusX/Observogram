@@ -1182,7 +1182,15 @@ service has one environment) does the whole check:
 2. **The scan** — the repository read now and crawled under the service's
    slug and the environment's name, so the scan is the service's own pack
    (`primary`), registered under the label `<name> · <env> · repository`:
-   the next Run's scan replaces it.
+   the next Run's scan replaces it. A GitHub or Azure DevOps read resolves
+   the branch and lists the tree first (each call under its own 60 s), then
+   fetches the files the crawler's rule takes (at most 200, 5 MB each, 16 MB
+   in all) 8 at a time (`HOST_READ_PARALLEL`), each within 60 s and all of
+   them within 120 s (`HOST_READ_FILES_BUDGET_MS`, both in
+   `server/github-crawl.mjs`): 25 rounds of 8 for 200 files, so a host that
+   answers a file in under about 5 s fits, and a slower one loses the tail of
+   the plan. A file the time ran out for is listed among the files not read
+   with *the read's 120 s for its files ran out*, never a failed Run.
 3. **The check** — saved as the journey `<slug>.<env>` (the scan as Pack A,
    the endpoint as Pack B; an existing one keeps its gate, schedule, notify
    and budget) and run, exactly as `POST /api/journeys/:name/run` runs it.
@@ -1488,8 +1496,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.17 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.17
+docker build -t observogram:0.8.18 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.18
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1552,7 +1560,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.17
+  observogram:0.8.18
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1560,7 +1568,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.17
+    image: observogram:0.8.18
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -1612,9 +1620,9 @@ The lower-case names (`https_proxy`, …) win over the upper-case ones.
     belongs in `NO_PROXY`.
 - **When a read sent directly finds no route to the host.** It says how a
   proxy is set.
-- **A read that takes more than 60 s.** It is given up and says so,
-  through the proxy or not. A proxy that closes the connection without
-  answering would otherwise keep it waiting.
+- **A request that takes more than 60 s** (a repository's tree, one of its
+  files). It is given up and says so, through the proxy or not. A proxy that
+  closes the connection without answering would otherwise keep it waiting.
 - **A proxy that re-signs TLS.** Give the server its certificate authority
   with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 

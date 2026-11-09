@@ -21,7 +21,9 @@
  *
  *   the fixture        tools/fixtures/live-repo, read by a folder Run here:
  *                      the files and kinds each host must return (offline)
- *   GitHub, public     a public repository read with no token at all
+ *   GitHub, public     a public repository read with no token at all, its
+ *                      files from raw.githubusercontent.com 8 at a time
+ *                      within the read's 120 s
  *                      (OBSERVOGRAM_LIVE_GITHUB_PUBLIC_REPO, default
  *                      MoebiusX/Observogram; "off" skips it)
  *   GitHub, private    OBSERVOGRAM_LIVE_GITHUB_REPO (owner/name): no token
@@ -302,10 +304,12 @@ test('GitHub, a public repository, read with no token: its files from raw.github
   }
   assert.equal(masked(read.source), `${gh.owner}/${gh.repo} on GitHub`);
   // A download that fails is skipped and named, never fatal: when
-  // raw.githubusercontent.com throttles every one, the files are 0 and each
-  // skip says "GitHub 429 on <path>". The message names the first three, so
-  // the weekly run shows the burst; it is not skipped, that burst is the thing
-  // worth seeing.
+  // raw.githubusercontent.com refuses every one (sent 8 at a time, each
+  // within 60 s, all within the read's 120 s), the files are 0 and each skip
+  // says "GitHub 429 on <path>" — or that the read's 120 s for its files ran
+  // out, when raw was too slow instead. The message names the first three, so
+  // the weekly run shows what raw answered; it is not skipped, that answer is
+  // the thing worth seeing.
   const got = Object.keys(read.files).length;
   const skips = (read.skipped ?? []).map((s) => `${s.path}: ${s.why}`);
   const shown = skips.length ? ` — skipped: ${skips.slice(0, 3).join('; ')}${skips.length > 3 ? ` … and ${skips.length - 3} more` : ''}` : '';
