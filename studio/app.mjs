@@ -4405,6 +4405,10 @@ async function deleteServiceEditor(ed) {
   const status = serviceDeleteStatus(service, answer);
   if (Array.isArray(state.services)) state.services = state.services.filter((s) => s.id !== service.id);
   for (const key of Object.keys(listResults)) if (key.startsWith(`${service.id}:`)) delete listResults[key];
+  // Settings entered from this service's page: Back goes home now, not to a
+  // page that would answer 404; the page's record goes with the service.
+  if (state.settingsFrom?.mode === 'service' && state.settingsFrom.serviceId === service.id) state.settingsFrom = { mode: 'home' };
+  if (servicePageRecord?.id === service.id) servicePageRecord = null;
   if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
   announce(status.text);
   await rereadAfterSettingsWrite(status.text);

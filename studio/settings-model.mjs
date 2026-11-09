@@ -279,18 +279,23 @@ function serviceFacts(record) {
 
 // What a delete takes with it — the server cascades the environments, the
 // pack links and the waivers, and removes an uploaded copy — and what stays:
-// the packs. A pack registered again that declares the service brings the
-// name back, empty, as the environment editor says of a name.
+// the packs, which still name the service on the Expert home (an orphan
+// pack tile). A pack linked again (registered, replaced or adopted) that
+// declares the service re-creates it with the environments it declares and
+// the link; tiers, bindings, links, waivers and the repository stay unset.
 function serviceDeleteConfirm(record) {
   const envs = isArr(record.environments) ? record.environments.length : 0;
   const packs = isArr(record.packs) ? record.packs.length : 0;
   const envLine = envs
     ? `Its ${plural(envs, 'environment goes', 'environments go')} with it — ${envs === 1 ? 'its tier, bindings, links and endpoint binding' : 'their tiers, bindings, links and endpoint bindings'}.`
     : 'It has no environment.';
-  const packLine = packs ? ` Its ${plural(packs, 'pack link goes', 'pack links go')}; the packs themselves stay registered.` : '';
+  const packLine = packs ? ` Its ${plural(packs, 'pack link goes', 'pack links go')}.` : '';
   const upload = record.repository?.kind === 'upload' ? ' Its uploaded repository copy is removed.' : '';
+  const back = packs
+    ? ` The packs stay registered and still name ${record.name} on the home; linked again, a pack that declares ${record.name} brings it back with the environments it declares, without tiers, bindings, links or waivers.`
+    : ` A pack that declares ${record.name}, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.`;
   return {
-    text: `Delete ${record.name} (${record.slug})? ${envLine}${packLine} Any waiver on it goes.${upload} A pack registered again that declares ${record.name} brings the name back, empty.`,
+    text: `Delete ${record.name} (${record.slug})? ${envLine}${packLine} Any waiver on it goes.${upload}${back}`,
     danger: `Delete ${record.name}`,
   };
 }

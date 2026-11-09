@@ -2073,16 +2073,16 @@ test('a service\'s Delete… (Settings → Environments): the row button by rank
   assert.deepEqual([m.id, m.title, m.eyebrow, m.fields, m.primary, m.remove], [1, 'Payment service', 'Service of Acme', [], null, { enabled: true, reason: null, label: 'Delete…' }]);
   assert.deepEqual(m.facts, ['payment-service', '2 environments: prod, staging', '0 pack links', 'no repository']);
   assert.deepEqual(m.confirm, {
-    text: 'Delete Payment service (payment-service)? Its 2 environments go with it — their tiers, bindings, links and endpoint bindings. Any waiver on it goes. A pack registered again that declares Payment service brings the name back, empty.',
+    text: 'Delete Payment service (payment-service)? Its 2 environments go with it — their tiers, bindings, links and endpoint bindings. Any waiver on it goes. A pack that declares Payment service, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.',
     danger: 'Delete Payment service',
   });
   // One environment, a pack link and an uploaded repository: the singular, the links, the copy; none: no environment.
   const one = { ...LEDGER, environments: [env(9, 'qa')], packs: [{ packId: 'p1' }], repository: { kind: 'upload', location: 'ledger.zip' } };
   assert.equal(buildSettingsEditorModel('service', one, { ctx, step: 'confirm-delete' }).confirm.text,
-    'Delete Ledger (ledger)? Its 1 environment goes with it — its tier, bindings, links and endpoint binding. Its 1 pack link goes; the packs themselves stay registered. Any waiver on it goes. Its uploaded repository copy is removed. A pack registered again that declares Ledger brings the name back, empty.');
+    'Delete Ledger (ledger)? Its 1 environment goes with it — its tier, bindings, links and endpoint binding. Its 1 pack link goes. Any waiver on it goes. Its uploaded repository copy is removed. The packs stay registered and still name Ledger on the home; linked again, a pack that declares Ledger brings it back with the environments it declares, without tiers, bindings, links or waivers.');
   assert.deepEqual(buildSettingsEditorModel('service', one, { ctx }).facts, ['ledger', '1 environment: qa', '1 pack link', 'repository: an upload, ledger.zip']);
   assert.equal(buildSettingsEditorModel('service', LEDGER, { ctx, step: 'confirm-delete' }).confirm.text,
-    'Delete Ledger (ledger)? It has no environment. Any waiver on it goes. A pack registered again that declares Ledger brings the name back, empty.');
+    'Delete Ledger (ledger)? It has no environment. Any waiver on it goes. A pack that declares Ledger, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.');
   assert.equal(buildSettingsEditorModel('service', LEDGER, { ctx }).confirm, null, 'the edit step has no danger button');
   // On screen: the edit step draws the facts and Delete… (no Save); Delete… asks for the delete step; the danger button confirms.
   const c = settingsContainer();
