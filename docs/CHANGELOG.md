@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+## 0.8.15 — 2026-11-09
+
+**The server's own requests go through an outbound proxy, set the way Grafana's is.** On a server whose egress is through an HTTP proxy, a read of Azure DevOps or GitHub timed out with *the connection timed out (UND_ERR_CONNECT_TIMEOUT)*. Node's fetch ignores `HTTPS_PROXY` unless the process starts with `NODE_USE_ENV_PROXY=1`, and nothing said so.
+
+### Added
+- **`server/launch.mjs`, the image's entrypoint** (`CMD ["node", "server/launch.mjs"]`). It starts `server/index.mjs` with Node's proxy switch on when `HTTPS_PROXY` or `HTTP_PROXY` is set and every one set is a URL Node can use. `HTTPS_PROXY` and `NO_PROXY` are then all a container needs, and the Docker client's own proxy settings (`~/.docker/config.json` `proxies`) set them in every container it starts.
+  - Node reads the switch only when a process starts, and stops at start on a proxy value it cannot parse, before any of the server's code runs, printing the value whole, password included. That is why the switch is decided one process up, and why the image does not set it.
+  - `NODE_USE_ENV_PROXY=0` keeps every request direct.
+  - Signals go to the server, and the launcher ends with its exit code.
+- **`server/outbound-proxy.mjs`:** which proxy a request takes. It mirrors undici's EnvHttpProxyAgent, the agent Node's fetch uses under the switch, checked against undici 6.29.1 over 138,240 generated cases:
+  - the lower-case name wins over the upper-case one;
+  - an https request takes `HTTPS_PROXY`, else `HTTP_PROXY`;
+  - `NO_PROXY` takes host, host:port, `.suffix`, `*.suffix` and `*`. A name with no dot matches only itself, and it takes no IP ranges.
+  - It also tells which values undici's ProxyAgent accepts (`usableProxy`): an http(s) URL with no path whose user name and password decode.
+  - It reads Node's switch as each version does: `1` from 22.21 and 24.5, the flags in `NODE_OPTIONS` and on the command line, and any non-empty value on 24.0–24.4.
+- **The start says whether a proxy took effect**, on the line right after `listening on`, where `docker logs` is read:
+  - One `[studio] outbound proxy:` line names each proxy as `scheme://host:port`, never its user name or password, and says whether it signs in. It also names the hosts `NO_PROXY` sends directly, or says `NO_PROXY` is unset. Then every request, or every https one when only `HTTPS_PROXY` is set, goes through the proxy.
+  - With no proxy variable set, the line says `none, every request goes directly`. With the switch off on purpose, it says that.
+  - A warning says what to fix in each of these cases. The warning names the variable, never the value.
+    - a proxy variable that is not a URL Node can use;
+    - one the server will not use: the switch is off outside the launcher, or the Node is older than 22.21;
+    - a `NO_PROXY` address range, a CIDR such as Docker's own example `127.0.0.0/8` or `a-b`. Node's fetch does not read either, so requests to those addresses go through the proxy.
+- **Docs:**
+  - the README's "Behind An Outbound Proxy", Docker first: the client's proxy settings, `docker run -e`, a compose `environment:`, and `host.docker.internal` for a proxy on the Docker host;
+  - percent-encoding a user name or password;
+  - `NO_PROXY` and short Service names;
+  - commented lines in `deploy/k8s/deployment-studio.yaml` and the journeys CronJob, which runs `tools/cli.mjs`, not the launcher;
+  - `deploy/k8s/README.md`;
+  - `.env.example`.
+
+### Changed
+- **Upgrading:** a container that already carries `HTTPS_PROXY` or `HTTP_PROXY` now sends the server's requests through it. Docker's client proxy settings do that, and so do clusters that put proxy variables in every pod. Check that `NO_PROXY` names the MCP endpoints and every internal host first, or set `NODE_USE_ENV_PROXY=0` to keep the 0.8.13 behaviour.
+- **A failed read says whether it went through the proxy** (`unreachable()` in `server/fetch-failure.mjs`). The sentences come from the errors undici 6.21–6.29 throws:
+  - *the proxy … could not be reached from the server — <reason> (<code>)*: the connection to the proxy itself was refused, timed out or did not resolve;
+  - *<host> could not be reached through the proxy … —* followed by the proxy's refusal:
+    - 407: with no user name or password in the URL, it says to give them, percent-encoded; with both, that the proxy refused them or asks for NTLM or Kerberos, which Node's fetch cannot give; with a user name alone, that neither is sent;
+    - 403 does not allow the host;
+    - 502–504 could not reach it, and a host inside your network belongs in `NO_PROXY`;
+    - any other status is given by number;
+  - a TLS handshake that timed out inside the open tunnel names the host, not the proxy: undici's timeout names the host's address there;
+  - a dropped connection or a TLS failure names the host, through the proxy.
+- **A read sent directly that finds no route to the host says how a proxy is set.** No route means a name that does not resolve, a timeout, or an unreachable network or host. The sentence ends *if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1*.
+  - When a proxy variable is set but unused, it says why: the value is not a URL Node can use, `NO_PROXY` sends the host directly, the switch is off, or the Node is older than 22.21.
+  - A refused connection or a TLS failure carries no hint.
+- **The Azure DevOps and GitHub readers give up a request after 60 s** (`READ_TIMEOUT_MS`) and say so, through the proxy or not. A proxy that closed a CONNECT without answering kept undici reconnecting, and the Run never answered.
+- The MCP endpoints and the sign-in hosts go through the proxy too. Their failures keep their own wording.
+
+### Tests
+- **`server/test-outbound-proxy.mjs`** (new, 15 tests):
+  - **Eleven pure tests:** the variables, Node's switch by version, the shown and usable proxy URLs, the `NO_PROXY` forms (short names included), each route, the launcher's plan, every start line and sentence, exact; the readers' deadline.
+  - **Two live tests** on a Node that reads the variables (22.21 or later), with `NODE_USE_ENV_PROXY=1` and a proxy on loopback. No request leaves the machine.
+    - For eleven `NO_PROXY` forms, Node's own fetch takes the route `outboundRoute` names.
+    - The Azure DevOps and GitHub readers' requests reach the proxy, and its 407 and 502 come back as the sentences above.
+    - A proxy that is down is named.
+  - **The real `start()`:** right after `listening on` it says there is no proxy, and it warns on every Node; on a Node that reads the variables it names the proxy in use without its password.
+  - **The real launcher, started as the image starts it.**
+    - It turns the switch on for a usable proxy.
+    - It starts the server on a value Node cannot parse, naming the variable without the value. A Node started with the switch on that value stops before any code runs.
+    - Its own test: it hands SIGTERM to the server and ends with exit code 143. It skips on Windows with `WIN32.signals`, where a signal ends a process outright; there the other launcher test ends the tree with `taskkill`.
+  - **Where the live checks run.** On an older Node they skip and say why. This machine's Node is 22.16, so CI's 22.23.4 and 22 runners run them. Locally all 15 pass with undici 6.21's EnvHttpProxyAgent preloaded in place of Node's.
+- **`server/test-service-run.mjs`:** the five codes with no route carry the hint, and the suite clears the shell's proxy variables.
+- **`tools/test-live-repos.mjs`:** the unreachable check accepts the hint.
+- **`tools/test-platform.mjs`:** `server/outbound-proxy.mjs` reads one URL path, a proxy URL's, which undici refuses. The launcher test reads `isWin32` once, as data, to end the tree, and that read is pinned. README "Platforms" and `docs/DOWNSTREAM.md` count 16 win32-skip sites and 20 `SKIP win32:` lines.
+- Before the push, four independent reviews, each finding checked by a skeptic, raised 13 findings; all are fixed here.
+- Suite total 1764 → 1779.
+
 ## 0.8.14 — 2026-11-09
 
 **A service can be deleted from the studio.** Settings → Environments carries Delete… on each service's row, with the consequence spelled out and confirmed first; the route existed, the studio now offers it.

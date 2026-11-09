@@ -7,14 +7,14 @@ and one PersistentVolumeClaim that holds the studio's state.
 
 ```bash
 # 1. Stamp the checkout (build.json says which commit the image is), then build it from the repo root.
-npm run build:stamp && docker build -t observogram:0.8.14 .
+npm run build:stamp && docker build -t observogram:0.8.15 .
 
 # 2. Make it visible to your cluster.
 #    docker-desktop: nothing to do.
-#    kind:           kind load docker-image observogram:0.8.14
-#    remote:         docker tag observogram:0.8.14 <registry>/observogram:0.8.14
-#                    docker push <registry>/observogram:0.8.14
-#                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.8.14
+#    kind:           kind load docker-image observogram:0.8.15
+#    remote:         docker tag observogram:0.8.15 <registry>/observogram:0.8.15
+#                    docker push <registry>/observogram:0.8.15
+#                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.8.15
 
 # 3. Check that the cluster can provision the store volume (see "Storage class" below).
 kubectl get storageclass            # one line should say (default)
@@ -111,7 +111,7 @@ spec:
     fsGroupChangePolicy: OnRootMismatch
   containers:
     - name: restore
-      image: observogram:0.8.14          # the studio's image and tag
+      image: observogram:0.8.15          # the studio's image and tag
       workingDir: /app
       command: ["node", "tools/cli.mjs", "store", "restore", "/data/db/$BACKUP"]
       env:
@@ -154,7 +154,7 @@ the studio at 0, from a one-off pod of the **store** image (the old one
 has no `store export`) that mounts both subPaths of the `store` claim at
 the studio's two paths:
 
-The pre-store release is the git tag `v0.4.0`. The store build is `0.8.14`
+The pre-store release is the git tag `v0.4.0`. The store build is `0.8.15`
 (`0.5.0` was the first store release), but builds of `develop` between
 `v0.4.0` and `0.5.0` also said `0.4.0` in `package.json`
 and `kustomization.yaml`, so an image called `observogram:0.4.0` may be
@@ -364,6 +364,20 @@ docroot. That architecture is gone:
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.
+- **An outbound proxy** (optional): on a cluster whose egress is through an
+  HTTP proxy, uncomment `HTTPS_PROXY` and `NO_PROXY` in
+  [deployment-studio.yaml](deployment-studio.yaml).
+  - The image's launcher turns Node's proxy switch on when the value is a
+    URL Node can use, so nothing else is needed.
+  - `NO_PROXY` must name each MCP endpoint by the exact name its URL uses,
+    since a short Service name matches only itself.
+  - The studio's start log says which proxy is in use, on the line after
+    `listening on`.
+  - The journeys CronJob runs `tools/cli.mjs` directly: give it the same
+    variables and `NODE_USE_ENV_PROXY=1`, which are commented in
+    `cronjob-journeys.yaml`.
+
+  See the README's "Behind An Outbound Proxy".
 - What persists: everything in the workspace and the database, on the store
   volume above — each org's live pack included
   (`<org root>/live/production-live.pack.yaml`, written by
@@ -500,7 +514,7 @@ spec:
     fsGroupChangePolicy: OnRootMismatch
   containers:
     - name: copy
-      image: observogram:0.8.14          # the studio's image and tag
+      image: observogram:0.8.15          # the studio's image and tag
       command: ["sh", "-c", "cp -a /data/workspace/. /workspace/ && ls -la /workspace"]
       volumeMounts:
         - { name: store, mountPath: /data/workspace, subPath: workspace }
