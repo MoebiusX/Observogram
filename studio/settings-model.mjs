@@ -28,7 +28,7 @@ export const SETTINGS_SECTIONS = ['environments', 'endpoints', 'sources', 'membe
 export const BUILT_SECTIONS = ['environments', 'endpoints', 'sources', 'members', 'audit', 'users', 'orgs', 'join-role'];
 // The record editors this build draws: a section whose editor is not built
 // draws no primary and no row action, and no sentence names one.
-export const BUILT_EDITORS = ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'];
+export const BUILT_EDITORS = ['endpoint', 'environment', 'service', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'];
 
 const SECTION_LABEL = {
   environments: 'Environments', endpoints: 'MCP endpoints', sources: 'Repository sources', members: 'Members', audit: 'Audit',
@@ -248,6 +248,10 @@ export function buildEnvironmentsSectionModel({ services, access, orgName = null
   }
   const groups = services.map((s) => ({
     serviceId: s.id, name: s.name, slug: s.slug,
+    // Delete… on the service's row (the service dialog on its delete step):
+    // an operator's, unavailable with the reason for another; null when no
+    // editor is built.
+    remove: editable ? { enabled: can, reason: can ? null : access.why.operate } : null,
     envs: (isArr(s.environments) ? s.environments : []).map((e) => ({
       id: e.id, name: e.name,
       tierText: e.effectiveTier ?? TIER_BY_PACK,
@@ -259,6 +263,51 @@ export function buildEnvironmentsSectionModel({ services, access, orgName = null
   const anyEnv = groups.some((g) => g.envs.length);
   const empty = anyEnv ? null : `No environments in ${org} yet.${can && editable ? ' Add environment registers one.' : ''}`;
   return { groups, primary: primaryOf({ enabled: can, reason: can ? null : access.why.operate }), empty, error: null, build: false };
+}
+
+// A service's facts on its dialog: the slug, its environments by name, its
+// pack links counted, where its repository is.
+function serviceFacts(record) {
+  const envs = isArr(record.environments) ? record.environments : [];
+  const packs = isArr(record.packs) ? record.packs : [];
+  const repo = record.repository;
+  return [
+    record.slug,
+    `${plural(envs.length, 'environment')}${envs.length ? `: ${envs.map((e) => e.name).join(', ')}` : ''}`,
+    plural(packs.length, 'pack link'),
+    repo ? `repository: ${repo.kind === 'upload' ? `an upload, ${repo.location}` : repo.location}` : 'no repository',
+  ];
+}
+
+// What a delete takes with it — the server cascades the environments, the
+// pack links and the waivers, and removes an uploaded copy — and what stays:
+// the packs, which still name the service on the Expert home (an orphan
+// pack tile). A pack linked again (registered, replaced or adopted) that
+// declares the service re-creates it with the environments it declares and
+// the link; tiers, bindings, links, waivers and the repository stay unset.
+function serviceDeleteConfirm(record) {
+  const envs = isArr(record.environments) ? record.environments.length : 0;
+  const packs = isArr(record.packs) ? record.packs.length : 0;
+  const envLine = envs
+    ? `Its ${plural(envs, 'environment goes', 'environments go')} with it — ${envs === 1 ? 'its tier, bindings, links and endpoint binding' : 'their tiers, bindings, links and endpoint bindings'}.`
+    : 'It has no environment.';
+  const packLine = packs ? ` Its ${plural(packs, 'pack link goes', 'pack links go')}.` : '';
+  const upload = record.repository?.kind === 'upload' ? ' Its uploaded repository copy is removed.' : '';
+  const back = packs
+    ? ` The packs stay registered and still name ${record.name} on the home; linked again, a pack that declares ${record.name} brings it back with the environments it declares, without tiers, bindings, links or waivers.`
+    : ` A pack that declares ${record.name}, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.`;
+  return {
+    text: `Delete ${record.name} (${record.slug})? ${envLine}${packLine} Any waiver on it goes.${upload}${back}`,
+    danger: `Delete ${record.name}`,
+  };
+}
+
+// The status after a service's delete: what went with it, as the server
+// counted it (DELETE /api/services/:id answers the counts).
+export function serviceDeleteStatus(record, answer = {}) {
+  const n = (k) => (Number.isInteger(answer?.[k]) ? answer[k] : 0);
+  const gone = [plural(n('environments'), 'environment'), plural(n('packLinks'), 'pack link'), plural(n('waivers'), 'waiver')];
+  return { kind: 'saved', text: `Deleted ${record.name} — ${gone.join(', ')} with it; the packs stay registered.` };
 }
 
 // ---------- MCP endpoints (design §5.3) ----------
@@ -1128,6 +1177,23 @@ export function buildSettingsEditorModel(kind, record = null, { draft = null, st
       status: st || idleStatus(record ? 'Name, tier, MCP endpoint, bindings and links.' : `A new environment of ${serviceName}.`),
       primary: primaryOf(record ? 'Save' : 'Create', can, access?.why?.operate ?? null),
     };
+  }
+
+  // A service (Settings → Environments, its row's Delete…): its facts, Delete…
+  // and the consequence sentence. Nothing is edited here — the service page
+  // edits the record — so no field and no primary.
+  if (kind === 'service') {
+    const can = access?.can?.operate === true;
+    const reason = can ? null : (access?.why?.operate ?? null);
+    const out = {
+      ...base, id: record.id, title: record.name, eyebrow: `Service of ${orgName}`, fields: [], limits: {}, draft: {},
+      facts: serviceFacts(record),
+      remove: { enabled: can, reason, label: 'Delete…' },
+      status: st || idleStatus('Its details are edited on its own page (Open service); here it can be deleted.'),
+      primary: null,
+    };
+    if (step === 'confirm-delete' && can) out.confirm = serviceDeleteConfirm(record);
+    return out;
   }
 
   if (kind === 'endpoint') {

@@ -593,7 +593,9 @@ Belongs here:
 
 - environments — every service's, each with its tier, bindings, links and
   MCP endpoint — read by every member, added, edited and deleted by
-  operators (the same editor opens from the service page);
+  operators (the same editor opens from the service page); a service's row
+  also holds Delete…, which removes the service with its environments, pack
+  links and waivers after a confirm step that names them;
 - the org's MCP endpoint records for admins — the URL and the token as the
   NAME of a server variable under the org's prefix, never its value; a viewer
   reads the name and the origin only;

@@ -60,7 +60,14 @@
   - a second switch did nothing while one was saved;
   - a service's own switched-off kind could not be chosen again;
   - and smaller wording and docs gaps (README, `docs/VENDORING.md`, `docs/DOWNSTREAM.md`, `docs/STORE_PLAN.md`).
-- Suite total 1763 → 1775.
+- Suite total 1764 → 1776.
+
+## 0.8.14 — 2026-11-09
+
+**A service can be deleted from the studio.** Settings → Environments carries Delete… on each service's row, with the consequence spelled out and confirmed first; the route existed, the studio now offers it.
+
+### Added
+- **Settings → Environments: Delete… on each service's row.** An operator deletes a service from the studio, as environments and MCP endpoints already could. The dialog opens on its delete step with the service's facts (slug, environments, pack links, repository) and says what goes with it — its environments, its pack links and waivers, an uploaded repository copy — and what stays: the packs. For a rank that may not, the button is `aria-disabled` with the reason, as the section's other controls. `DELETE /api/services/:id` already existed, audited as `service.delete`; the studio now offers it (`studio/settings-model.mjs`, `settings-view.mjs`, `settings-api.mjs`, `app.mjs`). Suite total 1763 → 1764.
 
 ## 0.8.13 — 2026-11-07
 

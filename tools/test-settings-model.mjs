@@ -16,7 +16,7 @@ import {
   SETTINGS_SECTIONS, BUILT_SECTIONS, BUILT_EDITORS, settingsSectionHead, AUDIT_KINDS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
   buildSettingsEditorModel, buildEnvironmentPatch, buildEnvironmentCreate, buildEndpointPatch, buildEndpointCreate, buildMemberAddBody, leftOrgText,
-  parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus,
+  parseKeyValueLines, environmentSaveStatus, endpointSaveStatus, memberSaveStatus, orgRenameStatus, endpointDeleteStatus, serviceDeleteStatus,
   lastAdmin, orgEnvPrefix, mcpTargetModel, mcpTargetBody, mcpPickerCanAdmin, profileEndpointNote, endpointDrift,
   mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer,
   noOwnerText, PASSWORD_ALPHABET, temporaryPassword, signInModeLine, userSignIn, buildUsersSectionModel, userActions, userActionStatus,
@@ -26,7 +26,7 @@ import {
   REPOSITORY_SOURCE_ROWS, buildSourcesSectionModel, sourcesStatus,
 } from '../studio/settings-model.mjs';
 import {
-  loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+  loadMcpEndpoints, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment, deleteService,
   loadMembers, addMember, patchMember, removeMember, renameOrg, loadAudit,
   loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
   loadRepositorySources, putRepositorySources,
@@ -130,7 +130,7 @@ test('settingsAccessModel: each rank, each posture — the reasons name a way ou
 test('the frame: the scope line, the nav lists only the built sections, each unreadable one disabled with its reason', () => {
   assert.deepEqual(SETTINGS_SECTIONS, ['environments', 'endpoints', 'sources', 'members', 'audit', 'users', 'orgs', 'join-role']);
   assert.deepEqual(BUILT_SECTIONS, SETTINGS_SECTIONS, 'the sections this build draws: the org\'s five and the deployment\'s three');
-  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'], 'the record editors this build draws: the MCP endpoint, the environment, the org name, the member editors, the user editors, the organisation editors and the join role');
+  assert.deepEqual(BUILT_EDITORS, ['endpoint', 'environment', 'service', 'org-name', 'member-add', 'member', 'user-create', 'user', 'org-create', 'org', 'join-role'], 'the record editors this build draws: the MCP endpoint, the environment, the service (its delete), the org name, the member editors, the user editors, the organisation editors and the join role');
   const FOUR = ['environments', 'endpoints', 'sources', 'members', 'audit'];
   assert.deepEqual(buildSettingsFrameModel({ access: OLIVE }).nav.map((n) => n.id), BUILT_SECTIONS, 'the default nav is the built sections (an owner\'s)');
   assert.deepEqual(buildSettingsFrameModel({ access: ADA }).nav.map((n) => n.id), FOUR, 'a non-owner\'s nav: the org\'s sections — the deployment\'s collapse into one line');
@@ -235,9 +235,13 @@ test('environments: the services table flattened, the binding named, the edit by
   assert.deepEqual(prod, { id: 3, name: 'prod', tierText: 'tier-1', mcpText: 'gw — https://mcp.acme.test', bindingsCount: 2, linksCount: 1, canEdit: true });
   assert.deepEqual(op.primary, { enabled: true, reason: null });
   assert.equal(op.empty, null);
+  // Delete… on each service's row: an operator's; a viewer's unavailable with the reason; none when no editor is built.
+  assert.deepEqual(op.groups.map((g) => g.remove), [{ enabled: true, reason: null }, { enabled: true, reason: null }]);
+  assert.equal(buildEnvironmentsSectionModel({ services: SERVICES, access: OSCAR, orgName: 'Acme', editable: false }).groups[0].remove, null);
   const vera = buildEnvironmentsSectionModel({ services: [{ ...LEDGER, environments: [env(9, 'qa')] }], access: VERA, orgName: 'Acme' });
   assert.deepEqual([vera.groups[0].envs[0].canEdit, vera.groups[0].envs[0].tierText, vera.groups[0].envs[0].mcpText], [false, TIER_BY_PACK, 'none']);
   assert.deepEqual(vera.primary, { enabled: false, reason: 'needs the operator role in Acme — yours is viewer' });
+  assert.deepEqual(vera.groups[0].remove, { enabled: false, reason: 'needs the operator role in Acme — yours is viewer' });
   // A11: no service yet — the primary disabled with the Build sentence; the Build button for an operator only.
   const none = buildEnvironmentsSectionModel({ services: [], access: OSCAR, orgName: 'Acme' });
   const buildText = 'No service in Acme yet — Build registers one (its DEFINE names the service).';
@@ -731,6 +735,7 @@ function settingsContainer() {
       if (sel === '[data-org-remove]') return [...html.matchAll(/data-org-remove="([\w-]+)"/g)].map((m) => get(`org:${m[1]}`, true, { orgRemove: m[1] }));
       if (sel === '[data-org-act]') return [...html.matchAll(/data-org-act="([\w-]+)"/g)].map((m) => get(`act:${m[1]}`, true, { orgAct: m[1] }));
       if (sel === '[data-source]') return [...html.matchAll(/data-source="([\w-]+)"/g)].map((m) => get(`src:${m[1]}`, true, { source: m[1] }));
+      if (sel === '[data-remove-service]') return [...html.matchAll(/data-remove-service="(\d+)"/g)].map((m) => get(`rmsvc:${m[1]}`, true, { removeService: m[1] }));
       return [];
     },
   };
@@ -2046,6 +2051,65 @@ test('renderSettings and the organisation and join-role editors: the rows escape
 });
 
 
+test('a service\'s Delete… (Settings → Environments): the row button by rank, the dialog on its delete step with the facts and the consequence, the status after, the loader', async () => {
+  const calls = [];
+  const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
+  const section = (access) => ({ id: 'environments', head: settingsSectionHead('environments', { orgName: 'Acme' }), model: buildEnvironmentsSectionModel({ services: SERVICES, access, orgName: 'Acme' }), status: null });
+  // The section: Delete… beside Open service on each service's row; a click opens the dialog on its delete step.
+  const op = settingsContainer();
+  renderSettings(op, buildSettingsFrameModel({ access: OSCAR, section: 'environments', orgName: 'Acme', orgId: 'acme' }), section(OSCAR), host);
+  assert.deepEqual([...op.innerHTML.matchAll(/data-remove-service="(\d+)" aria-label="([^"]*)">Delete…/g)].map((m) => [m[1], m[2]]), [['1', 'Delete Payment service'], ['2', 'Delete Ledger']]);
+  op.querySelectorAll('[data-remove-service]')[1].fire('click');
+  assert.deepEqual(calls, [['openEditor', { kind: 'service', id: 2, step: 'confirm-delete' }]]);
+  // A viewer: drawn, unavailable with the reason; a click explains and opens nothing.
+  const vw = settingsContainer();
+  calls.length = 0;
+  renderSettings(vw, buildSettingsFrameModel({ access: VERA, section: 'environments', orgName: 'Acme', orgId: 'acme' }), section(VERA), host);
+  const del = vw.querySelectorAll('[data-remove-service]')[0];
+  assert.deepEqual([del.getAttribute('aria-disabled'), del.why?.textContent], ['true', 'needs the operator role in Acme — yours is viewer']);
+  del.fire('click');
+  assert.deepEqual(calls, [['explain', 'needs the operator role in Acme — yours is viewer']]);
+
+  // The dialog over Payment service: the facts, no field and no primary; its delete step the sentence and the danger button.
+  const ctx = { access: OSCAR, orgName: 'Acme', orgId: 'acme' };
+  const m = buildSettingsEditorModel('service', PAYMENT, { ctx, step: 'confirm-delete' });
+  assert.deepEqual([m.id, m.title, m.eyebrow, m.fields, m.primary, m.remove], [1, 'Payment service', 'Service of Acme', [], null, { enabled: true, reason: null, label: 'Delete…' }]);
+  assert.deepEqual(m.facts, ['payment-service', '2 environments: prod, staging', '0 pack links', 'no repository']);
+  assert.deepEqual(m.confirm, {
+    text: 'Delete Payment service (payment-service)? Its 2 environments go with it — their tiers, bindings, links and endpoint bindings. Any waiver on it goes. A pack that declares Payment service, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.',
+    danger: 'Delete Payment service',
+  });
+  // One environment, a pack link and an uploaded repository: the singular, the links, the copy; none: no environment.
+  const one = { ...LEDGER, environments: [env(9, 'qa')], packs: [{ packId: 'p1' }], repository: { kind: 'upload', location: 'ledger.zip' } };
+  assert.equal(buildSettingsEditorModel('service', one, { ctx, step: 'confirm-delete' }).confirm.text,
+    'Delete Ledger (ledger)? Its 1 environment goes with it — its tier, bindings, links and endpoint binding. Its 1 pack link goes. Any waiver on it goes. Its uploaded repository copy is removed. The packs stay registered and still name Ledger on the home; linked again, a pack that declares Ledger brings it back with the environments it declares, without tiers, bindings, links or waivers.');
+  assert.deepEqual(buildSettingsEditorModel('service', one, { ctx }).facts, ['ledger', '1 environment: qa', '1 pack link', 'repository: an upload, ledger.zip']);
+  assert.equal(buildSettingsEditorModel('service', LEDGER, { ctx, step: 'confirm-delete' }).confirm.text,
+    'Delete Ledger (ledger)? It has no environment. Any waiver on it goes. A pack that declares Ledger, once linked, brings it back with the environments it declares, without tiers, bindings, links or waivers.');
+  assert.equal(buildSettingsEditorModel('service', LEDGER, { ctx }).confirm, null, 'the edit step has no danger button');
+  // On screen: the edit step draws the facts and Delete… (no Save); Delete… asks for the delete step; the danger button confirms.
+  const c = settingsContainer();
+  calls.length = 0;
+  renderSettingsEditor(c, buildSettingsEditorModel('service', PAYMENT, { ctx }), host);
+  assert.ok(c.innerHTML.includes('data-kind="service" data-record-id="1" data-editor-key="service:1:edit"'));
+  assert.ok(c.innerHTML.includes('<p class="set-row-meta set-user-fact">2 environments: prod, staging</p>'));
+  assert.ok(c.innerHTML.includes('id="set-editor-delete">Delete…</button>') && !c.innerHTML.includes('id="set-editor-save"'));
+  c.querySelector('#set-editor-delete').fire('click');
+  renderSettingsEditor(c, m, host);
+  assert.ok(c.innerHTML.includes(`<p class="set-confirm" id="set-editor-confirm-text">${m.confirm.text}</p>`));
+  assert.ok(c.innerHTML.includes('id="set-editor-confirm" aria-disabled="false">Delete Payment service</button>'));
+  c.querySelector('#set-editor-confirm').fire('click');
+  assert.deepEqual(calls, [['step', 'confirm-delete', {}], ['confirm']]);
+
+  // The status names what the server counted; the loader sends one DELETE with the id encoded and reads the counts.
+  assert.deepEqual(serviceDeleteStatus(PAYMENT, { environments: 2, packLinks: 1, waivers: 0 }), { kind: 'saved', text: 'Deleted Payment service — 2 environments, 1 pack link, 0 waivers with it; the packs stay registered.' });
+  const sent = [];
+  const fetchFn = async (url, init) => { sent.push([url, init?.method]); return { ok: true, deleted: PAYMENT, environments: 2, packLinks: 1, waivers: 3 }; };
+  assert.deepEqual(await deleteService(1, { fetchFn }), { deleted: PAYMENT, environments: 2, packLinks: 1, waivers: 3 });
+  assert.deepEqual(await deleteService('a/b', { fetchFn: async (url) => { sent.push([url]); return {}; } }), { deleted: null, environments: 0, packLinks: 0, waivers: 0 });
+  assert.deepEqual(sent, [['/api/services/1', 'DELETE'], ['/api/services/a%2Fb']]);
+});
+
 test('a confirm step the rank lost while it was open (a 403 by role): no danger button in the model nor on screen — Delete… or Remove… again, unavailable with the reason; every kind', () => {
   const calls = [];
   const host = { settings: new Proxy({}, { get: (_, k) => (...a) => calls.push([k, ...a]) }) };
@@ -2053,6 +2117,7 @@ test('a confirm step the rank lost while it was open (a 403 by role): no danger 
   const two = [...MEMBERS, { userId: 9, login: 'abe', role: 'admin', disabled: false }];
   const cases = [
     ['environment', PAYMENT.environments[0], 'confirm-delete', null, { access: OSCAR, orgName: 'Acme', orgId: 'acme', services: SERVICES, endpoints: EP_OP }, VERA, VERA.why.operate],
+    ['service', PAYMENT, 'confirm-delete', null, { access: OSCAR, orgName: 'Acme', orgId: 'acme' }, VERA, VERA.why.operate],
     ['endpoint', EP_OP[0], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', services: SERVICES }, OSCAR, OSCAR.why.admin],
     ['member', MEMBERS[1], 'confirm-delete', null, { access: ADA, orgName: 'Acme', orgId: 'acme', members: MEMBERS, me: 'ada' }, OSCAR, OSCAR.why.admin],
     ['member', MEMBERS[0], 'confirm-action', { role: 'operator' }, { access: ADA, orgName: 'Acme', orgId: 'acme', members: two, me: 'ada' }, OSCAR, OSCAR.why.admin],

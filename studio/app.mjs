@@ -73,7 +73,7 @@ import { serverNeeded, staticRemedy, staticInputOf } from './static-remedies.mjs
 import {
   BUILT_SECTIONS, BUILT_EDITORS, settingsAccessModel, settingsSectionFor, buildSettingsFrameModel, settingsSectionHead, settingsAboveRank,
   buildEnvironmentsSectionModel, buildEndpointsSectionModel, buildMembersSectionModel, buildAuditSectionModel, auditQuery,
-  buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus,
+  buildSettingsEditorModel, buildEndpointPatch, buildEndpointCreate, endpointSaveStatus, endpointDeleteStatus, serviceDeleteStatus,
   buildMemberAddBody, memberSaveStatus, orgRenameStatus, lastAdmin, leftOrgText,
   buildEnvironmentPatch, buildEnvironmentCreate, environmentSaveStatus,
   mcpTargetModel, mcpTargetBody, mcpTargetMissingText, rollbackTargetMissingText, mcpRegisterCheck, originRefusalOffer, profileEndpointNote, endpointDrift,
@@ -83,7 +83,7 @@ import {
   buildSourcesSectionModel, sourcesStatus,
 } from './settings-model.mjs';
 import {
-  loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment,
+  loadMcpEndpoints, loadMembers, createEndpoint, patchEndpoint, deleteEndpoint, createEnvironment, patchEnvironment, deleteEnvironment, deleteService,
   addMember, patchMember, removeMember, renameOrg, loadAudit,
   loadUsers, createUser, userAction, setOwner, loadAdminOrgs, loadJoinRole, createOrg, removeOrg, putJoinRole,
   loadRepositorySources, putRepositorySources,
@@ -3608,6 +3608,7 @@ function settingsEditorRecord(ed) {
   if (ed.kind === 'user') return Array.isArray(state.settings?.users) ? (state.settings.users.find((u) => u.id === ed.id) ?? undefined) : ed.record;
   if (ed.kind === 'endpoint' && Array.isArray(state.mcpEndpoints)) return state.mcpEndpoints.find((ep) => ep.id === ed.id) ?? undefined;
   if (ed.kind === 'environment' && (state.mode === 'service' || Array.isArray(state.services))) return environmentRecord(ed.id) ?? undefined;
+  if (ed.kind === 'service' && Array.isArray(state.services)) return state.services.find((s) => s.id === ed.id) ?? undefined;
   return ed.record;
 }
 
@@ -3658,6 +3659,7 @@ function settingsOpenerSelector(el) {
   if (!el) return null;
   if (el.dataset?.editEndpoint) return `[data-edit-endpoint="${CSS.escape(el.dataset.editEndpoint)}"]`;
   if (el.dataset?.editEnv) return `[data-edit-env="${CSS.escape(el.dataset.editEnv)}"]`;
+  if (el.dataset?.removeService) return `[data-remove-service="${CSS.escape(el.dataset.removeService)}"]`;
   if (el.dataset?.memberRole) return `[data-member-role="${CSS.escape(el.dataset.memberRole)}"]`;
   if (el.dataset?.memberRemove) return `[data-member-remove="${CSS.escape(el.dataset.memberRemove)}"]`;
   if (el.dataset?.userManage) return `[data-user-manage="${CSS.escape(el.dataset.userManage)}"]`;
@@ -3678,7 +3680,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   if (!BUILT_EDITORS.includes(kind)) return;
   if (kind === 'environment' ? !(state.mode === 'settings' || state.mode === 'service') : state.mode !== 'settings') return;
   const access = settingsAccess();
-  const need = kind === 'environment' ? 'operate' : kind === 'org-create' ? 'createOrg'
+  const need = kind === 'environment' || kind === 'service' ? 'operate' : kind === 'org-create' ? 'createOrg'
     : ['user', 'user-create', 'org', 'join-role'].includes(kind) ? 'own' : 'admin';
   if (!access.can[need]) { explainUnavailable(access.why[need]); return; }
   const opening = ++settingsEditorOpening;
@@ -3690,6 +3692,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
     if (kind === 'user') return Array.isArray(state.settings?.users) ? state.settings.users.find((u) => u.id === id) : null;
     if (kind === 'org') return Array.isArray(state.settings?.orgs?.orgs) ? state.settings.orgs.orgs.find((o) => o.id === id) : null;
     if (kind === 'org-name') return settingsOrgRecord();
+    if (kind === 'service') return Array.isArray(state.services) ? state.services.find((s) => s.id === id) : null;
     return environmentRecord(id);
   };
   if (id !== null && !find()) return;
@@ -3715,7 +3718,7 @@ async function openSettingsEditor(kind, id = null, serviceId = null, { step = 'e
   dropSettingsSecret(settingsEditor);
   settingsEditor = {
     kind, id, serviceId: record?.serviceId ?? serviceId ?? page, page: kind === 'environment' ? page : null,
-    record, draft: null, status: null, step: (kind === 'member' || kind === 'org') && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
+    record, draft: null, status: null, step: ['member', 'org', 'service'].includes(kind) && step === 'confirm-delete' ? 'confirm-delete' : 'edit', opener, endpointsError,
   };
   syncSettingsEditor();
   focusSettingsEditor();
@@ -3864,6 +3867,7 @@ async function confirmSettingsEditor(typed = null) {
   if (ed.step !== 'confirm-delete') return null;
   if (ed.kind === 'member') return removeMemberEditor(ed);
   if (ed.kind === 'environment') return deleteEnvironmentEditor(ed);
+  if (ed.kind === 'service') return deleteServiceEditor(ed);
   if (ed.kind !== 'endpoint') return null;
   ed.status = { kind: 'pending', text: 'Deleting…' };
   syncSettingsEditor();
@@ -4439,6 +4443,34 @@ async function deleteEnvironmentEditor(ed) {
   announce(status.text);
   if (state.mode === 'service') toast(status.text);
   await rereadAfterEnvironmentWrite(env.serviceId, status.text);
+  return { ok: true };
+}
+
+// The danger button of a service's delete step (Settings → Environments):
+// DELETE, then `Deleted <service> — n environments, n pack links, n waivers
+// with it` in the section's status line. The rows held in memory drop it
+// before the re-read, so nothing of it is drawn meanwhile; its row went, so
+// the focus goes to the section's primary.
+async function deleteServiceEditor(ed) {
+  const service = ed.record;
+  ed.status = { kind: 'pending', text: 'Deleting…' };
+  syncSettingsEditor();
+  let answer;
+  try { answer = await deleteService(service.id); }
+  catch (e) {
+    environmentWriteRefused(ed, e);
+    return null;
+  }
+  const status = serviceDeleteStatus(service, answer);
+  if (Array.isArray(state.services)) state.services = state.services.filter((s) => s.id !== service.id);
+  for (const key of Object.keys(listResults)) if (key.startsWith(`${service.id}:`)) delete listResults[key];
+  // Settings entered from this service's page: Back goes home now, not to a
+  // page that would answer 404; the page's record goes with the service.
+  if (state.settingsFrom?.mode === 'service' && state.settingsFrom.serviceId === service.id) state.settingsFrom = { mode: 'home' };
+  if (servicePageRecord?.id === service.id) servicePageRecord = null;
+  if (settingsEditor === ed) { ed.opener = null; closeSettingsEditor(); }
+  announce(status.text);
+  await rereadAfterSettingsWrite(status.text);
   return { ok: true };
 }
 
