@@ -22,6 +22,10 @@ export function parseGithubUrl(input) {
   return null;
 }
 
+// The extensions a metric can be declared in code under: the crawler's own
+// list (tools/lib/crawler.mjs METRIC_SOURCE_EXT_RE), lower case.
+const SOURCE_EXT = /\.(cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/;
+
 // The names an observability artefact usually has — a host read FETCHES
 // these first. They never decide what is read: that is the crawler's own
 // rule (scanReadsPath), the same for a folder, an upload and the CLI;
@@ -31,7 +35,7 @@ export function isCrawlerFile(path) {
   const p = path.toLowerCase();
   if (p.includes('node_modules/') || p.includes('.git/') || p.startsWith('.git/')) return false;
   const sourceMetricCandidate =
-    /\.(cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/.test(p) &&
+    SOURCE_EXT.test(p) &&
     !/(\.test\.|\.spec\.|\.d\.ts$|package-lock|yarn\.lock|pnpm-lock|tokenizer\.json)/.test(p) &&
     /(metrics?|prometheus|observability|telemetry|instrumentation|monitor|otel|mcp|bayesian|processor|chaos)/.test(p);
   return (
@@ -58,6 +62,11 @@ export function isCrawlerFile(path) {
     /(^|\/)dashboards?\/.*\.json$/.test(p) ||
     /(^|\/)grafana\/.*\.json$/.test(p) ||
     /\.dashboard\.json$/.test(p) ||
+    // A JSON whose path says dashboards or monitoring in any other spelling
+    // (`deploy/grafana-dashboards/api.json`, `observability/boards/x.json`):
+    // the crawler tells a dashboard by its content, so the cap must not put
+    // it behind the source.
+    (/\.json$/.test(p) && /(dashboard|grafana|monitoring|observability)/.test(p)) ||
     /(^|\/)kustomization\.(ya?ml)$/.test(p)
   );
 }
@@ -81,18 +90,77 @@ export function isExporterCandidateFile(path) {
 // declarations, tokenizer dumps — read when there is room, never before an
 // artefact.
 const LAST = /(\.test\.|\.spec\.|\.d\.ts$|package-lock\.json$|yarn\.lock$|pnpm-lock\.ya?ml$|tokenizer\.json$)/i;
+
+// The folders a web client's source lives under, by the names such folders
+// usually have — for the languages a browser runs. `client/` in a Go or Java
+// tree is an API client, the service's own code.
+const WEB_UI_FOLDERS = new Set(['client', 'frontend', 'front-end', 'ui', 'components']);
+const WEB_EXT = /\.(?:cjs|mjs|js|jsx|ts|tsx)$/;
+// A mobile app's folders, whatever the language.
+const MOBILE_FOLDERS = new Set(['android', 'ios']);
+// The top-level folders around a service rather than of it: tooling,
+// documentation, samples, data. Only at the root: `src/data/` is the
+// service's data layer, `internal/tools/` its own code.
+const AROUND_FOLDERS = new Set(['scripts', 'script', 'tools', 'docs', 'doc', 'examples', 'example', 'samples', 'bin', 'hack', 'data']);
+const lower = (path) => String(path ?? '').replace(/\\/g, '/').toLowerCase();
+const foldersOf = (path) => lower(path).split('/').slice(0, -1);
+
+/**
+ * Whether `path` is a user interface's source: a `.tsx` / `.jsx` component;
+ * a JavaScript or TypeScript file under a folder named as a web client's is
+ * (`client/`, `frontend/`, `ui/`, `components/`); or anything under
+ * `android/` or `ios/`. A cap reaches these after the rest of the source: in
+ * tree order `client/` sorts before `server/`, and a 200-file cap spent 86
+ * slots on React components while the service file that declared three live
+ * metrics was cut. A client file that does hold telemetry says so in its
+ * path (isCrawlerFile's `otel`, `metrics`, `telemetry` …) and is read first,
+ * whatever folder it is in.
+ */
+export function isUiSourcePath(path) {
+  const p = lower(path);
+  if (/\.(?:tsx|jsx)$/.test(p)) return true;
+  const folders = foldersOf(p);
+  return folders.some((seg) => MOBILE_FOLDERS.has(seg)) || (WEB_EXT.test(p) && folders.some((seg) => WEB_UI_FOLDERS.has(seg)));
+}
+
+/**
+ * Whether `path` is the service's own source or configuration: a file a
+ * metric can be declared in (SOURCE_EXT) or a YAML the names above did not
+ * single out (a rule file called `alerts.yml`), outside the top-level
+ * folders around a service (`scripts/`, `tools/`, `docs/`, `examples/`,
+ * `samples/`, `bin/`, `hack/`, `data/`) and not a build tool's `*.config.*`
+ * at the root. What is left — tooling scripts, a JSON no name singled out,
+ * documentation, data — is read after it. Neither rule decides what a scan
+ * reads (scanReadsPath does): they order it under planCrawlerFetch's cap.
+ */
+export function isServiceSourcePath(path) {
+  const p = lower(path);
+  if (!(SOURCE_EXT.test(p) || /\.ya?ml$/.test(p))) return false;
+  if (/^[^/]*\.config\.[^/]+$/.test(p)) return false;
+  return !AROUND_FOLDERS.has(foldersOf(p)[0]);
+}
+
+// Under the cap, in this order. A YAML of the service goes before its source:
+// a rule file with a plain name holds dozens of rules, a source file a metric.
 const tierOf = (path) => (isCrawlerFile(path) ? 0
   : isExporterCandidateFile(path) ? 1
-    : isTestOrFixturePath(path) || LAST.test(path) ? 3 : 2);
+    : isTestOrFixturePath(path) || LAST.test(path) ? 6
+      : isUiSourcePath(path) ? 5
+        : !isServiceSourcePath(path) ? 4
+          : /\.ya?ml$/i.test(String(path)) ? 2 : 3);
 
 /**
  * What a host read (a GitHub or an Azure DevOps tree) downloads: every blob
  * the crawler's rule reads (scanReadsPath — the rule a folder, an upload and
  * the CLI apply), at most `maxFiles` of them, ordered so the cap reaches the
  * likely artefacts last: isCrawlerFile's names first, then
- * isExporterCandidateFile's, then the rest, then tests, fixtures and lock
- * files — each group in tree order — so a monorepo's many `config.yaml` files
- * never push out a rule file, an Alertmanager config or a collector config.
+ * isExporterCandidateFile's, then the service's own YAML and then its source
+ * (isServiceSourcePath), then what is around it (tooling, documentation,
+ * data), then a user interface's source (isUiSourcePath), then tests,
+ * fixtures and lock files — each group in tree order — so a monorepo's many
+ * `config.yaml` files never push out a rule file, an Alertmanager config or
+ * a collector config, and a client's components or a `scripts/` folder never
+ * push out the service that declares the metrics.
  * A secrets file, a blob the tree says is over `fileCapBytes` and a blob past
  * `totalCapBytes` (by the tree's sizes, in that order) are skipped and named,
  * never fetched.

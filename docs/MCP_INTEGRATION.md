@@ -758,6 +758,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
 | `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
+| `observogram.partial.alerting.rules[<i>]` | `labels=<keys>` | an alert rule whose listing gave no `labels` object: of its labels, the keys the listing did show — `labels=severity`, written for every rule of a listing in which no rule carries a labels map and at least one carries a flat `severity`. The comparison holds the rule to those keys (docs/DIFF.md) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
 | `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
 | `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome (`data` rows are `sampled`) |
@@ -915,6 +916,35 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   labels and severity are. Until 1.4 these rules were counted
   (`alert_rules_operational`) and carried nowhere, and a live Grafana
   snapshot matched zero alerts against the repository that provisioned them.
+- **A rule listing should pass each rule's `labels` through.** A ruler's own
+  API gives a rule its `labels` map and leaves the key out of a rule that
+  has none (vmalert omits an empty map), so whether labels are shown is the
+  listing's to say: where any rule of it — alerting or recording — carries
+  a labels map, a rule without the key has no labels, and every rule is
+  compared whole. A tool that projects the answer to a flat `severity` and
+  drops the rest shows the fetcher one label: the rule's `service`, `team`
+  or routing labels never arrive. A listing in which no rule carries a
+  labels map and at least one carries a flat severity is read as that
+  projection: each of its rules is stated in
+  `observogram.partial.alerting.rules[<i>]` = `labels=severity` (the
+  severity was shown, so a rule without one has none; no other label was),
+  the comparison holds the rule to what was shown, and the pair names the
+  labels that went uncompared (`unobserved` on the pair, a count in the
+  summary and the run record; the board's status strip adds *rule labels*
+  to what the live side did not show). A listing with neither states nothing
+  and is compared whole. To have the labels compared, pass the ruler's
+  `labels` through.
+- **Every rule the ruler lists is kept.** A ruler that lists two rules under
+  one alert name (a warning and a critical threshold) yields two entries in
+  `spec.alerting.rules`, in the ruler's order, as the rule file holds two.
+  Nothing is folded: a rule listed twice is a rule running twice, and a
+  listing that shows no labels cannot say two rules are one. Whether a rule
+  is operational is decided rule by rule (its expression references no
+  recorded series of an SLO), as the crawler decides it, so a name shared by
+  an SLO's rule and an operational one yields one of each on both sides;
+  `mcp.discovered.alert_rules_operational` counts those rules. A snapshot's
+  union of several engines still takes a name from the first engine that
+  lists it.
 - A rule with no recognisable severity gets one from its burn factor
   (`>= 10x` SEV1, `>= 5x` SEV2, else SEV3) and is listed in
   `mcp.discovered.alert_rules_severity_inferred`.

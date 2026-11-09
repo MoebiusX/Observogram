@@ -1350,6 +1350,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       outOfScope: diff.summary?.outOfScope ?? 0,
       // Placeholders parked on either side (never paired, never counted).
       scaffold: diff.summary?.scaffold ?? 0,
+      // Only when pairs were compared on part of a field (a live rule listing
+      // that showed severities and no other label): how many.
+      ...(diff.summary?.partlyCompared ? { partlyCompared: diff.summary.partlyCompared } : {}),
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
     // On-wire liveness of the vantage point itself (Pack B annotations).

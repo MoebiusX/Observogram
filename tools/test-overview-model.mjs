@@ -984,6 +984,12 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
   assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold in every link, 1 in part, 12 broken.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
+  // Rules compared on part of their labels (a live listing that shows severities only): said beside the numbers and on the strip.
+  const partly = keep(fidelityModel({ run: { ...run, drift: { ...run.drift, partlyCompared: 58 } }, journey, pack: krystalinePack, now: NOW }));
+  assert.deepEqual([partly.note, partly.partial], ['The live side answered only in part: its dashboards could not be read. 58 alert rules were compared without the labels the live side does not show.', ['dashboards', 'rule labels']]);
+  const one = keep(fidelityModel({ run: { ...run, probes: { failed: [] }, drift: { ...run.drift, partlyCompared: 1 } }, journey, pack: krystalinePack, now: NOW }));
+  assert.deepEqual([one.note, one.partial], ['1 alert rule was compared without the labels the live side does not show.', ['rule labels']]);
+  assert.deepEqual(f.partial, ['dashboards'], 'no such count in the record: the strip names the failed families alone');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
   const never = keep(fidelityModel({}));

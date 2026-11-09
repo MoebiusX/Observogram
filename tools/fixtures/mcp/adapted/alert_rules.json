@@ -14,7 +14,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.227986028Z",
     "evaluationTime": 0.003051935,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "HighLatencyP99",
@@ -31,7 +34,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.231070112Z",
     "evaluationTime": 0.002376765,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "HighLatencyP99Critical",
@@ -48,7 +54,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.233484163Z",
     "evaluationTime": 0.002587316,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ServiceDown",
@@ -65,7 +74,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.23609988Z",
     "evaluationTime": 0.00141155,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "NoTraffic",
@@ -82,7 +94,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.237535721Z",
     "evaluationTime": 0.001425293,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ColdWalletUnpricedFlows",
@@ -100,7 +115,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.21460519Z",
     "evaluationTime": 0.002001504,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "CustodyWebhookSignatureFailures",
@@ -118,7 +136,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.216637079Z",
     "evaluationTime": 0.001553573,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "CustodyWebhookSignatureFailures",
@@ -136,7 +157,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.218222516Z",
     "evaluationTime": 0.001674042,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "CustodyWebhookErrors",
@@ -154,7 +178,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.219924116Z",
     "evaluationTime": 0.00154094,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ColdWithdrawalStuckInFlight",
@@ -172,7 +199,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.221491988Z",
     "evaluationTime": 0.001383465,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ColdWithdrawalSettlementSlow",
@@ -190,7 +220,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.222901959Z",
     "evaluationTime": 0.001258226,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ContainerCrashLooping",
@@ -207,7 +240,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.219617703Z",
     "evaluationTime": 0.003667616,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "ContainerOOMKilled",
@@ -223,7 +259,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.223326891Z",
     "evaluationTime": 0.001223216,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "PodNotReady",
@@ -240,7 +279,10 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.224577881Z",
     "evaluationTime": 0.005627373,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   },
   {
     "name": "DeploymentReplicasMismatch",
@@ -257,6 +299,9 @@
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.230248764Z",
     "evaluationTime": 0.001809033,
-    "state": "inactive"
+    "state": "inactive",
+    "labelsObserved": [
+      "severity"
+    ]
   }
 ]

@@ -97,6 +97,40 @@ export function isWithheldValue(value) {
   return typeof value === 'string' && /^(?:redacted|unresolved):/i.test(value);
 }
 
+// PARTLY OBSERVED FIELDS
+// A producer may have been shown a field only in part: a live rule listing
+// that gives each alert rule a flat `severity` and no `labels` object showed
+// that one label and no other. The pack says so per artefact, in
+//   observogram.partial.<symbol> = <field>=<key>,<key>[;<field>=…]
+// — of that field (a map), the keys the producer was shown; none after the
+// `=`, nothing of it. The adapter puts it on the artefact as
+// `partial: { <field>: [keys] }`, and the comparison holds the artefact to
+// those keys: a key it was never shown cannot contradict what the other pack
+// states, so it is never a difference on its own (deltasOf), and the pair
+// says which keys went uncompared (unobservedOf). Today one field of one
+// family uses it: an alert rule's `labels`.
+export const PARTIAL_ANNOTATION_PREFIX = 'observogram.partial.';
+
+/** `{ labels: ['severity'] }` → `labels=severity`, fields and keys sorted. */
+export function partialAnnotation(fields) {
+  return Object.keys(fields || {}).sort()
+    .map((f) => `${f}=${[...new Set((fields[f] || []).map(String))].sort().join(',')}`)
+    .join(';');
+}
+
+/** The annotation's value → `{ <field>: [keys] }`, or null when it states nothing. */
+export function parsePartialAnnotation(value) {
+  if (typeof value !== 'string' || !value.includes('=')) return null;
+  const out = {};
+  for (const part of value.split(';')) {
+    const eq = part.indexOf('=');
+    const field = eq < 0 ? '' : part.slice(0, eq).trim();
+    if (!field) continue;
+    out[field] = part.slice(eq + 1).split(',').map((k) => k.trim()).filter(Boolean);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function stripRef(s) {
   if (typeof s !== 'string') return s ?? '';
   return s.replace(/^ref:/, '').replace(/^slos\./, '').replace(/^slis\./, '');
@@ -344,15 +378,69 @@ export function deltasOf(a, b) {
   const ba = behaviorOf(a);
   const bb = behaviorOf(b);
   const fields = new Set([...Object.keys(ba), ...Object.keys(bb)]);
+  // The label keys both sides were shown, when a side saw an alert rule's
+  // labels only in part; null when both saw them whole.
+  const shown = kind === 'alert_rule' ? shownLabelKeys(a, b) : null;
   const deltas = [];
   for (const f of [...fields].sort()) {
     const sa = JSON.stringify(ba[f] ?? null);
     const sb = JSON.stringify(bb[f] ?? null);
     if (sa !== sb && isPartialEvidenceExpressionDelta(kind, f, ba[f], bb[f])) continue;
     if (sa !== sb && kind === 'alert_route' && f === 'channels' && isWithheldChannelDelta(ba[f], bb[f])) continue;
+    if (sa !== sb && shown && f === 'labels') {
+      // Compared on the keys both were shown, and reported on those alone.
+      const la = pickKeys(ba[f], shown);
+      const lb = pickKeys(bb[f], shown);
+      if (JSON.stringify(la) !== JSON.stringify(lb)) deltas.push({ field: f, a: la, b: lb });
+      continue;
+    }
+    // The pack's severity is read from the severity label: not shown, not compared.
+    if (sa !== sb && shown && f === 'severity' && !shown.includes('severity')) continue;
     if (sa !== sb) deltas.push({ field: f, a: ba[f] ?? null, b: bb[f] ?? null });
   }
   return deltas;
+}
+
+// What a matched pair could not be compared on: for each side that was shown
+// a field only in part (`partial`, the adapter's reading of
+// `observogram.partial.<symbol>`), the keys the OTHER side states there that
+// it was never shown — `[{ field, side, keys }]`, `side` the one that did
+// not see them. Empty for a pair compared whole.
+export function unobservedOf(a, b) {
+  if (sharedKind(a, b) !== 'alert_rule') return [];
+  const out = [];
+  for (const [side, self, other] of [['a', a, b], ['b', b, a]]) {
+    const seen = partialKeysOf(self, 'labels');
+    if (!seen) continue;
+    const stated = behaviorOf(other) || {};
+    const labels = stated.labels && typeof stated.labels === 'object' && !Array.isArray(stated.labels) ? stated.labels : {};
+    // The pack's severity is read from the severity label: stated there
+    // without the label, it went uncompared all the same.
+    const named = new Set(Object.keys(labels));
+    if (stated.severity != null) named.add('severity');
+    const keys = [...named].filter((k) => !seen.includes(k)).sort();
+    if (keys.length) out.push({ field: 'labels', side, keys });
+  }
+  return out;
+}
+
+function partialKeysOf(artefact, field) {
+  const keys = artefact?.partial?.[field];
+  return Array.isArray(keys) ? keys : null;
+}
+
+function shownLabelKeys(a, b) {
+  const pa = partialKeysOf(a, 'labels');
+  const pb = partialKeysOf(b, 'labels');
+  if (!pa && !pb) return null;
+  if (pa && pb) return pa.filter((k) => pb.includes(k)).sort();
+  return [...(pa || pb)].sort();
+}
+
+function pickKeys(map, keys) {
+  const out = {};
+  if (map && typeof map === 'object' && !Array.isArray(map)) for (const k of keys) if (k in map) out[k] = map[k];
+  return out;
 }
 
 function sharedKind(a, b) {
