@@ -30,8 +30,9 @@
 //                (operator by class: the only direct entries below admin)
 //   closedAs     how the posture refusals name the route — 'the identity
 //                API' (default), 'the MCP endpoint API', 'the audit API',
-//                'the live MCP API' or 'the MCP server-settings API' (a
-//                singular subject: the texts say `is closed`, `answers only`)
+//                'the live MCP API', 'the MCP server-settings API' or 'the
+//                repository sources API' (a singular subject: the texts say
+//                `is closed`, `answers only`)
 //   modes        where the route is registered: local, oidc, proxy, off
 //                (the /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -165,6 +166,10 @@ export const ROUTES = Object.freeze({
   // The org's MCP endpoint records: the name and origin to every member,
   // the URL and the token variable's name to operators and above.
   'GET /api/mcp-endpoints': { class: 'viewer' },
+  // The org's repository sources (Settings → Repository sources;
+  // server/routes/services.mjs): which repository kinds a service may use,
+  // read by every member.
+  'GET /api/repository-sources': { class: 'viewer' },
 
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
@@ -254,6 +259,13 @@ export const ROUTES = Object.freeze({
   'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.create'] },
   'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.update'] },
   'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoint API', audit: ['mcp_endpoint.delete'] },
+  // The switch of the org's repository sources (server/routes/services.mjs):
+  // durable configuration of the org, which decides what a save, an upload
+  // and a Run may use, so it takes the MCP endpoint changes' defences under
+  // its own name.
+  'PUT /api/repository-sources': {
+    class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the repository sources API', audit: ['org.repository_sources'],
+  },
   // The org's audit (STORE_PLAN §5, slice 5; server/routes/audit.mjs): the
   // rows with its org_id, to its admins; an owner reads the deployment's
   // (scope=all, the default for an owner; scope=deployment for the rows

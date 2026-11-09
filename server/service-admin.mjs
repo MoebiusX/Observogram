@@ -18,10 +18,12 @@
 // repository's text.
 //
 // Also here: the views the routes serve (§7.3), serviceTierFor — the
-// conformance route's tier from the service record (§9) — and
+// conformance route's tier from the service record (§9) —,
 // resolveMcpTarget, how refresh-live, draft-from-mcp and the deploy routes
 // take an MCP endpoint by id (§7.6; the read token from the org's own
-// variable, read at request time, never logged, returned or stored).
+// variable, read at request time, never logged, returned or stored), and
+// the org's repository sources (Settings → Repository sources): which
+// repository kinds a save, an upload and a Run may use in the request's org.
 //
 // No SQL of its own: every read and write goes through server/store/*.
 
@@ -45,10 +47,11 @@ import {
   assertNoCredential, countBound, createMcpEndpoint, deleteMcpEndpoint, envNameHookText, envNameOwnedBy, envNameOwnerText, envNameShapeText,
   getMcpEndpoint, isOrgHookShaped, listMcpEndpoints, updateMcpEndpoint,
 } from './store/mcp-endpoints.mjs';
+import { REPOSITORY_SOURCES, repositorySourcesOf, setRepositorySources } from './store/orgs.mjs';
 import { getPack } from './store/packs.mjs';
 import { listLinksForOrg, listPacksForService, listServicesForPack } from './store/pack-services.mjs';
 import { countWaivers } from './store/waivers.mjs';
-import { textOk } from './store/rows.mjs';
+import { requireOrg, textOk } from './store/rows.mjs';
 
 const refuse = (message, kind = 'conflict') => { throw new AdminRefusal(message, kind); };
 const invalid = (message) => refuse(message, 'invalid');
@@ -98,6 +101,10 @@ export const WAYS = Object.freeze({
   repositoryRef: 'a branch is 1–200 characters with no spaces',
   repositoryFolderRoots: (x) => `${JSON.stringify(x)} is not under a folder this server reads repositories from (OBSERVOGRAM_REPO_ROOTS)`,
   repositoryFolderPosture: "a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS on the server, or from the server's own machine while it runs without sign-in on loopback — list the folder there, or give a GitHub or Azure DevOps repository",
+  repositorySourceOff: (label) => `${label} is switched off in Settings → Repository sources — an org admin can switch it back on`,
+  repositorySourcesBody: 'send at least one repository source to switch — { github, ado, path, upload }, each true (on) or false (off)',
+  repositorySourceKey: (x) => `${JSON.stringify(x)} is not a repository source — github, ado, path or upload`,
+  repositorySourceValue: (kind, x) => `${kind} is true (on) or false (off), not ${JSON.stringify(x) ?? String(x)}`,
   tokenUnset: (ep) => `MCP endpoint "${ep.name}" reads its token from ${ep.readTokenEnv}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`,
 });
 
@@ -258,6 +265,50 @@ export function parseRepository(value, { caller = null } = {}) {
   return { kind, location: resolvePath(location), ref: null };
 }
 
+// ---------- the org's repository sources ----------
+//
+// Settings → Repository sources (server/store/orgs.mjs): one switch per
+// source the service form offers, per org, every source on until an org
+// admin switches it off. Off, a save naming it, an upload and the Run of a
+// service declared there are refused (409) with WAYS.repositorySourceOff;
+// the records keep their repository, and switched back on they work again.
+
+export const REPOSITORY_SOURCE_LABEL = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps', path: 'Folder', upload: 'Upload' });
+
+// The request's org's switches: { github, ado, path, upload }, true is on.
+export function repositorySourcesView(db) {
+  return repositorySourcesOf(db, requireOrg('the repository sources'));
+}
+
+// Why `kind` may not be used in the request's org now — the sentence — or
+// '' when it may (on, or not a source this rule knows).
+export function repositorySourceRefusal(db, kind) {
+  if (!REPOSITORY_SOURCES.includes(kind)) return '';
+  return repositorySourcesView(db)[kind] ? '' : WAYS.repositorySourceOff(REPOSITORY_SOURCE_LABEL[kind]);
+}
+
+function refuseSourceOff(db, kind) {
+  const why = repositorySourceRefusal(db, kind);
+  if (why) refuse(why);
+}
+
+// The source a save's repository names (github, ado or path), before it is
+// parsed — so a source switched off is the refusal, not its address — or null.
+const namedSource = (value) => (isPlainObject(value) && REPOSITORY_KINDS.includes(value.kind) ? value.kind : null);
+
+// An org admin's switch: `body` is { github?, ado?, path?, upload? }, each
+// true (on) or false (off), at least one. → { sources, from, changed }
+// (setRepositorySources: one org.repository_sources row when a switch
+// moved, none otherwise).
+export function setRepositorySourcesFromApi(db, actor, body) {
+  if (!isPlainObject(body) || !Object.keys(body).length) invalid(WAYS.repositorySourcesBody);
+  for (const [kind, on] of Object.entries(body)) {
+    if (!REPOSITORY_SOURCES.includes(kind)) invalid(WAYS.repositorySourceKey(kind));
+    if (typeof on !== 'boolean') invalid(WAYS.repositorySourceValue(kind, on));
+  }
+  return setRepositorySources(db, actor, requireOrg('the repository sources'), { ...body });
+}
+
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // The keys of `next` whose value differs from `current`'s (JSON-equal
@@ -268,13 +319,15 @@ function changedFields(current, next) {
 
 // ---------- services ----------
 
-// `caller` (mcpCallerOf(req)) decides whether a folder repository may be named.
+// `caller` (mcpCallerOf(req)) decides whether a folder repository may be
+// named; a repository of a source the org switched off is refused (409).
 export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
-    repository: parseRepository(repository, { caller }) ?? null,
   };
+  if (namedSource(repository)) refuseSourceOff(db, namedSource(repository));
+  fields.repository = parseRepository(repository, { caller }) ?? null;
   return atomic(db, () => {
     const existing = getServiceBySlug(db, fields.slug);
     if (existing) refuse(WAYS.serviceExists(existing));
@@ -283,6 +336,8 @@ export function createServiceFromApi(db, actor, { slug, name, owners, tier, desc
 }
 
 // → { service, changed: [fields] }; nothing differs → changed: [] and no row.
+// A repository of a source the org switched off is refused (409) only when
+// it changes: the record's own repository, sent again, still saves.
 export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null } = {}) {
   return atomic(db, () => {
     const current = getService(db, id);
@@ -293,8 +348,17 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.owners !== undefined) next.owners = parseOwners(patch.owners);
     if (patch.tier !== undefined) next.tier = parseTier(patch.tier);
     if (patch.description !== undefined) next.description = parseDescription(patch.description);
-    if (patch.repository !== undefined) next.repository = parseRepository(patch.repository, { caller });
+    if (patch.repository !== undefined) {
+      // Another kind than the record's is a change whatever its address.
+      const named = namedSource(patch.repository);
+      if (named && named !== current.repository?.kind) refuseSourceOff(db, named);
+      // Within a source switched off, an address the parse refuses is a change too:
+      // the switch's 409 comes first, as on a create.
+      try { next.repository = parseRepository(patch.repository, { caller }); }
+      catch (e) { if (named && e instanceof AdminRefusal) refuseSourceOff(db, named); throw e; }
+    }
     const changed = changedFields(current, next);
+    if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
     const service = updateService(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
     return { service, changed };

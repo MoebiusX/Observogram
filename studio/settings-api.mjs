@@ -188,3 +188,17 @@ export async function putJoinRole(role, confirm = false, { fetchFn = requestJson
   const doc = await fetchFn('/api/admin/join-role', json('PUT', body));
   return { role: doc?.role ?? null, from: doc?.from ?? null };
 }
+
+// GET /api/repository-sources → { sources: { github, ado, path, upload } }:
+// the active org's switches (every member reads them).
+export async function loadRepositorySources({ fetchFn = requestJson } = {}) {
+  const doc = await fetchFn('/api/repository-sources');
+  return { sources: doc?.sources ?? null };
+}
+
+// PUT /api/repository-sources { <kind>: true|false } (an admin's) →
+// { sources, from }: the switches after, and before.
+export async function putRepositorySources(patch, { fetchFn = requestJson } = {}) {
+  const doc = await fetchFn('/api/repository-sources', json('PUT', patch));
+  return { sources: doc?.sources ?? null, from: doc?.from ?? null };
+}

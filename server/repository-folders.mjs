@@ -65,7 +65,7 @@ const byName = (a, b) => (Number(a.name.startsWith('.')) - Number(b.name.startsW
   || a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
   || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
-// listRepositoryFolders(path, caller, { roots, home, limit }) → the listing:
+// listRepositoryFolders(path, caller, { roots, home, limit, off }) → the listing:
 //   { ok, allowed, why, bounded, path, up, repository, folders: [{ name, path, repository }], truncated, limit }
 //   path      the folder listed (its full path), or null for the top of a bounded server (the listed folders)
 //   up        { path } — the folder above, path null for that top — or null at the top
@@ -73,13 +73,20 @@ const byName = (a, b) => (Number(a.name.startsWith('.')) - Number(b.name.startsW
 // With no path, the top; a caller the rule refuses there gets allowed: false
 // and the rule's sentence (the studio shows it in place of Browse…). A named
 // path the rule refuses, that is not a full path, not there or not a folder
-// throws the AdminRefusal (400, or 404 for a folder not there).
-export async function listRepositoryFolders(path, caller, { roots = repositoryRoots(), home = homedir(), limit = FOLDER_LIST_LIMIT } = {}) {
+// throws the AdminRefusal (400, or 404 for a folder not there). `off`, the
+// sentence when the org switched Folder off (server/service-admin.mjs
+// repositorySourceRefusal), comes first: the top answers allowed: false with
+// it, a named path throws it as a conflict (409), and no folder is read.
+export async function listRepositoryFolders(path, caller, { roots = repositoryRoots(), home = homedir(), limit = FOLDER_LIST_LIMIT, off = '' } = {}) {
   const bounded = roots.length > 0;
   const base = { ok: true, allowed: true, why: null, bounded, limit };
+  let shown = typeof path === 'string' ? path.trim() : '';
+  if (off) {
+    if (shown) refuse(off, 'conflict');
+    return { ...base, allowed: false, why: off, path: null, up: null, repository: false, folders: [], truncated: false };
+  }
   const fence = bounded ? await fenceOf(roots) : [];
   const allowedHere = (p) => !folderRefusal(p, caller, { roots: bounded ? fence : roots });
-  let shown = typeof path === 'string' ? path.trim() : '';
   if (!shown) {
     if (bounded) {
       const folders = [];

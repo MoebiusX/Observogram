@@ -642,7 +642,7 @@ the server registers, and each route's first handler is its guard.
 |---|---|
 | `viewer` | every read (`GET`) in the org |
 | `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys (a journey's `notify` names one of the org's notify hooks — no role types a webhook URL), the live refresh, testing an MCP connection and live jobs against a registered endpoint ([Test An MCP Connection And Build A Live Pack](#test-an-mcp-connection-and-build-a-live-pack)), RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| `admin` | the org's name, members, MCP endpoints and repository sources as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), a typed MCP URL in a ping, a live job, a draft, a live refresh, a deploy, a rollback or a journey's Pack B ([Fetch Live From MCP](#fetch-live-from-mcp); below admin, and without sign-in, only a registered endpoint), cancelling another member's live job, and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
@@ -687,9 +687,10 @@ next one is refused.
 
 In the studio, Settings (Advanced → Settings, or the account menu) draws
 what each role may do from the server's answer for the active org: every
-member reads the environments and the MCP endpoints (a viewer an
-endpoint's name and origin only), an operator edits the environments, an
-admin the MCP endpoints, the members, the org's name and the audit, an owner
+member reads the environments, the MCP endpoints (a viewer an
+endpoint's name and origin only) and the repository sources, an operator
+edits the environments, an admin the MCP endpoints, the repository
+sources, the members, the org's name and the audit, an owner
 also the deployment's users, organisations and join role; a section or a
 control the reader's rank cannot use is listed `aria-disabled` with the
 sentence naming who can. The server still decides every write; a
@@ -956,6 +957,8 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
 | `GET` | `/api/repository-folders` | operator | `?path=` (a folder's full path; left out: the top) | the folders a `path` repository can be picked from (Overview's **Browse…**): `{ allowed, why, bounded, path, up, repository, folders, truncated, limit }` — `folders` the folders inside `path` by name (`{ name, path, repository }`, `repository` when it holds `.git`; never a file, `.git` or `node_modules`; at most `limit`, 500, then `truncated`), `up` the folder above (`{ path }`, `path` `null` for the top) or `null`. The rule is the save's: with `OBSERVOGRAM_REPO_ROOTS` listed (`bounded`) the top is those folders, `path` `null`, and nothing outside them is listed or opened, a link that leads out included; with none, the top is the home folder of a server answering a direct request on loopback without sign-in, and any other reader gets `allowed: false` with the rule's sentence in `why`. A refused folder is 400 with the save's sentence; one that is not there, 404 |
+| `GET` | `/api/repository-sources` | viewer | — | `sources`: the org's switches `{ github, ado, path, upload }`, each `true` unless an admin switched it off (Settings → Repository sources) |
+| `PUT` | `/api/repository-sources` | admin | `{ github?, ado?, path?, upload? }`, booleans, at least one | `sources` after and `from` before; one `org.repository_sources` audit row when a switch moved, none otherwise; a source switched off refuses a save naming it, an upload and a Run with 409 |
 | `GET` | `/api/services/:id/environments` | viewer | — | `service` (`id`, `slug`, `name`, `tier`) and its `environments` |
 | `POST` | `/api/services/:id/environments` | operator | `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }` | an environment (201); `bindings` at most 32 string values of 1–256 characters, `endpoints` at most 20 http(s) URLs by name, `mcpEndpointId` one of the org's MCP endpoints; a name in use is 409 |
 | `GET` | `/api/environments/:id` | viewer | — | `environment` and its `service` (`id`, `slug`, `name`, `tier`); `effectiveTier` is the environment's tier, else the service's |
@@ -1145,6 +1148,26 @@ repository, the live endpoint) and **Run** on every row.
 | `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | as the person who runs it ([whose access](#whose-access-reads-a-repository)): their own personal access token with Code (Read); a token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
 | `path` | a folder's full path on the server, typed or picked with **Browse…** (`GET /api/repository-folders`, the same rule) | the server's own file system, under the org's part of the workspace; taken only under a folder listed in `OBSERVOGRAM_REPO_ROOTS` (comma-separated), or — none listed — from the server's own machine while it runs without sign-in on loopback |
 | `upload` | the folder's or the `.zip`'s name (set by `PUT /api/services/:id/repository-upload`, never named in POST or PATCH) | the copy the person uploaded from their own machine — no server-held token reads anything; each Run scans the copy again, so it is as current as its last upload |
+
+**Repository sources.** Each organisation chooses which of the four kinds
+above its services may use. Settings → **Repository sources** has one
+switch per source, and every source is on until an admin switches one off.
+Every member reads the switches; an admin changes them, through
+`GET /api/repository-sources` and `PUT /api/repository-sources` with
+`{ "<kind>": true | false }`.
+
+Once a source is switched off:
+- **Add a service** no longer offers it.
+- A save naming it, an upload, Browse… for a folder (Folder off: its top
+  answers `allowed: false` with the sentence, a `?path=` 409), and a Run of
+  a service declared there each answer 409 before anything is read, with *<source> is switched off in
+  Settings → Repository sources — an org admin can switch it back on*.
+- The service's record stays, so a change to its other fields still saves.
+  Its row in the list keeps its repository, marked "switched off in
+  Settings", and its Run waits with that sentence.
+
+Switch the source back on and the service runs again. Each change writes
+one `org.repository_sources` row to the organisation's audit.
 
 `ref` is a branch (the default branch when left out). `POST
 /api/services/:id/run` with `{ env, repoAuth? }` (`env` left out when the
@@ -1454,8 +1477,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.13 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.13
+docker build -t observogram:0.8.16 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.16
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -3269,7 +3292,10 @@ token's; a live job's gate log is its starter's — `POST /api/draft-from-mcp`
 and `POST /api/refresh-live` take the same posture); every `/api/mcp-settings/…`
 route is `admin` (the MCP server-settings API, off unless `OBSERVOGRAM_MCP_ADMIN_PROXY=1`:
 a server-side request carrying an admin's settings to the MCP server, so the
-live MCP API's posture with the admin class); every other `GET` is `viewer` and every other route `operator`.
+live MCP API's posture with the admin class); `PUT /api/repository-sources` is `admin`
+(the org's Settings → Repository sources: the MCP endpoint changes' defences — the
+`X-Observogram-CSRF: 1` header in every posture, closed on an exposed server without
+sign-in); every other `GET` is `viewer` and every other route `operator`.
 
 A request body the server cannot read is answered as JSON on every route,
 `{ ok: false, error }` with a fixed text and quoting none of the body:
@@ -3346,6 +3372,8 @@ unsupported charset or content encoding. The body is not logged.
 | `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
 | `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
 | `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |
+| `GET` | `/api/repository-sources` | The org's repository sources (Settings → Repository sources): `{ ok, sources: { github, ado, path, upload } }`, `true` on — every source is on until an org admin switches it off |
+| `PUT` | `/api/repository-sources` | Switches them: `{ github?, ado?, path?, upload? }`, each `true` or `false`, at least one (anything else is a 400) → `{ ok, sources, from }`, the switches after and before. Switched off, a save naming that source (a create, or an update that changes the repository), an Upload and the Run of a service declared there are refused (409, the sentence names the switch), and Browse… answers `allowed: false` for Folder; the records keep their repository, and switched back on they work again. An audit row: `org.repository_sources` (`{ from, to }`, the sources switched off) when a switch moved |
 | `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
 | `POST` | `/api/admin/users` | Create a local user (201) |
 | `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |

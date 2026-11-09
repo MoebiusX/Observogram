@@ -77,13 +77,15 @@ export async function runServiceCheck(name, { fetchFn = requestJson } = {}) {
 // the org's MCP endpoints with what may be registered here (the form's
 // fourth answer), and whether a folder can be picked on the server (the
 // third answer's Browse…). Each failure is a sentence, never thrown:
-//   { journeys, journeysError, endpoints, endpointsError, register, folders }
+//   { journeys, journeysError, endpoints, endpointsError, register, folders, sources }
+//   sources  the org's repository sources ({ github, ado, path, upload }), or null when
+//            not read (an older server): every source offered, the server judges
 //   folders  { allowed, why } — may a folder be picked on the server, and if
 //            not, the server's reason — or null when the server has no folder
 //            listing (an older one) or this reader may not ask (a viewer):
 //            Browse… is then not drawn
 export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
-  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null };
+  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, sources: null };
   await Promise.all([
     fetchFn('/api/journeys')
       .then((body) => { out.journeys = Array.isArray(body?.journeys) ? body.journeys : []; })
@@ -100,6 +102,9 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
         out.folders = { allowed: body.allowed, why: body.why || null };
       })
       .catch(() => { /* no listing here, or not for this reader: no Browse… */ }),
+    fetchFn('/api/repository-sources')
+      .then((body) => { out.sources = body?.sources && typeof body.sources === 'object' ? body.sources : null; })
+      .catch(() => { /* an older server: every source offered, and the server judges */ }),
   ]);
   return out;
 }

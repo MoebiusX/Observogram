@@ -847,3 +847,249 @@ test('a Run of a private Azure DevOps repository on a server without sign-in: th
     delete process.env.AZURE_DEVOPS_TOKEN;
   }
 });
+
+// ---------- the org's repository sources ----------
+//
+// Settings → Repository sources (server/store/orgs.mjs, the rule in
+// server/service-admin.mjs): one switch per source the service form offers,
+// per org, every source on until an org admin switches it off. Off, a save
+// naming it, an upload and the Run of a service declared there are refused
+// (409, the sentence naming the switch) and write nothing; the records keep
+// their repository; switched back on, they work again. These cases run last
+// and leave every source on.
+
+const { REPOSITORY_SOURCES, repositorySourcesOf, setRepositorySources, createOrg, removeOrg } = await import('./store/orgs.mjs');
+const { getMeta, putMeta } = await import('./store/meta.mjs');
+const { atomic } = await import('./store/db.mjs');
+const { REPOSITORY_SOURCE_LABEL } = await import('./service-admin.mjs');
+
+const ALL_ON = Object.freeze({ github: true, ado: true, path: true, upload: true });
+const SOURCES_KEY = 'repository_sources:default';
+const OFF = (label) => WAYS.repositorySourceOff(label);
+const switchSources = (body) => call('PUT', '/api/repository-sources', body);
+const allOn = () => switchSources({ ...ALL_ON });
+// The org.repository_sources rows, oldest first: [actor, org, target kind, target, detail].
+const sourceRows = () => listAudit(currentStore(), { action: 'org.repository_sources' }).reverse()
+  .map((r) => [r.actor, r.orgId, r.targetKind, r.targetId, r.detail]);
+
+test('repository sources: every source on until one is switched off — GET /api/repository-sources, and the store\'s one key per org (absent, [] and a kind this build does not know read as on; that kind is kept when a switch is written); the store refuses a bad switch and an org that is not live', async () => {
+  // The studio says a source switched off in the server's words (studio/overview-model.mjs sourceOffText), and labels it alike.
+  const { sourceOffText, REPOSITORY_KINDS: FORM_KINDS } = await import('../studio/overview-model.mjs');
+  for (const kind of REPOSITORY_SOURCES) assert.equal(sourceOffText(kind), WAYS.repositorySourceOff(REPOSITORY_SOURCE_LABEL[kind]), `the studio's sentence for ${kind} is the server's`);
+  assert.deepEqual(Object.fromEntries(FORM_KINDS.map((k) => [k.kind, k.label])), { ...REPOSITORY_SOURCE_LABEL }, 'the form\'s labels are the server\'s');
+  const r = await call('GET', '/api/repository-sources');
+  assert.deepEqual([r.status, r.json], [200, { ok: true, sources: ALL_ON }]);
+  assert.deepEqual(REPOSITORY_SOURCES, ['github', 'ado', 'path', 'upload']);
+  assert.deepEqual(REPOSITORY_SOURCE_LABEL, { github: 'GitHub', ado: 'Azure DevOps', path: 'Folder', upload: 'Upload' });
+  assert.equal(OFF('Azure DevOps'), 'Azure DevOps is switched off in Settings → Repository sources — an org admin can switch it back on');
+  const db = currentStore();
+  const rows = sourceRows().length;
+  try {
+    assert.equal(getMeta(db, SOURCES_KEY), null, 'nothing stored: every source on');
+    atomic(db, () => putMeta(db, SOURCES_KEY, '[]'));
+    assert.deepEqual(repositorySourcesOf(db, 'default'), ALL_ON, '[] is every source on');
+    atomic(db, () => putMeta(db, SOURCES_KEY, JSON.stringify(['gitlab', 'upload'])));
+    assert.deepEqual(repositorySourcesOf(db, 'default'), { ...ALL_ON, upload: false }, 'a kind this build does not know is ignored');
+    assert.deepEqual(repositorySourcesOf(db, 'another-org'), ALL_ON, 'the key is the org\'s own');
+    const moved = setRepositorySources(db, 'local', 'default', { upload: true });
+    assert.deepEqual([moved.sources, moved.from, moved.changed], [ALL_ON, { ...ALL_ON, upload: false }, ['upload']]);
+    assert.equal(getMeta(db, SOURCES_KEY), '["gitlab"]', 'the kind this build does not know is kept');
+    assert.deepEqual(sourceRows().slice(rows), [['local', 'default', 'org', 'default', { from: ['upload', 'gitlab'], to: ['gitlab'] }]]);
+
+    for (const patch of [null, [], { gitlab: false }, { github: 'off' }, { upload: 1 }]) {
+      assert.throws(() => setRepositorySources(db, 'local', 'default', patch), (e) => e instanceof TypeError && /^observogram store: /.test(e.message), JSON.stringify(patch));
+    }
+    assert.throws(() => setRepositorySources(db, 'local', 'no-such-org', { github: false }), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_NOT_FOUND', 'an org that does not exist');
+    createOrg(db, 'system', { id: 'gone-org', name: 'Gone' });
+    removeOrg(db, 'system', 'gone-org');
+    assert.throws(() => setRepositorySources(db, 'local', 'gone-org', { github: false }), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_NOT_FOUND', 'a removed org');
+    assert.equal(getMeta(db, 'repository_sources:gone-org'), null);
+    assert.equal(sourceRows().length, rows + 1, 'the refusals wrote nothing');
+  } finally {
+    atomic(db, () => putMeta(db, SOURCES_KEY, null));
+  }
+  assert.deepEqual((await call('GET', '/api/repository-sources')).json.sources, ALL_ON);
+});
+
+test('PUT /api/repository-sources: a switch writes one org.repository_sources row — the org\'s id, the sources switched off before and after — read in the org\'s own audit; the same switch again writes none; every source on again leaves no key; an empty body, an unknown source or a value that is not true or false is a 400 that writes nothing', async () => {
+  const rows = sourceRows().length;
+  try {
+    for (const [body, error] of [
+      [undefined, WAYS.repositorySourcesBody],
+      [{}, WAYS.repositorySourcesBody],
+      [['github'], WAYS.repositorySourcesBody],
+      [{ gitlab: false }, WAYS.repositorySourceKey('gitlab')],
+      [{ github: false, svn: true }, WAYS.repositorySourceKey('svn')],
+      [{ github: 'off' }, WAYS.repositorySourceValue('github', 'off')],
+      [{ upload: 0 }, WAYS.repositorySourceValue('upload', 0)],
+      [{ path: null }, WAYS.repositorySourceValue('path', null)],
+    ]) {
+      const r = await switchSources(body);
+      assert.deepEqual([r.status, r.json], [400, { ok: false, error }], JSON.stringify(body));
+    }
+    assert.equal(WAYS.repositorySourceValue('github', 'off'), 'github is true (on) or false (off), not "off"');
+    assert.equal(sourceRows().length, rows, 'a refusal writes no row');
+    assert.deepEqual([(await call('GET', '/api/repository-sources')).json.sources, getMeta(currentStore(), SOURCES_KEY)], [ALL_ON, null], 'and switches nothing');
+
+    const off = await switchSources({ github: false, ado: false });
+    assert.deepEqual([off.status, off.json], [200, { ok: true, sources: { ...ALL_ON, github: false, ado: false }, from: ALL_ON }]);
+    assert.deepEqual(sourceRows().slice(rows), [['local', 'default', 'org', 'default', { from: [], to: ['github', 'ado'] }]]);
+    assert.equal(getMeta(currentStore(), SOURCES_KEY), '["github","ado"]', 'one key for the org: the sources switched off');
+    const again = await switchSources({ github: false });
+    assert.deepEqual([again.status, again.json.sources, again.json.from], [200, { ...ALL_ON, github: false, ado: false }, { ...ALL_ON, github: false, ado: false }]);
+    assert.equal(sourceRows().length, rows + 1, 'nothing moved: no row');
+    const some = await switchSources({ ado: true, upload: true });
+    assert.deepEqual(some.json.sources, { ...ALL_ON, github: false }, 'Upload was on already: Azure DevOps alone moved');
+    assert.deepEqual(sourceRows().at(-1), ['local', 'default', 'org', 'default', { from: ['github', 'ado'], to: ['github'] }]);
+    const back = await switchSources({ github: true });
+    assert.deepEqual([back.json.sources, back.json.from], [ALL_ON, { ...ALL_ON, github: false }]);
+    assert.equal(getMeta(currentStore(), SOURCES_KEY), null, 'every source on again: no key left');
+    assert.equal(sourceRows().length, rows + 3);
+    // The rows carry the org's id, so the org's own audit (what an org admin reads) lists them.
+    const audit = await call('GET', '/api/audit?scope=org&action=org.repository_sources');
+    assert.equal(audit.status, 200, audit.text);
+    assert.equal(audit.json.rows.length, sourceRows().length);
+    assert.ok(audit.json.rows.every((x) => x.orgId === 'default' && x.targetKind === 'org'), 'every row in the org\'s audit');
+  } finally {
+    await allOn();
+  }
+});
+
+test('a source switched off refuses a save naming it (409, the sentence, nothing written) — a create, an update to another source or another address of it — before its address is read; an update that keeps the repository or changes something else saves; the records keep their repository; switched back on, the same saves work', async () => {
+  const creates = auditRows('service.create').length;
+  const updates = auditRows('service.update').length;
+  const made = [];
+  try {
+    assert.equal((await switchSources({ github: false, path: false })).status, 200);
+    const create = await call('POST', '/api/services', { name: 'Switched Off', repository: { kind: 'github', location: 'acme/switched' } });
+    assert.deepEqual([create.status, create.json], [409, { ok: false, error: OFF('GitHub') }]);
+    const badFolder = await call('POST', '/api/services', { name: 'Switched Off', repository: { kind: 'path', location: 'relative/dir' } });
+    assert.deepEqual([badFolder.status, badFolder.json.error], [409, OFF('Folder')], 'switched off is the answer, before the address is read');
+    assert.ok(!(await call('GET', '/api/services')).json.services.some((x) => x.name === 'Switched Off'), 'no service was made');
+    // A source still on saves.
+    const ado = await call('POST', '/api/services', { name: 'Ado Still On', repository: { kind: 'ado', location: 'https://dev.azure.com/acme/Shop/_git/on' } });
+    assert.equal(ado.status, 201, ado.text);
+    made.push(ado.json.service.id);
+    assert.equal(auditRows('service.create').length, creates + 1, 'only the save of a source still on wrote its row');
+
+    for (const [id, repository, label] of [
+      [ado.json.service.id, { kind: 'github', location: 'acme/x' }, 'GitHub'],
+      [ado.json.service.id, { kind: 'path', location: 'relative/dir' }, 'Folder'],
+      [ids.shop, { kind: 'path', location: EMPTY_REPO }, 'Folder'],
+      [ids.shop, { kind: 'path', location: 'relative/dir' }, 'Folder'],
+      [ids.privateShop, { kind: 'github', location: 'not a repository' }, 'GitHub'],
+      [ids.privateShop, { kind: 'github', location: 'acme/another-shop' }, 'GitHub'],
+    ]) {
+      const r = await call('PATCH', `/api/services/${id}`, { repository, tier: 'tier-3' });
+      assert.deepEqual([r.status, r.json], [409, { ok: false, error: OFF(label) }], JSON.stringify(repository));
+    }
+    const keep = await call('PATCH', `/api/services/${ids.shop}`, { repository: { kind: 'path', location: REPO } });
+    assert.deepEqual([keep.status, keep.json.changed], [200, []], 'the record\'s own repository, sent again, saves');
+    const other = await call('PATCH', `/api/services/${ids.privateShop}`, { repository: { kind: 'github', location: 'acme/private-shop' }, description: 'kept while GitHub is off' });
+    assert.deepEqual([other.status, other.json.changed], [200, ['description']], 'another field of a service declared on GitHub saves');
+    assert.equal(auditRows('service.update').length, updates + 1, 'the refused updates wrote nothing');
+    assert.deepEqual((await call('GET', `/api/services/${ids.shop}`)).json.service.repository, { kind: 'path', location: resolve(REPO), ref: null }, 'the records keep their repository');
+    assert.deepEqual((await call('GET', `/api/services/${ids.privateShop}`)).json.service.repository, { kind: 'github', location: 'https://github.com/acme/private-shop', ref: null });
+
+    assert.equal((await switchSources({ github: true, path: true })).status, 200);
+    const created = await call('POST', '/api/services', { name: 'Switched Off', repository: { kind: 'github', location: 'acme/switched' } });
+    assert.equal(created.status, 201, created.text);
+    made.push(created.json.service.id);
+    const moved = await call('PATCH', `/api/services/${ado.json.service.id}`, { repository: { kind: 'github', location: 'acme/x' } });
+    assert.deepEqual([moved.status, moved.json.changed], [200, ['repository']], 'switched back on, the same save works');
+  } finally {
+    await allOn();
+    for (const id of made) await call('DELETE', `/api/services/${id}`);
+  }
+});
+
+test('a source switched off refuses its Run (409) after the record\'s own refusals and before the folder rule, any repository read, any MCP call or any row; switched back on, the Run reads and runs again', async () => {
+  const calls = fake.calls.length;
+  const runs = auditRows('journey.run').length;
+  const captures = auditRows('journey.capture').length;
+  const packs = (await call('GET', '/api/packs')).json.packs.length;
+  const realFetch = globalThis.fetch;
+  const hosts = [];
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith('https://')) { hosts.push(u); return new Response('', { status: 404 }); }
+    return realFetch(url, init);
+  };
+  const made = [];
+  try {
+    assert.equal((await switchSources({ github: false, path: false })).status, 200);
+    const bare = await call('POST', '/api/services', { name: 'No Repository Yet' });
+    made.push(bare.json.service.id);
+    assert.equal((await call('POST', `/api/services/${bare.json.service.id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+    const none = await call('POST', `/api/services/${bare.json.service.id}/run`, {});
+    assert.deepEqual([none.status, none.json.error], [409, 'No Repository Yet names no repository yet — say where its declaration lives: GitHub, Azure DevOps or a folder on the server'], 'the record\'s own refusal first');
+
+    process.env.OBSERVOGRAM_REPO_ROOTS = join(WORKSPACE, 'repos');   // the folder rule would refuse REPO (403)
+    try {
+      const folder = await call('POST', `/api/services/${ids.shop}/run`, {});
+      assert.deepEqual([folder.status, folder.json], [409, { ok: false, error: OFF('Folder') }], 'switched off is said before the folder rule');
+    } finally {
+      delete process.env.OBSERVOGRAM_REPO_ROOTS;
+    }
+    const github = await call('POST', `/api/services/${ids.privateShop}/run`, { repoAuth: 'ghp_PersonalToken0123456789' });
+    assert.deepEqual([github.status, github.json], [409, { ok: false, error: OFF('GitHub') }], 'never a repoAuth: there is nothing to sign in to');
+    assert.deepEqual(hosts, [], 'no request left for the repository\'s host');
+    assert.equal(fake.calls.length, calls, 'no MCP call');
+    assert.deepEqual([auditRows('journey.run').length, auditRows('journey.capture').length], [runs, captures], 'no row');
+    assert.equal((await call('GET', '/api/packs')).json.packs.length, packs, 'no scan registered');
+
+    assert.equal((await switchSources({ github: true, path: true })).status, 200);
+    const again = await call('POST', `/api/services/${ids.shop}/run`, {});
+    assert.equal(again.status, 200, again.text);
+    assert.ok(fake.calls.length > calls, 'the live side was read');
+    assert.equal(auditRows('journey.run').length, runs + 1);
+  } finally {
+    globalThis.fetch = realFetch;
+    await allOn();
+    for (const id of made) await call('DELETE', `/api/services/${id}`);
+  }
+});
+
+test('Upload switched off: an upload is refused (409) before its body is read or a copy kept, and the Run of an uploaded repository is refused; Folder switched off: Browse… says so in place of the folders, a named folder is 409; switched back on, each works again', async () => {
+  const created = await call('POST', '/api/services', { name: 'Uploaded Switch' });
+  assert.equal(created.status, 201, created.text);
+  const id = created.json.service.id;
+  try {
+    assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+    const first = await call('PUT', `/api/services/${id}/repository-upload`, { name: 'operational-alerts', files: UPLOADED });
+    assert.equal(first.status, 200, first.text);
+    const copy = readFileSync(copyOf(id), 'utf8');
+    const updates = auditRows('service.update').length;
+    const calls = fake.calls.length;
+    const runs = auditRows('journey.run').length;
+
+    assert.equal((await switchSources({ upload: false })).status, 200);
+    for (const body of [{ name: 'replacement', files: UPLOADED }, undefined, { name: 'empty', files: {} }]) {
+      const r = await call('PUT', `/api/services/${id}/repository-upload`, body);
+      assert.deepEqual([r.status, r.json], [409, { ok: false, error: OFF('Upload') }], JSON.stringify(body)?.slice(0, 40) ?? 'no body');
+    }
+    assert.equal((await call('PUT', '/api/services/999999/repository-upload', { name: 'x', files: UPLOADED })).status, 404, 'an unknown service is still 404 first');
+    assert.equal(readFileSync(copyOf(id), 'utf8'), copy, 'the kept copy is untouched');
+    assert.equal((await call('GET', `/api/services/${id}`)).json.service.repository.location, 'operational-alerts', 'the record keeps its repository');
+    assert.equal(auditRows('service.update').length, updates, 'no row');
+    const run = await call('POST', `/api/services/${id}/run`, {});
+    assert.deepEqual([run.status, run.json], [409, { ok: false, error: OFF('Upload') }]);
+    assert.deepEqual([fake.calls.length, auditRows('journey.run').length], [calls, runs], 'no MCP call, no row');
+
+    assert.equal((await switchSources({ path: false })).status, 200);
+    const top = await call('GET', '/api/repository-folders');
+    assert.deepEqual([top.status, top.json.allowed, top.json.why, top.json.path, top.json.folders], [200, false, OFF('Folder'), null, []]);
+    const named = await call('GET', `/api/repository-folders?path=${encodeURIComponent(REPO)}`);
+    assert.deepEqual([named.status, named.json], [409, { ok: false, error: OFF('Folder') }]);
+
+    assert.equal((await switchSources({ upload: true, path: true })).status, 200);
+    const again = await call('PUT', `/api/services/${id}/repository-upload`, { name: 'replacement', files: UPLOADED });
+    assert.deepEqual([again.status, again.json.service.repository.location], [200, 'replacement'], 'switched back on, the upload is kept');
+    assert.equal((await call('POST', `/api/services/${id}/run`, {})).status, 200, 'and its Run runs');
+    const listed = await call('GET', `/api/repository-folders?path=${encodeURIComponent(REPO)}`);
+    assert.deepEqual([listed.status, listed.json.allowed, listed.json.path], [200, true, resolve(REPO)], 'and Browse… lists folders again');
+  } finally {
+    await allOn();
+    await call('DELETE', `/api/services/${id}`);
+  }
+});

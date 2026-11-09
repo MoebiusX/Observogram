@@ -5,7 +5,7 @@
  * identity server, driven as the people the fixture names.
  *
  * As oscar (operator): Advanced → Settings — the scope names his role, the
- * nav lists the org's four sections, Members and Audit and New MCP endpoint
+ * nav lists the org's five sections, Members and Audit and New MCP endpoint
  * aria-disabled with the admin reason, the SERVICE chip and the context bar
  * hidden; the environment editor opened from the service page in a fresh
  * browser waits for the org's endpoint list before it draws; add an
@@ -362,7 +362,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
       await toSettings(page);
       assert.equal(await text(page, '.set-scope'), 'Settings · Acme (acme) · you are operator');
       const nav = await page.evaluate(() => [...document.querySelectorAll('.set-nav-item')].map((b) => [b.dataset.section, b.getAttribute('aria-disabled')]));
-      assert.deepEqual(nav, [['environments', null], ['endpoints', null], ['members', 'true'], ['audit', 'true']], 'the deployment\'s sections are not listed to a non-owner');
+      assert.deepEqual(nav, [['environments', null], ['endpoints', null], ['sources', null], ['members', 'true'], ['audit', 'true']], 'the deployment\'s sections are not listed to a non-owner');
       assert.equal(await text(page, '#set-nav-deployment'), 'The deployment');
       assert.equal(await text(page, '#set-nav-no-owner'), "Users, organisations and the join role are an owner's — ask one. (A deployment with no owner gets one from the server's shell: npm run users -- owner <login>.)", 'the no-owner line (D-H)');
       for (const id of ['members', 'audit']) assert.equal(await text(page, `.set-nav-item[data-section="${id}"] .svc-why`), ADMIN_REASON('Acme', 'operator'));
@@ -1087,7 +1087,7 @@ test('BROWSER: the Settings journey — environments, endpoints and the pickers,
     try {
       await page.waitForSelector('.svc-noorg', { timeout: T });
       await page.click('.observa-adv-toggle');
-      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, members, the audit, users, organisations, the join role…', 'the menu names every built section');
+      assert.equal(await text(page, '.observa-adv-item[data-action="settings"] .observa-adv-item-sub'), 'environments, MCP endpoints, repository sources, members, the audit, users, organisations, the join role…', 'the menu names every built section');
       await page.click('.observa-adv-item[data-action="settings"]');
       await page.waitForFunction(() => document.querySelector('#toast')?.hidden === false, null, { timeout: T });
       assert.equal(await text(page, '#toast'), NO_ORG);

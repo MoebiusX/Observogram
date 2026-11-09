@@ -1020,6 +1020,13 @@ export const REPOSITORY_KINDS = Object.freeze([
   Object.freeze({ kind: 'upload', label: 'Upload', placeholder: '', hint: 'A folder or a .zip from your machine. Its files are kept for this service and each Run scans them again; upload again when they change.' }),
 ]);
 const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
+// The org's repository sources (GET /api/repository-sources: { github, ado,
+// path, upload }, a missing kind on; null when not read — every source on,
+// and the server still refuses one switched off). A source switched off, in
+// the server's words (server/service-admin.mjs WAYS.repositorySourceOff).
+export const sourceOffText = (kind) => `${KIND_LABEL[kind] || kind} is switched off in Settings → Repository sources — an org admin can switch it back on`;
+export const ALL_SOURCES_OFF = 'Every repository source is switched off in Settings → Repository sources — an org admin can switch one on.';
+const sourceOff = (sources, kind) => !!sources && typeof sources === 'object' && sources[kind] === false;
 export const NEW_ENDPOINT = 'new';
 
 const lastSegments = (p, n) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).slice(-n).join('/');
@@ -1091,7 +1098,7 @@ export function serviceListModel(input = {}) {
   const {
     services = null, servicesStatus = null, catalog = [], isLiveAggregatePack = () => false,
     journeys = null, journeysError = null, endpoints = null, access = null, now = Date.now(),
-    running = {}, results = {}, showAll = false, heldTokens = [], repoSignIn = null,
+    running = {}, results = {}, showAll = false, heldTokens = [], repoSignIn = null, sources = null,
   } = input;
   const canWrite = access?.canWrite !== false;
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
@@ -1113,7 +1120,10 @@ export function serviceListModel(input = {}) {
     const { pack, how } = packForService(s, catalog, { isLiveAggregatePack });
     const ownPack = how === 'primary';
     if (!showAll && !s.repository && !ownPack) { hidden += 1; continue; }
-    const repository = repositoryLine(s.repository, { now });
+    const line = repositoryLine(s.repository, { now });
+    // A repository whose source is switched off keeps its record; its Run waits for the switch.
+    const off = !!line && sourceOff(sources, s.repository.kind);
+    const repository = line && off ? { ...line, off: true } : line;
     const envs = Array.isArray(s.environments) && s.environments.length ? s.environments : [null];
     for (const env of envs) {
       const key = rowKey(s.id, env?.name ?? null);
@@ -1127,6 +1137,7 @@ export function serviceListModel(input = {}) {
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;
       else if (!why && !repository) why = `Say where ${s.name}'s repository is first.`;
+      else if (!why && off) why = `${sourceOffText(s.repository.kind)}.`;
       else if (!why && !live) why = `Choose the live MCP endpoint for ${env.name} first.`;
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
@@ -1194,7 +1205,8 @@ function repositoryHint(kind, repoSignIn) {
 export const FORM_CLOSED = Object.freeze({ open: false });
 
 // The form opened: blank (add), or a row's service and environment (edit).
-export function formOpened(services, { serviceId = null, env = null, endpoints = [] } = {}) {
+// A new form opens on the first source switched on (`sources`, as serviceListModel takes it).
+export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null } = {}) {
   const s = Array.isArray(services) ? services.find((x) => x && x.id === serviceId) : null;
   const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
   const eps = Array.isArray(endpoints) ? endpoints : [];
@@ -1204,13 +1216,21 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   else if (!eps.length) endpointId = NEW_ENDPOINT;
   const values = {
     name: s?.name || '', env: e?.name || env || (s ? '' : 'prod'),
-    kind: s?.repository?.kind || 'github', location: s?.repository?.location || '', ref: s?.repository?.ref || '',
+    kind: s?.repository?.kind || firstSourceOn(sources), location: s?.repository?.location || '', ref: s?.repository?.ref || '',
     endpointId, epName: '', epUrl: '', epToken: '',
   };
   // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
   const r = s?.repository;
   const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
-  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null };
+  // The repository as saved: a source switched off since may still be kept as it is.
+  const original = r ? { kind: r.kind, location: r.location || '', ref: r.ref || '' } : null;
+  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null, original };
+}
+
+// The first source switched on, a folder or an address before Upload; GitHub when every one is off.
+function firstSourceOn(sources) {
+  const on = REPOSITORY_KINDS.filter((k) => !sourceOff(sources, k.kind));
+  return (on.find((k) => k.kind !== 'upload') || on[0] || REPOSITORY_KINDS[0]).kind;
 }
 
 // One field typed into: the state with that value (only known fields). A
@@ -1231,11 +1251,19 @@ const trimmed = (v) => String(v ?? '').trim();
 // What is missing before the form can be saved — { field: sentence }. The
 // server judges the rest (an address it cannot read, a folder it may not, an
 // endpoint origin it does not allow) and its sentence is shown as written.
-export function formProblems(values = {}) {
+// A source switched off (`sources`) is refused here too, before any call:
+// only a repository kept exactly as saved (`original`; an upload with
+// nothing new staged) may stay on one.
+export function formProblems(values = {}, { sources = null, original = null, uploadStaged = false } = {}) {
   const out = {};
   if (!trimmed(values.name)) out.name = 'Name the service.';
   if (!trimmed(values.env)) out.env = 'Name the environment, e.g. prod.';
   if (!REPOSITORY_KINDS.some((k) => k.kind === values.kind)) out.kind = 'Choose where the repository is.';
+  else if (sourceOff(sources, values.kind)) {
+    const kept = !!original && original.kind === values.kind
+      && (values.kind === 'upload' ? !uploadStaged : trimmed(values.location) === original.location && trimmed(values.ref) === original.ref);
+    if (!kept) out.kind = REPOSITORY_KINDS.every((k) => sourceOff(sources, k.kind)) ? ALL_SOURCES_OFF : `${sourceOffText(values.kind)}: choose another source.`;
+  }
   if (!trimmed(values.location)) {
     out.location = values.kind === 'path' ? "Give the folder's full path on the server."
       : values.kind === 'upload' ? 'Choose a folder or a .zip to upload.' : "Give the repository's address.";
@@ -1248,6 +1276,15 @@ export function formProblems(values = {}) {
   return out;
 }
 
+// The form's note when a save is stopped by formProblems: the switched-off
+// source's own sentence when that is the only problem (nothing is missing),
+// else that some answers are missing.
+export function formProblemsNote(problems = {}) {
+  const keys = Object.keys(problems);
+  if (keys.length === 1 && keys[0] === 'kind' && /is switched off in Settings/.test(problems.kind)) return problems.kind;
+  return 'Some answers are missing — each is marked where it goes.';
+}
+
 // formModel(form, { endpoints, register, access, folders, uploads, repoSignIn, now }) → what the renderer draws:
 //   register  GET /api/mcp-endpoints' policy.register ({ allowed, why }) — may a new endpoint be registered here
 //   folders   loadServiceListFacts' `folders` ({ allowed, why }) — may a folder be picked on the server
@@ -1255,14 +1292,23 @@ export function formProblems(values = {}) {
 //   uploads   true when the host wires Upload (below): the kind is offered; without it, never
 //   repoSignIn  /auth/me's `repoSignIn` (as serviceListModel takes it): a host this server
 //             offers sign-in to says so in its hint — a private repository is read as you
-export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, now = Date.now() } = {}) {
+//   sources   the org's repository sources (as serviceListModel takes it): a source switched
+//             off is not offered, but for the form's own kind, kept and marked off
+export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;
   const newAllowed = register ? register.allowed !== false : true;
-  const offered = REPOSITORY_KINDS.filter((k) => k.kind !== 'upload' || uploads || v.kind === 'upload')
-    .map((k) => ({ ...k, hint: repositoryHint(k, repoSignIn) }));
+  const offered = REPOSITORY_KINDS
+    .filter((k) => (k.kind !== 'upload' || uploads || v.kind === 'upload') && (!sourceOff(sources, k.kind) || k.kind === v.kind || k.kind === form.original?.kind))
+    .map((k) => {
+      if (!sourceOff(sources, k.kind)) return { ...k, hint: repositoryHint(k, repoSignIn) };
+      // The record's own source, switched off since: it may be kept as it is (and chosen again, to keep it).
+      const own = form.original?.kind === k.kind;
+      return { ...k, off: true, hint: `${sourceOffText(k.kind)}.${own ? ' A service kept on it as it is still saves its other changes.' : ''}` };
+    });
+  const switchedOff = REPOSITORY_KINDS.filter((k) => sourceOff(sources, k.kind)).map((k) => k.label);
   return {
     open: true, mode: form.mode, saving: !!form.saving, error: form.error || null, focus: form.focus || null,
     title: form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',
@@ -1270,11 +1316,12 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     values: { ...v },
     kinds: offered.map((k) => ({ ...k, selected: k.kind === v.kind })),
     kind: offered.find((k) => k.kind === v.kind) || offered[0],
+    sourcesNote: switchedOff.length ? `Switched off in Settings → Repository sources: ${switchedOff.join(', ')}.` : null,
     browse: browseModel(form, v, folders, canWrite),
     upload: uploadModel(form, v, { uploads, canWrite, now }),
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
-    problems: formProblems(v),
+    problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged }),
     canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
   };
 }
@@ -1442,7 +1489,7 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
   if (form.uploaded) {
     const k = form.uploaded;
     const ago = k.uploadedAt ? agoText(k.uploadedAt, now) : '';
-    return { ...base, ...failed, state: u.error ? 'failed' : 'kept', text: `${k.name} · uploaded${ago ? ` ${ago}` : ''}${k.files !== null ? ` · ${k.files} file${k.files === 1 ? '' : 's'}` : ''}. Choose again to replace it.` };
+    return { ...base, ...failed, state: u.error ? 'failed' : 'kept', text: `${k.name} · uploaded${ago ? ` ${ago}` : ''}${k.files !== null ? ` · ${k.files} file${k.files === 1 ? '' : 's'}` : ''}.${base.offered ? ' Choose again to replace it.' : ''}` };
   }
   return { ...base, ...failed, state: u.error ? 'failed' : 'empty', text: 'Choose the folder, or a .zip of it, from your machine.' };
 }

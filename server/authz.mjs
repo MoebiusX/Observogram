@@ -299,10 +299,11 @@ const NO_SIGN_IN_WAY_AUTH_OFF = `this server has no sign-in (OBSERVOGRAM_AUTH=of
 export const noSignInWay = (ctx) => (ctx.authOff ? NO_SIGN_IN_WAY_AUTH_OFF : NO_SIGN_IN_WAY);
 // The csrf: 'always' refusal, by what the entry is closed as: 'identity
 // changes' for the identity API (and the self route that changes a
-// session), 'changes to the MCP endpoint API' for those rows, 'requests to
-// the live MCP API' for the live MCP API (a ping changes nothing) and
-// 'requests to the MCP server-settings API' (a describe changes nothing; a
-// submit changes the MCP server, not the studio).
+// session), 'changes to the MCP endpoint API' for those rows (and 'changes
+// to the repository sources API' for its switch), 'requests to the live MCP
+// API' for the live MCP API (a ping changes nothing) and 'requests to the
+// MCP server-settings API' (a describe changes nothing; a submit changes the
+// MCP server, not the studio).
 export function csrfAlwaysText(entry) {
   const what = entry.closedAs === 'the identity API' ? 'identity changes'
     : entry.closedAs === 'the live MCP API' || entry.closedAs === 'the MCP server-settings API' ? `requests to ${entry.closedAs}` : `changes to ${entry.closedAs}`;
@@ -327,8 +328,8 @@ export function authzDecision(entry, ctx) {
     return deny(403, 'posture', why);
   }
   // 2. Without sign-in, a `direct` entry (the identity API, the MCP endpoint
-  //    changes, the audit reader, the live MCP API) answers a person at this
-  //    machine only.
+  //    changes, the audit reader, the live MCP API, the repository sources'
+  //    switch) answers a person at this machine only.
   //    The CLI way out is the identity API's, the audit's reader
   //    (`packc store audit`, tools/store-admin.mjs), or for the live MCP API
   //    the fetcher itself, which needs no server: no CLI manages endpoints.
