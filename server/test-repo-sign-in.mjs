@@ -89,14 +89,14 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 // sign-in page, on which Node's fetch throws "fetch failed" under redirect: 'error'. Both name
 // the tenant the organization signs in through.
 function adoRefusal(headers, init) {
-  const www = `Bearer authorization_uri=https://login.microsoftonline.com/${host.adoOrgTenant.toUpperCase()}, Basic realm="https://tfsprodweu5.app.visualstudio.com/"`;
+  const www = `Bearer authorization_uri=https://login.microsoftonline.com/${host.adoOrgTenant.toUpperCase()}, Basic realm="https://tfsprod-example.app.visualstudio.com/"`;
   if (headers.get('x-tfs-fedauthredirect') === 'Suppress') {
     return new Response(JSON.stringify({ message: "TF400813: The user '' is not authorized to access this resource." }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'www-authenticate': www } });
   }
   if (init.redirect === 'error') throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
   return new Response('<html>Azure DevOps sign-in</html>', {
     status: 302,
-    headers: { 'content-type': 'text/html; charset=utf-8', location: 'https://spsprodweu5.vssps.visualstudio.com/_signin?realm=dev.azure.com&reply_to=https%3A%2F%2Fdev.azure.com%2Fcontoso', 'www-authenticate': www },
+    headers: { 'content-type': 'text/html; charset=utf-8', location: 'https://spsprod-example.vssps.visualstudio.com/_signin?realm=dev.azure.com&reply_to=https%3A%2F%2Fdev.azure.com%2Fcontoso', 'www-authenticate': www },
   });
 }
 

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.8.17 — 2026-11-09
+
+**Follow-ups from the review of 0.8.11–0.8.13: the reader sentences for three edge paths, the live suite's quota skip and masking, and the records.** None of it changes what a Run answers on the paths the earlier releases described; each item is one of the low findings the 2026-11-09 adversarial review of #227, #228 and #229 left open, and this change was reviewed the same way before it was cut.
+
+### Fixed
+- **A redirect to the request's own host** (`server/ado-crawl.mjs` `adoFetch`). A 3xx whose Location is on the same origin and carries no challenge — a sign-in page or a proxy in front of the repository, or a Server that ignores `X-TFS-FedAuthRedirect` — read as a host move, with advice nobody could follow (*give the repository's address on the host that serves it*). It now reads *Azure DevOps <status>: <origin> redirects this read to <path> on the same host, which the server does not follow — a sign-in page or a proxy in front of the repository answers instead of it*: the path only, never the query, which may carry a reply address; the same host whatever the scheme or port. A Location the server cannot name — none, one it cannot parse, an opaque origin such as `data:` — reads *another address*, never *null*. The Run still answers 502 and asks for no token; a redirect to another host keeps its sentence.
+- **An answer the server could not read to the end** (`server/fetch-failure.mjs` `unreachable`, and the readers' body reads). `unreachable` wrapped the fetch only; `res.json()` and `res.text()` sat outside it, so the Run said *502 the repository could not be read: terminated* — undici's one word for three things. The body reads now throw through `unreachable`, which tells them apart by the cause's code: *<host>: the connection to <origin> was dropped while the answer was read (<code>)* for `UND_ERR_SOCKET`, `ECONNRESET`, `EPIPE` or no code at all; *<origin> answered, but its answer did not finish in time (UND_ERR_BODY_TIMEOUT)* for undici's own body timeout; *the answer from <origin> could not be read to the end — <what undici said> (<code>)* for any other code (a decoder's `Z_DATA_ERROR` on a body that is not the encoding it claims, the parser's `HPE_*` on a frame it cannot read). A body that stalls past the readers' 60 s deadline used to read *did not answer within 60 s* although the status was in hand; it reads *<origin> answered, but its answer did not finish within 60 s* (`unreachable`'s `answered` option, which the body-read call sites set). Each names the proxy when the request went through one; still 502, no token asked. `adoFetch`'s JSON read and `fetchGithubFiles`'s repository and tree reads throw these; a GitHub file cut short is that file's skipped reason with the same words, never fatal. A body that is not JSON stays the SyntaxError it was.
+- **TLS wording.** The catch-all *the TLS handshake failed (is it https on that port?)* was wrong for a server that shares no protocol or cipher; it is now *the TLS handshake failed* with the code beside it. Nineteen X509 verify codes (`UNABLE_TO_GET_CRL`, `INVALID_CA`, `CERT_REVOKED`, …) read *its certificate did not verify on the server*; before, the ones without a `CERT_` prefix read a bare *fetch failed* and the others the handshake sentence. The untrusted-issuer, expired and wrong-name sentences are unchanged.
+
+### Changed
+- **The live repository suite** (`tools/test-live-repos.mjs`, not in `npm test`):
+  - **GitHub's quota skips on GitHub's sentence**, a 403 or a 429 (*API rate limit exceeded*), at the public read and at the two Runs without a token. The Run route answers a 429 as 502, so the status it hands back missed the quota and the check failed with *is it private?* instead of skipping.
+  - **A throttled public read says what was skipped**: *files read: 0 of N — skipped: <path>: <why>; …*, the first three. It fails rather than skips, so the weekly run shows the burst.
+  - **The server's and the hosts' sentences it compares are masked before the compare.** A failed `assert.equal` prints its actual raw, from node's reporter in the parent process, where the suite's masking of its own messages does not reach; those actuals now go through `masked()` first, and the two direct reads with a real token fail through `masked()` too. The suite's header, `docs/LIVE_REPO_TESTS.md` and the 0.8.13 entry below now say *every message the suite writes is masked* rather than *every text it shows*.
+  - `docs/LIVE_REPO_TESTS.md`: the *is it private?* row quotes the Azure DevOps sentence too; the quota row says how the skip is decided; a row for the all-throttled read.
+- **Records.**
+  - `README.md` "Whose access reads a repository": the answer's `signIn: false` for an Azure DevOps Server repository (the Azure DevOps sign-in reads Azure DevOps Services only), and the *, or AZURE_DEVOPS_TOKEN set on this server for every Run* tail on a server without sign-in — Azure DevOps only; a GitHub sentence never names `GITHUB_TOKEN`.
+  - `vendor/observability-pack-spec/README.md`: the `--ref` example names the pinned commit (5be3baa7, not the 1.4 one); the pin is upstream `develop`, not an RFC branch; the refresh checklist names everything that follows `upstream.commit` — the three studio hrefs (`tools/test-validator.mjs` names the ones left behind), `tools/lib/brand.mjs`'s spec link (`tools/test-brand.mjs`), the three audit-report goldens that carry it (`npm run test:golden:audit-report:update`) and the conformance-view capture (byte for byte in `tools/test-waivers.mjs`, no update flag).
+  - `tools/test-validator.mjs`'s link message says *develop 1.5*, not 1.3.
+  - This CHANGELOG, three lines: 0.8.11's link bullet names which test holds which href (`test-validator` the three studio files, `test-brand` the brand's); 0.8.12's `rawFetch` line says a raw redirect used to read *fetch failed* for that file, not *unreachable*; 0.8.13's masking sentence is narrowed as above.
+  - Test fixtures (`server/test-service-run.mjs`, `server/test-repo-sign-in.mjs`): two Azure DevOps scale-unit hostnames, copied from a live probe, replaced by made-up labels of the same shape. Nothing read them.
+  - `tools/test-platform.mjs` pins the third `.pathname` in `server/ado-crawl.mjs` (the same-host redirect's path, a URL path).
+
+### Tests
+- `server/test-service-run.mjs` +1: the Run's tail sentences pinned literally (`REPO_AUTH_WAYS` for Azure DevOps and GitHub, and `repoAuthTail`'s choice among them). The existing cases grow: the redirect to the same host for every token source, with and without a query, over http and on another port, and an opaque Location; the three *terminated* sentences in the table, through `adoFetch`, through `fetchGithubFiles`'s tree and per file, and through a proxy; the stalled body with and without `answered`; the SyntaxError left as it is; the TLS rows.
+- Cut as 0.8.17: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1791 → 1792.
+
 ## 0.8.16 — 2026-11-09
 
 **Settings → Repository sources: each organisation switches the sources its services may use.** There is one switch per source the service form offers: GitHub, Azure DevOps, Folder and Upload. Every member reads them, an admin switches them, and every source is on until one is switched off.
@@ -142,7 +170,7 @@
 ### Added
 - **`npm run test:live:repos`** (`tools/test-live-repos.mjs`, a `node --test` suite, not part of `npm test`).
   - **Setup.** It runs the studio in process with sign-in on. The test user is made by `npm run users -- add` with a password made for the run, and a fake MCP stands in as the live side. The real hosts sit behind `fetchRepositoryFiles` and `POST /api/services/:id/run`.
-  - **No token is printed.** Every request the readers send is recorded by host and by which token it carried, as a label. Every text the suite shows is masked: each token, and an Azure DevOps token's Basic form, which gives the token back.
+  - **No token is printed.** Every request the readers send is recorded by host and by which token it carried, as a label. Every message the suite writes is masked: each token, and an Azure DevOps token's Basic form, which gives the token back.
 
   The checks:
   - **the fixture:** a folder Run of `tools/fixtures/live-repo` reads three files, one of each kind, into a valid pack. That is what each host must return. It needs no network.
@@ -194,7 +222,7 @@
   - anything else: *fetch failed — <code>*.
 
   The Run still answers 502, and the original error is kept as `cause`.
-- **`rawFetch`** reads a redirect from raw.githubusercontent.com and names it (*the repository may have moved*), instead of calling the host unreachable.
+- **`rawFetch`** reads a redirect from raw.githubusercontent.com and names it (*the repository may have moved*), instead of throwing *fetch failed* for that file.
 - **`parseRepoAuth`** takes printable ASCII only. A control character made fetch refuse to build the request, which read as an unreachable host. Now it is refused with the shape sentence before anything is sent.
 
 ### Tests
@@ -218,7 +246,7 @@
 
 ### Changed
 - **`vendor/observability-pack-spec/VERSIONS.json`** records ref `develop` and commit `5be3baa7b3c354d84aabe60aaac23f9be5f8b702`. All four files are byte-identical to the ones vendored from `adea3bf3` (same sha256 and byte counts), so `v1.5/` does not move; only the upstream block and `fetchedAt` do.
-- **The links into the upstream repository** follow `upstream.commit`, as `tools/test-validator.mjs` requires: the footer (`studio/index.html`), the Schema view's schema and spec links (`studio/schema-view.mjs`), the Conformance view's rubric link (`studio/conformance-view.mjs`) and the brand's spec link (`tools/lib/brand.mjs`, exports unchanged).
+- **The links into the upstream repository** follow `upstream.commit`: the footer (`studio/index.html`), the Schema view's schema and spec links (`studio/schema-view.mjs`) and the Conformance view's rubric link (`studio/conformance-view.mjs`) — the three studio files `tools/test-validator.mjs` pins — and the brand's spec link (`tools/lib/brand.mjs`, exports unchanged), which `tools/test-brand.mjs` holds: brand.mjs builds the footer anchor from it, and the test asserts that anchor is in `studio/index.html` exactly once.
 - **Goldens.** The three audit-report goldens (`npm run test:golden:audit-report:update`) and the conformance-view capture change in that one href each, and nowhere else.
 - **Docs.** `docs/CHAOS_EXPERIMENTS.md` says spec 1.5 is vendored from upstream `develop`.
 - Cut as 0.8.11: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.

@@ -272,6 +272,6 @@ test('every studio link into the upstream spec repo opens the vendored commit, n
       for (const m of line.matchAll(link)) { seen.push(rel); if (m[1] !== upstream.commit) offenders.push(`${rel}:${i + 1}: blob/${m[1]}`); }
     });
   }
-  assert.deepEqual(offenders, [], `a studio link into ${upstream.repo} opens blob/${upstream.commit} (VERSIONS.json upstream.commit; upstream main serves 1.2, develop 1.3)`);
+  assert.deepEqual(offenders, [], `a studio link into ${upstream.repo} opens blob/${upstream.commit} (VERSIONS.json upstream.commit; upstream main serves 1.2, develop 1.5)`);
   assert.deepEqual([...new Set(seen)].sort(), ['studio/conformance-view.mjs', 'studio/index.html', 'studio/schema-view.mjs'], 'the footer, the Schema view and the Conformance view link upstream');
 });

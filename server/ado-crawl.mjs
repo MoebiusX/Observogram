@@ -132,8 +132,12 @@ export function isSignInRedirect(location, base, wwwAuthenticate = null) {
 // (https://<x>.vssps.visualstudio.com/_signin), and an older host may answer
 // 203 with a sign-in page: all of these read as the token. A redirect is read,
 // never followed, so the token goes to the repository's host and nowhere
-// else; a redirect anywhere else is named as one. A host the server cannot
-// reach says why (server/fetch-failure.mjs).
+// else; a redirect anywhere else is named as one — to another host (give the
+// address that host serves), or to a page on the request's own host (a
+// sign-in page or a proxy in front of the repository answers instead of it:
+// nothing to re-address, and no token asked for). A host the server cannot
+// reach, or whose answer cannot be read to the end, says why
+// (server/fetch-failure.mjs).
 //
 // The sentence is the fact, for whoever can fix it; the Run's tail
 // (server/repo-auth.mjs repoAuthTail) says what the person can do here:
@@ -160,10 +164,24 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
   const www = res.headers.get('www-authenticate');
   const redirected = res.status >= 300 && res.status < 400;
   if (redirected && !isSignInRedirect(res.headers.get('location'), url, www)) {
-    let to = 'another address';
+    const requested = new URL(url);
+    const origin = requested.origin;
+    let target = null;
     const location = res.headers.get('location');
-    if (location) { try { to = new URL(location, url).origin; } catch { /* no usable Location */ } }
-    throw new Error(`Azure DevOps ${res.status}: ${new URL(url).origin} redirects this read to ${to}, which the server does not follow — give the repository's address on the host that serves it`);
+    if (location) { try { target = new URL(location, url); } catch { /* no usable Location */ } }
+    // The same host, whatever the scheme or port (http: on an https host, a
+    // sign-in port beside the repository's): a sign-in page (a Server that
+    // ignores the suppress header, a sign-in proxy) or a proxy answers for
+    // the repository, so there is no other address to give — and an http:
+    // one could not be given anyway, adoHostRefusal taking https only. The
+    // pathname only: the query may carry a reply address. No Location, or
+    // one with no host in it (an opaque origin, which the URL reads as
+    // "null"): another address, unnamed.
+    const named = target && target.origin !== 'null';
+    if (named && target.hostname === requested.hostname) {
+      throw new Error(`Azure DevOps ${res.status}: ${origin} redirects this read to ${target.pathname} on the same host, which the server does not follow — a sign-in page or a proxy in front of the repository answers instead of it`);
+    }
+    throw new Error(`Azure DevOps ${res.status}: ${origin} redirects this read to ${named ? target.origin : 'another address'}, which the server does not follow — give the repository's address on the host that serves it`);
   }
   if (res.status === 203 || res.status === 401 || redirected || (res.ok && !ct.includes('json'))) {
     const tenants = tokenSource === 'link' ? tenantMismatch(www, token) : null;
@@ -183,7 +201,11 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  // The body: the status was read, so an answer that does not finish or
+  // cannot be read to the end is said as that, not as the host not reached
+  // (unreachable leaves a body that is not JSON as the SyntaxError it was).
+  try { return await res.json(); }
+  catch (e) { throw unreachable('Azure DevOps', url, e, { answered: true }); }
 }
 
 const itemsUrl = (repo, params) => {

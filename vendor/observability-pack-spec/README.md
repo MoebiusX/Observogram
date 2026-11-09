@@ -30,7 +30,7 @@ derived from that constant.
 node tools/sync-spec.mjs
 
 # Sync to a specific branch, tag or commit
-node tools/sync-spec.mjs --ref e64e5813
+node tools/sync-spec.mjs --ref 5be3baa7
 
 # Verify on-disk files match VERSIONS.json (CI-friendly)
 node tools/sync-spec.mjs --check
@@ -42,6 +42,17 @@ the commit that moves `SPEC_VERSION` (git history keeps it). The sync script use
 authentication and rate-limit headroom; no npm deps.
 
 The studio links into the upstream repository at the vendored commit (`upstream.commit`), never at a branch:
-upstream `main` still serves 1.2 while `develop` and the RFC branches carry the later versions, so a link labelled with the
-version must open the file the label names. After a refresh, move the hrefs in `studio/index.html` (footer), `studio/schema-view.mjs`
-and `studio/conformance-view.mjs` to the new commit; `tools/test-validator.mjs` names the ones left behind.
+upstream `main` still serves 1.2 while `develop` carries 1.5 (commit 5be3baa7, the RFC-0004 merge), so a link labelled
+with the version must open the file the label names. After a refresh, everything that carries the old commit follows
+`upstream.commit`:
+
+- the studio hrefs in `studio/index.html` (footer), `studio/schema-view.mjs` (schema and spec links) and
+  `studio/conformance-view.mjs` (`RUBRIC_URL`) — `tools/test-validator.mjs` names the ones left behind;
+- `SPEC_LINK.href` in `tools/lib/brand.mjs` — brand.mjs builds the footer anchor (`SHELL_ANCHORS.footerLinks`) from it, and
+  `tools/test-brand.mjs` asserts that anchor is in `studio/index.html` exactly once, so a stale href fails `anchor footerLinks
+  once in studio/index.html` and every branded shell render throws `shell anchor missing or repeated (footer links)`;
+- the three audit-report HTML goldens in `tools/fixtures/golden/audit-report/` that carry the spec link —
+  `npm run test:golden:audit-report:update`, then check the diff moves one href each and nothing else;
+- the conformance-view capture `tools/fixtures/golden/conformance-view/payment-service.bare.html`, which
+  `tools/test-waivers.mjs` compares byte for byte and has no update flag — recapture it as that test's header describes
+  (the view rendered headless over the document stub) or move its one href by hand.

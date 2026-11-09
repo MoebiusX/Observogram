@@ -1219,7 +1219,15 @@ read as the person who runs it (`server/repo-auth.mjs`):
   (or that the one sent was refused). Where the host offers sign-in it adds
   `signIn: true` and says to sign in first; when the person's sign-in was the
   one refused it adds `via: 'sign-in'` and the `account` (and `expired: true`
-  when GitHub no longer takes it, which also drops it from the browser).
+  when GitHub no longer takes it, which also drops it from the browser). An
+  Azure DevOps Server repository (an origin listed in
+  `OBSERVOGRAM_ADO_ORIGINS`) answers `signIn: false` instead, whatever the
+  server offers: the Azure DevOps sign-in reads Azure DevOps Services only, so
+  the token is the one way, and the row offers no sign-in. On a server
+  without sign-in, an Azure DevOps sentence that asks for a token ends with
+  ", or `AZURE_DEVOPS_TOKEN` set on this server for every Run" — the
+  operator's way, named for Azure DevOps only; a GitHub sentence never names
+  `GITHUB_TOKEN`.
 
 A schedule and **Check now** never read the repository: they check live
 against the last scan a person's Run made, so a scheduled check needs no one's
@@ -1480,8 +1488,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.16 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.16
+docker build -t observogram:0.8.17 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.17
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1544,7 +1552,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.16
+  observogram:0.8.17
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1552,7 +1560,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.16
+    image: observogram:0.8.17
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
