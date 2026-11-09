@@ -54,8 +54,8 @@ const REPO = join(ROOT, 'tools', 'fixtures', 'crawl', 'operational-alerts');
 
 const { parseRepository, folderRefusal, repositoryRoots, WAYS } = await import('./service-admin.mjs');
 const { parseAdoUrl, adoHostRefusal, adoFetch, listedAdoOrigins, tenantMismatch } = await import('./ado-crawl.mjs');
-const { fetchGithubFiles, ghFetch, rawFetch } = await import('./github-crawl.mjs');
-const { unreachable } = await import('./fetch-failure.mjs');
+const { fetchGithubFiles, ghFetch, rawFetch, downloadFiles, outOfTime, planCrawlerFetch, HOST_READ_CAPS, HOST_READ_PARALLEL, HOST_READ_FILES_BUDGET_MS } = await import('./github-crawl.mjs');
+const { unreachable, readSignal } = await import('./fetch-failure.mjs');
 const { fetchRepositoryFiles } = await import('./repo-sources.mjs');
 
 const LOCAL = { posture: 'open-loopback', direct: true };
@@ -309,6 +309,11 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
   assert.equal(unreachable('GitHub', 'https://api.github.com', original).cause, original, 'the original kept as the cause');
   const other = new Error('Azure DevOps 404: no such repository');
   assert.equal(unreachable('Azure DevOps', 'https://dev.azure.com', other), other, 'not fetch\'s network failure: untouched');
+  // A read's budget running out (github-crawl.mjs downloadFiles aborts the read's files with it): a
+  // ReadBudgetError, neither fetch's failure nor a TimeoutError, so its sentence passes through.
+  const budgetOut = outOfTime(HOST_READ_FILES_BUDGET_MS);
+  assert.equal(unreachable('GitHub', 'https://raw.githubusercontent.com/acme/shop/main/a.yml', budgetOut), budgetOut, 'the budget\'s error: untouched');
+  assert.equal(unreachable('Azure DevOps', 'https://dev.azure.com', budgetOut, { answered: true }), budgetOut, 'at a body-read call site too');
   assert.ok(unreachable('x', 'not a url', failed(withCode('ENOTFOUND'))).message.startsWith('x: not a url could not be reached'));
 
   // Through the readers: the token never in the sentence, no status, so the Run answers 502.
@@ -407,6 +412,183 @@ test('fetchRepositoryFiles: an Azure DevOps tree, the crawler\'s files downloade
   assert.ok(Object.keys(folder.files).length > 0 && folder.source === `the folder ${REPO}`);
   await assert.rejects(fetchRepositoryFiles({ kind: 'path', location: join(EMPTY_REPO, 'gone') }), (e) => e.status === 404 && /no folder .* on the server/.test(e.message));
   await assert.rejects(fetchRepositoryFiles({ kind: 'svn', location: 'x' }), (e) => e.status === 400);
+});
+
+// ---------- the read's bound: 8 files at a time, one budget ----------
+
+// Twenty blobs the crawler reads, listed out of path order: one tier, so the
+// plan takes them in tree order, and the crawler gets them in path order.
+const TWENTY = Array.from({ length: 20 }, (_, i) => `alerts/${String(i).padStart(2, '0')}.rules.yaml`);
+const TWENTY_TREE = [...TWENTY].reverse().map((path) => ({ type: 'blob', path }));
+const answerJson = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+const ghTreeOf = (tree) => answerJson({ tree });
+const adoTreeOf = (tree) => answerJson({ value: [{ path: '/', gitObjectType: 'tree' }, ...tree.map((n) => ({ path: `/${n.path}`, gitObjectType: 'blob' }))] });
+const isAdoTreeCall = (url) => new URL(url).searchParams.get('recursionLevel') === 'Full';
+// The file a GitHub contents call or an Azure DevOps items call is for.
+const contentsPathOf = (apiPath) => decodeURIComponent(/^\/repos\/acme\/shop\/contents\/(.+)\?ref=main$/.exec(apiPath)[1]);
+const itemsPathOf = (url) => new URL(url).searchParams.get('path').replace(/^\//, '');
+// A host that never answers: settles only when its signal aborts, with the signal's reason.
+const untilAborted = (signal) => new Promise((_, reject) => {
+  if (signal.aborted) return reject(signal.reason);
+  signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+});
+const ADO_REPO = { kind: 'ado', location: 'https://dev.azure.com/acme/Shop/_git/checkout', ref: null };
+const GH_REPO = { owner: 'acme', repo: 'shop', ref: 'main' };
+
+test('a host read fetches at most 8 files at once — a pool, the next file taken as a slot frees, never a batch waiting on its slowest — and every file reaches the crawler in path order; each download carries the read\'s signal, which the fetchers combine with their own deadline', async () => {
+  assert.equal(HOST_READ_PARALLEL, 8);
+  assert.equal(HOST_READ_FILES_BUDGET_MS, 120_000);
+  const order = planCrawlerFetch(TWENTY_TREE, HOST_READ_CAPS).selected.map((n) => n.path);
+  assert.equal(order.length, 20);
+  // A gauge over the downloads: how many are in flight, the peak, the order they started in, their
+  // signals. The plan's first file is held until the test releases it; the others answer a tick later.
+  const gauge = () => {
+    const g = { inFlight: 0, peak: 0, started: [], signals: [], held: order[0] };
+    g.released = new Promise((r) => { g.release = r; });
+    g.take = async (path, signal) => {
+      g.started.push(path); g.signals.push(signal);
+      g.inFlight++; g.peak = Math.max(g.peak, g.inFlight);
+      if (path === g.held) await g.released; else await new Promise((r) => setTimeout(r, 0));
+      g.inFlight--;
+    };
+    // Until every download has started and the held one is the only one left in flight.
+    g.drained = async () => { for (let i = 0; i < 500 && !(g.started.length === 20 && g.inFlight === 1); i++) await new Promise((r) => setTimeout(r, 1)); };
+    return g;
+  };
+  const check = async (label, g, read) => {
+    await g.drained();
+    assert.deepEqual([g.started.length, g.inFlight], [20, 1], `${label}: every download started while one was still held — a pool, not batches`);
+    g.release();
+    const out = await read;
+    assert.equal(g.peak, 8, `${label}: 8 at once, never more`);
+    assert.deepEqual(g.started, order, `${label}: taken in the plan's order`);
+    assert.deepEqual(Object.keys(out.files), TWENTY, `${label}: every file, in path order`);
+    assert.deepEqual([out.candidates, out.capped, out.skipped], [20, 0, []], label);
+    assert.ok(g.signals.length === 20 && g.signals.every((s) => s instanceof AbortSignal && !s.aborted), `${label}: each download carries the read's signal, not aborted`);
+  };
+  // GitHub from raw: rawFn's fifth argument is { signal }.
+  const raw = gauge();
+  await check('raw', raw, fetchGithubFiles(GH_REPO, {
+    fetchFn: async () => ghTreeOf(TWENTY_TREE),
+    rawFn: async (_o, _r, _ref, path, { signal }) => { await raw.take(path, signal); return new Response(`# ${path}`); },
+  }));
+  // GitHub through the contents API: init.signal.
+  const api = gauge();
+  await check('api', api, fetchGithubFiles(GH_REPO, {
+    rawFn: null,
+    fetchFn: async (path, init) => {
+      if (path.includes('/git/trees/')) return ghTreeOf(TWENTY_TREE);
+      const file = contentsPathOf(path);
+      await api.take(file, init.signal);
+      return new Response(`# ${file}`);
+    },
+  }));
+  // Azure DevOps through fetchRepositoryFiles: adoFetch's init.signal, the tree call apart.
+  const ado = gauge();
+  await check('ado', ado, fetchRepositoryFiles(ADO_REPO, {
+    fetchImpl: async (url, init) => {
+      if (isAdoTreeCall(url)) return adoTreeOf(TWENTY_TREE);
+      const file = itemsPathOf(url);
+      await ado.take(file, init.signal);
+      return answerJson({ content: `# ${file}` });
+    },
+  }));
+  // The fetchers combine the caller's signal with their own deadline: the signal fetch gets is a
+  // third one, not yet aborted, and aborting the caller's aborts it with the caller's reason.
+  const combined = async (label, call) => {
+    const budget = new AbortController();
+    const seen = await call(budget.signal);
+    assert.ok(seen instanceof AbortSignal && seen !== budget.signal && !seen.aborted, `${label}: a signal of its own, not yet aborted`);
+    const reason = outOfTime(1000);
+    budget.abort(reason);
+    assert.ok(seen.aborted && seen.reason === reason, `${label}: aborting the budget aborts it, with the budget's reason`);
+  };
+  await combined('adoFetch', async (signal) => {
+    let seen;
+    await adoFetch('https://dev.azure.com/acme/Shop/_apis/git/repositories/c/items', { fetchImpl: async (_u, init) => { seen = init.signal; return answerJson({ value: [] }); }, signal });
+    return seen;
+  });
+  const realFetch = globalThis.fetch;
+  try {
+    let seen;
+    globalThis.fetch = async (_u, init) => { seen = init.signal; return new Response('{}', { status: 200 }); };
+    await combined('ghFetch', async (signal) => { await ghFetch('/repos/acme/shop', { signal }); return seen; });
+    await combined('rawFetch', async (signal) => { await rawFetch('acme', 'shop', 'main', 'alerts/a.yml', { signal }); return seen; });
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('the read\'s files share one budget: when it runs out, every file not read — in flight or not yet started — is skipped with the sentence, never fatal, and the read ends then, GitHub from raw, through the API and through ghFetch itself, and Azure DevOps alike; the files that answered before it are read; the repository and tree calls run outside the budget, under a deadline of their own; without a budget each fetch still carries a deadline signal of its own — not the caller\'s, not yet aborted', async (t) => {
+  const limits = { budgetMs: 1000 };
+  const WHY = 'it could not be downloaded (the read\'s 1 s for its files ran out)';
+  const allSkipped = TWENTY.map((path) => ({ path, why: WHY }));
+  const timed = async (read) => { const t0 = Date.now(); const out = await read; return { out, ms: Date.now() - t0 }; };
+  // The ceiling is far under the 60 s deadline and far over the 1 s budget: a slow CI box still
+  // passes, and the diagnostic says how close it came.
+  const ended = (label, { out, ms }, files, skipped) => {
+    t.diagnostic(`${label}: the read ended in ${ms} ms (budget 1000, ceiling 5000)`);
+    assert.ok(ms < 5000, `${label}: the read ended with the budget, not at a 60 s deadline (${ms} ms)`);
+    assert.deepEqual([out.files, out.skipped, out.candidates, out.capped], [files, skipped, 20, 0], label);
+  };
+  // The calls a GitHub read makes before its files — the repository, when the ref is not known,
+  // and the tree — answered at once; null for a file call. `GH_NO_REF` makes a read ask for both.
+  const GH_NO_REF = { ...GH_REPO, ref: null };
+  const ghBefore = (path) => (path.endsWith('/repos/acme/shop') ? answerJson({ default_branch: 'main' }) : path.includes('/git/trees/') ? ghTreeOf(TWENTY_TREE) : null);
+  // What the calls before the files reach their seam with: through fetchFn the call alone (no
+  // init, so nothing of the read's budget), through fetch and fetchImpl the signal the fetcher made.
+  const seamInits = [];
+  const ghSignals = [];
+  const adoSignals = [];
+  // Every file stalls until the budget aborts it.
+  const stalledRaw = fetchGithubFiles(GH_REPO, { fetchFn: async (path, init) => { seamInits.push(init); return ghBefore(path); }, rawFn: (_o, _r, _ref, _p, { signal }) => untilAborted(signal), limits });
+  const stalledApi = fetchGithubFiles(GH_NO_REF, { rawFn: null, fetchFn: (path, init) => { const before = ghBefore(path); if (before) { seamInits.push(init); return before; } return untilAborted(init.signal); }, limits });
+  const stalledAdo = fetchRepositoryFiles(ADO_REPO, { fetchImpl: (url, init) => { if (isAdoTreeCall(url)) { adoSignals.push(init.signal); return adoTreeOf(TWENTY_TREE); } return untilAborted(init.signal); }, limits });
+  // The plan's first two answer at once, the rest stall: the two are read, the rest carry the sentence.
+  const fast = new Set(planCrawlerFetch(TWENTY_TREE, HOST_READ_CAPS).selected.slice(0, 2).map((n) => n.path));
+  const mixed = fetchGithubFiles(GH_REPO, {
+    fetchFn: async () => ghTreeOf(TWENTY_TREE),
+    rawFn: (_o, _r, _ref, path, { signal }) => (fast.has(path) ? new Response(`# ${path}`) : untilAborted(signal)), limits,
+  });
+  // downloadFiles itself, one slot: the first file stalls, so the two behind it are never asked for.
+  const calls = [];
+  const direct = downloadFiles([{ path: 'a' }, { path: 'b' }, { path: 'c' }], (node, signal) => { calls.push(node.path); return untilAborted(signal); }, { parallel: 1, budgetMs: 1000 });
+  // GitHub through ghFetch itself over a stubbed fetch, so the signal each call runs under is seen
+  // where the host would see it; the budget's sentence passes through unreachable() unchanged.
+  const realFetch = globalThis.fetch;
+  let raw, api, ado, mix, texts, gh;
+  try {
+    globalThis.fetch = async (url, init) => { const before = ghBefore(url); if (before) { ghSignals.push(init.signal); return before; } return untilAborted(init.signal); };
+    const stalledGh = fetchGithubFiles(GH_NO_REF, { rawFn: null, limits });
+    [raw, api, ado, mix, texts, gh] = await Promise.all([timed(stalledRaw), timed(stalledApi), timed(stalledAdo), timed(mixed), direct, timed(stalledGh)]);
+  } finally { globalThis.fetch = realFetch; }
+  ended('raw', raw, {}, allSkipped);
+  ended('api', api, {}, allSkipped);
+  ended('ado', ado, {}, allSkipped);
+  ended('gh', gh, {}, allSkipped);
+  ended('mixed', mix, Object.fromEntries([...fast].sort().map((p) => [p, `# ${p}`])), allSkipped.filter((s) => !fast.has(s.path)));
+  assert.deepEqual(calls, ['a'], 'b and c were reached after the budget was up: stored without a call');
+  assert.deepEqual([...texts], ['a', 'b', 'c'].map((path) => [path, { error: 'the read\'s 1 s for its files ran out' }]));
+  // The reads have ended, their budgets spent: a signal under a budget would be aborted by now. The
+  // calls before the files are not under one — through fetchFn they carried no init at all, so
+  // nothing of the read's budget; through fetch and fetchImpl the fetcher's own deadline, still running.
+  assert.deepEqual(seamInits, [undefined, undefined, undefined], 'GitHub through fetchFn: the tree call (raw) and the repository and tree calls (api) carry no init — nothing of the read\'s budget is handed to them');
+  assert.ok(ghSignals.length === 2 && ghSignals.every((s) => s instanceof AbortSignal && !s.aborted), 'GitHub through ghFetch: the repository and tree calls\' signals are AbortSignals of their own, not aborted after the budget ran out — a deadline, not the budget');
+  assert.ok(adoSignals.length === 1 && adoSignals[0] instanceof AbortSignal && !adoSignals[0].aborted, 'Azure DevOps: the tree call\'s signal is an AbortSignal of its own, not aborted after the budget ran out — a deadline, not the budget');
+  const budgetOut = outOfTime(HOST_READ_FILES_BUDGET_MS);
+  assert.deepEqual([budgetOut.name, budgetOut.message], ['ReadBudgetError', 'the read\'s 120 s for its files ran out']);
+  // No budget: each fetch still gets a deadline signal of its own (readSignal's AbortSignal.timeout;
+  // its 60 s delay is nothing a test can see), not the caller's and not yet aborted.
+  const deadline = readSignal();
+  assert.ok(deadline instanceof AbortSignal && !deadline.aborted, 'readSignal() alone: a deadline signal of its own, not yet aborted');
+  let adoSignal;
+  await adoFetch('https://dev.azure.com/acme/Shop/_apis/git/repositories/c/items', { fetchImpl: async (_u, init) => { adoSignal = init.signal; return answerJson({ value: [] }); } });
+  assert.ok(adoSignal instanceof AbortSignal && !adoSignal.aborted, 'adoFetch without a signal: a deadline signal of its own, not yet aborted');
+  try {
+    const seen = [];
+    globalThis.fetch = async (_u, init) => { seen.push(init.signal); return new Response('{}', { status: 200 }); };
+    await ghFetch('/repos/acme/shop');
+    await rawFetch('acme', 'shop', 'main', 'alerts/a.yml');
+    assert.ok(seen.length === 2 && seen.every((s) => s instanceof AbortSignal && !s.aborted), 'ghFetch and rawFetch without a signal: a deadline signal of their own, not yet aborted');
+  } finally { globalThis.fetch = realFetch; }
 });
 
 // The live suite's test repositories hold tools/fixtures/live-repo

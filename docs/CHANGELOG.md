@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.18 — 2026-11-09
+
+**A repository read fetches its files 8 at a time, under one budget.** A GitHub read fetched every selected file at once — up to 200 requests in one burst at raw.githubusercontent.com, each under its own 60 s deadline — and an Azure DevOps read took them in batches of 8 one after another, where a slow file idled the other seven slots and a stalling host cost one 60 s deadline per batch. Both now go through one pool with one clock.
+
+### Changed
+- **`downloadFiles` (`server/github-crawl.mjs`), the one download loop for both hosts.** A pool of `HOST_READ_PARALLEL` (8) workers, each taking the next file as its slot frees; every file under its own 60 s deadline (`READ_TIMEOUT_MS`) and all of them under one budget of `HOST_READ_FILES_BUDGET_MS` (120 s, twice the deadline: 25 rounds of 8 for a 200-file read, so a host that answers a file in under about 5 s fits, and a slower one — which every-file-at-once tolerated up to 60 s a file — loses the tail of the plan, each file named; the trade for never sending 200 requests at once). When the budget runs out, every file not read — in flight or not yet started — is skipped and named *it could not be downloaded (the read's 120 s for its files ran out)*, never fatal; the Run goes on with the files it has, and the board lists the rest under *Not read*. The repository and tree reads keep their own 60 s each, outside the budget. The files and their order are the same as before whenever nothing times out.
+- **The fetchers take the read's signal.** `rawFetch(owner, repo, ref, path, { signal })`, `adoFetch(url, { …, signal })` and `ghFetch`'s `init.signal` combine it with their own deadline (`readSignal` in `server/fetch-failure.mjs`, `AbortSignal.any`) instead of replacing it; the one caller passing a signal today, the GitHub sign-in's 15 s `/user` read, is unchanged by it. A read's budget running out (`outOfTime`, a `ReadBudgetError`) passes through `unreachable` as it is, so its sentence is the one a person reads.
+- **Worst cases.** A host that stalls the repository or tree read fails the Run at that read's 60 s, as before. A host that answers the tree and then stalls every file now costs 120 s for GitHub (60 s before, every file at once; the first 8 say *did not answer within 60 s*, the rest the budget sentence) and 120 s for Azure DevOps (25 × 60 s before); a host that answers slowly but steadily is cut at 120 s for the files, with the unread ones named.
+- `fetchGithubFiles` and `fetchRepositoryFiles` take `limits` (`{ parallel, budgetMs }`), a test seam; `server/repo-sources.mjs` loses its own `PARALLEL` loop.
+- **Docs.** `README.md` "A service's Run" says what bounds the read; `docs/LIVE_REPO_TESTS.md` rewords the all-429 row (the public read no longer bursts) and adds a row for a read whose budget ran out; the live suite's comments follow.
+
+### Tests
+- `server/test-service-run.mjs` +2: the pool (20 files, the first held until every other download has started — a batch loop would stall at 8 — peak exactly 8, every file in path order, the read's signal on every seam, for GitHub from raw, through the API and for Azure DevOps; the fetchers' signal distinct from the caller's and aborting with it), and the budget (seams that settle only when aborted: every file skipped with the exact sentence, the read ending within the budget — for GitHub from raw, through the API and through `ghFetch` itself over a stubbed fetch, and for Azure DevOps; the files that answered before it are read; the repository and tree calls outside the budget, under a deadline of their own; without a budget each fetch still carries a deadline signal of its own). `unreachable` leaves a `ReadBudgetError` untouched.
+- Cut as 0.8.18: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1792 → 1794.
+
 ## 0.8.17 — 2026-11-09
 
 **Follow-ups from the review of 0.8.11–0.8.13: the reader sentences for three edge paths, the live suite's quota skip and masking, and the records.** None of it changes what a Run answers on the paths the earlier releases described; each item is one of the low findings the 2026-11-09 adversarial review of #227, #228 and #229 left open, and this change was reviewed the same way before it was cut.

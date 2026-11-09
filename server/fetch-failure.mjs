@@ -100,6 +100,16 @@ const PROXY_NOT_REACHED = new Set([...NO_ROUTE, 'ECONNREFUSED']);
 // and the Run never answers.
 export const READ_TIMEOUT_MS = 60_000;
 
+// The signal a reader's fetch runs under: one deadline per fetch
+// (READ_TIMEOUT_MS), and the read's budget when the caller has one
+// (server/github-crawl.mjs downloadFiles) — whichever ends first aborts the
+// fetch, with its own reason, so a file the budget ran out for says that and
+// one the host stalled says the deadline. fetch(), res.text() and res.json()
+// reject with the signal's reason.
+export function readSignal(signal = null) {
+  return signal ? AbortSignal.any([AbortSignal.timeout(READ_TIMEOUT_MS), signal]) : AbortSignal.timeout(READ_TIMEOUT_MS);
+}
+
 // The status a proxy answered a CONNECT with, when it would not open the way
 // to the host. undici words it "Proxy response (407) !== 200 when HTTP
 // Tunneling", an UND_ERR_ABORTED one or two causes down (6.21–6.29).
@@ -163,7 +173,10 @@ function directHint(route, host) {
 // and asks the person for nothing. The original error is kept as `cause`.
 // An error that is none of fetch's own network failure, an answer not read
 // to the end and the readers' deadline (a TimeoutError) is returned as it
-// is: a SyntaxError from a body that is not JSON stays what it was.
+// is: a SyntaxError from a body that is not JSON stays what it was, and so
+// does a read's budget running out (a ReadBudgetError, the reason
+// server/github-crawl.mjs downloadFiles aborts a read's files with: neither
+// fetch's failure nor a TimeoutError, so its sentence passes through).
 export function unreachable(label, url, error, { route = outboundRoute(url), answered = false } = {}) {
   let origin = String(url);
   let host = origin;
