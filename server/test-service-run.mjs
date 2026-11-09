@@ -31,6 +31,8 @@ delete process.env.GITHUB_TOKEN;
 delete process.env.AZURE_DEVOPS_TOKEN;
 delete process.env.OBSERVOGRAM_ADO_ORIGINS;
 delete process.env.OBSERVOGRAM_REPO_ROOTS;
+// No proxy from the shell: the sentences below are a direct request's (server/test-outbound-proxy.mjs has the proxy's).
+for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_USE_ENV_PROXY']) delete process.env[k];
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
@@ -217,14 +219,14 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
   const said = (cause) => unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', failed(cause)).message;
   const REACH = 'Azure DevOps: https://dev.azure.com could not be reached from the server — ';
   const table = [
-    ['ENOTFOUND', 'its name does not resolve on the server (ENOTFOUND)'],
-    ['EAI_AGAIN', 'its name does not resolve on the server (the lookup timed out) (EAI_AGAIN)'],
+    ['ENOTFOUND', 'its name does not resolve on the server (ENOTFOUND); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1'],
+    ['EAI_AGAIN', 'its name does not resolve on the server (the lookup timed out) (EAI_AGAIN); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1'],
     ['ECONNREFUSED', 'the connection was refused (ECONNREFUSED)'],
-    ['ETIMEDOUT', 'the connection timed out (ETIMEDOUT)'],
-    ['UND_ERR_CONNECT_TIMEOUT', 'the connection timed out (UND_ERR_CONNECT_TIMEOUT)'],
+    ['ETIMEDOUT', 'the connection timed out (ETIMEDOUT); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1'],
+    ['UND_ERR_CONNECT_TIMEOUT', 'the connection timed out (UND_ERR_CONNECT_TIMEOUT); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1'],
     ['ECONNRESET', 'the connection was dropped (ECONNRESET)'],
     ['UND_ERR_SOCKET', 'the connection was dropped (UND_ERR_SOCKET)'],
-    ['ENETUNREACH', 'the network is unreachable from the server (ENETUNREACH)'],
+    ['ENETUNREACH', 'the network is unreachable from the server (ENETUNREACH); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1'],
     ['SELF_SIGNED_CERT_IN_CHAIN', 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS) (SELF_SIGNED_CERT_IN_CHAIN)'],
     ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS) (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)'],
     ['CERT_HAS_EXPIRED', 'its certificate has expired or is not yet valid (CERT_HAS_EXPIRED)'],
@@ -234,7 +236,7 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
   for (const [code, reason] of table) assert.equal(said(withCode(code)), REACH + reason, code);
   // A host with IPv6 and IPv4 addresses: an AggregateError, the last attempt's reason first.
   const both = Object.assign(new AggregateError([withCode('ENETUNREACH'), withCode('ETIMEDOUT')], ''), { code: 'ENETUNREACH' });
-  assert.equal(said(both), `${REACH}the connection timed out (ETIMEDOUT)`);
+  assert.equal(said(both), `${REACH}the connection timed out (ETIMEDOUT); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1`);
   // Reached, but not followed / not sent / something else.
   assert.equal(said(new Error('unexpected redirect')), 'Azure DevOps: https://dev.azure.com answered with a redirect, which the server does not follow (unexpected redirect)');
   assert.equal(said(new Error('redirect count exceeded')), 'Azure DevOps: https://dev.azure.com answered with a redirect, which the server does not follow (redirect count exceeded)');
@@ -250,7 +252,7 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
 
   // Through the readers: the token never in the sentence, no status, so the Run answers 502.
   await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => { throw failed(withCode('ENOTFOUND')); }, token: 'pat-SECRET-0000' }),
-    (e) => e.status === undefined && e.message === `${REACH}its name does not resolve on the server (ENOTFOUND)` && !e.message.includes('pat-SECRET'));
+    (e) => e.status === undefined && e.message === `${REACH}its name does not resolve on the server (ENOTFOUND); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1` && !e.message.includes('pat-SECRET'));
   const realFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () => { throw failed(withCode('ECONNREFUSED')); };
@@ -840,7 +842,7 @@ test('a Run of a private Azure DevOps repository on a server without sign-in: th
     down = true;
     const unreachableRun = await run({ repoAuth: MINE });
     assert.deepEqual([unreachableRun.status, unreachableRun.json.repoAuth, unreachableRun.json.error],
-      [502, undefined, 'the repository could not be read: Azure DevOps: https://dev.azure.com could not be reached from the server — its name does not resolve on the server (ENOTFOUND)']);
+      [502, undefined, 'the repository could not be read: Azure DevOps: https://dev.azure.com could not be reached from the server — its name does not resolve on the server (ENOTFOUND); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1']);
     for (const r of answers) for (const token of [MINE, SERVER]) assert.ok(!r.text.includes(token), 'no token is ever answered');
   } finally {
     globalThis.fetch = realFetch;

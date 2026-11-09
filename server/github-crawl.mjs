@@ -8,7 +8,7 @@
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
 import { SCAN_MAX_FILE_BYTES, SCAN_WHY, scanReadsPath, scanRefusal } from '../tools/lib/crawler.mjs';
-import { unreachable } from './fetch-failure.mjs';
+import { READ_TIMEOUT_MS, unreachable } from './fetch-failure.mjs';
 
 export function parseGithubUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -172,7 +172,7 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   let res;
-  try { res = await fetch(`https://api.github.com${path}`, { ...init, headers }); }
+  try { res = await fetch(`https://api.github.com${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(READ_TIMEOUT_MS) }); }
   catch (e) { throw unreachable('GitHub', 'https://api.github.com', e); }
   if (!res.ok) {
     const said = githubSays(await res.text().catch(() => ''));
@@ -200,7 +200,7 @@ function githubSays(body) {
 export async function rawFetch(owner, repo, ref, path) {
   const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref).replace(/%2F/g, '/')}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
   let res;
-  try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual' }); }
+  try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); }
   catch (e) { throw unreachable('GitHub', url, e); }
   // A redirect is read, never followed, and named as what it is.
   if (res.status >= 300 && res.status < 400) {

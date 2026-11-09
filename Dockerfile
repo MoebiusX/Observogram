@@ -64,4 +64,11 @@ RUN mkdir -p /app/.observogram && chown -R node:node /app/.observogram /app/exam
 USER node
 ENV HOST=0.0.0.0 PORT=8000
 EXPOSE 8000
-CMD ["node", "server/index.mjs"]
+# server/launch.mjs starts server/index.mjs with Node's proxy switch
+# (NODE_USE_ENV_PROXY=1) on when HTTPS_PROXY or HTTP_PROXY is set and is a
+# URL Node can use, so the server's own requests (Azure DevOps, GitHub, the
+# sign-in hosts, the MCP endpoints) go through it, and directly to every
+# host NO_PROXY names. Docker's client proxy settings set those variables in
+# every container. The start says, after "listening on", which proxy is in
+# use or which variable to fix. NODE_USE_ENV_PROXY=0 keeps every request direct.
+CMD ["node", "server/launch.mjs"]

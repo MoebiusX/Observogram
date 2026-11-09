@@ -815,10 +815,10 @@ facts are the ones Windows cannot express: POSIX mode bits (`0600`, `0644`,
 `chmod 0000`), signal delivery (`process.kill` ends a Windows process
 outright, so the store's SIGTERM/SIGINT self-close cannot be exercised) and
 symlink creation (a privilege), skipped on every Windows host, elevated or
-not. There are 15 skip sites — `server/test-store.mjs` (8),
+not. There are 16 skip sites — `server/test-store.mjs` (8),
 `server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
-`tools/test-journey.mjs` (1) — and **a Windows run prints
-19 `SKIP win32:` lines**, plus the PID 1 namespace test's
+`tools/test-journey.mjs` (1), `server/test-outbound-proxy.mjs` (1) — and
+**a Windows run prints 20 `SKIP win32:` lines**, plus the PID 1 namespace test's
 `# SKIP unshare --pid is unavailable here` and the browser suites' Playwright
 skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. Inside an export copy six more
 skip, each `# SKIP an export copy: <why>`: the three tests that read the CI

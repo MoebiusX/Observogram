@@ -364,6 +364,20 @@ docroot. That architecture is gone:
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.
+- **An outbound proxy** (optional): on a cluster whose egress is through an
+  HTTP proxy, uncomment `HTTPS_PROXY` and `NO_PROXY` in
+  [deployment-studio.yaml](deployment-studio.yaml).
+  - The image's launcher turns Node's proxy switch on when the value is a
+    URL Node can use, so nothing else is needed.
+  - `NO_PROXY` must name each MCP endpoint by the exact name its URL uses,
+    since a short Service name matches only itself.
+  - The studio's start log says which proxy is in use, on the line after
+    `listening on`.
+  - The journeys CronJob runs `tools/cli.mjs` directly: give it the same
+    variables and `NODE_USE_ENV_PROXY=1`, which are commented in
+    `cronjob-journeys.yaml`.
+
+  See the README's "Behind An Outbound Proxy".
 - What persists: everything in the workspace and the database, on the store
   volume above — each org's live pack included
   (`<org root>/live/production-live.pack.yaml`, written by

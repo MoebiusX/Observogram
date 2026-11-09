@@ -379,11 +379,11 @@ mode bits (`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends
 a Windows process outright, so the store's SIGTERM/SIGINT self-close cannot be
 exercised) and symlink creation (a privilege; skipped on every Windows host,
 elevated or not, so the count is one number everywhere). There are
-15 win32-skip sites — `server/test-store.mjs` (8),
+16 win32-skip sites — `server/test-store.mjs` (8),
 `server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
-`tools/test-journey.mjs` (1) — and 19 `SKIP win32:` lines once the loops
-unroll, plus the PID 1 namespace test's
-`# SKIP unshare --pid is unavailable here` and the Playwright skips (and,
+`tools/test-journey.mjs` (1), `server/test-outbound-proxy.mjs` (1) —
+and 20 `SKIP win32:` lines once the loops unroll, plus the PID 1 namespace
+test's `# SKIP unshare --pid is unavailable here` and the Playwright skips (and,
 inside a copy `npm run vendor-export` wrote, six `# SKIP an export copy: …`
 lines). The
 Windows leg fails unless a run prints exactly that number, and unless it ran
@@ -1490,7 +1490,9 @@ is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
 and packs across containers. The image carries Observogram's `LICENSE` beside
 `package.json`, and its `node_modules` each installed package's own licence
-file.
+file. On a host whose egress is through an HTTP proxy, the Docker client's
+proxy settings are all the studio needs: see
+[Behind An Outbound Proxy](#behind-an-outbound-proxy) below.
 
 Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
 applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
@@ -1502,6 +1504,111 @@ needs a default StorageClass (or a `storageClassName`):
 kubectl apply -k deploy/k8s            # the studio and its store volume
 kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
+
+#### Behind An Outbound Proxy
+
+On a server whose egress is through an HTTP proxy, the studio's own requests
+go through it: Azure DevOps, GitHub, the sign-in hosts and the MCP
+endpoints. It is set the way Grafana's is, with `HTTPS_PROXY`, `HTTP_PROXY`
+and `NO_PROXY`. Node (22.21 or later) reads them only with its switch,
+`NODE_USE_ENV_PROXY=1`. The image starts the studio through
+`server/launch.mjs`, which turns that switch on for the server when a proxy
+variable is set and every one set is a URL Node can use. On any other value
+it leaves the switch off. Node would otherwise stop at start on that value,
+before the studio could say which variable is wrong, and print it whole,
+password included. Outside the image, start with `node server/launch.mjs`.
+
+**In Docker, the first way is the Docker client's own proxy settings.** Put
+them in `~/.docker/config.json` on the machine that runs `docker`:
+
+```json
+{
+  "proxies": {
+    "default": {
+      "httpProxy": "http://proxy.example.com:3128",
+      "httpsProxy": "http://proxy.example.com:3128",
+      "noProxy": "localhost,127.0.0.1,.internal.example.com"
+    }
+  }
+}
+```
+
+Docker then sets `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, and their
+lower-case twins, in every container it starts from then on. A container
+that is already running keeps what it had. Nothing is set on the studio
+itself.
+
+You can also give them to one container:
+
+```bash
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
+  -e HTTPS_PROXY=http://proxy.example.com:3128 \
+  -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
+  observogram:0.8.16
+```
+
+Or put them in a compose file's `environment:`:
+
+```yaml
+services:
+  studio:
+    image: observogram:0.8.16
+    environment:
+      HTTPS_PROXY: http://proxy.example.com:3128
+      NO_PROXY: localhost,127.0.0.1,.internal.example.com
+```
+
+**A proxy on the Docker host itself.** Inside a container, `localhost` is
+the container, not the host. Docker Desktop names the host
+`host.docker.internal`: `HTTPS_PROXY=http://host.docker.internal:3128`. On
+Linux Docker Engine, add `--add-host=host.docker.internal:host-gateway` to
+`docker run`; in compose, `extra_hosts: ["host.docker.internal:host-gateway"]`.
+
+**The start line says whether it took effect.** Right after `listening on`,
+the studio prints one line, which `docker logs` shows:
+
+```
+[studio] listening on http://0.0.0.0:8000
+[studio] outbound proxy: https requests through http://proxy.example.com:3128 (https_proxy), http requests through http://proxy.example.com:3128 (http_proxy); directly to the hosts no_proxy names: localhost, 127.0.0.1, .internal.example.com
+```
+
+A container that got no proxy says `[studio] outbound proxy: none, every
+request goes directly (no HTTPS_PROXY or HTTP_PROXY is set)`. A
+`[studio] WARNING:` line there says what to set instead, in two cases:
+
+- a proxy variable the studio will not use: the value is not a proxy URL
+  Node can use (it names the variable, never the value), the switch is off,
+  or the Node is older than 22.21;
+- a `NO_PROXY` address range, such as the CIDR `127.0.0.0/8` in Docker's
+  own example. Node's fetch does not read ranges, so name the hosts or
+  addresses instead.
+
+In Kubernetes the same variables go in the Deployment's `env`;
+[deploy/k8s/deployment-studio.yaml](deploy/k8s/deployment-studio.yaml) has
+them commented.
+
+| Variable | What it does |
+|---|---|
+| `HTTPS_PROXY` | The proxy for https requests: `http://host:port` or `https://host:port`, with no path, e.g. `http://proxy.example.com:3128`. A user name and password go in the URL, `http://user:password@proxy.example.com:3128`, both or neither, sent as Basic. Any `#`, `/`, `?`, `@`, `:` or `%` in them must be percent-encoded, e.g. `#` as `%23`; `node -p "encodeURIComponent(process.argv[1])" '<password>'` prints the encoded form. They can then be read with `docker inspect`; the studio's own lines never show them. A proxy that signs in with NTLM or Kerberos only is not reached. |
+| `HTTP_PROXY` | The proxy for http requests, and for https ones when `HTTPS_PROXY` is not set. |
+| `NO_PROXY` | The hosts reached directly, comma-separated: `host`, `host:port`, `.example.com` or `*.example.com` for a domain, or `*` for every host. List every host inside your network the studio calls, above all the MCP endpoints: sent to the proxy, they fail. A name with no dot matches only itself, so a Service or compose service reached by a short name (`otel-mcp-server`, or `otel-mcp-server.observability`) is listed by that exact name; `.svc.cluster.local` covers only the full `<service>.<namespace>.svc.cluster.local` form. IP ranges and CIDR are not read. |
+| `NODE_USE_ENV_PROXY` | Node's switch: Node (22.21 or later) ignores the three above without `NODE_USE_ENV_PROXY=1`. The image's launcher sets it for the server; set it yourself only when the values are right, because Node then stops at start on one it cannot parse. `0` keeps every request direct. |
+
+The lower-case names (`https_proxy`, …) win over the upper-case ones.
+
+- **When a read fails through the proxy.** It says that it went through the
+  proxy, and either that the proxy was not reached or how it refused:
+  - 407: the proxy asks for credentials;
+  - 403: the proxy refuses the host;
+  - 502–504: the proxy could not reach the host. A host inside your network
+    belongs in `NO_PROXY`.
+- **When a read sent directly finds no route to the host.** It says how a
+  proxy is set.
+- **A read that takes more than 60 s.** It is given up and says so,
+  through the proxy or not. A proxy that closes the connection without
+  answering would otherwise keep it waiting.
+- **A proxy that re-signs TLS.** Give the server its certificate authority
+  with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 
 ### Which Build Am I Running?
 
