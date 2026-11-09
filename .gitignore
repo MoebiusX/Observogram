@@ -70,3 +70,8 @@ docker/.t2-provisioning/
 
 # npm run vendor-export writes here by default
 /vendor-export/
+
+# Coding-agent local state. Claude Code's "don't ask again" rules can embed
+# the full approved command, secrets included.
+.claude/settings.local.json
+CLAUDE.local.md
