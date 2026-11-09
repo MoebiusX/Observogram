@@ -22,9 +22,10 @@ which value is missing; the rest run.
 The studio runs in the test process **with sign-in on** (a local test user
 with a password made for that run), a fake MCP as the live side, and the real
 hosts behind it. Every request the readers send is recorded by host and by
-*which* token it carried (a label, never the value). Every text the suite
-shows is masked: each token, and an Azure DevOps token's Basic form, which
-gives the token back.
+*which* token it carried (a label, never the value). Every message the suite
+writes is masked, and so is every sentence from the server or a host before it
+is compared: each token, and an Azure DevOps token's Basic form, which gives
+the token back.
 
 | Check | Needs | Proves |
 |---|---|---|
@@ -187,8 +188,9 @@ ignores anyway.
 | It says | Usually |
 |---|---|
 | *your GitHub token was refused* / *not authorised to read this repository* on the read | The token expired or lost its access: make a new one and replace the secret. |
-| *a private repository reads as not there without a token — is it private?* | The test repository was made public. |
+| *a private repository reads as not there without a token — is it private?* (GitHub) / *a private repository is refused without a token — is it private?* (Azure DevOps) | The test repository was made public. |
 | *… must be owner/name …* / *… must be a repository on Azure DevOps Services …* | The variable holds something else: set it as the table above says. |
 | `missing` / `extra` / `differ` paths | The test repository no longer holds the fixture at its root, or the fixture changed here: push `tools/fixtures/live-repo` again. |
-| *GitHub's quota without a token is spent here* (a skip) | A check that reads GitHub with no token shares the runner's 60-calls-an-hour quota; it skips rather than fails. |
+| *GitHub's quota without a token is spent here* (a skip) | The public read and the two Runs without a token share the runner's 60-calls-an-hour quota. The skip is decided from GitHub's own sentence (*API rate limit exceeded*, as a 403 or a 429), not from the status the Run route answers, which turns a 429 into a 502. |
+| *files read: 0 of N — skipped: <path>: it could not be downloaded (GitHub 429 on <path>); …* | raw.githubusercontent.com throttled every download of the public read. It fails rather than skips, naming the first three files, so the weekly run shows the burst; run it again later. |
 | An exact sentence differs on a refusal | The host changed how it answers. That is what this suite is for: fix the reader and its stubs to the new answer, measured, and say so in the CHANGELOG. |

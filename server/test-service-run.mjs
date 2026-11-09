@@ -143,9 +143,9 @@ test('adoFetch: the token as Basic only to an allowed host, with the redirect su
 // the tenant the organization signs in through. Tenant ids with hex letters, so case matters.
 const ORG_TENANT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const PERSON_TENANT = 'ffffffff-1111-4222-8333-444444444444';
-const WWW = `Bearer authorization_uri=https://login.microsoftonline.com/${ORG_TENANT}, Basic realm="https://tfsprodweu5.app.visualstudio.com/"`;
+const WWW = `Bearer authorization_uri=https://login.microsoftonline.com/${ORG_TENANT}, Basic realm="https://tfsprod-example.app.visualstudio.com/"`;
 const jwtFor = (tid) => `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify({ tid, upn: 'ada@contoso.example' })).toString('base64url')}.sig`;
-const adoRefusal = (init, { status = 302, location = 'https://spsprodweu5.vssps.visualstudio.com/_signin?realm=dev.azure.com', www = WWW } = {}) => {
+const adoRefusal = (init, { status = 302, location = 'https://spsprod-example.vssps.visualstudio.com/_signin?realm=dev.azure.com', www = WWW } = {}) => {
   if (init.headers?.['X-TFS-FedAuthRedirect'] === 'Suppress') {
     return new Response(JSON.stringify({ message: "TF400813: The user '' is not authorized to access this resource." }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8', 'www-authenticate': www } });
   }
@@ -184,18 +184,39 @@ test('adoFetch: a refusal reads as the token, the fact worded for whoever can fi
   await assert.rejects(adoFetch(URL_, { fetchImpl: redirectAnyway([], { location: 'https://elsewhere.example/x' }), token: '' }), (e) => e.status === 401, 'a challenge beside it');
 });
 
-test('adoFetch: a redirect anywhere but the sign-in page is named as one — never followed, never read as the token, the person not asked', async () => {
+test('adoFetch: a redirect anywhere but the sign-in page is named as one — to another host, or to a page on the same host (a sign-in page or a proxy answering for the repository) — never followed, never read as the token, the person not asked', async () => {
   process.env.OBSERVOGRAM_ADO_ORIGINS = 'https://tfs.corp.example';
   try {
     const seen = [];
     const moved = redirectAnyway(seen, { status: 302, location: 'https://tfs.corp.example.com/DefaultCollection/Shop/_apis/git/repositories/c/items', www: null });
-    for (const opts of [{ token: 'pat-MINE-0000', tokenSource: 'request' }, { token: 'pat-SERVER-0000' }, { token: '' }]) {
+    const tokens = [{ token: 'pat-MINE-0000', tokenSource: 'request' }, { token: 'pat-SERVER-0000' }, { token: '' }];
+    for (const opts of tokens) {
       await assert.rejects(adoFetch('https://tfs.corp.example/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: moved, ...opts }),
         (e) => e.status === undefined && e.message === "Azure DevOps 302: https://tfs.corp.example redirects this read to https://tfs.corp.example.com, which the server does not follow — give the repository's address on the host that serves it");
     }
+    // The request's own origin (a Server that ignores the suppress header, a sign-in proxy): there is no
+    // other address to give, and the query — which may carry a reply address — is never quoted.
+    const SAME_HOST = "Azure DevOps 302: https://tfs.corp.example redirects this read to /tfs/_signin on the same host, which the server does not follow — a sign-in page or a proxy in front of the repository answers instead of it";
+    const signInPage = redirectAnyway(seen, { status: 302, location: 'https://tfs.corp.example/tfs/_signin?ReturnUrl=%2Ftfs%2FDefaultCollection%2FShop%2F_apis%2Fgit', www: null });
+    for (const opts of tokens) {
+      await assert.rejects(adoFetch('https://tfs.corp.example/tfs/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: signInPage, ...opts }),
+        (e) => e.status === undefined && e.message === SAME_HOST && !e.message.includes('ReturnUrl'), JSON.stringify(opts));
+    }
+    await assert.rejects(adoFetch('https://tfs.corp.example/tfs/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: redirectAnyway(seen, { status: 302, location: '/tfs/_signin', www: null }), token: '' }),
+      (e) => e.status === undefined && e.message === SAME_HOST, 'a relative Location resolves against the request');
+    // The same host on another scheme or port is the same host: its "address" could not be given anyway
+    // (adoHostRefusal takes https only), and a sign-in port beside the repository's answers for it.
+    await assert.rejects(adoFetch('https://tfs.corp.example/tfs/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: redirectAnyway(seen, { status: 302, location: 'http://tfs.corp.example/tfs/_signin', www: null }), token: '' }),
+      (e) => e.status === undefined && e.message === SAME_HOST, 'http: on the same host');
+    await assert.rejects(adoFetch('https://tfs.corp.example/tfs/DefaultCollection/Shop/_apis/git/repositories/c/items', { fetchImpl: redirectAnyway(seen, { status: 302, location: 'https://tfs.corp.example:8443/x', www: null }), token: '' }),
+      (e) => e.status === undefined && e.message === SAME_HOST.replace('/tfs/_signin', '/x'), 'another port on the same host');
+    const ELSEWHERE = "Azure DevOps 302: https://tfs.corp.example redirects this read to another address, which the server does not follow — give the repository's address on the host that serves it";
     await assert.rejects(adoFetch('https://tfs.corp.example/x/_apis/y', { fetchImpl: redirectAnyway([], { location: '', www: null }), token: '' }),
-      (e) => e.status === undefined && /redirects this read to another address, which the server does not follow/.test(e.message), 'no Location at all');
-    assert.ok(seen.every((s) => s.url.startsWith('https://tfs.corp.example/')), 'nothing followed');
+      (e) => e.status === undefined && e.message === ELSEWHERE, 'no Location at all');
+    // A Location with no host in it (an opaque origin): another address, unnamed — never the URL's "null".
+    await assert.rejects(adoFetch('https://tfs.corp.example/x/_apis/y', { fetchImpl: redirectAnyway(seen, { status: 302, location: 'data:text/html,hello', www: null }), token: '' }),
+      (e) => e.status === undefined && e.message === ELSEWHERE, 'an opaque origin');
+    assert.ok(seen.every((s) => s.url.startsWith('https://tfs.corp.example/') && s.redirect === 'manual'), 'nothing followed');
   } finally { delete process.env.OBSERVOGRAM_ADO_ORIGINS; }
 });
 
@@ -213,7 +234,7 @@ test('tenantMismatch: the organization\'s tenant from the refusal, the person\'s
   assert.equal(tenantMismatch(null, null), null);
 });
 
-test('unreachable: "could not be reached" only when the host was not reached, with the reason per code; a redirect, a request never sent and anything else are each named as what they are; the original error is kept; any other error is left as it is', async () => {
+test('unreachable: "could not be reached" only when the host was not reached, with the reason per code; a redirect, a request never sent, a connection dropped while the answer was read and anything else are each named as what they are; the original error is kept; any other error is left as it is', async () => {
   const failed = (cause) => new TypeError('fetch failed', { cause });
   const withCode = (code, message = code) => Object.assign(new Error(message), { code });
   const said = (cause) => unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', failed(cause)).message;
@@ -231,9 +252,49 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
     ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS) (UNABLE_TO_GET_ISSUER_CERT_LOCALLY)'],
     ['CERT_HAS_EXPIRED', 'its certificate has expired or is not yet valid (CERT_HAS_EXPIRED)'],
     ['ERR_TLS_CERT_ALTNAME_INVALID', 'its certificate does not name this host (something else answered, or the address uses a name the certificate is not for) (ERR_TLS_CERT_ALTNAME_INVALID)'],
-    ['ERR_SSL_WRONG_VERSION_NUMBER', 'the TLS handshake failed (is it https on that port?) (ERR_SSL_WRONG_VERSION_NUMBER)'],
+    // Node's X509 verify codes outside the cases above: no hint, the code says which (an extra authority fixes none).
+    ['CERT_REVOKED', 'its certificate did not verify on the server (CERT_REVOKED)'],
+    ['INVALID_CA', 'its certificate did not verify on the server (INVALID_CA)'],
+    // The handshake itself: a protocol or cipher the two sides do not share, or no TLS on that port — no guess at which.
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'the TLS handshake failed (ERR_SSL_WRONG_VERSION_NUMBER)'],
   ];
   for (const [code, reason] of table) assert.equal(said(withCode(code)), REACH + reason, code);
+  // The host answered, then the body could not be read to the end: undici's TypeError 'terminated', told apart
+  // by its cause's code. Never "could not be reached": it was.
+  const terminated = (cause) => (cause === undefined ? new TypeError('terminated') : new TypeError('terminated', { cause }));
+  const DROPPED = 'Azure DevOps: the connection to https://dev.azure.com was dropped while the answer was read';
+  const cut = (cause) => unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', terminated(cause)).message;
+  // A drop: the socket's code, or no code at all.
+  assert.equal(cut(withCode('UND_ERR_SOCKET', 'other side closed')), `${DROPPED} (UND_ERR_SOCKET)`);
+  assert.equal(cut(withCode('ECONNRESET', 'read ECONNRESET')), `${DROPPED} (ECONNRESET)`);
+  assert.equal(cut(withCode('EPIPE', 'write EPIPE')), `${DROPPED} (EPIPE)`);
+  assert.equal(cut(new Error('other side closed')), `${DROPPED} (other side closed)`, 'no code: what the cause said');
+  assert.equal(cut(undefined), `${DROPPED} (no reason given)`);
+  // undici's own body timeout: the host answered and its answer did not finish — the connection was not dropped.
+  assert.equal(cut(withCode('UND_ERR_BODY_TIMEOUT', 'Body Timeout Error')), 'Azure DevOps: https://dev.azure.com answered, but its answer did not finish in time (UND_ERR_BODY_TIMEOUT)');
+  // Any other code is a body the server could not read while the connection held: a 200 whose Content-Encoding
+  // says gzip or deflate over bytes that are not (the decoder's Z_*), brotli (ERR__ERROR_FORMAT_*), or a chunk
+  // the parser cannot frame (HPE_*). Never "dropped": nothing was.
+  const NOT_READ = 'Azure DevOps: the answer from https://dev.azure.com could not be read to the end — ';
+  assert.equal(cut(withCode('Z_DATA_ERROR', 'incorrect header check')), `${NOT_READ}incorrect header check (Z_DATA_ERROR)`);
+  assert.equal(cut(withCode('ERR__ERROR_FORMAT_PADDING_1', 'Decompression failed')), `${NOT_READ}Decompression failed (ERR__ERROR_FORMAT_PADDING_1)`);
+  assert.equal(cut(withCode('HPE_INVALID_CHUNK_SIZE', 'Invalid character in chunk size')), `${NOT_READ}Invalid character in chunk size (HPE_INVALID_CHUNK_SIZE)`);
+  const PROXIED = { route: { through: 'http://proxy.example:3128', variable: 'HTTPS_PROXY', credentials: null } };
+  assert.equal(unreachable('GitHub', 'https://api.github.com', terminated(withCode('UND_ERR_SOCKET', 'other side closed')), PROXIED).message,
+    'GitHub: the connection to https://api.github.com was dropped while the answer was read through the proxy http://proxy.example:3128 (UND_ERR_SOCKET)');
+  assert.equal(unreachable('GitHub', 'https://api.github.com', terminated(withCode('Z_DATA_ERROR', 'incorrect header check')), PROXIED).message,
+    'GitHub: the answer from https://api.github.com could not be read to the end through the proxy http://proxy.example:3128 — incorrect header check (Z_DATA_ERROR)');
+  const originalCut = terminated(withCode('UND_ERR_SOCKET'));
+  assert.equal(unreachable('GitHub', 'https://api.github.com', originalCut).cause, originalCut, 'the original kept as the cause');
+  // A body that stalls past the readers' deadline rejects with the same TimeoutError a host that never answered
+  // does; the body-read call sites say `answered`, since the status was read, and the sentence says so.
+  const timedOut = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  assert.equal(unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', timedOut).message, 'Azure DevOps: https://dev.azure.com did not answer within 60 s', 'a fetch() call site: the host did not answer');
+  assert.equal(unreachable('Azure DevOps', 'https://dev.azure.com/acme/x/_apis/y', timedOut, { answered: true }).message, 'Azure DevOps: https://dev.azure.com answered, but its answer did not finish within 60 s');
+  assert.equal(unreachable('GitHub', 'https://api.github.com', timedOut, { ...PROXIED, answered: true }).message, 'GitHub: https://api.github.com answered, but its answer did not finish within 60 s through the proxy http://proxy.example:3128');
+  assert.equal(unreachable('GitHub', 'https://api.github.com', timedOut, { answered: true }).cause, timedOut, 'the original kept as the cause');
+  const notJson = await new Response('not json', { status: 200 }).json().catch((e) => e);
+  assert.ok(notJson instanceof SyntaxError && unreachable('Azure DevOps', 'https://dev.azure.com', notJson) === notJson, 'a body that is not JSON is no network failure: the SyntaxError stays');
   // A host with IPv6 and IPv4 addresses: an AggregateError, the last attempt's reason first.
   const both = Object.assign(new AggregateError([withCode('ENETUNREACH'), withCode('ETIMEDOUT')], ''), { code: 'ENETUNREACH' });
   assert.equal(said(both), `${REACH}the connection timed out (ETIMEDOUT); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1`);
@@ -253,6 +314,37 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
   // Through the readers: the token never in the sentence, no status, so the Run answers 502.
   await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => { throw failed(withCode('ENOTFOUND')); }, token: 'pat-SECRET-0000' }),
     (e) => e.status === undefined && e.message === `${REACH}its name does not resolve on the server (ENOTFOUND); if this server reaches it through a proxy, set HTTPS_PROXY and NODE_USE_ENV_PROXY=1` && !e.message.includes('pat-SECRET'));
+  // A 200 whose body is cut short: res.json() rejects with the TypeError above, and the reader says so.
+  const cutShort = () => new Response(new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode('{"value":[')); c.error(Object.assign(new TypeError('terminated'), { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })); },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => cutShort(), token: 'pat-SECRET-0000' }),
+    (e) => e.status === undefined && e.message === `${DROPPED} (UND_ERR_SOCKET)` && !e.message.includes('pat-SECRET'), 'Azure DevOps: the tree cut short');
+  await assert.rejects(fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, { rawFn: null, fetchFn: async () => cutShort() }),
+    (e) => e.status === undefined && e.message === 'GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET)', 'GitHub: the tree cut short');
+  // A file cut short is that file's skipped reason, never fatal — from raw without a token, from the API with one.
+  const treeOf = (paths) => new Response(JSON.stringify({ tree: paths.map((path) => ({ type: 'blob', path })) }));
+  const cutFile = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, {
+    fetchFn: async () => treeOf(['alerts/a.rules.yaml', 'alerts/b.rules.yaml']),
+    rawFn: async (_o, _r, _ref, path) => (path === 'alerts/b.rules.yaml' ? cutShort() : new Response(`# ${path}`)),
+  });
+  assert.deepEqual([cutFile.files, cutFile.skipped], [{ 'alerts/a.rules.yaml': '# alerts/a.rules.yaml' }, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://raw.githubusercontent.com was dropped while the answer was read (UND_ERR_SOCKET))' }]]);
+  const cutViaApi = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, {
+    rawFn: null, fetchFn: async (path) => (path.includes('/git/trees/') ? treeOf(['alerts/b.rules.yaml']) : cutShort()),
+  });
+  assert.deepEqual(cutViaApi.skipped, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET))' }]);
+  // A 200 whose body stalls past the readers' deadline: the status was read, so the sentence is the answer not
+  // finishing, never "did not answer" — through the Azure DevOps tree and a GitHub file alike.
+  const stalled = () => new Response(new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode('{"value":[')); c.error(new DOMException('The operation was aborted due to timeout', 'TimeoutError')); },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => stalled(), token: 'pat-SECRET-0000' }),
+    (e) => e.status === undefined && e.message === 'Azure DevOps: https://dev.azure.com answered, but its answer did not finish within 60 s' && !e.message.includes('pat-SECRET'), 'Azure DevOps: the tree stalled');
+  const stalledFile = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, { fetchFn: async () => treeOf(['alerts/b.rules.yaml']), rawFn: async () => stalled() });
+  assert.deepEqual(stalledFile.skipped, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: https://raw.githubusercontent.com answered, but its answer did not finish within 60 s)' }]);
+  // A 200 that is not JSON keeps what it was: a SyntaxError, no status, so the Run answers 502 with it.
+  await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => new Response('<html>a portal</html>', { status: 200, headers: { 'content-type': 'application/json' } }), token: '' }),
+    (e) => e instanceof SyntaxError && e.status === undefined, 'not JSON: the SyntaxError as it was');
   const realFetch = globalThis.fetch;
   try {
     globalThis.fetch = async () => { throw failed(withCode('ECONNREFUSED')); };
@@ -670,7 +762,8 @@ test('an upload never keeps a secrets file and keeps what the browser did not re
 // server's own token only on a server without sign-in; never in a log or an
 // answer.
 
-const { repositoryCredential, parseRepoAuth, repoAuthNeed, redactToken, signInOn, REPO_AUTH_WAYS, RepoAuthRefusal } = await import('./repo-auth.mjs');
+const REPO_AUTH = await import('./repo-auth.mjs');
+const { repositoryCredential, parseRepoAuth, repoAuthNeed, redactToken, signInOn, REPO_AUTH_WAYS, RepoAuthRefusal } = REPO_AUTH;
 
 test('repositoryCredential: the person\'s own token wins; the server\'s only on a server without sign-in, never once sign-in is on; a value that is no token is refused without being quoted', () => {
   const env = { GITHUB_TOKEN: 'srv-gh-00000', AZURE_DEVOPS_TOKEN: 'srv-ado-00000' };
@@ -697,6 +790,34 @@ test('repositoryCredential: the person\'s own token wins; the server\'s only on 
   assert.equal(repoAuthNeed('path', { source: 'none' }, 404), null);
   assert.equal(redactToken('a mine-12345 b mine-12345', 'mine-12345'), 'a [your token] b [your token]');
   assert.equal(redactToken('nothing here', null), 'nothing here');
+});
+
+// The Run's tail sentences, word for word: every end-to-end assertion above interpolates
+// REPO_AUTH_WAYS.*, so this is the one place a reword shows. README, "Whose access reads a repository".
+test('REPO_AUTH_WAYS: the sentences a refused read ends with, pinned — Azure DevOps names Code (Read) and, on a server without sign-in, AZURE_DEVOPS_TOKEN; GitHub never names GITHUB_TOKEN', () => {
+  const { repoAuthTail } = REPO_AUTH;
+  assert.equal(REPO_AUTH_WAYS.needed('ado'), 'it needs your own Azure DevOps token (a personal access token with Code (Read)), sent with this Run and never kept');
+  assert.equal(REPO_AUTH_WAYS.needed('ado', { serverToken: true }), 'it needs your own Azure DevOps token (a personal access token with Code (Read)), sent with this Run and never kept, or AZURE_DEVOPS_TOKEN set on this server for every Run');
+  assert.equal(REPO_AUTH_WAYS.refused('ado'), 'your Azure DevOps token was refused or cannot read it — check that it can read this repository (Code (Read))');
+  assert.equal(REPO_AUTH_WAYS.signIn('ado'), 'sign in to Azure DevOps to read it as you, or run it with your own Azure DevOps token (Code (Read))');
+  assert.equal(REPO_AUTH_WAYS.signedInRefused('ado', 'ada@contoso.example'), 'you are signed in to Azure DevOps as ada@contoso.example, and that account cannot read this repository — sign in as one that can, or run it with a token that can');
+  assert.equal(REPO_AUTH_WAYS.signedInRefused('ado', null), 'you are signed in to Azure DevOps, and that account cannot read this repository — sign in as one that can, or run it with a token that can', 'no account known');
+  assert.equal(REPO_AUTH_WAYS.signedInRefused('ado', null, { expired: true }), 'your Azure DevOps sign-in has ended — sign in to Azure DevOps again');
+  assert.equal(REPO_AUTH_WAYS.needed('github'), 'if it is private, run it with your own GitHub token (read access to its contents), sent with this Run and never kept');
+  assert.equal(REPO_AUTH_WAYS.needed('github', { serverToken: true }), REPO_AUTH_WAYS.needed('github'), 'GITHUB_TOKEN is never named: the operator\'s way is said of Azure DevOps only');
+  assert.equal(REPO_AUTH_WAYS.refused('github'), 'your GitHub token was refused or cannot read it — check that it can read this repository');
+  assert.equal(REPO_AUTH_WAYS.signIn('github'), 'if it is private, sign in to GitHub to read it as you, or run it with your own GitHub token');
+  assert.equal(REPO_AUTH_WAYS.signedInRefused('github', 'ada-gh'), 'you are signed in to GitHub as ada-gh, and that account cannot read this repository — sign in as one that can, or run it with a token that can');
+  assert.equal(REPO_AUTH_WAYS.signedInRefused('github', 'ada-gh', { expired: true }), 'your GitHub sign-in has ended — sign in to GitHub again');
+  // How the Run picks one (server/index.mjs): sign-in offered, else the token — the server's own named only
+  // for Azure DevOps on a server without sign-in; `signIn: false` (an Azure DevOps Server) reads as not offered.
+  assert.equal(repoAuthTail({ kind: 'ado', refused: false, signIn: true }, { serverToken: true }), REPO_AUTH_WAYS.signIn('ado'));
+  assert.equal(repoAuthTail({ kind: 'ado', refused: false, signIn: false }, { serverToken: true }), REPO_AUTH_WAYS.needed('ado', { serverToken: true }));
+  assert.equal(repoAuthTail({ kind: 'ado', refused: false }, { serverToken: false }), REPO_AUTH_WAYS.needed('ado'));
+  assert.equal(repoAuthTail({ kind: 'github', refused: false }, { serverToken: true }), REPO_AUTH_WAYS.needed('github'));
+  assert.equal(repoAuthTail({ kind: 'github', refused: true, signIn: true }), REPO_AUTH_WAYS.refused('github'));
+  assert.equal(repoAuthTail({ kind: 'github', refused: true, via: 'sign-in', account: 'ada-gh', expired: true }), REPO_AUTH_WAYS.signedInRefused('github', 'ada-gh', { expired: true }));
+  assert.equal(repoAuthTail(null), '');
 });
 
 test('a Run of a private GitHub repository sends the person\'s token for that read only: without it the answer asks for it, with it the scan reads, a wrong one is named; the server\'s token serves only a server without sign-in; no token reaches a log or an answer; Expert\'s GitHub scan follows the same rule', async () => {

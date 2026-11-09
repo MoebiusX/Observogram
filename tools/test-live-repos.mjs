@@ -15,8 +15,9 @@
  * the real GitHub and Azure DevOps behind server/repo-sources.mjs
  * fetchRepositoryFiles and POST /api/services/:id/run. Every request the
  * readers send is recorded by host, never by token: which token it carried
- * is a label, so no assertion or message can print one, and every text this
- * suite shows is masked (each token, and an Azure DevOps token's Basic form).
+ * is a label, so no assertion on it can print one; every message this suite
+ * writes is masked, and so is every sentence from the server or a host before
+ * it is compared (each token, and an Azure DevOps token's Basic form).
  *
  *   the fixture        tools/fixtures/live-repo, read by a folder Run here:
  *                      the files and kinds each host must return (offline)
@@ -125,7 +126,11 @@ const SECRETS = [
   ...[LIVE.adoToken, MADE_UP.ado].filter(Boolean).map((t) => wire(t).replace(/=+$/, '')),
 ].filter(Boolean);
 const holdsSecret = (text) => SECRETS.some((s) => String(text ?? '').includes(s));
-// Any text a message may show, with every token masked.
+// Any text a message may show, with every token masked. A text from the
+// server or a host is also masked before it is handed to assert as the
+// actual: a failed compare prints its actual raw, from the reporter in the
+// parent process under node --test, where nothing here reaches it (and the
+// child's stdout is the test protocol, so it is never wrapped either).
 const masked = (text) => SECRETS.reduce((s, t) => s.split(t).join('[token]'), String(text ?? ''));
 
 // Every request the server sends past loopback, by host and by whose token
@@ -233,9 +238,12 @@ async function serviceOn(repository) {
 }
 const runOf = (svc, body = {}) => call('POST', `/api/services/${svc.id}/run`, { env: 'prod', ...body });
 
-// GitHub's quota for a reader with no token is spent (ghFetch keeps GitHub's
-// own sentence, "API rate limit exceeded for …"): not the reader's fault.
-const quotaSpent = (status, error) => [403, 429].includes(status) && /rate limit/i.test(String(error ?? ''));
+// GitHub's quota for a reader with no token is spent: not the reader's fault.
+// Decided from the sentence alone — ghFetch keeps GitHub's own ("GitHub 403 on
+// /repos/…: API rate limit exceeded for …", a 403 or a 429 as GitHub documents
+// it), and the Run route answers a 429 as 502, so the status it hands back
+// would miss the quota while a direct read's would not.
+const quotaSpent = (error) => /\bGitHub (?:403|429) on \S+: .*rate limit/i.test(String(error ?? ''));
 const QUOTA = (error) => `GitHub's quota without a token is spent here: ${masked(error)}`;
 
 // ---------- the fixture ----------
@@ -289,11 +297,19 @@ test('GitHub, a public repository, read with no token: its files from raw.github
   let read;
   try { read = await fetchRepositoryFiles(repository, { credential: { token: null, source: 'none' } }); }
   catch (e) {
-    if (quotaSpent(e.status, e.message)) { t.skip(QUOTA(e.message)); return; }
+    if (quotaSpent(e.message)) { t.skip(QUOTA(e.message)); return; }
     throw e;
   }
-  assert.equal(read.source, `${gh.owner}/${gh.repo} on GitHub`);
-  assert.ok(Object.keys(read.files).length > 0 && read.candidates >= Object.keys(read.files).length, `files read: ${Object.keys(read.files).length} of ${read.candidates}`);
+  assert.equal(masked(read.source), `${gh.owner}/${gh.repo} on GitHub`);
+  // A download that fails is skipped and named, never fatal: when
+  // raw.githubusercontent.com throttles every one, the files are 0 and each
+  // skip says "GitHub 429 on <path>". The message names the first three, so
+  // the weekly run shows the burst; it is not skipped, that burst is the thing
+  // worth seeing.
+  const got = Object.keys(read.files).length;
+  const skips = (read.skipped ?? []).map((s) => `${s.path}: ${s.why}`);
+  const shown = skips.length ? ` — skipped: ${skips.slice(0, 3).join('; ')}${skips.length > 3 ? ` … and ${skips.length - 3} more` : ''}` : '';
+  assert.ok(got > 0 && read.candidates >= got, masked(`files read: ${got} of ${read.candidates}${shown}`));
   const calls = sentSince(from);
   assert.ok(calls.every((c) => c.token === null), 'no token at all: none sent');
   assert.ok(calls.every((c) => c.origin === 'https://api.github.com' || c.origin === 'https://raw.githubusercontent.com'), `only GitHub's hosts: ${[...new Set(calls.map((c) => c.origin))].join(', ')}`);
@@ -306,17 +322,17 @@ test('GitHub, the private test repository, signed in: no token is answered 404 w
   const gh = parseGithubUrl(svc.repository.location);
   let from = sent.length;
   const none = await runOf(svc);
-  if (quotaSpent(none.status, none.json?.error)) { t.skip(QUOTA(none.json.error)); return; }
+  if (quotaSpent(none.json?.error)) { t.skip(QUOTA(none.json.error)); return; }
   assert.equal(none.status, 404, `a private repository reads as not there without a token — is it private? ${masked(none.text).slice(0, 300)}`);
   assert.deepEqual(none.json.repoAuth, { kind: 'github', label: 'GitHub token', refused: false });
-  assert.equal(none.json.error, `the repository could not be read: GitHub 404 on /repos/${gh.owner}/${gh.repo}: Not Found — ${REPO_AUTH_WAYS.needed('github')}`);
+  assert.equal(masked(none.json.error), `the repository could not be read: GitHub 404 on /repos/${gh.owner}/${gh.repo}: Not Found — ${REPO_AUTH_WAYS.needed('github')}`);
   assert.ok(sentSince(from).every((c) => c.token === null), 'none sent');
 
   from = sent.length;
   const wrong = await runOf(svc, { repoAuth: MADE_UP.github });
   assert.equal(wrong.status, 403, masked(wrong.text));
   assert.deepEqual(wrong.json.repoAuth, { kind: 'github', label: 'GitHub token', refused: true });
-  assert.equal(wrong.json.error, `the repository could not be read: GitHub 401 on /repos/${gh.owner}/${gh.repo}: Bad credentials — ${REPO_AUTH_WAYS.refused('github')}`);
+  assert.equal(masked(wrong.json.error), `the repository could not be read: GitHub 401 on /repos/${gh.owner}/${gh.repo}: Bad credentials — ${REPO_AUTH_WAYS.refused('github')}`);
   const calls = sentSince(from);
   assert.ok(calls.length >= 1 && calls.every((c) => c.token === 'made-up' && c.origin === 'https://api.github.com'), 'the made-up token, to the API only');
 });
@@ -328,21 +344,24 @@ test('GitHub, the private test repository read with its token: the Run scans the
   let from = sent.length;
   const r = await runOf(svc, { repoAuth: LIVE.githubToken });
   assert.equal(r.status, 200, masked(r.text));
-  assert.equal(r.json.scan.source, `${gh.owner}/${gh.repo} on GitHub`);
+  assert.equal(masked(r.json.scan.source), `${gh.owner}/${gh.repo} on GitHub`);
   assert.deepEqual(scanShape(r.json.scan), FIXTURE_SCAN, 'the same scan as the folder');
   let calls = sentSince(from);
   // The repository, its tree and its three files: all through the API with the token.
   assert.ok(calls.length >= 5 && calls.every((c) => c.token === 'github' && c.origin === 'https://api.github.com'), 'the token on every call, through the API (never raw.githubusercontent.com)');
 
   from = sent.length;
-  const read = await fetchRepositoryFiles(svc.repository, { credential: { token: LIVE.githubToken, source: 'request' } });
+  // A direct read bypasses the Run route's redaction: its failure is masked here before the reporter prints it.
+  let read;
+  try { read = await fetchRepositoryFiles(svc.repository, { credential: { token: LIVE.githubToken, source: 'request' } }); }
+  catch (e) { assert.fail(masked(e.message)); }
   await sameAsFixture(read, `${gh.owner}/${gh.repo}`);
   calls = sentSince(from);
   assert.ok(calls.every((c) => c.token === 'github' && c.origin === 'https://api.github.com'));
 
   // The next Run without it reads with none: its answer is anonymous.
   const again = await runOf(svc);
-  if (quotaSpent(again.status, again.json?.error)) { t.skip(`the read passed; the Run after it, with no token, could not run — ${QUOTA(again.json.error)}`); return; }
+  if (quotaSpent(again.json?.error)) { t.skip(`the read passed; the Run after it, with no token, could not run — ${QUOTA(again.json.error)}`); return; }
   assert.equal(again.status, 404, 'the token was for that Run only: the next one without it has none');
 });
 
@@ -357,7 +376,7 @@ test('Azure DevOps, the private test repository, signed in: no token is "not pub
   const none = await runOf(svc);
   assert.equal(none.status, 403, `a private repository is refused without a token — is it private? ${masked(none.text).slice(0, 300)}`);
   assert.deepEqual(none.json.repoAuth, { kind: 'ado', label: 'Azure DevOps token', refused: false });
-  assert.equal(none.json.error, `the repository could not be read: Azure DevOps 401: this repository is not public — ${REPO_AUTH_WAYS.needed('ado')}`, 'sign-in on: the way is the person\'s own token, never AZURE_DEVOPS_TOKEN');
+  assert.equal(masked(none.json.error), `the repository could not be read: Azure DevOps 401: this repository is not public — ${REPO_AUTH_WAYS.needed('ado')}`, 'sign-in on: the way is the person\'s own token, never AZURE_DEVOPS_TOKEN');
   let calls = sentSince(from);
   assert.ok(calls.length >= 1 && calls.every((c) => c.token === null), 'none sent');
   assert.ok(calls.every((c) => c.origin === ADO_ORIGIN && c.suppress === 'Suppress' && c.redirect === 'manual'), 'to the repository\'s host only, asking for the 401, following nothing');
@@ -366,7 +385,7 @@ test('Azure DevOps, the private test repository, signed in: no token is "not pub
   const wrong = await runOf(svc, { repoAuth: MADE_UP.ado });
   assert.equal(wrong.status, 403, masked(wrong.text));
   assert.deepEqual(wrong.json.repoAuth, { kind: 'ado', label: 'Azure DevOps token', refused: true });
-  assert.equal(wrong.json.error, `the repository could not be read: Azure DevOps 401: not authorised to read this repository — ${REPO_AUTH_WAYS.refused('ado')}`);
+  assert.equal(masked(wrong.json.error), `the repository could not be read: Azure DevOps 401: not authorised to read this repository — ${REPO_AUTH_WAYS.refused('ado')}`);
   calls = sentSince(from);
   assert.ok(calls.length >= 1 && calls.every((c) => c.token === 'made-up' && c.origin === ADO_ORIGIN && c.redirect === 'manual'), 'the made-up token, to the repository\'s host only');
 });
@@ -378,14 +397,16 @@ test('Azure DevOps, the private test repository read with its token: the Run sca
   let from = sent.length;
   const r = await runOf(svc, { repoAuth: LIVE.adoToken });
   assert.equal(r.status, 200, masked(r.text));
-  assert.equal(r.json.scan.source, `${ado.project}/${ado.repo} on Azure DevOps`);
+  assert.equal(masked(r.json.scan.source), `${ado.project}/${ado.repo} on Azure DevOps`);
   assert.deepEqual(scanShape(r.json.scan), FIXTURE_SCAN, 'the same scan as the folder');
   let calls = sentSince(from);
   // The tree and the three files.
   assert.ok(calls.length >= 4 && calls.every((c) => c.token === 'ado' && c.origin === ADO_ORIGIN && c.suppress === 'Suppress' && c.redirect === 'manual'), 'the token as Basic on the tree and every file, to the repository\'s host only');
 
   from = sent.length;
-  const read = await fetchRepositoryFiles(svc.repository, { credential: { token: LIVE.adoToken, source: 'request' } });
+  let read;
+  try { read = await fetchRepositoryFiles(svc.repository, { credential: { token: LIVE.adoToken, source: 'request' } }); }
+  catch (e) { assert.fail(masked(e.message)); }
   await sameAsFixture(read, `${ado.project}/${ado.repo}`);
   calls = sentSince(from);
   assert.ok(calls.every((c) => c.token === 'ado' && c.origin === ADO_ORIGIN));
@@ -403,7 +424,7 @@ test('a host the server cannot reach: the Run answers 502 and says why, and asks
     const r = await runOf(svc, { repoAuth: MADE_UP.ado });
     assert.equal(r.status, 502, masked(r.text));
     assert.equal(r.json.repoAuth, undefined, 'a token would not change the answer');
-    assert.match(r.json.error, /^the repository could not be read: Azure DevOps: https:\/\/ado\.observogram\.invalid could not be reached from the server — .+ \([A-Z0-9_]+\)(?:; .+)?$/, masked(r.json.error));
+    assert.match(masked(r.json.error), /^the repository could not be read: Azure DevOps: https:\/\/ado\.observogram\.invalid could not be reached from the server — .+ \([A-Z0-9_]+\)(?:; .+)?$/);
     assert.ok(sentSince(from).every((c) => c.origin === origin), 'nothing else was tried');
   } finally { delete process.env.OBSERVOGRAM_ADO_ORIGINS; }
 });

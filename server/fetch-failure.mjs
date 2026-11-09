@@ -1,12 +1,19 @@
-// server/fetch-failure.mjs — a fetch that failed before the host answered, in words.
+// server/fetch-failure.mjs — a fetch that failed before the host answered, or
+// while its answer was read, in words.
 //
 // Node's fetch throws `TypeError: fetch failed` for every failure below HTTP
 // and keeps the reason in `cause`: a name that does not resolve, a refused,
 // timed-out or dropped connection, a TLS failure — but also a redirect it
-// was told not to follow, or a request it would not build. A Run that said
-// only "fetch failed" left the person nothing to act on, and "could not be
-// reached" is true of the first kind only. unreachable() says which it was,
-// and whether the request went through the server's proxy
+// was told not to follow, or a request it would not build. An answer that
+// cannot be read to the end is another shape: res.json() or res.text()
+// rejects with `TypeError: terminated`, and the cause is the socket's error
+// (the connection dropped), the decoder's (a Content-Encoding the bytes are
+// not) or the parser's (a chunk it cannot frame) — the cause's code says
+// which; read under the readers' deadline, it rejects with a TimeoutError
+// although the host answered. A Run that said only "fetch failed" or
+// "terminated" left the person nothing to act on, and "could not be reached"
+// is true of the first kind only. unreachable() says which it was, and
+// whether the request went through the server's proxy
 // (server/outbound-proxy.mjs): through one, the server's connection is to
 // the proxy, which then fails or refuses to open the way to the host.
 // Server-only; pure but for the default route, read from this process's
@@ -29,8 +36,26 @@ const NETWORK = Object.freeze({
 // The TLS codes where the server does not trust the certificate's issuer:
 // the one case an extra certificate authority (NODE_EXTRA_CA_CERTS) fixes.
 const UNTRUSTED_ISSUER = new Set(['UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT']);
+// Node's other X509 verify codes: the certificate did not verify, for a
+// reason an extra certificate authority does not fix (revoked, a CRL that
+// could not be read, an invalid CA, the wrong purpose, a chain too long, a
+// signature that does not check). Most carry no CERT_ prefix, so the
+// handshake catch-all below would miss them; the ones that do are named
+// here first, since the handshake was not the failure.
+const CERT_NOT_VERIFIED = new Set([
+  'UNABLE_TO_GET_CRL', 'UNABLE_TO_DECRYPT_CERT_SIGNATURE', 'UNABLE_TO_DECRYPT_CRL_SIGNATURE', 'UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY',
+  'CRL_SIGNATURE_FAILURE', 'CRL_NOT_YET_VALID', 'CRL_HAS_EXPIRED',
+  'ERROR_IN_CERT_NOT_BEFORE_FIELD', 'ERROR_IN_CERT_NOT_AFTER_FIELD', 'ERROR_IN_CRL_LAST_UPDATE_FIELD', 'ERROR_IN_CRL_NEXT_UPDATE_FIELD',
+  'CERT_CHAIN_TOO_LONG', 'CERT_REVOKED', 'INVALID_CA', 'PATH_LENGTH_EXCEEDED', 'INVALID_PURPOSE', 'CERT_UNTRUSTED', 'CERT_REJECTED', 'CERT_SIGNATURE_FAILURE',
+]);
 // Codes for a request the server would not send: nothing left the machine.
 const NOT_SENT = new Set(['UND_ERR_INVALID_ARG', 'UND_ERR_NOT_SUPPORTED', 'ERR_INVALID_URL', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE']);
+// The codes under undici's 'terminated' that mean the connection itself went
+// while the body was read: the socket closed or reset, or the write end was
+// gone. Any other code there is a body the server could not read while the
+// connection held — the decoder's (Z_DATA_ERROR for gzip or deflate bytes
+// that are not, ERR__ERROR_FORMAT_* for brotli) or the parser's (HPE_*).
+const DROPPED = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE']);
 
 // Why the host was not reached, for one code, or '' when the code is no network failure.
 function networkReason(code) {
@@ -38,7 +63,10 @@ function networkReason(code) {
   if (UNTRUSTED_ISSUER.has(code)) return 'its certificate is not one the server trusts (if a proxy re-signs the traffic, give the server its certificate authority with NODE_EXTRA_CA_CERTS)';
   if (code === 'CERT_HAS_EXPIRED' || code === 'CERT_NOT_YET_VALID') return 'its certificate has expired or is not yet valid';
   if (code === 'ERR_TLS_CERT_ALTNAME_INVALID' || code === 'HOSTNAME_MISMATCH') return 'its certificate does not name this host (something else answered, or the address uses a name the certificate is not for)';
-  if (/^(?:ERR_SSL_|ERR_TLS_|CERT_)/.test(code)) return 'the TLS handshake failed (is it https on that port?)';
+  if (CERT_NOT_VERIFIED.has(code)) return 'its certificate did not verify on the server';
+  // Any other TLS code: the handshake itself — a protocol or cipher the two
+  // sides do not share, or no TLS at all on that port. The code names which.
+  if (/^(?:ERR_SSL_|ERR_TLS_|CERT_)/.test(code)) return 'the TLS handshake failed';
   return '';
 }
 
@@ -108,40 +136,65 @@ function directHint(route, host) {
   return '';
 }
 
-// unreachable(label, url, error, { route }) → the Error to throw in place of fetch's own:
+// unreachable(label, url, error, { route, answered }) → the Error to throw in place of fetch's own:
 //   not reached   "<label>: <origin> could not be reached from the server — <reason> (<code>)"
 //                 and, for a code with no route (NO_ROUTE), "; <how a proxy would be set>"
 //   the proxy     "<label>: the proxy <proxy> could not be reached from the server — <reason> (<code>)"
 //   refused by it "<label>: <origin> could not be reached through the proxy <proxy> — <what its status means>"
 //   through it    "<label>: <origin> could not be reached through the proxy <proxy> — <reason> (<code>)"
 //   too long      "<label>: <origin> did not answer within 60 s[ through the proxy <proxy>]"
+//                 and, with `answered` (the body read under the same deadline, the status already in hand),
+//                 "<label>: <origin> answered, but its answer did not finish within 60 s[ through the proxy <proxy>]"
+//   a drop        "<label>: the connection to <origin> was dropped while the answer was read[ through the proxy <proxy>] (<code, or what the cause said, or 'no reason given'>)"
+//   not finished  "<label>: <origin> answered, but its answer did not finish in time[ through the proxy <proxy>] (UND_ERR_BODY_TIMEOUT)"
+//   not readable  "<label>: the answer from <origin> could not be read to the end[ through the proxy <proxy>] — <what the cause said, or the code> (<code>)"
+//                 (the three are undici's TypeError 'terminated' from res.json() or res.text(), told apart by the cause's
+//                 code: a drop is UND_ERR_SOCKET, ECONNRESET, EPIPE or no code at all; not finished is undici's own body
+//                 timeout; not readable is any other code — a decoder's Z_* or ERR__ERROR_FORMAT_*, the parser's HPE_*.
+//                 The host answered in each, so never "could not be reached")
 //   a redirect    "<label>: <origin> answered with a redirect, which the server does not follow"
 //   not sent      "<label>: the request to <origin> was not sent — <what undici said>"
 //   anything else "<label>: <origin>: fetch failed — <code or what undici said>"
 // `route` is how the request left the server (outboundRoute): by default, as
-// this process's environment sends it. `status` stays unset, so the caller
-// answers 502 and asks the person for nothing. The original error is kept as
-// `cause`. An error that is neither fetch's own network failure nor the
-// readers' deadline (a TimeoutError) is returned as it is.
-export function unreachable(label, url, error, { route = outboundRoute(url) } = {}) {
+// this process's environment sends it. `answered` is for a body-read call
+// site (res.json(), res.text()): the status was read, so a TimeoutError
+// there is the answer not finishing, not the host not answering; a fetch()
+// call site leaves it off. `status` stays unset, so the caller answers 502
+// and asks the person for nothing. The original error is kept as `cause`.
+// An error that is none of fetch's own network failure, an answer not read
+// to the end and the readers' deadline (a TimeoutError) is returned as it
+// is: a SyntaxError from a body that is not JSON stays what it was.
+export function unreachable(label, url, error, { route = outboundRoute(url), answered = false } = {}) {
   let origin = String(url);
   let host = origin;
   let port = '';
   try { const u = new URL(url); origin = u.origin; host = u.hostname; port = u.port || (u.protocol === 'http:' ? '80' : '443'); } catch { /* keep it */ }
   const proxy = route?.through || null;
+  const viaProxy = proxy ? ` through the proxy ${proxy}` : '';
   if (error?.name === 'TimeoutError') {
-    return new Error(`${label}: ${origin} did not answer within ${Math.round(READ_TIMEOUT_MS / 1000)} s${proxy ? ` through the proxy ${proxy}` : ''}`, { cause: error });
+    const seconds = Math.round(READ_TIMEOUT_MS / 1000);
+    if (answered) return new Error(`${label}: ${origin} answered, but its answer did not finish within ${seconds} s${viaProxy}`, { cause: error });
+    return new Error(`${label}: ${origin} did not answer within ${seconds} s${viaProxy}`, { cause: error });
   }
-  if (!(error instanceof TypeError) || !/fetch failed/i.test(error.message)) return error;
+  if (!(error instanceof TypeError)) return error;
   const cause = error.cause || {};
   const codes = codesOf(cause);
   const said = typeof cause.message === 'string' ? cause.message.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
+  if (typeof error.message === 'string' && error.message.trim().toLowerCase() === 'terminated') {
+    // undici says 'terminated' for a socket that went, but also for a body its decoder or parser
+    // could not read while the connection held: the cause's code tells which, so the sentence does.
+    const code = codes[0] || '';
+    if (!code || DROPPED.has(code)) return new Error(`${label}: the connection to ${origin} was dropped while the answer was read${viaProxy} (${code || said || 'no reason given'})`, { cause: error });
+    if (code === 'UND_ERR_BODY_TIMEOUT') return new Error(`${label}: ${origin} answered, but its answer did not finish in time${viaProxy} (UND_ERR_BODY_TIMEOUT)`, { cause: error });
+    return new Error(`${label}: the answer from ${origin} could not be read to the end${viaProxy} — ${said || code} (${code})`, { cause: error });
+  }
+  if (!/fetch failed/i.test(error.message)) return error;
   const named = codes.find((c) => networkReason(c));
-  const answered = proxy ? proxyAnswer(cause) : null;
+  const proxyStatus = proxy ? proxyAnswer(cause) : null;
   // A connect timeout that names the host's address: the tunnel was open, its TLS handshake was not.
   const hostTimedOut = named === 'UND_ERR_CONNECT_TIMEOUT' && typeof cause.message === 'string' && cause.message.includes(`${host}:${port}`);
   let text;
-  if (answered) text = `${origin} could not be reached through the proxy ${proxy} — ${proxyStatusText(answered, host, route)}`;
+  if (proxyStatus) text = `${origin} could not be reached through the proxy ${proxy} — ${proxyStatusText(proxyStatus, host, route)}`;
   else if (proxy && hostTimedOut) text = `${origin} could not be reached through the proxy ${proxy} — the proxy opened the connection, but the TLS handshake with ${host} timed out (${named})`;
   else if (proxy && named && PROXY_NOT_REACHED.has(named)) text = `the proxy ${proxy} could not be reached from the server — ${networkReason(named)} (${named})`;
   else if (proxy && named) text = `${origin} could not be reached through the proxy ${proxy} — ${networkReason(named)} (${named})`;

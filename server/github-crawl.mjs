@@ -162,6 +162,14 @@ export function settleFetched(selected, texts, { fileCapBytes = SCAN_MAX_FILE_BY
 // A host read's caps: at most 200 files of the scan's 5 MB each, 16 MB in all.
 export const HOST_READ_CAPS = Object.freeze({ maxFiles: 200, fileCapBytes: SCAN_MAX_FILE_BYTES, totalCapBytes: 16 * 1024 * 1024 });
 
+// The JSON a GitHub REST answer carries, an answer that could not be read to
+// the end said as what it is (server/fetch-failure.mjs: the status was read,
+// so `answered`; a body that is not JSON stays the SyntaxError it was).
+async function apiJson(res) {
+  try { return await res.json(); }
+  catch (e) { throw unreachable('GitHub', 'https://api.github.com', e, { answered: true }); }
+}
+
 export async function ghFetch(path, init = {}, { token = null } = {}) {
   const headers = {
     'Accept': 'application/vnd.github+json',
@@ -194,11 +202,14 @@ function githubSays(body) {
   return (message ?? text).replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
+// A public file's address on raw.githubusercontent.com.
+const rawUrl = (owner, repo, ref, path) => `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref).replace(/%2F/g, '/')}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
+
 // A public file's bytes from raw.githubusercontent.com — outside the REST
 // API's quota (60 requests an hour without a token, which a 200-file scan
 // would spend in its first minute). Never sent a token.
 export async function rawFetch(owner, repo, ref, path) {
-  const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(ref).replace(/%2F/g, '/')}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
+  const url = rawUrl(owner, repo, ref, path);
   let res;
   try { res = await fetch(url, { headers: { 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity' }, redirect: 'manual', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); }
   catch (e) { throw unreachable('GitHub', url, e); }
@@ -223,7 +234,9 @@ export async function rawFetch(owner, repo, ref, path) {
  * contents API with a `token` (a private repository; repo-auth.mjs says
  * whose), else from raw.githubusercontent.com (rawFetch: a public one, no
  * quota spent). A file that fails or does not fit is skipped and named,
- * never fatal; a tree or repository error throws (err.status is GitHub's).
+ * never fatal (a connection dropped while it was read is named as that); a
+ * tree or repository error throws (err.status is GitHub's; none when the
+ * host was not reached or its answer was cut short).
  * → { ref, candidates, capped, files, skipped: [{ path, why }], truncated }
  * — candidates the blobs the crawler's rule reads, capped how many of them
  * the 200-file cap left out, truncated GitHub's own flag (a tree too large
@@ -233,10 +246,10 @@ export async function rawFetch(owner, repo, ref, path) {
 export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch } = {}) {
   let at = ref;
   if (!at) {
-    const repoMeta = await fetchFn(`/repos/${owner}/${repo}`).then(r => r.json());
+    const repoMeta = await apiJson(await fetchFn(`/repos/${owner}/${repo}`));
     at = repoMeta.default_branch || 'main';
   }
-  const treeResp = await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`).then(r => r.json());
+  const treeResp = await apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`));
   const plan = planCrawlerFetch(treeResp.tree, HOST_READ_CAPS);
   const texts = new Map();
   await Promise.all(plan.selected.map(async (node) => {
@@ -246,7 +259,12 @@ export async function fetchGithubFiles({ owner, repo, ref = null }, { token = nu
         : await fetchFn(`/repos/${owner}/${repo}/contents/${encodeURIComponent(node.path).replace(/%2F/g, '/')}?ref=${encodeURIComponent(at)}`, {
           headers: { Accept: 'application/vnd.github.raw+json' },
         });
-      texts.set(node.path, { text: await contentRes.text() });
+      // The bytes: the status was read, so an answer that does not finish or
+      // cannot be read to the end is said as that, not as the host not reached.
+      let text;
+      try { text = await contentRes.text(); }
+      catch (e) { throw unreachable('GitHub', rawFn ? rawUrl(owner, repo, at, node.path) : 'https://api.github.com', e, { answered: true }); }
+      texts.set(node.path, { text });
     } catch (e) {
       texts.set(node.path, { error: e.message });
     }
