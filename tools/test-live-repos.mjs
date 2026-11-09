@@ -403,7 +403,7 @@ test('a host the server cannot reach: the Run answers 502 and says why, and asks
     const r = await runOf(svc, { repoAuth: MADE_UP.ado });
     assert.equal(r.status, 502, masked(r.text));
     assert.equal(r.json.repoAuth, undefined, 'a token would not change the answer');
-    assert.match(r.json.error, /^the repository could not be read: Azure DevOps: https:\/\/ado\.observogram\.invalid could not be reached from the server — .+ \([A-Z0-9_]+\)$/, masked(r.json.error));
+    assert.match(r.json.error, /^the repository could not be read: Azure DevOps: https:\/\/ado\.observogram\.invalid could not be reached from the server — .+ \([A-Z0-9_]+\)(?:; .+)?$/, masked(r.json.error));
     assert.ok(sentSince(from).every((c) => c.origin === origin), 'nothing else was tried');
   } finally { delete process.env.OBSERVOGRAM_ADO_ORIGINS; }
 });

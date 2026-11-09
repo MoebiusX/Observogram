@@ -68,6 +68,7 @@ import {
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { describeProxyAuth } from './auth-proxy.mjs';
+import { proxyBootReport } from './outbound-proxy.mjs';
 import { stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { mcpCallerOf, mcpRefusalBody, redactTarget } from './mcp-target-policy.mjs';
 import { captureNotifyRefusal, hooksAllTaken, notifyBootReport, notifyHookOf, notifyHooksOf, notifyNamesRefusal, notifyPostureRefusal, resolveJourneyNotify } from './notify-target-policy.mjs';
@@ -2813,6 +2814,12 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   brand = loadBrand();
   brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
   if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
+  // The proxy the server's own requests go through (server/outbound-proxy.mjs:
+  // HTTPS_PROXY, HTTP_PROXY, NO_PROXY, which Node reads with NODE_USE_ENV_PROXY=1).
+  // Read here, said beside "listening on" below, where whoever set a proxy
+  // looks: scheme://host:port and NO_PROXY's hosts only, never a user name or
+  // password, and a proxy variable this Node will not use as a warning.
+  const outbound = proxyBootReport();
   const { db, ctx } = await bootStore({ host, log, warn });
   // The notify hooks (server/notify-target-policy.mjs notifyBootReport): a
   // hook is registered by setting its variables and starting the server, so
@@ -2852,6 +2859,8 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
       // server's only once it listens: a start that fails to bind records nothing.
       recordIdentityMode(db, ctx);
       if (!silent) process.stdout.write(`[studio] listening on http://${addr.address}:${addr.port}\n`);
+      for (const line of outbound.log) log(line);
+      for (const line of outbound.warn) warn(line);
       resolveListen(srv);
     });
     srv.on('error', reject);

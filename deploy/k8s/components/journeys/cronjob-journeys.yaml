@@ -71,7 +71,7 @@ spec:
               # applies to the kustomization that declares it), so
               # deploy/k8s-journeys/kustomization.yaml repeats the `images:`
               # entry; tools/test-deploy-manifests.mjs pins it to the base's.
-              image: observogram:0.8.13
+              image: observogram:0.8.15
               imagePullPolicy: IfNotPresent
               workingDir: /app
               command: ["node", "tools/cli.mjs", "journey", "run", "--all"]
@@ -104,6 +104,18 @@ spec:
                 # - name: MY_JOURNEY_WEBHOOK_TOKEN
                 #   valueFrom:
                 #     secretKeyRef: { name: journey-secrets, key: MY_JOURNEY_WEBHOOK_TOKEN }
+                # Egress through an HTTP proxy, for journeys that notify or
+                # read hosts outside the cluster: the same HTTPS_PROXY and
+                # NO_PROXY as the studio Deployment. This runs tools/cli.mjs,
+                # not the image's launcher, so Node's switch is set here too,
+                # and only once HTTPS_PROXY is right: Node stops at start on a
+                # value it cannot parse (README "Behind An Outbound Proxy").
+                # - name: NODE_USE_ENV_PROXY
+                #   value: "1"
+                # - name: HTTPS_PROXY
+                #   value: http://proxy.example.com:3128
+                # - name: NO_PROXY
+                #   value: localhost,127.0.0.1,otel-mcp-server,.svc.cluster.local,.internal.example.com
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities: { drop: ["ALL"] }

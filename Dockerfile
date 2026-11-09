@@ -1,7 +1,7 @@
 # Observogram — studio + API in one Express server (server/index.mjs).
 #
-# Build:  npm run build:stamp && docker build -t observogram:0.8.13 .
-# Run:    docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.13
+# Build:  npm run build:stamp && docker build -t observogram:0.8.15 .
+# Run:    docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.15
 #         (the image binds 0.0.0.0, and the server refuses to start off
 #         loopback without a seeded sign-in or OBSERVOGRAM_API_TOKEN; the
 #         workspace lives at /app/.observogram — mount a volume there or
@@ -23,10 +23,10 @@ FROM node:22.23.4-alpine
 # package.json. server/build-info.mjs then answers the studio footer,
 # GET /api/version and /healthz from that file (source 'file'); without it
 # they say "build unknown" — never a guess.
-#   npm run build:stamp && docker build -t observogram:0.8.13 .
+#   npm run build:stamp && docker build -t observogram:0.8.15 .
 # OBSERVOGRAM_BUILD, when given, overrides the composite build string on
 # /healthz only (a CI run number or tag); /api/version stays the stamp.
-#   docker build --build-arg OBSERVOGRAM_BUILD=ci-412 -t observogram:0.8.13 .
+#   docker build --build-arg OBSERVOGRAM_BUILD=ci-412 -t observogram:0.8.15 .
 ARG OBSERVOGRAM_BUILD=
 ENV OBSERVOGRAM_BUILD=$OBSERVOGRAM_BUILD
 
@@ -64,4 +64,11 @@ RUN mkdir -p /app/.observogram && chown -R node:node /app/.observogram /app/exam
 USER node
 ENV HOST=0.0.0.0 PORT=8000
 EXPOSE 8000
-CMD ["node", "server/index.mjs"]
+# server/launch.mjs starts server/index.mjs with Node's proxy switch
+# (NODE_USE_ENV_PROXY=1) on when HTTPS_PROXY or HTTP_PROXY is set and is a
+# URL Node can use, so the server's own requests (Azure DevOps, GitHub, the
+# sign-in hosts, the MCP endpoints) go through it, and directly to every
+# host NO_PROXY names. Docker's client proxy settings set those variables in
+# every container. The start says, after "listening on", which proxy is in
+# use or which variable to fix. NODE_USE_ENV_PROXY=0 keeps every request direct.
+CMD ["node", "server/launch.mjs"]

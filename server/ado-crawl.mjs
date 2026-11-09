@@ -20,7 +20,7 @@
 // with versionDescriptor.version=<branch> when the repository names one
 // (else the repository's default branch).
 
-import { unreachable } from './fetch-failure.mjs';
+import { READ_TIMEOUT_MS, unreachable } from './fetch-failure.mjs';
 
 const SERVICES_HOST = /^(?:dev\.azure\.com|[a-z0-9][a-z0-9-]*\.visualstudio\.com)$/i;
 const SEGMENT = /^[^/?#\s][^/?#]*$/;
@@ -154,7 +154,7 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
   const headers = { Accept: 'application/json', 'User-Agent': 'observogram-crawler/1.0', 'Accept-Encoding': 'identity', 'X-TFS-FedAuthRedirect': 'Suppress' };
   if (token) headers.Authorization = tokenSource === 'link' ? `Bearer ${token}` : `Basic ${Buffer.from(`:${token}`).toString('base64')}`;
   let res;
-  try { res = await fetchImpl(url, { headers, redirect: 'manual' }); }
+  try { res = await fetchImpl(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(READ_TIMEOUT_MS) }); }
   catch (e) { throw unreachable('Azure DevOps', url, e); }
   const ct = res.headers.get('content-type') || '';
   const www = res.headers.get('www-authenticate');

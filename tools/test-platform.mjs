@@ -62,6 +62,7 @@ const lineOf = (src, index) => src.slice(0, index).split('\n').length;
 // is browser code (window.location, fetch URLs) and is not scanned.
 const PATHNAME_ALLOWED = Object.freeze({
   'server/ado-crawl.mjs': 2,            // an Azure DevOps repository URL's path (org, project, _git, repo); a redirect Location's path (/_signin)
+  'server/outbound-proxy.mjs': 1,       // a proxy URL's path, which undici's ProxyAgent refuses (usableProxy)
   'server/store/identity.mjs': 1,       // the OIDC issuer URL's well-known suffix
   'server/routes/mcp-settings.mjs': 2,  // an MCP server's settings URL path, for a refusal and the audit row
   'server/test-auth-oidc.mjs': 4,       // the fake IdP's HTTP request paths
@@ -79,6 +80,7 @@ const README_COUNT_RE = /(\d+) win32-skip sites/;
 // isWin32 is a data read (a ternary over an expected value), never a branch
 // that silently skips: the allowed places, and the two shapes refused everywhere.
 const ISWIN32_ALLOWED = Object.freeze({
+  'server/test-outbound-proxy.mjs': 1,  // ending the launcher and its server: taskkill /T on Windows, where a signal ends the launcher outright
   'server/test-store-ops.mjs': 1,       // the flat-export index.json mode: 0666 on Windows
   'server/test-store-paths.mjs': 1,     // the default host's rule: a directory spelled in another case is itself on Windows
   'tools/test-backend-validate.mjs': 2, // the .exe suffix and the mimirtool notice

@@ -59,7 +59,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: studio
-          image: observogram:0.8.13
+          image: observogram:0.8.15
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -112,6 +112,20 @@ spec:
             # - name: GITHUB_TOKEN
             #   valueFrom:
             #     secretKeyRef: { name: studio-github-token, key: token }
+            # Egress through an HTTP proxy: the image's launcher
+            # (server/launch.mjs) turns Node's proxy switch on when
+            # HTTPS_PROXY is a URL Node can use, so the server's requests go
+            # through it, and directly to every host NO_PROXY names. List
+            # the MCP endpoints there, each by the exact name its URL uses
+            # (a short Service name matches only itself; .svc.cluster.local
+            # covers the full form): sent to the proxy, they fail. A user
+            # name and password go in the URL, percent-encoded, so bind it
+            # from a Secret then. A proxy that re-signs TLS also needs
+            # NODE_EXTRA_CA_CERTS (its CA, mounted from a ConfigMap).
+            # - name: HTTPS_PROXY
+            #   value: http://proxy.example.com:3128
+            # - name: NO_PROXY
+            #   value: localhost,127.0.0.1,otel-mcp-server,.svc.cluster.local,.internal.example.com
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
