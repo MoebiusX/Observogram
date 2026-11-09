@@ -1103,7 +1103,10 @@ with their URLs, and never changes an endpoint.
   Operators add, edit (name, tier, bindings, links, the MCP endpoint) and
   delete environments in one editor, opened from Settings or from the service
   page (Add environment, Edit environment); a save sends only what changed,
-  so a tier save neither resends nor clears the binding. Admins register,
+  so a tier save neither resends nor clears the binding. Operators also
+  delete a service from its row there (Delete…, confirmed first): its
+  environments, pack links and waivers go with it and an uploaded repository
+  copy is removed; the packs stay registered. Admins register,
   edit and delete the org's MCP endpoint records: the URL, and the token as
   the NAME of a variable under the org's prefix
   (`OBSERVOGRAM_ORG_<ORGKEY>_<NAME>`), never its value; the server's refusal
@@ -1454,8 +1457,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.13 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.13
+docker build -t observogram:0.8.14 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.14
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or

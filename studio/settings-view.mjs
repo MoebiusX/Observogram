@@ -35,10 +35,11 @@ function navHtml(nav, deployment = null) {
 }
 
 // The environments, grouped by service: each service's name and slug, "Open
-// service" (its page), then one line per environment — the name, the tier
-// (or "graded by the pack"), the MCP endpoint it is checked through, the
-// bindings and links counted — and, for a rank that may write, Edit… (the
-// environment editor over it).
+// service" (its page) and Delete… (the service dialog on its delete step —
+// unavailable with the reason for a rank that may not), then one line per
+// environment — the name, the tier (or "graded by the pack"), the MCP
+// endpoint it is checked through, the bindings and links counted — and, for
+// a rank that may write, Edit… (the environment editor over it).
 function environmentsHtml(model) {
   if (!model.groups.length) return '';
   return `
@@ -46,7 +47,10 @@ function environmentsHtml(model) {
           <li class="set-row" data-service-id="${escapeHtml(String(g.serviceId))}">
             <span class="set-row-name">${escapeHtml(g.name)}</span>
             <span class="set-row-meta">${escapeHtml(g.slug)}</span>
-            <button type="button" class="ux-secondary-btn" data-open-service="${escapeHtml(String(g.serviceId))}">Open service</button>
+            <span class="set-row-actions">
+              <button type="button" class="ux-secondary-btn" data-open-service="${escapeHtml(String(g.serviceId))}">Open service</button>${g.remove ? `
+              <button type="button" class="ux-secondary-btn" data-remove-service="${escapeHtml(String(g.serviceId))}" aria-label="${escapeHtml(`Delete ${g.name}`)}">Delete…</button>` : ''}
+            </span>
             <ul class="set-envs" aria-label="${escapeHtml(`Environments of ${g.name}`)}">${g.envs.length ? g.envs.map((e) => `
               <li class="set-env" data-env-id="${escapeHtml(String(e.id))}">
                 <span class="set-row-name">${escapeHtml(e.name)}</span>
@@ -337,6 +341,16 @@ export function renderSettings(container, frame, section, host = appHost) {
   container.querySelectorAll('[data-edit-env]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'environment', id: Number(btn.dataset.editEnv) }));
   });
+  // A service's Delete…: its dialog on the delete step, or why not.
+  container.querySelectorAll('[data-remove-service]').forEach((btn) => {
+    const group = (section.model?.groups || []).find((g) => String(g.serviceId) === btn.dataset.removeService);
+    const reason = group?.remove && !group.remove.enabled ? group.remove.reason : null;
+    if (reason) markUnavailable(btn, reason);
+    btn.addEventListener('click', () => {
+      if (reason) { host.settings?.explain?.(reason); return; }
+      host.settings?.openEditor?.({ kind: 'service', id: Number(btn.dataset.removeService), step: 'confirm-delete' });
+    });
+  });
   if (section.id === 'members') wireMembers(container, section.model, host);
   container.querySelectorAll('[data-user-manage]').forEach((btn) => {
     btn.addEventListener('click', () => host.settings?.openEditor?.({ kind: 'user', id: Number(btn.dataset.userManage) }));
@@ -534,7 +548,7 @@ function editorBodyHtml(model) {
           <button type="button" class="ux-secondary-btn" id="set-secret-copy">Copy</button>
         </div>`;
   if (model.step === 'notice') return '';
-  if (model.kind === 'org') return (model.facts || []).map((f) => `
+  if (model.kind === 'org' || model.kind === 'service') return (model.facts || []).map((f) => `
         <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('');
   if (model.kind === 'user') return `${(model.facts || []).map((f) => `
         <p class="set-row-meta set-user-fact">${escapeHtml(f)}</p>`).join('')}
