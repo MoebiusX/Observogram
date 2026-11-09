@@ -66,7 +66,14 @@
 - **`tools/test-live-repos.mjs`:** the unreachable check accepts the hint.
 - **`tools/test-platform.mjs`:** `server/outbound-proxy.mjs` reads one URL path, a proxy URL's, which undici refuses. The launcher test reads `isWin32` once, as data, to end the tree, and that read is pinned. README "Platforms" and `docs/DOWNSTREAM.md` count 16 win32-skip sites and 20 `SKIP win32:` lines.
 - Before the push, four independent reviews, each finding checked by a skeptic, raised 13 findings; all are fixed here.
-- Suite total 1763 → 1778.
+- Suite total 1764 → 1779.
+
+## 0.8.14 — 2026-11-09
+
+**A service can be deleted from the studio.** Settings → Environments carries Delete… on each service's row, with the consequence spelled out and confirmed first; the route existed, the studio now offers it.
+
+### Added
+- **Settings → Environments: Delete… on each service's row.** An operator deletes a service from the studio, as environments and MCP endpoints already could. The dialog opens on its delete step with the service's facts (slug, environments, pack links, repository) and says what goes with it — its environments, its pack links and waivers, an uploaded repository copy — and what stays: the packs. For a rank that may not, the button is `aria-disabled` with the reason, as the section's other controls. `DELETE /api/services/:id` already existed, audited as `service.delete`; the studio now offers it (`studio/settings-model.mjs`, `settings-view.mjs`, `settings-api.mjs`, `app.mjs`). Suite total 1763 → 1764.
 
 ## 0.8.13 — 2026-11-07
 

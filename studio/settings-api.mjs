@@ -80,6 +80,16 @@ export async function deleteEnvironment(id, { fetchFn = requestJson } = {}) {
   return doc?.deleted ?? null;
 }
 
+// ---------- services ----------
+
+// DELETE /api/services/:id → { deleted: the ServiceView as it was, environments, packLinks, waivers }
+// (operator) — the counts of what went with it; the packs stay registered.
+export async function deleteService(id, { fetchFn = requestJson } = {}) {
+  const doc = await fetchFn(`/api/services/${enc(id)}`, { method: 'DELETE' });
+  const n = (k) => (Number.isInteger(doc?.[k]) ? doc[k] : 0);
+  return { deleted: doc?.deleted ?? null, environments: n('environments'), packLinks: n('packLinks'), waivers: n('waivers') };
+}
+
 // ---------- members and the org's name ----------
 
 // GET /api/org/members → { org, members } with no email (admin; in the token
