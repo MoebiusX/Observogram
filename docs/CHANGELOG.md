@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.26 — 2026-11-10
+
 **The screens are about the chain people know: exporters, alerts, dashboards and MTTD / MTTR.** The board counted everything the repository declares together — 741 things, 324 of them dashboard panels and 39 recording rules — and a reader could not tell the alerts they care about from the machinery behind them. Every kind of artefact now has a tier, Overview shows the chain alone with the rest named in a line, and Expert folds the machinery until asked for. The grade is unchanged.
 
 ### Added
@@ -27,6 +29,7 @@
 - `tools/test-overview-model.mjs` +3: `chainModel` (the links, the objectives without an alert, MTTD / MTTR declared, measured, placeholder), the chain against live (`fidelityModel`, `changesModel`, `stillTrueModel`, `nextActionModel`, an older record), the board drawn with both; the board's render test and its pack stub follow the new Discover, the import closure gains the module, the differences list's machinery row.
 - `tools/test-discover-rows.mjs` +1: the folded groups match the families' homes and tiers, a band folded and drawn whole. `tools/test-chaos-detect.mjs` +2: `spec.baselines` read, refused, declared in a scan, the placeholder without it. `tools/test-journey.mjs`: `drift.tiers` with and without set-asides, the report's line.
 - `npm run test:golden:board`: every golden byte-identical (they draw the machinery); one new, `krystaline-repo-carlos.folded.board.html`, the board as Discover first draws it.
+- Cut as 0.8.26: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1836 → 1850.
 
 ## 0.8.25 — 2026-11-10
