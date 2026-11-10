@@ -249,7 +249,11 @@ asks why in place; **Stop grading it** saves the switch on the service's
 record (who, when, why) and checks against live again. The letter is then
 over the criteria that are on — *Graded on 6 of 7 criteria*, *3.9 of 6
 points* — and the ones off are listed under the reasons, each with **Grade it
-again**. Every run of the service's checks grades the same way and its record
+again**. Expert's Diagnose says it too — *Graded on 6 of 7 criteria: Fresh is
+not graded for this service.* opens its summary, *Criteria graded for*
+and the service's name lists what is off with **Grade it again**, and each row of the
+coverage and trust tables under Evidence has the same *Not for this
+service…*. Every run of the service's checks grades the same way and its record
 names what it left out; a run that graded on other criteria is not the
 board's letter until the next check. README, *Criteria a service is not
 graded on*.

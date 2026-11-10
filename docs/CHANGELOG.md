@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.8.23 — 2026-11-10
+
+**Expert's Diagnose says on how many criteria a service is graded, and switches them.** Since 0.8.22 Diagnose graded a service's pack on its switches — *Checks passed 3 of 6* — but said so only deep under Evidence: the summary read as if all seven counted, and *Trust* still named *recently verified* with Fresh off.
+
+### Added
+- **The summary says it** (`studio/compare-view.mjs`, with the new pure `studio/grade-criteria-ui.mjs`). The note opens with *Graded on 6 of 7 criteria: Fresh is not graded for this service.*; *Meets the target?* reads *this pack 53% on 6 of 7 criteria*; *Coverage* and *Trust* name only the checks graded — *1.2 of 2 checks: recovery tested, matches live · recently verified not graded for this service* — and a group left out whole reads *Not graded*, not 0%; *Checks passed* adds *1 not graded*; the sticky strip says *on 6 of 7 criteria*; *How the grade is calculated* counts and names the checks graded and says what is left out. Under the measures, *Criteria graded for* and the service's name lists each criterion off with why, who and when, and **Grade it again**.
+- **Diagnose switches them** (`compare-view.mjs`, `ux-diagnose.css`; `studio/host.mjs` gains the optional `setGradeCriterion(serviceId, key, { graded, reason })`, which `studio/app.mjs` fills). Each scored row of the coverage and trust tables carries *Not for this service…*: it asks why in a row under it — a reason is required; Enter saves, Escape gives up, what is typed keeps its focus and caret through a repaint — then **Stop grading it**; a criterion off reads *(not graded for this service)* with **Grade it again**. It is the board's switch (`switchGradeCriterion`): one at a time, the whole list built from the record as the server has it then. Diagnose grades the packs on screen again as it repaints; the board's last check, over the other set, is the board's to redo, as it says. A reader below operator sees the same words, explained when pressed. A static bundle, or a page that embeds Diagnose without the hook, offers no switch and still says what is off. With nothing off and no switch, Diagnose's markup is what it was.
+
+### Changed
+- `studio/app.mjs`: `gradeServiceInFocus` (was `gradeOffInFocus`) sets `state.gradeService` — the record whose primary pack is on screen — beside `state.gradeOff`. `studio/overview-model.mjs` exports `notGradedLines`, so both screens word a criterion off alike.
+- **Docs.** `README.md` (*Criteria a service is not graded on*: Expert's Diagnose), `docs/USER_JOURNEY.md`, `docs/VENDORING.md` (`state.gradeService`, `host.setGradeCriterion`), `docs/UI_CONVENTIONS.md` (the host's optional hook).
+
+### Not here
+- Settings offers no switch yet; the board and Diagnose do.
+- **Setting aside things found in the repository or live** (under development, not this service's) is still the next change.
+
+### Tests
+- `tools/test-overview-model.mjs` +4: `criteriaScope` (no service, no hook, a reader who may not, all seven named); `groupNames` with nothing off reading the words Diagnose always used, and with criteria off; the summary's panel byte for byte, empty with nothing off and no switch, every word from the record escaped; the switches, the ask, the host hook absent by default.
+- Cut as 0.8.23: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1820 → 1824.
+
 ## 0.8.22 — 2026-11-10
 
 **A service is graded on the criteria that apply to it.** The grade's seven criteria were the same for every service, so a project that runs no fault injection was marked down on *Chaos-validated* for good. A service can now switch a criterion off, with a reason, and is graded over the others — and everything that shows the letter says on how many.

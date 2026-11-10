@@ -1221,14 +1221,22 @@ service can switch a criterion off, with a reason:
   the reasons — what, why, who and when — each with **Grade it again**. A
   reader below operator sees the same words and is told why they are not
   theirs to press.
+- **In Expert's Diagnose.** The summary says it first — *Graded on 6 of 7
+  criteria: Fresh is not graded for this service.* — and *Criteria graded for*
+  and the service's name, under the measures, lists each criterion off with why, who and
+  when, and **Grade it again**. Each row of the coverage and trust tables
+  under Evidence carries *Not for this service…*, which asks why in a row
+  under it, then **Stop grading it**. It is the board's switch, on the same
+  record; Diagnose grades the packs on screen again at once.
 - **What changes.** The grade is over the criteria that are on: a criterion
   switched off leaves both the points and the total, so the board reads
   *Graded on 6 of 7 criteria* and *3.9 of 6 points*. It is never hidden: the
   status strip, the list row's letter (*… · on 6 of 7 criteria*, and *…
   graded before this service's criteria changed* until the next check), the
   journeys views and Expert's Diagnose — which grades the service's pack with
-  the same switches, draws the criterion as shown, not scored, and counts its
-  scored checks accordingly — all say so. A score change between two runs
+  the same switches, draws the criterion as shown, not scored, and counts and
+  names its scored checks accordingly (*Trust 1.2 of 2 checks: recovery tested,
+  matches live · recently verified not graded for this service*) — all say so. A score change between two runs
   graded on different criteria is not shown as a change of the service.
 - **The record.** `PATCH /api/services/:id { gradeOff: [{ key, reason }] }`
   sends the whole list; a key is one of `multi-modal`, `correlated`,
@@ -1576,8 +1584,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.22 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.22
+docker build -t observogram:0.8.23 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.23
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1640,7 +1648,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.22
+  observogram:0.8.23
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1648,7 +1656,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.22
+    image: observogram:0.8.23
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

@@ -13,6 +13,13 @@
 //   openDeployModal()  — open the deploy modal ({ packId, presetIdentities })
 //   renderMainView()   — repaint the active view
 //   renderTabs()       — repaint the top nav
+// and one optional hook:
+//   setGradeCriterion(serviceId, key, { graded, reason }) — switch a grade
+//                        criterion on or off for a service (PATCH
+//                        /api/services/:id { gradeOff }), resolve true once
+//                        saved and repainted. Diagnose offers its switches
+//                        only when it is set; without it, it still says what
+//                        is off.
 //
 // Like state.mjs, `host` is never reassigned — initHost merges into it, so
 // the imported binding stays live across modules. The defaults no-op so a
@@ -23,6 +30,7 @@ export const host = {
   openDeployModal: () => {},
   renderMainView: () => {},
   renderTabs: () => {},
+  setGradeCriterion: null,
 };
 
 export function initHost(fns) { Object.assign(host, fns); }
