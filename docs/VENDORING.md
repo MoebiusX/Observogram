@@ -348,7 +348,7 @@ changes. The models are pure; the state (the form, which row runs, whether
 the board or the list is on screen) is the host's:
 
 ```js
-import { serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
+import { serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, formDraft, formRestored, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
 import { renderServiceList, readTokenDrafts } from './overview-view.mjs';
 import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys, /api/mcp-endpoints, /api/repository-folders, /api/repository-sources; failures as sentences
 import { createServiceRecord, patchService, runServiceRecord } from './services-api.mjs';
@@ -362,7 +362,7 @@ const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggrega
   access, now: Date.now(), running, results, showAll, heldTokens, repoSignIn, sources: facts.sources });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']; repoSignIn: /auth/me's
 const drafts = readTokenDrafts(container);      // before a repaint that clears the container: a token typed and not sent yet (below)
 renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders,
-  uploads: facts.sources?.upload !== false, sources: facts.sources, heldTokens }), host, { drafts });
+  uploads: facts.sources?.upload !== false, sources: facts.sources, heldTokens, repoSignIn }), host, { drafts });
 
 host.overview = {
   ...host.overview,
@@ -380,7 +380,8 @@ host.overview = {
   closeForm() { form = FORM_CLOSED; repaint(); },
   runService(key, { repoAuth } = {}) { /* POST /api/services/:id/run { env, repoAuth } (runServiceRecord(id, env, { repoAuth })), then re-read the list's facts */ },
   forgetRepoToken(kind) { /* drop the person's token for that host from your memory */ },
-  signInRepoHost(kind, key) { /* open /auth/repo/<kind>/start?popup=<id>&return=<this page>; when it reports back for <id>, answer, re-read /auth/me and Run `key` again */ },
+  signInRepoHost(kind, key, { fromForm } = {}) { /* open /auth/repo/<kind>/start?popup=<id>&return=<this page>; when it reports back for <id>, answer, re-read /auth/me and Run `key` again.
+                                                     From the form (key null, fromForm true): keep formDraft(form) for the tab first — below */ },
   signOutRepoHost(kind) { /* POST /auth/repo/<kind>/sign-out with the CSRF header, then re-read /auth/me */ },
   openService(serviceId, env) { /* draw the board for that row */ },
   backToList() { /* draw the list again */ },
@@ -461,8 +462,12 @@ when a Run says it was `refused`, and pass the hosts you hold as
 studio's wiring is `repoTokens` and `runListRow` in `studio/app.mjs`.
 
 No Run has to fail to be asked: a row whose repository is on GitHub or Azure
-DevOps draws the field from the start, unless `heldTokens` names its host or
-`repoSignIn` says the person is signed in to it, and the row's own *Run*
+DevOps draws the field from the start, unless `heldTokens` names its host,
+`repoSignIn` says the person is signed in to it, or the journeys listing
+says its last scan read this very repository with no access of the person's
+(`lastRun.repositoryAccess`: `{ by, kind, location }` with `by` `none` or
+`server` — the server keeps it with each Run's scan, so there is nothing to
+wire), and the row's own *Run*
 calls `runService(key, { repoAuth })` when the field holds something. The
 form draws the same field under the repository's address when you pass
 `heldTokens` to `formModel` — an array, `[]` when you hold none; without it
@@ -475,7 +480,10 @@ markup; so a repaint that clears the container first reads
 `renderServiceList(…, { drafts })`, which puts each value in the field drawn
 in its place (a row's by its key, the form's by its host) and drops the
 rest. Hold `drafts` in a local only. The studio's wiring is `saveListForm`
-and `renderMainView` in `studio/app.mjs`.
+and `renderMainView` in `studio/app.mjs`. Each of these fields is a password
+field marked `autocomplete="one-time-code"`; keep the marking on any you
+draw yourself: with `off`, Chrome's own password store offered to keep what
+was typed and filled a sign-in saved for the page's address into the field.
 
 **Signing in to the host instead.** Where the server is set up for it
 (README, *Signing in to GitHub or Azure DevOps*), pass `/auth/me`'s
@@ -483,7 +491,17 @@ and `renderMainView` in `studio/app.mjs`.
 GitHub* (or *Azure DevOps*) before the token field, calling
 `signInRepoHost(kind, key)`, and the list names each host the person is
 signed in to (`accounts`) with *Sign out of …* (`signOutRepoHost(kind)`). A
-host that passes no `repoSignIn` draws neither. The host's token never
+host that passes no `repoSignIn` draws neither. The form draws the same
+button before its field when `formModel` is passed both `heldTokens` and
+`repoSignIn`, calling `signInRepoHost(kind, null, { fromForm: true })`: no
+row to run again. A blocked window takes your tab to the host and back, and
+your page boots again, so keep the form's answers first: `formDraft(form)` is
+what to keep (for the tab — the studio uses `sessionStorage`, bound to the
+org) and `formRestored(services, draft, { endpoints, sources })` the form to
+open, once, when the page is back and its facts are read. It restores nothing
+older than `FORM_DRAFT_TTL_MS`, and never a token, which the form does not
+hold. Drop the kept copy when the window reports back and when the form
+closes or saves. The host's token never
 reaches the page: it rides in an HttpOnly cookie the server sealed, so
 `signInRepoHost` only opens `/auth/repo/<kind>/start?popup=<id>&return=<this
 page>` with an id of its own for this sign-in (or, when the window is blocked,

@@ -2014,13 +2014,20 @@ function dropListFormDraft() {
   try { sessionStorage.removeItem(LIST_FORM_DRAFT_KEY); } catch (_) { /* nothing was kept */ }
 }
 
-function restoreListFormDraft() {
+// Taken once, whatever it holds; opened after the list's facts are read — the
+// endpoints the form offers are known then, and the draw they bring would
+// take the focus from a form opened before it.
+async function restoreListFormDraft() {
   let raw = null;
   try { raw = sessionStorage.getItem(LIST_FORM_DRAFT_KEY); sessionStorage.removeItem(LIST_FORM_DRAFT_KEY); } catch (_) { return; }
-  if (!raw || state.mode !== 'overview' || overviewScreen !== 'list' || !serviceListAvailable()) return;
+  const onList = () => state.mode === 'overview' && overviewScreen === 'list' && serviceListAvailable();
+  if (!raw || !onList()) return;
   let draft = null;
   try { draft = JSON.parse(raw); } catch (_) { return; }
   if (!draft || (draft.org ?? null) !== (getActiveOrg() ?? null)) return;
+  if (!listFacts.loaded) { try { await refreshListFacts(); } catch (_) { /* the form opens on what is known */ } }
+  // The person may have moved on, or opened the form themselves, while the facts were read.
+  if (!onList() || listForm.open) return;
   const form = formRestored(state.services, draft, { endpoints: listFacts.endpoints || [], sources: listFacts.sources });
   if (!form) return;
   listForm = { ...form, focus: form.mode === 'add' && !form.values.name ? 'name' : 'location' };
@@ -6053,7 +6060,7 @@ function renderHomeView() {
         <div id="home-mcp-advanced" class="home-mcp-advanced" hidden>
           <label class="home-mcp-field">
             <span class="home-mcp-key">Auth token <em>not persisted</em></span>
-            <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="off">
+            <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="one-time-code">
           </label>
         </div>
       </div>

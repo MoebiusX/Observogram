@@ -1216,16 +1216,24 @@ read as the person who runs it (`server/repo-auth.mjs`):
   from the start — every GitHub or Azure DevOps row whose host has neither
   the person's token in this tab nor their sign-in — so a Run never has to
   fail to be asked; Run sends what the field holds, and a public GitHub
-  repository runs with it empty. **Add a service** has the same field under
+  repository runs with it empty. Once a Run has read a row's repository
+  with no access of the person's — none at all, or the server's own — the
+  row has no field: the record keeps what read it (`packA.scan.access`).
+  **Add a service** has the same field under
   the repository's address: **Save and run** reads the new repository with
   it, and **Save** keeps it for the tab's next Run. The tab keeps the token
   in memory for that host's next Runs until it closes, the page is read
   again or the person forgets it; after a refusal the row says what the host
-  answered. Expert's GitHub scan has a field for it.
+  answered. Expert's GitHub scan has a field for it. Each of these fields
+  is a password field marked `autocomplete="one-time-code"`, so a
+  browser's own password store neither offers to keep what is typed there
+  nor fills a saved sign-in into it (measured in Chrome).
 - **Their sign-in to the host** — where the server is set up for it
   ([below](#signing-in-to-github-or-azure-devops)), *Sign in to GitHub* or
-  *Sign in to Azure DevOps* on the row that asks (and beside Expert's scan
-  error). The host's own sign-in page, and its token comes back sealed in an
+  *Sign in to Azure DevOps* on the row, in the form that adds or changes a
+  service (its answers are kept for the tab while the sign-in is under way)
+  and beside Expert's scan error. The host's own sign-in page, and its token
+  comes back sealed in an
   HttpOnly cookie of the person's browser: never on the server, never
   readable by the page. Every Run of that host's repositories then reads as
   that account, until the person signs out, the session ends or the host's
@@ -1321,7 +1329,10 @@ the read did not, with why (`skipped`, `skippedFiles`: git ignores it, a
 secrets values file, too large, a failed download), what the crawler
 recognised (`classified`, `byKind`) and the files it read and recognised as
 nothing (`unclassified`, `unknownFiles`), the files the environment's
-deployment profile left out (`environment`) and the crawl's `warnings`. The
+deployment profile left out (`environment`) and the crawl's `warnings`. For
+a GitHub or Azure DevOps repository it also says what read it — `access`:
+`{ by, kind, location }`, `by` one of `none`, `token`, `sign-in`, `server`:
+the kind of access, never its value. The
 run record keeps it as `packA.scan`, the Overview board shows it under the
 layers and the Run's toast says what was lost. Every door reads by the
 crawler's rule, and a local one — a folder, an upload, the CLI — honours
@@ -1510,8 +1521,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.20 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.20
+docker build -t observogram:0.8.21 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.21
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1574,7 +1585,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.20
+  observogram:0.8.21
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1582,7 +1593,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.20
+    image: observogram:0.8.21
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -3480,7 +3491,7 @@ unsupported charset or content encoding. The body is not logged.
 | `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
 | `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpEndpointId`, or a typed `mcpUrl`: the admin role, for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
+| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`, `repositoryAccess` `{ by, kind, location }` — how the scan behind it read a GitHub or Azure DevOps repository, `null` otherwise) |
 | `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule); a notify name the server refuses is never bound — it is listed in `refusedEnvNames`, and each snippet says so where its binding would have been |
