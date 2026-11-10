@@ -873,17 +873,20 @@ export function renderLayerFilterChips() {
 // The grade criteria the pack on screen is not graded on: the switches of the
 // service whose own pack it is (a service record's gradeOff). Expert's
 // screens grade with them (state.gradeOff), so Diagnose's letter is the
-// board's; a pack that is no service's own is graded on all seven.
-function gradeOffInFocus() {
+// board's; a pack that is no service's own is graded on all seven. The record
+// itself (state.gradeService) lets Diagnose say what is off — why, who, when —
+// and switch it (setExpertGradeCriterion).
+function gradeServiceInFocus() {
   const id = state.selectedPackId;
-  if (!id || !Array.isArray(state.services)) return [];
-  const service = state.services.find((s) => Array.isArray(s?.packs) && s.packs.some((p) => p && p.id === id && p.role === 'primary'));
-  return Array.isArray(service?.gradeOff) ? service.gradeOff.map((x) => x.key).filter((k) => typeof k === 'string') : [];
+  if (!id || !Array.isArray(state.services)) return null;
+  return state.services.find((s) => Array.isArray(s?.packs) && s.packs.some((p) => p && p.id === id && p.role === 'primary')) || null;
 }
 
 export function renderMainView() {
   const view = $('#layer-view');
-  state.gradeOff = gradeOffInFocus();
+  const graded = gradeServiceInFocus();
+  state.gradeService = graded;
+  state.gradeOff = Array.isArray(graded?.gradeOff) ? graded.gradeOff.map((x) => x?.key).filter((k) => typeof k === 'string') : [];
   // The audit's filters as typed but not applied survive the repaint.
   const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
   // So does a token typed on the service list and not sent yet (overview-view.mjs readTokenDrafts):
@@ -2002,10 +2005,11 @@ const CRITERION_WORDS = { 'multi-modal': 'Multi-modal', correlated: 'Correlated'
 let gradeSwitchBusy = false;
 let recheckAfterRun = null;
 const onOverviewBoard = () => state.mode === 'overview' && !(overviewScreen === 'list' && serviceListAvailable());
-async function setOverviewGradeCriterion(key, { graded = true, reason = '' } = {}) {
-  const service = overviewService();
-  if (!service || !CRITERION_WORDS[key]) return;
-  if (gradeSwitchBusy) { announce('A switch is being saved: try again once it is done.'); return; }
+// The switch itself, for the board and for Expert's Diagnose alike: true once saved
+// and the services read again.
+async function switchGradeCriterion(service, key, { graded = true, reason = '' } = {}) {
+  if (!service || !CRITERION_WORDS[key]) return false;
+  if (gradeSwitchBusy) { announce('A switch is being saved: try again once it is done.'); return false; }
   gradeSwitchBusy = true;
   try {
     let fresh = null;
@@ -2014,12 +2018,27 @@ async function setOverviewGradeCriterion(key, { graded = true, reason = '' } = {
     const current = (Array.isArray(record.gradeOff) ? record.gradeOff : []).filter((x) => x.key !== key);
     const next = graded ? current : [...current, { key, reason }];
     try { await patchService(service.id, { gradeOff: next.map((x) => ({ key: x.key, reason: x.reason })) }); }
-    catch (e) { toast(`${CRITERION_WORDS[key]} could not be switched ${graded ? 'on' : 'off'}: ${e?.message || e}`, 'error'); return; }
+    catch (e) { toast(`${CRITERION_WORDS[key]} could not be switched ${graded ? 'on' : 'off'}: ${e?.message || e}`, 'error'); return false; }
     await refreshServices();
   } finally {
     gradeSwitchBusy = false;
   }
   announce(graded ? `${CRITERION_WORDS[key]} is graded for ${service.name} again.` : `${CRITERION_WORDS[key]} is no longer graded for ${service.name}.`);
+  return true;
+}
+// Expert's Diagnose (host.setGradeCriterion): the service whose own pack is on
+// screen. Diagnose grades the packs on screen again as it repaints, so no check
+// is started; the board's last check, graded on the other set, is the board's
+// to redo (it says so).
+async function setExpertGradeCriterion(serviceId, key, opts = {}) {
+  const service = (Array.isArray(state.services) ? state.services : []).find((s) => s?.id === serviceId) || null;
+  if (!(await switchGradeCriterion(service, key, opts))) return false;
+  renderMainView();
+  return true;
+}
+async function setOverviewGradeCriterion(key, opts = {}) {
+  const service = overviewService();
+  if (!(await switchGradeCriterion(service, key, opts))) return;
   if (state.mode !== 'overview') return;
   renderMainView();
   // The person may have moved on while it was saved: another service, the list.
@@ -9728,6 +9747,6 @@ function setupTheme() {
 // re-render / loader / modal entrypoints through it instead of importing
 // app.mjs (docs/VENDORING.md, docs/UI_CONVENTIONS.md). Function declarations
 // hoist, so binding them here (before boot) is safe.
-initHost({ loadPackB, openDeployModal, renderMainView, renderTabs });
+initHost({ loadPackB, openDeployModal, renderMainView, renderTabs, setGradeCriterion: setExpertGradeCriterion });
 
 boot();

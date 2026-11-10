@@ -24,7 +24,8 @@ appHost.renderTabs(); appHost.renderMainView();
 ```
 
 The contract (names promised stable): `loadPackB`, `openDeployModal`,
-`renderMainView`, `renderTabs`.
+`renderMainView`, `renderTabs`; and the optional `setGradeCriterion`
+(`null` by default — a view that uses an optional hook checks for it first).
 
 - Import it **as `appHost`** — this codebase uses `host` for DOM container
   locals (`const host = document.createElement(…)`), and the alias keeps the
