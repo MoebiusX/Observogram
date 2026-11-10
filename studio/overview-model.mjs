@@ -1105,7 +1105,9 @@ export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 //   start (`offered: true`) on every row a Run of which may need one — a GitHub or Azure
 //   DevOps repository, no token of that host held in this tab, the person not signed in to
 //   the host — so nobody has to fail a Run to be asked; after a refusal it says what the
-//   host answered (authAsk)
+//   host answered (authAsk). A row whose last scan read this repository with no access of
+//   the person's (the journeys listing's lastRun.repositoryAccess: none at all, or the
+//   server's own) is offered none: there is nothing to give
 //   accounts  the hosts the person is signed in to: { kind, host, account, text }
 export function serviceListModel(input = {}) {
   const {
@@ -1160,7 +1162,7 @@ export function serviceListModel(input = {}) {
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
         // What the host answered the last Run, else the offer a row that can run starts with.
-        auth: authAsk(results[key]?.repoAuth, canWrite, signIn) || (!why && !busy ? authOffer(s.repository, { canWrite, repoSignIn: signIn, held }) : null),
+        auth: authAsk(results[key]?.repoAuth, canWrite, signIn) || (!why && !busy ? authOffer(s.repository, { canWrite, repoSignIn: signIn, held, lastAccess: journey?.lastRun?.repositoryAccess || null }) : null),
         complete: !!(env && repository && live),
       });
     }
@@ -1204,15 +1206,28 @@ function authAsk(need, canWrite, repoSignIn = null) {
 // the field where the token goes, not an error. A public GitHub repository
 // needs none, and the note says so: Run reads it as before, the field empty.
 // The Azure DevOps sign-in reads Azure DevOps Services only, so a repository
-// on another host is offered the token alone.
+// on another host is offered the token alone — also to a person signed in to
+// Azure DevOps, whose sign-in does not read it.
+//   lastAccess  how the last scan read a repository ({ by, kind, location }:
+//               the journeys listing's lastRun.repositoryAccess). When it read
+//               this very one with no access of the person's — 'none', a
+//               public repository, or 'server', the server's own on a server
+//               without sign-in — the row is offered nothing. A repository
+//               that stops being readable that way answers its next Run with
+//               the ask (authAsk), as every row did before the offer.
+//   blankTakesSignIn  the form, where the address is still to be typed: an
+//               Azure DevOps address not given yet is offered the sign-in.
 const ADO_SERVICES = /^https:\/\/(?:dev\.azure\.com|[a-z0-9-]+\.visualstudio\.com)(?:[/:?#]|$)/i;
-function authOffer(repository, { canWrite = true, repoSignIn = null, held = [] } = {}) {
+const READ_WITHOUT_THE_PERSON = ['none', 'server'];
+function authOffer(repository, { canWrite = true, repoSignIn = null, held = [], lastAccess = null, blankTakesSignIn = false } = {}) {
   const kind = repository?.kind;
   if (!canWrite || !HOST_LABEL[kind] || held.includes(kind)) return null;
+  if (lastAccess && READ_WITHOUT_THE_PERSON.includes(lastAccess.by) && lastAccess.kind === kind && lastAccess.location === repository.location) return null;
+  const location = String(repository.location ?? '').trim();
+  const takesSignIn = kind !== 'ado' || ADO_SERVICES.test(location) || (blankTakesSignIn && !location);
   const s = repoSignIn ? repoSignIn[kind] : null;
-  if (s?.signedIn === true) return null;   // read as that account: nothing to give
+  if (s?.signedIn === true && takesSignIn) return null;   // read as that account: nothing to give
   const host = HOST_LABEL[kind];
-  const takesSignIn = kind !== 'ado' || ADO_SERVICES.test(String(repository.location ?? ''));
   const signIn = s?.available === true && takesSignIn ? { kind, label: `Sign in to ${host}` } : null;
   const kept = 'sent with this tab\'s Runs only and never kept on the server';
   let text;
@@ -1231,22 +1246,22 @@ function authOffer(repository, { canWrite = true, repoSignIn = null, held = [] }
 // A repository kind's hint on this server: a host that offers sign-in (and
 // the person signed in to this studio, which is when the page passes
 // `repoSignIn`) is named with it — the hint never mentions only a token where
-// Sign in is the first way offered. Signing in is on the service's row (it
-// opens the host's own page, and a blocked window would take the form's
-// answers with it); the token is given there too, or in the form (formAuth).
+// Sign in is the first way offered. Both are in the form (formAuth) and on
+// the service's row. A person already signed in is told as whom; an Azure
+// DevOps repository off Azure DevOps Services still takes their own token.
 function repositoryHint(kind, repoSignIn) {
   const host = HOST_LABEL[kind.kind];
   const s = host && repoSignIn && typeof repoSignIn === 'object' ? repoSignIn[kind.kind] : null;
   if (!s || s.available !== true) return kind.hint;
   if (s.signedIn) {
-    const who = s.account ? ` (you are signed in to ${host} as ${s.account})` : '';
+    const as = s.account ? ` as ${s.account}` : '';
     return kind.kind === 'github'
-      ? `A public repository, or a private one read as you${who}: sign in to GitHub, or give your own GitHub token, on its row.`
-      : `Read as you${who}: sign in to Azure DevOps, or give your own token (Code (Read)), on its row.`;
+      ? `A public repository, or a private one read as you: you are signed in to GitHub${as}.`
+      : `Read as you: you are signed in to Azure DevOps${as}. A repository on another Azure DevOps host takes your own token (Code (Read)).`;
   }
   return kind.kind === 'github'
-    ? 'A public repository, or a private one read as you: sign in to GitHub on its row, or give your own GitHub token.'
-    : 'Read as you: sign in to Azure DevOps on its row, or give your own token (Code (Read)).';
+    ? 'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token.'
+    : 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)).';
 }
 
 // The person's own token, in the form: the field a row would offer
@@ -1257,14 +1272,23 @@ function repositoryHint(kind, repoSignIn) {
 // a row would offer none: a folder, an upload, a source switched off, a token
 // of that host already held in the tab, the person signed in to the host, a
 // reader who cannot save. GitHub's is marked optional: a public repository
-// needs none.
+// needs none. Where the host offers sign-in here (`repoSignIn`), `signIn`
+// ({ kind, label }) comes first, as on the row: the view calls
+// signInRepoHost(kind, null, { fromForm: true }), and the form's answers
+// outlive a sign-in that takes this tab to the host's page (formDraft, below).
 function formAuth(v, { canWrite = true, repoSignIn = null, heldTokens = null, sources = null } = {}) {
   if (!Array.isArray(heldTokens) || sourceOff(sources, v.kind)) return null;
-  const offer = authOffer({ kind: v.kind, location: v.location }, { canWrite, repoSignIn: repoSignIn && typeof repoSignIn === 'object' ? repoSignIn : null, held: heldTokens });
+  const offer = authOffer({ kind: v.kind, location: v.location }, { canWrite, repoSignIn: repoSignIn && typeof repoSignIn === 'object' ? repoSignIn : null, held: heldTokens, blankTakesSignIn: true });
   if (!offer) return null;
-  const kept = 'Sent with this tab\'s Runs only and never kept on the server.';
+  const host = HOST_LABEL[offer.kind];
   const optional = offer.kind === 'github';
-  return { kind: offer.kind, label: offer.label, optional, text: optional ? `For a private repository. ${kept}` : kept };
+  let text;
+  if (offer.signIn) {
+    text = `${optional ? 'For a private repository: sign' : 'Sign'} in to ${host} to read it as you, or give your own token — sent with this tab's Runs only and never kept on the server.`;
+  } else {
+    text = `${optional ? 'For a private repository. ' : ''}Sent with this tab's Runs only and never kept on the server.`;
+  }
+  return { kind: offer.kind, label: offer.label, optional, text, ...(offer.signIn ? { signIn: offer.signIn } : {}) };
 }
 
 // ---------- the Add a service form ----------
@@ -1320,6 +1344,38 @@ export function formInput(form, field, value) {
 }
 
 const trimmed = (v) => String(v ?? '').trim();
+
+// The form's answers, to outlive a sign-in that takes this tab to the host's
+// own page and back (a blocked window, or a browser that opens windows in the
+// tab): formDraft(form) is what the host keeps for the tab, formRestored the
+// form opened again from it. Never a token — it is no form value — and never
+// an upload's files, which leave with the page: a draft on Upload opens on
+// the form's first kind. A draft older than FORM_DRAFT_TTL_MS, of a service
+// that is gone, or that is no draft at all restores nothing.
+export const FORM_DRAFT_TTL_MS = 15 * 60_000;
+const FORM_DRAFT_VALUE_MAX = 2048;
+
+export function formDraft(form, { now = Date.now() } = {}) {
+  if (!form?.open) return null;
+  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values } };
+}
+
+export function formRestored(services, draft, { endpoints = [], sources = null, now = Date.now() } = {}) {
+  if (!draft || typeof draft !== 'object' || draft.v !== 1 || !Number.isFinite(draft.at)) return null;
+  if (now - draft.at > FORM_DRAFT_TTL_MS || draft.at - now > 60_000) return null;
+  const serviceId = draft.serviceId ?? null;
+  if (serviceId !== null && !(Array.isArray(services) && services.some((x) => x && x.id === serviceId))) return null;
+  let form = formOpened(services, { serviceId, env: typeof draft.env === 'string' ? draft.env : null, endpoints, sources });
+  const values = draft.values && typeof draft.values === 'object' ? draft.values : {};
+  if (values.kind === 'upload') return form;
+  for (const field of Object.keys(form.values)) {
+    const value = values[field];
+    if (typeof value !== 'string' || value.length > FORM_DRAFT_VALUE_MAX) continue;
+    if (field === 'kind' && !REPOSITORY_KINDS.some((k) => k.kind === value)) continue;
+    form = formInput(form, field, value);
+  }
+  return form;
+}
 
 // What is missing before the form can be saved — { field: sentence }. The
 // server judges the rest (an address it cannot read, a folder it may not, an

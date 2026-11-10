@@ -585,7 +585,9 @@ export function renderOverview(container, model, host = appHost) {
 // host.overview: addService(), editService(serviceId, env), runService(key),
 // openService(serviceId, env), formInput(field, value), saveService({ run,
 // repoAuth }) — `repoAuth` the person's own token when the form's field holds
-// one (drawn only where the model offers it: formModel's `heldTokens`) —
+// one (drawn only where the model offers it: formModel's `heldTokens`), with
+// signInRepoHost(kind, null, { fromForm: true }) before it where the host
+// offers sign-in —
 // closeForm(), showAll(), compare(), runService(key, { repoAuth }) — a row's
 // Run with the person's own token (asked for on the row when its host wants
 // it) — and forgetRepoToken(kind); and the Folder answer's panel when the
@@ -647,7 +649,7 @@ function svcAuthHtml(r) {
           <span class="ov-svc__auth-or og-muted">or</span>` : '';
   return `
         <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}${r.auth.offered ? ' ov-svc__auth--offered' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">${signIn}
-          <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="off" spellcheck="false" aria-describedby="${id}"></label>
+          <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="one-time-code" spellcheck="false" aria-describedby="${id}"></label>
           <button type="button" class="og-btn" data-ux-action="ov-svc-auth-run" data-key="${attr(r.key)}">Run with it</button>
           <span class="ov-svc__auth-note og-muted" id="${id}">${escapeHtml(r.auth.text)}</span>
         </div>`;
@@ -748,9 +750,16 @@ function svcFormHtml(f) {
   const off = !f.canWrite;
   // The person's own token for the repository's host, where the model offers it: a password
   // field with nothing in it — what is typed is read when Save is pressed, never drawn.
+  // Sign in to … comes first where the host offers it here, as on a row.
+  const authField = f.auth ? `<label class="ov-form__f"><span class="ov-form__l">Your ${escapeHtml(f.auth.label)}${f.auth.optional ? ' <em>optional</em>' : ''}</span><input class="og-input" type="password" data-form-auth="${attr(f.auth.kind)}" autocomplete="one-time-code" spellcheck="false" aria-describedby="ov-form-auth-note"></label>` : '';
   const auth = f.auth ? `
-            <div class="ov-form__auth">
-              <label class="ov-form__f"><span class="ov-form__l">Your ${escapeHtml(f.auth.label)}${f.auth.optional ? ' <em>optional</em>' : ''}</span><input class="og-input" type="password" data-form-auth="${attr(f.auth.kind)}" autocomplete="off" spellcheck="false" aria-describedby="ov-form-auth-note"></label>
+            <div class="ov-form__auth">${f.auth.signIn ? `
+              <div class="ov-form__auth-ways">
+                <button type="button" class="og-btn" data-ux-action="ov-form-sign-in" data-kind="${attr(f.auth.signIn.kind)}"${f.saving ? ' disabled' : ''}>${escapeHtml(f.auth.signIn.label)}</button>
+                <span class="ov-form__auth-or og-muted">or</span>
+                ${authField}
+              </div>` : `
+              ${authField}`}
               <span class="ov-form__hint og-muted" id="ov-form-auth-note">${escapeHtml(f.auth.text)}</span>
             </div>` : '';
   return `
@@ -915,6 +924,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.(saveWith(true)); },
     'ov-form-save': () => ov.saveService?.(saveWith(false)),
     'ov-form-close': () => ov.closeForm?.(),
+    // No row to run again afterwards (null), and the host keeps the form's answers while the sign-in is under way.
+    'ov-form-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, null, { fromForm: true }),
     'ov-form-browse': () => ov.browseFolders?.(),
     'ov-folders-open': (ev, el) => ov.openFolder?.(el.dataset.path ? el.dataset.path : null),
     'ov-folders-choose': (ev, el) => ov.chooseFolder?.(el.dataset.path),
