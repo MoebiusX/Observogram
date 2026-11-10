@@ -555,6 +555,10 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   if (hasLiveDiff) {
     const declaredAhead = Object.values(diff.layers || {}).reduce((n, bucket) => n + (bucket.declaredAhead || []).length, 0);
     const aheadNote = declaredAhead ? `; ${declaredAhead} declared ahead of this environment` : '';
+    // The differences the service set aside (studio/set-asides.mjs applySetAsides): said, never silent.
+    const aside = diff.setAsides;
+    const asideN = aside ? (aside.declared || 0) + (aside.live || 0) : 0;
+    const asideNote = asideN || aside?.chains ? `; ${asideN} set aside${aside.chains ? ` (${aside.chains} requirement${aside.chains === 1 ? '' : 's'} with them)` : ''}` : '';
     const branchRollup = diff.traceabilityGraph?.rollup;
     if (branchRollup && branchRollup.declaredTotal > 0) {
       driftScore = Math.max(0, Math.min(1, branchRollup.integrityMean ?? 0));
@@ -564,7 +568,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         : 'declared edges';
       driftDetail = (driftFree
         ? `requirement-chain integrity ${branchRollup.integrityPct}% - ${branchRollup.intact}/${branchRollup.declaredTotal} declared commitment${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`
-        : `requirement-chain integrity ${branchRollup.integrityPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold) - ${branchRollup.intact}/${branchRollup.declaredTotal} declared commitment${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`) + aheadNote;
+        : `requirement-chain integrity ${branchRollup.integrityPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold) - ${branchRollup.intact}/${branchRollup.declaredTotal} declared commitment${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`) + aheadNote + asideNote;
     } else {
       let alignedLive = 0;
       let declaredMissing = 0;
@@ -608,7 +612,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       const driftBreakdown = `${weighted.driftedBreakdown.decision} decision-bearing, ${weighted.driftedBreakdown.default} default, ${weighted.driftedBreakdown.cosmetic} cosmetic`;
       const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
         + (notObserved ? `; ${notObserved} not checked (the live side could not observe them)` : '')
-        + aheadNote;
+        + aheadNote + asideNote;
       driftDetail = driftFree
         ? `weighted live-fidelity ${weighted.healthPct}% - declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`
         : `weighted live-fidelity ${weighted.healthPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold); declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`;

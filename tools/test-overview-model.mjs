@@ -30,6 +30,7 @@ import {
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed,
+  serviceAsideKey,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
@@ -39,7 +40,12 @@ import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from '..
 import {
   offSet, toggleOff, whatIfChanges, whatIfWords, gradeScale, gradeScaleHtml, verdictBarHtml, whatIfBarHtml,
   checksTableHtml, checkDetailHtml, checkSwitchHtml, moreSummaryHtml, layerCoverage, layerMiniHtml, fmtChecks, CHECK_ASKS, CHECK_GROUPS,
+  asideChanges, setAsideListHtml, setAsideWords,
 } from '../studio/assessment-page.mjs';
+import {
+  applySetAsides, setAsideCandidates, setAsideFingerprint, setAsideList, activeSetAsides, setAsideState, reviewDate, baseKeyOf, setAsideId,
+  SET_ASIDE_SIDES, SET_ASIDE_KINDS, KIND_WORDS, DEFAULT_KIND,
+} from '../studio/set-asides.mjs';
 import { host as studioHost } from '../studio/host.mjs';
 
 // ---------- fixtures ----------
@@ -2271,7 +2277,8 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './constants.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './constants.mjs'],
+  'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
   'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],
   'studio/ux-kit-pure.mjs': ['./util.mjs'],
@@ -2599,4 +2606,209 @@ test("the folded rows and the page's wiring: a closed row says its headline and 
   assert.ok(view.includes("canSwitch: typeof appHost.setGradeCriteria === 'function' && !isStatic(),"), 'Keep only where the host saves a set, never in a static bundle');
   assert.equal(studioHost.setGradeCriteria, null, 'a page that embeds Diagnose without the hook: its switches are a what-if only');
   assert.ok(!('setGradeCriterion' in studioHost), "0.8.23's one-criterion hook is replaced");
+});
+
+// ---------- set-asides (studio/set-asides.mjs) ----------
+
+// A comparison as tools/lib/diff.mjs writes one, with the chains of tools/lib/traceability-graph.mjs, small:
+// L1 declares an SLO nothing live has (its own chain) and shares an SLI; L2 declares one metric twice that is not
+// live (a chain of the shared SLI leans on it) and sees one metric live it does not declare; a live-only chain.
+const M = 'metric::{"name":"auth_failures_total"}';
+const SET_ASIDE_DIFF = () => ({
+  summary: { onlyInA: 3, onlyInB: 1, inBoth: 2, aligned: 1, drifted: 1, outOfScope: 0, scaffold: 0, notObserved: 0, union: 6, aTotal: 5, bTotal: 3, jaccard: 0.33, alignment: 0.17 },
+  layers: {
+    L1: { onlyInA: [{ key: 'slo::{"id":"pay_99"}', artefact: { id: 'SLO-01' } }], onlyInB: [], inBoth: [{ key: 'sli::{"id":"pay"}', match: 'aligned' }], outOfScope: [] },
+    L2: { onlyInA: [{ key: `${M}#01`, artefact: { id: 'METRIC-SRC-03' } }, { key: `${M}#02`, artefact: { id: 'METRIC-SRC-04' } }], onlyInB: [{ key: 'metric::{"name":"node_load1"}', artefact: { id: 'LIVE-7' } }], inBoth: [{ key: 'metric::{"name":"up"}', match: 'drifted' }], outOfScope: [] },
+  },
+  traceabilityGraph: {
+    branches: [
+      { rootKey: 'slo::{"id":"pay_99"}', title: 'pay_99', hasA: true, hasB: false, verdict: 'broken', integrity: 0, integrityPct: 0, counts: { declaredOnly: 1 }, missingRoles: [],
+        nodes: [{ status: 'declared_only', kind: 'slo', key: 'slo::{"id":"pay_99"}', weight: 3, aId: 'SLO-01' }] },
+      { rootKey: 'sli::{"id":"pay"}', title: 'pay', hasA: true, hasB: true, verdict: 'broken', integrity: 0.6, integrityPct: 60, counts: { aligned: 1, declaredOnly: 1 }, missingRoles: [],
+        nodes: [{ status: 'aligned', kind: 'sli', key: 'sli::{"id":"pay"}', weight: 3 }, { status: 'declared_only', kind: 'metric', key: M, weight: 2, aId: 'METRIC-SRC-03' }] },
+      { rootKey: 'sli::{"id":"burn"}', title: 'burn', hasA: true, hasB: true, verdict: 'broken', integrity: 0.4286, integrityPct: 43, counts: { aligned: 1, declaredOnly: 1 },
+        missingRoles: [{ role: 'action', weight: 2, loadBearing: true }],
+        nodes: [{ status: 'aligned', kind: 'sli', key: 'sli::{"id":"burn"}', weight: 3 }, { status: 'declared_only', kind: 'metric', key: M, weight: 2, aId: 'METRIC-SRC-03' }] },
+      { rootKey: 'slo::{"id":"node_99"}', title: 'node_99', hasA: false, hasB: true, verdict: 'undeclared', integrity: 0, integrityPct: 0, counts: { liveOnly: 1 },
+        nodes: [{ status: 'live_only', kind: 'slo', key: 'slo::{"id":"node_99"}', weight: 3, bId: 'LIVE-9' }] },
+    ],
+    rollup: { intact: 0, partial: 0, broken: 3, undeclared: 1, declaredTotal: 3, total: 4, integrityMean: 0.3667, integrityPct: 37, ladder: { kept: true } },
+  },
+});
+const ASIDE_NOW = '2026-11-10T12:00:00.000Z';
+const aside = (key, side, extra = {}) => ({ key, side, layer: 'L2', label: key, kind: side === 'declared' ? 'in-development' : 'not-this-service', note: '', until: null, by: 'oscar', at: ASIDE_NOW, ...extra });
+
+test('applySetAsides: a declared difference set aside leaves the counts, every artefact of its identity with it, and the chains that lean on it are scored without it — one broken only by it is intact, one with a missing role stays broken; the engine\'s numbers ride beside; nothing is changed in place', () => {
+  const raw = SET_ASIDE_DIFF();
+  const before = JSON.stringify(raw);
+  const out = applySetAsides(raw, [aside(M, 'declared', { until: '2026-12-10' })], { now: ASIDE_NOW });
+  assert.equal(JSON.stringify(raw), before, 'the engine\'s diff is not touched');
+  assert.deepEqual(out.layers.L2.onlyInA, [], 'both occurrences of the identity leave');
+  assert.deepEqual(out.layers.L2.setAside.map((e) => [e.key, e.side, e.setAside.kind]), [[`${M}#01`, 'a', 'in-development'], [`${M}#02`, 'a', 'in-development']]);
+  assert.equal(out.layers.L1, raw.layers.L1, 'a layer with nothing set aside is the engine\'s, as it was');
+  assert.deepEqual([out.summary.onlyInA, out.summary.onlyInB, out.summary.union, out.summary.aTotal, out.summary.alignment, out.summary.jaccard], [1, 1, 4, 3, 0.25, 0.5], 'counted again by the engine\'s formulas');
+  const [pay99, pay, burn, live] = out.traceabilityGraph.branches;
+  assert.equal(pay99, raw.traceabilityGraph.branches[0], 'a chain with nothing set aside is the engine\'s');
+  assert.deepEqual([pay.verdict, pay.integrity, pay.integrityPct, pay.counts.declaredOnly, pay.counts.setAside, pay.engine], ['intact', 1, 100, 0, 1, { verdict: 'broken', integrity: 0.6 }], 'broken only by the set-aside link: intact, scored on what is left');
+  assert.equal(pay.nodes[1].setAside, true);
+  assert.deepEqual([burn.verdict, burn.integrity], ['broken', 0.6], 'a missing load-bearing role keeps it broken; it scores 3 of 5 now, not 3 of 7');
+  assert.equal(live, raw.traceabilityGraph.branches[3]);
+  assert.deepEqual(out.traceabilityGraph.rollup, { intact: 1, partial: 0, broken: 2, undeclared: 1, declaredTotal: 3, total: 4, integrityMean: 0.5333, integrityPct: 53, ladder: { kept: true }, setAside: 0 });
+  assert.deepEqual(out.setAsides.engine, { summary: raw.summary, rollup: raw.traceabilityGraph.rollup }, 'the engine\'s summary and rollup, beside');
+  assert.deepEqual([out.setAsides.declared, out.setAsides.live, out.setAsides.chains, out.setAsides.due], [2, 0, 0, 0]);
+  assert.deepEqual(out.setAsides.records.map((r) => [r.state, r.matched]), [['active', 2]]);
+});
+
+test('applySetAsides: a set-aside requirement takes its chain out of the rollup; a live thing set aside leaves the live counts, and a live-only chain rooted on it leaves "live-only"; a review date passed counts again; a set-aside of what is now in both is retired, of what is in neither gone; no list is no change', () => {
+  const raw = SET_ASIDE_DIFF();
+  const out = applySetAsides(raw, [
+    aside('slo::{"id":"pay_99"}', 'declared', { layer: 'L1' }),
+    aside('metric::{"name":"node_load1"}', 'live'),
+    aside('slo::{"id":"node_99"}', 'live', { layer: 'L1' }),
+    aside(M, 'declared', { until: '2026-11-09' }),
+    aside('sli::{"id":"pay"}', 'declared', { layer: 'L1' }),
+    aside('metric::{"name":"gone"}', 'declared'),
+  ], { now: ASIDE_NOW });
+  assert.deepEqual([out.layers.L1.onlyInA, out.layers.L2.onlyInB, out.layers.L2.onlyInA.length], [[], [], 2], 'the due one counts again');
+  assert.deepEqual([out.summary.onlyInA, out.summary.onlyInB], [2, 0]);
+  const [pay99, pay, , live] = out.traceabilityGraph.branches;
+  assert.deepEqual([pay99.setAside, live.setAside, pay.verdict], [true, true, 'broken'], 'its root set aside: the chain leaves; the due metric still breaks the other');
+  assert.deepEqual(['declaredTotal', 'undeclared', 'total', 'setAside', 'broken', 'integrityMean'].map((k) => out.traceabilityGraph.rollup[k]), [2, 0, 2, 2, 2, 0.5143]);
+  assert.deepEqual(out.setAsides.records.map((r) => `${r.key.slice(0, 18)} ${r.state} ${r.matched}`), [
+    'slo::{"id":"pay_99 active 1', 'metric::{"name":"n active 1', 'slo::{"id":"node_9 active 0', 'metric::{"name":"a due 0', 'sli::{"id":"pay"} retired 0', 'metric::{"name":"g gone 0',
+  ], 'a set-aside of a live-only chain\'s root that is no difference of its own is gone from the counts, and still takes its chain out');
+  assert.deepEqual([out.setAsides.declared, out.setAsides.live, out.setAsides.chains, out.setAsides.due], [1, 1, 2, 1]);
+  // Nothing asked for: the engine's diff itself, so a service with no set-aside grades byte for byte as before.
+  for (const none of [[], null, undefined, [{ key: 'x' }], [{ side: 'declared' }]]) assert.equal(applySetAsides(raw, none, { now: ASIDE_NOW }), raw);
+  assert.equal(applySetAsides({ error: 'no diff' }, [aside(M, 'declared')], { now: ASIDE_NOW }).error, 'no diff', 'a diff without layers comes back as it was');
+});
+
+test('set-aside helpers: the key without its occurrence, the review date, the states, one record per side and key, a fingerprint of what holds, the candidates a person can set aside, the engine\'s load-bearing kinds', () => {
+  assert.equal(baseKeyOf(`${M}#02`), M);
+  assert.equal(baseKeyOf(M), M);
+  assert.equal(setAsideId('live', `${M}#11`), `live:${M}`);
+  assert.equal(reviewDate('2026-11-10T23:30:00Z'), '2026-12-10');
+  assert.equal(reviewDate(Date.parse('2026-01-31T00:00:00Z'), 1), '2026-02-01');
+  assert.equal(setAsideState({ until: '2026-11-10' }, ASIDE_NOW), 'active', 'it holds through its review date');
+  assert.equal(setAsideState({ until: '2026-11-09' }, ASIDE_NOW), 'due');
+  assert.equal(setAsideState({ until: null }, ASIDE_NOW), 'active');
+  assert.deepEqual(setAsideList([aside(`${M}#01`, 'declared'), aside(M, 'declared', { kind: 'not-this-service' }), aside(M, 'live'), { key: '', side: 'live' }, null]).map((r) => `${r.side}:${r.key === M}:${r.kind}`),
+    ['declared:true:in-development', 'live:true:not-this-service'], 'the first per side and key, the suffix dropped, the damaged skipped');
+  assert.deepEqual([...activeSetAsides([aside(M, 'declared', { until: '2020-01-01' }), aside(M, 'live')], ASIDE_NOW).keys()], [`live:${M}`]);
+  const fp = setAsideFingerprint([aside(M, 'declared'), aside('metric::x', 'live')], ASIDE_NOW);
+  assert.match(fp, /^2:[0-9a-f]{8}$/);
+  assert.equal(setAsideFingerprint([aside('metric::x', 'live'), aside(M, 'declared', { note: 'reworded' })], ASIDE_NOW), fp, 'the same set in another order, other words: the same name');
+  assert.notEqual(setAsideFingerprint([aside(M, 'declared')], ASIDE_NOW), fp);
+  assert.equal(setAsideFingerprint([aside(M, 'declared', { until: '2020-01-01' })], ASIDE_NOW), '', 'nothing holds: no name');
+  assert.equal(setAsideFingerprint([], ASIDE_NOW), '');
+  const adjusted = applySetAsides(SET_ASIDE_DIFF(), [aside(M, 'declared')], { now: ASIDE_NOW });
+  const c = setAsideCandidates(adjusted, (e) => `label of ${e.key}`);
+  assert.deepEqual(c.declared.map((x) => [x.key, x.layer, x.kind, x.label, !!x.setAside]), [
+    ['slo::{"id":"pay_99"}', 'L1', 'slo', 'label of slo::{"id":"pay_99"}', false],
+    [M, 'L2', 'metric', `label of ${M}#01`, true],
+  ], 'one row per identity, the set-aside ones with their record');
+  assert.deepEqual(c.live.map((x) => [x.id, !!x.setAside]), [['live:metric::{"name":"node_load1"}', false]]);
+  assert.deepEqual(setAsideCandidates(null), { declared: [], live: [] });
+  assert.deepEqual([SET_ASIDE_SIDES, SET_ASIDE_KINDS, Object.keys(KIND_WORDS), DEFAULT_KIND], [['declared', 'live'], ['in-development', 'not-this-service'], ['in-development', 'not-this-service'], { declared: 'in-development', live: 'not-this-service' }]);
+  // The chains' load-bearing kinds are the engine's (tools/lib/traceability-graph.mjs isLoadBearingKind), word for word.
+  const engine = readFileSync(new URL('../tools/lib/traceability-graph.mjs', import.meta.url), 'utf8');
+  const mine = readFileSync(new URL('../studio/set-asides.mjs', import.meta.url), 'utf8');
+  const list = (src, re) => re.exec(src)?.[1];
+  assert.equal(list(mine, /const LOAD_BEARING = new Set\(\[([^\]]+)\]\)/), list(engine, /function isLoadBearingKind\(kind\) \{\s*return \[([^\]]+)\]\.includes\(kind\);/));
+});
+
+test('the board and a service\'s set-asides: a run that left out other differences than the service\'s now is not the letter; its counts and its sentence say how many it set aside; a list row says it, and says when its letter was graded before they changed', () => {
+  const ASIDE = [{ key: 'metric::{"name":"auth_failures_total"}', side: 'declared', layer: 'L2', label: 'auth_failures_total', kind: 'in-development', note: '', until: '2099-01-01', by: 'ada', at: '2026-11-10T09:00:00.000Z' }];
+  const fp = serviceAsideKey({ setAside: ASIDE }, NOW);
+  assert.match(fp, /^1:[0-9a-f]{8}$/);
+  assert.equal(serviceAsideKey({ setAside: [] }, NOW), '');
+  assert.equal(serviceAsideKey({}, NOW), '');
+  assert.equal(serviceAsideKey({ setAside: [{ ...ASIDE[0], until: '2020-01-01' }] }, NOW), '', 'a review date passed: nothing holds');
+  const asideRun = { ...atBarRun, grade: { ...atBarRun.grade, setAside: { fingerprint: fp, declared: 3, live: 1, chains: 0, due: 0 } }, drift: { ...atBarRun.drift, setAside: { declaredNotLive: 3, liveNotDeclared: 1 } } };
+  // The letter: the run's only when it set aside what the service sets aside now.
+  assert.equal(runGradesBoard(asideRun, krystalinePack, [], fp), true);
+  assert.equal(runGradesBoard(asideRun, krystalinePack, [], ''), false, 'the run set things aside the service no longer does');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack, [], fp), false, 'the service sets aside what the run counted');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack, [], ''), true, 'neither: as before');
+  const before = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBarRun, journey, now: NOW, aside: fp }));
+  assert.deepEqual([before.basis, before.source], ['repository', 'Graded from the repository alone: what is set aside changed since the last live check. Check again to grade against live.']);
+  const both = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBarRun, journey, now: NOW, off: OFF, aside: fp }));
+  assert.match(both.source, /the criteria graded here changed since/, 'criteria and set-asides both changed: the criteria are named');
+  assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: asideRun, journey, now: NOW, aside: fp })).basis, 'live');
+  // Expert is handed the run's live read by the same rule.
+  assert.equal(boardComparison({ journey: { ...journey, livePack: { id: 'lp', refreshedAt: asideRun.packB?.refreshedAt } }, run: asideRun, catalog: [{ id: 'lp' }], pack: krystalinePack, aside: '' }), null);
+  // The counts: what was set aside, said beside the tiles it was taken from, and in the sentence.
+  const tiles = fidelityModel({ run: asideRun, journey, pack: krystalinePack, now: NOW }).tiles;
+  assert.deepEqual(tiles.filter((x) => x.key === 'missing' || x.key === 'extra').map((x) => x.note), ['declared, nowhere live · 3 set aside', 'running live, not declared · 1 set aside']);
+  assert.deepEqual(fidelityModel({ run: atBarRun, journey, pack: krystalinePack, now: NOW }).tiles.filter((x) => x.key === 'missing').map((x) => x.note), ['declared, nowhere live'], 'nothing set aside: the words as they were');
+  const still = stillTrueModel({ journey, run: asideRun, now: NOW });
+  assert.ok(still.sentence.includes(' 4 more are set aside for this service.'), still.sentence);
+  assert.ok(!stillTrueModel({ journey, run: atBarRun, now: NOW }).sentence.includes('set aside'));
+  // The list row: the letter's set-asides said, or that it was graded before they changed.
+  const lastRun = { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 };
+  const rowOf = (last, service) => serviceListModel({ services: [svcRow(service)], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, ...last })], endpoints: [EP], now: NOW }).rows[0].last.gradeLabel;
+  assert.equal(rowOf({ setAside: { fingerprint: fp, declared: 3, live: 1 } }, { setAside: ASIDE }), 'Diagnostic grade · 4 set aside');
+  assert.equal(rowOf({ setAside: { fingerprint: fp, declared: 3, live: 1 } }, {}), "Diagnostic grade · graded before this service's set-asides changed");
+  assert.equal(rowOf({ setAside: null }, { setAside: ASIDE }), "Diagnostic grade · graded before this service's set-asides changed");
+  assert.equal(rowOf({ setAside: null }, {}), 'Diagnostic grade', 'neither: as before');
+});
+
+test('the differences to set aside on the page: asideChanges tells a what-if from what is saved; whatIfWords and the verdict say how many; Keep asks once how they are set aside; the list draws a row and a switch per difference, a switch per layer, a due one with Forget, and the ones that match nothing', () => {
+  const a = (key, side, extra = {}) => ({ key, side, layer: 'L2', label: key.slice(9, 20), kind: side === 'declared' ? 'in-development' : 'not-this-service', note: '', until: side === 'declared' ? '2026-12-10' : null, ...extra });
+  const saved = [a('metric::{"name":"m1"}', 'declared'), a('metric::{"name":"m2"}', 'declared')];
+  assert.deepEqual(asideChanges(saved, saved), { added: [], removed: [], changed: [], same: true });
+  assert.deepEqual(asideChanges(saved, [saved[0], { ...saved[1], until: '2027-01-10' }, a('metric::{"name":"x"}', 'live')]),
+    { added: ['live:metric::{"name":"x"}'], removed: [], changed: ['declared:metric::{"name":"m2"}'], same: false });
+  assert.deepEqual(asideChanges(saved, [saved[1]]).removed, ['declared:metric::{"name":"m1"}']);
+  assert.deepEqual(asideChanges(null, undefined), { added: [], removed: [], changed: [], same: true });
+  assert.equal(whatIfWords({ asideAdded: 31 }), 'with 31 set aside');
+  assert.equal(whatIfWords({ turnedOff: ['fresh'], asideAdded: 2, asideRemoved: 1 }), 'without Fresh, and with 2 set aside, and with 1 no longer set aside');
+  const v = verdictBarHtml({ letter: 'C', gradeName: 'Field grade', sentence: 's', scorePct: 60, scoreExact: 60, graded: 6, total: 7, aside: 31 });
+  assert.ok(v.includes('<span class="diag-verdict-on">on 6 of 7 criteria · 31 set aside</span>'));
+  assert.ok(!verdictBarHtml({ letter: 'C', scorePct: 60, aside: 0 }).includes('set aside'), 'nothing set aside: nothing said');
+
+  // Keep's ask: a kind per side with a difference newly set aside, a review date while one is under development, a note.
+  const keep = { enabled: true, reason: null, serviceName: 'krystaline', needsReason: true };
+  const bar = (ask) => whatIfBarHtml({ words: 'with 31 set aside', now: { letter: 'C', pct: 60, graded: 7, total: 7 }, saved: { letter: 'C', pct: 59, graded: 7, total: 7 }, keep: { ...keep, ask } });
+  const both = bar({ count: 0, reason: '', aside: { declared: 31, live: 2, kind: { declared: 'in-development', live: 'not-this-service' }, until: '2026-12-10', note: 'lands <soon>' } });
+  assert.ok(!both.includes('data-diag-keep-reason'), 'no criterion newly left out: no reason asked');
+  assert.ok(both.includes('<legend>Set aside as</legend>') && both.includes('<span>31 declared, not live</span>') && both.includes('<span>2 live, not declared</span>'));
+  assert.ok(both.includes('<select class="og-input" data-diag-keep-kind="declared"><option value="in-development" selected>Under development</option><option value="not-this-service">Not this service&#39;s</option></select>')
+    || both.includes('<select class="og-input" data-diag-keep-kind="declared"><option value="in-development" selected>Under development</option><option value="not-this-service">Not this service\'s</option></select>'), both);
+  assert.ok(both.includes('data-diag-keep-kind="live"><option value="in-development">Under development</option><option value="not-this-service" selected>'));
+  assert.ok(both.includes('<input class="og-input" type="date" data-diag-keep-until value="2026-12-10">') && both.includes('value="lands &lt;soon&gt;"'));
+  const noDate = bar({ count: 0, aside: { declared: 3, live: 0, kind: { declared: 'not-this-service', live: 'not-this-service' }, until: '2026-12-10', note: '' } });
+  assert.ok(!noDate.includes('data-diag-keep-until') && !noDate.includes('live, not declared'), 'not under development: no review date; a side with none newly set aside: no select');
+  const withReason = bar({ count: 1, reason: 'x', aside: { declared: 1, live: 0, kind: { declared: 'in-development' }, until: '2026-12-10', note: '' } });
+  assert.ok(withReason.includes('data-diag-keep-reason value="x"') && withReason.includes('data-diag-keep-kind="declared"'), 'both asked when both changed');
+
+  // The list.
+  const row = (key, side, layer, extra = {}) => ({ id: `${side}:${key}`, key, side, layer, label: key.replace(/^.*"name":"([^"]+)".*$/, '$1'), kind: 'metric', tried: null, saved: null, due: null, ...extra });
+  const html = setAsideListHtml({
+    declared: [
+      row('metric::{"name":"m1"}', 'declared', 'L2', { tried: saved[0], saved: saved[0] }),
+      row('metric::{"name":"m2"}', 'declared', 'L2', { tried: saved[1] }),
+      row('metric::{"name":"m3"}', 'declared', 'L2', { due: { ...saved[0], until: '2026-11-01' } }),
+      row('slo::{"id":"s"}', 'declared', 'L1'),
+    ],
+    live: [row('metric::{"name":"x"}', 'live', 'L2')],
+    stale: [{ id: 'declared:metric::{"name":"old"}', label: 'old', state: 'retired' }, { id: 'live:metric::{"name":"gone"}', label: 'gone', state: 'gone' }],
+    open: ['declared:L2'],
+    layerTitle: (L) => `${L} name`,
+  });
+  assert.ok(html.startsWith('\n    <section class="diag-aside" id="diag-aside" tabindex="-1" aria-labelledby="diag-aside-title">'));
+  assert.ok(html.includes('<p class="diag-aside-lede">5 differences, 2 set aside.'));
+  assert.deepEqual([...html.matchAll(/data-aside-group="([^"]+)"/g)].map((m) => m[1]), ['declared:L2', 'declared:L1', 'live:L2'], 'a closed row per layer, by side, in the comparison\'s order');
+  assert.ok(html.includes('<details class="diag-aside-layer" open data-aside-group="declared:L2">') && html.includes('<details class="diag-aside-layer" data-aside-group="declared:L1">'), 'the one opened stays open');
+  assert.ok(html.includes('<span class="diag-aside-layer-n">3 · 2 set aside</span>') && html.includes('aria-label="Set aside all 3 in L2 name"') && html.includes('data-ux-action="diag-aside-group:declared:L2"'));
+  assert.equal((html.match(/role="switch"/g) || []).length, 5 + 3, 'one per difference, one per layer');
+  assert.ok(html.includes('<li class="diag-aside-item is-aside">') && html.includes('Under development · review 10 Dec'), 'saved and on screen: set aside, said how');
+  assert.ok(html.includes('<li class="diag-aside-item is-aside is-changed">'), 'set aside by the what-if alone: marked');
+  assert.ok(html.includes('<li class="diag-aside-item is-due">') && html.includes('Review due since 1 Nov <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget:declared:metric::{&quot;name&quot;:&quot;m3&quot;}">Forget it</button>'), 'a due one counts again, with Forget');
+  assert.ok(html.includes('aria-checked="false" aria-label="Set aside x" data-ux-action="diag-aside-toggle:live:metric::{&quot;name&quot;:&quot;x&quot;}"'), 'the key rides in the action, escaped');
+  assert.ok(html.includes('2 set-asides match no difference now (now on both sides and in neither pack). <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget-stale">Forget them</button>'));
+  assert.equal(setAsideListHtml({}), '', 'no differences and nothing stale: nothing drawn');
+  assert.ok(!setAsideListHtml({ declared: [row('metric::{"name":"<b>"}', 'declared', 'L2')] }).includes('<b>'), 'labels escaped');
+  assert.equal(setAsideWords({ kind: 'not-this-service' }), "Not this service's");
+  assert.equal(setAsideWords({ kind: 'in-development', until: null }), 'Under development');
 });

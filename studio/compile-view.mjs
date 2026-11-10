@@ -27,6 +27,8 @@ import {
   LAYERS_FOR_DIFF, renderLiveScopeControl,
 } from './compare-view.mjs';
 import { compareModeFor } from './diagnostic-grade.mjs';
+// A service's set-asides (studio/set-asides.mjs): what its grade leaves out, the plan proposes nothing for.
+import { applySetAsides } from './set-asides.mjs';
 import { artefactLabel, deploySelectionFromEntries, deploySurfaceForArtefact } from './artifact-model.mjs';
 import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, renderRemediationFlow } from './remediation-flow-view.mjs';
 import {
@@ -252,13 +254,23 @@ function effectiveRemediateOp(recommended = null, fallback = 'all') {
   return recommended || fallback;
 }
 
+// The comparison the plan is made from: the server-computed diff, without the
+// differences the service set aside when it is a comparison with live — the
+// ones Diagnose leaves out of the grade are not proposed here either.
+function remediationDiff() {
+  const diff = (state.diff && !state.diff.error && state.diff.layers) ? state.diff : null;
+  if (!diff || compareModeFor(state.packB, state.compareBId) !== 'drift') return diff;
+  return applySetAsides(diff, Array.isArray(state.gradeService?.setAside) ? state.gradeService.setAside : [], { now: new Date().toISOString() });
+}
+
 // Resolve a set operation to a per-layer artefact list. Uses the
-// server-computed diff (state.diff) for B / ∪ / − so the membership
-// matches the Diagnose drill exactly; falls back to whole-pack walks
-// when the diff isn't present (op 'A', or B-ops before the diff loads).
+// server-computed diff (state.diff, without the service's set-asides) for
+// B / ∪ / − so the membership matches the Diagnose drill exactly; falls back
+// to whole-pack walks when the diff isn't present (op 'A', or B-ops before
+// the diff loads).
 function resolveRemediationSet(op) {
   const haveB = !!state.packB;
-  const diff = (state.diff && !state.diff.error && state.diff.layers) ? state.diff : null;
+  const diff = remediationDiff();
   const out = { byLayer: {}, total: 0, deployable: 0, author: 0, retrofeed: 0, drift: 0, needsDiff: false };
 
   for (const L of LAYERS_FOR_DIFF) {
@@ -400,6 +412,8 @@ function remediationModel() {
     repoDeployable: sets.deploy?.deployable || 0,
     drift: sets.drift?.drift || 0,
     outOfScope: (haveB && state.diff?.summary?.outOfScope) || 0,
+    // Left out of the plan: the service set them aside (under development, not its own).
+    setAside: (() => { const a = haveB ? remediationDiff()?.setAsides : null; return a ? a.declared + a.live : 0; })(),
   };
   const rec = recommendRemediation({ haveB, mode, ...counts });
   const op = effectiveRemediateOp(rec?.op, mode === 'gap' ? 'retrofeed' : 'all');
@@ -566,6 +580,7 @@ function remediationHeaderHtml(m) {
     { label: 'Only in the repository', value: String(counts.repoOnly), note: mode === 'gap' ? 'additional in your pack — not a gap' : (counts.repoOnly ? (counts.repoDeployable ? 'not yet live' : 'not yet live; need a manual fix') : 'nothing to deploy'), tone: counts.repoOnly && mode !== 'gap' ? 'warn' : 'neutral' },
     { label: 'Shared, fields differ', value: String(counts.drift), note: counts.drift ? 'decide which side is right' : 'shared artefacts agree', tone: counts.drift ? 'warn' : 'neutral' },
     { label: 'Scope checked', value: scopeWords(state.diff?.scope?.mode || activeDiffScopeMode(), mode), note: counts.outOfScope ? `${plural(counts.outOfScope, parkedWord(mode))} parked out of scope, not compared` : 'nothing parked out of scope', tone: counts.outOfScope && mode === 'gap' ? 'warn' : 'neutral' },
+    ...(counts.setAside ? [{ label: 'Set aside', value: String(counts.setAside), note: 'left out of the plan: set aside in Diagnose (under development, or found live and not this service’s)', tone: 'neutral' }] : []),
   ] : [];
 
   return decisionHeaderHtml({

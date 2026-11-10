@@ -49,8 +49,10 @@ import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from './
 // The Assessment as one screen: the verdict, the checks as rows with their switches, the rest folded.
 import {
   verdictBarHtml, whatIfBarHtml, checksTableHtml, moreSummaryHtml, layerCoverage, layerMiniHtml,
-  toggleOff, whatIfChanges, whatIfWords, fmtChecks,
+  toggleOff, whatIfChanges, whatIfWords, fmtChecks, asideChanges, setAsideListHtml,
 } from './assessment-page.mjs';
+// A service's set-asides: differences with live its grade leaves out, applied before the grade is taken.
+import { applySetAsides, setAsideCandidates, setAsideId, setAsideState, reviewDate, DEFAULT_KIND, SET_ASIDE_KINDS } from './set-asides.mjs';
 
 // Requirements traceability (the TRACEABILITY VIEW section below).
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
@@ -1130,15 +1132,21 @@ function renderDiagnose(view) {
   const scope = diagnoseCriteriaScope();
   const whatIf = diagnoseWhatIf();
   const gradeOpts = (off) => ({ ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off });
+  // The service's set-asides (studio/set-asides.mjs) — or the what-if's — apply to
+  // a comparison with live only: a baseline's differences are no one's to set aside.
+  const asideNow = new Date().toISOString();
+  const asideOn = !!diffSafe && compareModeFor(state.packB, state.compareBId) === 'drift';
+  const diffGraded = asideOn ? applySetAsides(diffSafe, whatIf ? whatIf.aside : savedSetAsides(), { now: asideNow }) : diffSafe;
+  const diffSaved = asideOn && whatIf ? applySetAsides(diffSafe, savedSetAsides(), { now: asideNow }) : diffGraded;
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(whatIf ? whatIf.off : state.gradeOff));
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffGraded, gradeOpts(whatIf ? whatIf.off : state.gradeOff));
   // What is saved, beside a what-if: the grade the service has today.
-  const savedDiagnostic = whatIf ? computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(state.gradeOff)) : null;
+  const savedDiagnostic = whatIf ? computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSaved, gradeOpts(state.gradeOff)) : null;
 
   // The decision is DERIVED from the same diagnostic (and the same lensed
   // comparison digest the drill renders) — nothing re-scores.
   const ctx = diagnoseContext();
-  const digest = haveB ? diffDigest(diffSafe, state.packB, lens) : null;
+  const digest = haveB ? diffDigest(diffGraded, state.packB, lens) : null;
   // The probe record the engine scored "fresh" / "drift-free" from: Pack B's
   // when it carries mcp.* annotations, otherwise Pack A's — the same rule as
   // computeDiagnosticGrade, so the sentence and the checks read one record.
@@ -1165,7 +1173,8 @@ function renderDiagnose(view) {
   // One screen (assessment-page.mjs): the verdict, a what-if while one is
   // tried, the checks — one row each, a switch on each — and everything else
   // folded into closed rows that say their headline.
-  report.insertAdjacentHTML('beforeend', assessmentVerdictHtml(decision, ctx, diagnostic, !!whatIf));
+  const asideCount = diffGraded?.setAsides ? diffGraded.setAsides.declared + diffGraded.setAsides.live : 0;
+  report.insertAdjacentHTML('beforeend', assessmentVerdictHtml(decision, ctx, diagnostic, !!whatIf, asideCount));
   if (whatIf) report.insertAdjacentHTML('beforeend', assessmentWhatIfHtml(whatIf, scope, diagnostic, savedDiagnostic));
   report.insertAdjacentHTML('beforeend', checksTableHtml(assessmentChecks(decision, diagnostic, scope, whatIf)));
 
@@ -1194,7 +1203,7 @@ function renderDiagnose(view) {
     id: 'diag-compare', title: haveB ? ctx.roles.title : 'Comparison with a baseline',
     metaHtml: escapeHtml(cannotCompare ? 'this pack cannot be compared yet'
       : !haveB ? 'no baseline selected: the pack is read on its own'
-        : t && t.universe > 0 ? `${t.onlyInA} ${ctx.roles.aDelta.toLowerCase()} · ${t.drifted} changed · ${t.onlyInB} ${ctx.roles.bDelta.toLowerCase()} · ${t.aligned} match`
+        : t && t.universe > 0 ? `${t.onlyInA} ${ctx.roles.aDelta.toLowerCase()} · ${t.drifted} changed · ${t.onlyInB} ${ctx.roles.bDelta.toLowerCase()} · ${t.aligned} match${asideCount ? ` · ${asideCount} set aside` : ''}`
           : 'nothing to compare in this scope'),
     count: digest ? decision.qualityGaps : null, countTitle: decision.qualityGaps === 1 ? 'quality gap' : 'quality gaps', tone: 'warn',
   });
@@ -1213,7 +1222,9 @@ function renderDiagnose(view) {
   } else if (!haveB) {
     cmp.appendChild(renderComparePrompt());
   } else {
-    const drill = renderDriftDrill(diffSafe, state.packB, state.compareBId, lens);
+    // The differences, each to set aside (a what-if until kept), before the drill that counts them.
+    if (asideOn) cmp.insertAdjacentHTML('beforeend', assessmentAsideHtml(diffGraded, asideNow));
+    const drill = renderDriftDrill(diffGraded, state.packB, state.compareBId, lens);
     if (drill) cmp.appendChild(drill);
     else if (diffSafe?.error) cmp.insertAdjacentHTML('beforeend', diagUx.emptyStateHtml({ title: 'The comparison could not be computed.', body: String(diffSafe.error), tone: 'warn' }));
     else cmp.insertAdjacentHTML('beforeend', diagUx.emptyStateHtml({
@@ -1230,7 +1241,7 @@ function renderDiagnose(view) {
     const hurt = (rollup?.broken || 0) + (rollup?.partial || 0);
     diagMoreRow(more, {
       id: 'diag-requirements', title: 'Requirement chains',
-      metaHtml: escapeHtml(rollup?.declaredTotal ? `${rollup.intact} of ${rollup.declaredTotal} intact · ${rollup.broken} broken · ${rollup.partial} partial` : 'from each objective to the signals that prove it'),
+      metaHtml: escapeHtml(rollup?.declaredTotal ? `${rollup.intact} of ${rollup.declaredTotal} intact · ${rollup.broken} broken · ${rollup.partial} partial${rollup.setAside ? ` · ${rollup.setAside} set aside` : ''}` : 'from each objective to the signals that prove it'),
       count: hurt, countTitle: hurt === 1 ? 'chain not intact' : 'chains not intact', tone: 'warn',
     }).insertAdjacentHTML('beforeend', parts.requirementsHtml);
   }
@@ -1251,19 +1262,21 @@ function renderDiagnose(view) {
 
   wireDiagActions(report);
   wireDiagKeepAsk(report);
+  wireDiagAsideGroups(report);
 }
 
 // ---------- the Assessment's page state ----------
 //
 // What the Assessment keeps through its repaints, for the pack on screen: the
-// check rows and the folded rows drawn open, and a what-if — the set of
-// criteria the grade is taken without while one is tried ({ off, keep }),
-// null when the page shows what is saved. `keep` is the reason being typed
-// once Keep asks for one. All of it is dropped when another pack, or another
-// service's, comes on screen.
+// check rows, the folded rows and the differences' layers drawn open, and a
+// what-if — the criteria the grade is taken without and the differences it
+// sets aside while one is tried ({ off, aside, keep }), null when the page
+// shows what is saved. `keep` is what Keep asks for, as it is typed. All of
+// it is dropped when another pack, or another service's, comes on screen.
 let diagPageKey = null;
 const diagOpenChecks = new Set();
 const diagOpenRows = new Set();
+const diagOpenAside = new Set();
 let diagWhatIfState = null;
 let diagGradeScope = null;
 
@@ -1279,18 +1292,29 @@ function diagnoseCriteriaScope() {
     writeReason: state.access?.reason || '',
   });
   const key = `${scope?.serviceId ?? ''}|${state.selectedPackId ?? ''}`;
-  if (key !== diagPageKey) { diagPageKey = key; diagOpenChecks.clear(); diagOpenRows.clear(); diagWhatIfState = null; }
+  if (key !== diagPageKey) { diagPageKey = key; diagOpenChecks.clear(); diagOpenRows.clear(); diagOpenAside.clear(); diagWhatIfState = null; }
   diagGradeScope = scope;
   return scope;
 }
 
-// The what-if on screen, or null: a set that is what the service already keeps is none.
+// The set-asides the service keeps ([] for a pack that is no service's own).
+const savedSetAsides = () => (Array.isArray(state.gradeService?.setAside) ? state.gradeService.setAside : []);
+
+// The what-if on screen, or null: one that is what the service already keeps is none.
 function diagnoseWhatIf() {
   const w = diagWhatIfState;
   if (!w) return null;
-  if (whatIfChanges(state.gradeOff, w.off).same) { diagWhatIfState = null; return null; }
+  if (whatIfChanges(state.gradeOff, w.off).same && asideChanges(savedSetAsides(), w.aside).same) { diagWhatIfState = null; return null; }
   return w;
 }
+
+// A what-if from a set of criteria and a list of set-asides; none when both are what is saved.
+function setWhatIf(off, aside) {
+  const keep = diagWhatIfState?.keep || null;
+  diagWhatIfState = whatIfChanges(state.gradeOff, off).same && asideChanges(savedSetAsides(), aside).same ? null : { off, aside, keep };
+}
+const triedOff = () => (diagWhatIfState ? diagWhatIfState.off : state.gradeOff);
+const triedAside = () => (diagWhatIfState ? diagWhatIfState.aside : savedSetAsides());
 
 // A folded row: closed unless it was opened on this pack, its headline on the row.
 function diagMoreRow(parent, { id, title, metaHtml = '', count = null, countTitle = '', tone = 'neutral' }) {
@@ -1307,7 +1331,7 @@ function diagMoreRow(parent, { id, title, metaHtml = '', count = null, countTitl
 // The verdict band: the grade, the score on the scale, and coverage, trust and
 // the live read in a number each (the measures, grouped by meaning since the
 // 2026-09 review, now one line of facts).
-function assessmentVerdictHtml(d, ctx, diagnostic, whatIf = false) {
+function assessmentVerdictHtml(d, ctx, diagnostic, whatIf = false, aside = 0) {
   const context = [
     ctx.service ? { key: 'Service', value: ctx.service } : null,
     { key: ctx.roles.aKey, value: packLine(ctx.a), title: 'Pack A — the pack being assessed' },
@@ -1342,7 +1366,7 @@ function assessmentVerdictHtml(d, ctx, diagnostic, whatIf = false) {
     tone: d.tone, letter: d.ig.letter, gradeName: d.gradeName, gradeTitle: d.verdictTitle,
     sentence: d.sentence.startsWith(lead) ? capitalize(d.sentence.slice(lead.length)) : d.sentence,
     scorePct: d.scorePct, scoreExact: d.audit.scorePctExact, threshold: d.audit.threshold, passes: d.passes,
-    graded, total: graded + s.off.length, whatIf,
+    graded, total: graded + s.off.length, aside, whatIf,
     facts: [
       group('coverage', diagnostic.coverage),
       group('trust', diagnostic.trust),
@@ -1369,17 +1393,96 @@ function gradeInBrief(diagnostic) {
 // Keep where a set can be saved for the service, and Reset.
 function assessmentWhatIfHtml(whatIf, scope, diagnostic, savedDiagnostic) {
   const changes = whatIfChanges(state.gradeOff, whatIf.off);
+  const aside = asideChanges(savedSetAsides(), whatIf.aside);
   const sw = scope?.switches || null;
+  const added = asideAddedBySide(aside);
+  const k = whatIf.keep;
   return whatIfBarHtml({
-    words: whatIfWords(changes),
+    words: whatIfWords({ ...changes, asideAdded: aside.added.length + aside.changed.length, asideRemoved: aside.removed.length }),
     now: gradeInBrief(diagnostic),
     saved: gradeInBrief(savedDiagnostic),
     keep: sw ? {
       enabled: sw.enabled, reason: sw.reason, serviceName: scope.serviceName,
-      needsReason: changes.turnedOff.length > 0,
-      ask: sw.enabled && whatIf.keep ? { reason: whatIf.keep.reason, count: changes.turnedOff.length } : null,
+      needsReason: changes.turnedOff.length > 0 || aside.added.length > 0,
+      ask: sw.enabled && k ? {
+        reason: k.reason, count: changes.turnedOff.length,
+        aside: aside.added.length ? { ...added, kind: k.kind, until: k.until, note: k.note } : null,
+      } : null,
     } : null,
   });
+}
+
+// The differences a what-if newly sets aside, by side.
+function asideAddedBySide(aside) {
+  return { declared: aside.added.filter((id) => id.startsWith('declared:')).length, live: aside.added.filter((id) => id.startsWith('live:')).length };
+}
+
+// The differences, each to set aside: the comparison's candidates (the graded diff's set-aside
+// bucket first), each with the record that sets it aside on screen, the saved one, and one
+// whose review date has passed; the set-asides that match no difference now.
+function assessmentAsideHtml(diffGraded, now) {
+  const tried = new Map(triedAside().map((r) => [setAsideId(r.side, r.key), r]));
+  const saved = new Map(savedSetAsides().map((r) => [setAsideId(r.side, r.key), r]));
+  const holds = (r) => (r && setAsideState(r, now) === 'active' ? r : null);
+  const row = (c) => {
+    const t = tried.get(c.id) || null;
+    return { ...c, tried: holds(t), saved: holds(saved.get(c.id)), due: t && !holds(t) ? t : null };
+  };
+  const candidates = setAsideCandidates(diffGraded, diffEntryLabel);
+  const stale = (diffGraded?.setAsides?.records || []).filter((r) => r.state === 'retired' || r.state === 'gone')
+    .map((r) => ({ id: setAsideId(r.side, r.key), label: r.label || r.key, state: r.state }));
+  diagAsideIndex = new Map([...candidates.declared, ...candidates.live].map((c) => [c.id, c]));
+  diagAsideStale = stale.map((x) => x.id);
+  return setAsideListHtml({
+    declared: candidates.declared.map(row), live: candidates.live.map(row), stale,
+    open: [...diagOpenAside], layerTitle: (L) => diagUx.layerTitle(L),
+  });
+}
+
+// The differences' layers keep open through a repaint.
+function wireDiagAsideGroups(root) {
+  for (const d of root.querySelectorAll('details[data-aside-group]')) {
+    d.addEventListener('toggle', () => { if (d.open) diagOpenAside.add(d.dataset.asideGroup); else diagOpenAside.delete(d.dataset.asideGroup); });
+  }
+}
+
+// One or more differences set aside, or counted again, as a what-if: `ids` of the
+// candidates on screen (`side:key`), `on` true to set aside, false to count again.
+// A new set-aside is of the side's usual kind; one under development is reviewed in
+// REVIEW_DAYS; one whose review date has passed is set aside again from today.
+function diagSetAside(ids, on, focusAction = null) {
+  const now = new Date().toISOString();
+  const byId = new Map(triedAside().map((r) => [setAsideId(r.side, r.key), r]));
+  const candidates = diagAsideCandidates();
+  for (const id of ids) {
+    const was = byId.get(id);
+    if (!on) { byId.delete(id); continue; }
+    if (was && setAsideState(was, now) === 'active') continue;
+    const c = candidates.get(id);
+    if (!c && !was) continue;
+    const kind = was?.kind || DEFAULT_KIND[c.side];
+    byId.set(id, {
+      key: was?.key || c.key, side: was?.side || c.side, layer: was?.layer ?? c?.layer ?? null, label: was?.label || c?.label || c?.key,
+      kind, note: was?.note || '', until: kind === 'in-development' ? reviewDate(now) : null,
+    });
+  }
+  setWhatIf(triedOff(), [...byId.values()]);
+  appHost.renderMainView();
+  if (focusAction) [...document.querySelectorAll('#diag-aside [data-ux-action]')].find((el) => el.dataset.uxAction === focusAction)?.focus({ preventScroll: true });
+  diagUx.announce(document.querySelector('.diag-whatif-text')?.textContent.replace(/\s+/g, ' ').trim() || 'Back to what is saved.');
+}
+
+// The candidates on screen by id (what the comparison holds now), and the set-asides that match none.
+let diagAsideIndex = new Map();
+let diagAsideStale = [];
+const diagAsideCandidates = () => diagAsideIndex;
+
+// Forget set-asides (one whose review date passed, or those that match no difference): out of the what-if's list.
+function diagForgetAside(ids) {
+  const drop = new Set(ids);
+  setWhatIf(triedOff(), triedAside().filter((r) => !drop.has(setAsideId(r.side, r.key))));
+  appHost.renderMainView();
+  document.getElementById('diag-aside')?.focus({ preventScroll: true });
 }
 
 // The rows of the checks table: the decision's checks by group, each marked
@@ -1413,12 +1516,29 @@ function assessmentChecks(decision, diagnostic, scope, whatIf) {
   };
 }
 
-// Keep's field: what is typed stays with the what-if, and so does the focus
-// through a repaint; Enter saves, Escape gives the ask up.
+// Keep's fields: what is typed stays with the what-if, and so does the focus
+// through a repaint; Enter saves, Escape gives the ask up. A kind chosen draws
+// the ask again (the review date belongs to one under development).
 function wireDiagKeepAsk(root) {
-  const input = root.querySelector('[data-diag-keep-reason]');
   const keep = diagWhatIfState?.keep;
-  if (!input || !keep) return;
+  if (!keep) return;
+  for (const sel of root.querySelectorAll('[data-diag-keep-kind]')) {
+    sel.addEventListener('change', () => {
+      keep.kind = { ...keep.kind, [sel.dataset.diagKeepKind]: sel.value };
+      appHost.renderMainView();
+      document.querySelector(`[data-diag-keep-kind="${sel.dataset.diagKeepKind}"]`)?.focus({ preventScroll: true });
+    });
+  }
+  const until = root.querySelector('[data-diag-keep-until]');
+  until?.addEventListener('input', () => { keep.until = until.value; until.removeAttribute('aria-invalid'); });
+  const note = root.querySelector('[data-diag-keep-note]');
+  note?.addEventListener('input', () => { keep.note = note.value; });
+  for (const el of [until, note]) el?.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); diagKeepSubmit(); } else if (ev.key === 'Escape') { ev.preventDefault(); runDiagAction('diag-whatif-keep-cancel'); } });
+  const input = root.querySelector('[data-diag-keep-reason]');
+  if (!input) {
+    if (keep.focus) { keep.focus = false; root.querySelector('[data-diag-keep-kind], [data-diag-keep-note]')?.focus({ preventScroll: true }); }
+    return;
+  }
   input.addEventListener('input', () => { keep.reason = input.value; keep.caret = input.selectionStart; input.removeAttribute('aria-invalid'); });
   input.addEventListener('focus', () => { keep.focused = true; });
   // A field taken away by a repaint keeps the ask focused; one left by the person does not.
@@ -1455,33 +1575,54 @@ function diagToggleCheck(key) {
     diagUx.announce('A grade stands on at least one criterion.');
     return;
   }
-  const changes = whatIfChanges(state.gradeOff, off);
-  diagWhatIfState = changes.same ? null : { off, keep: changes.turnedOff.length ? (diagWhatIfState?.keep || null) : null };
+  setWhatIf(off, triedAside());
   appHost.renderMainView();
   document.querySelector(`.diag-checks [data-ux-action="diag-check-toggle:${cssKey(key)}"]`)?.focus({ preventScroll: true });
   diagUx.announce(document.querySelector('.diag-whatif-text')?.textContent.replace(/\s+/g, ' ').trim() || 'Back to what is saved.');
 }
 
-// Keep, once a reason is typed: it is required for the criteria newly left out.
+// Keep, once it is said: a reason for the criteria newly left out (required), and
+// for the differences newly set aside how — their kinds, and a review date for
+// those under development (YYYY-MM-DD, required).
 function diagKeepSubmit() {
   const input = document.querySelector('[data-diag-keep-reason]');
   const reason = String(input?.value ?? diagWhatIfState?.keep?.reason ?? '').trim();
-  if (!reason) {
-    input?.setAttribute('aria-invalid', 'true');
-    input?.focus({ preventScroll: true });
+  if (input && !reason) {
+    input.setAttribute('aria-invalid', 'true');
+    input.focus({ preventScroll: true });
     diagUx.announce('Say why first: a reason is required.');
     return;
   }
-  diagKeepSave(reason);
+  const until = document.querySelector('[data-diag-keep-until]');
+  const day = String(until?.value ?? '').trim();
+  if (until && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    until.setAttribute('aria-invalid', 'true');
+    until.focus({ preventScroll: true });
+    diagUx.announce('Choose a review date: when to look at what is under development again.');
+    return;
+  }
+  diagKeepSave(reason, { until: day || null, note: String(document.querySelector('[data-diag-keep-note]')?.value ?? '').trim() });
 }
 
 // The host saves the set and draws Diagnose again on what the service now
-// keeps — which is the what-if, so the page then shows it as saved.
-async function diagKeepSave(reason) {
+// keeps — which is the what-if, so the page then shows it as saved. The
+// differences newly set aside take the kinds chosen in the ask, its review
+// date and note; one set aside again takes the review date.
+async function diagKeepSave(reason, { until = null, note = '' } = {}) {
   const w = diagWhatIfState;
   const scope = diagGradeScope;
   if (!w || !scope?.switches?.enabled || typeof appHost.setGradeCriteria !== 'function') return;
-  const ok = await appHost.setGradeCriteria(scope.serviceId, { off: w.off, reason });
+  const aside = asideChanges(savedSetAsides(), w.aside);
+  const added = new Set(aside.added);
+  const renewed = new Set(aside.changed);
+  const kinds = w.keep?.kind || DEFAULT_KIND;
+  const setAside = w.aside.map((r) => {
+    const id = setAsideId(r.side, r.key);
+    if (!added.has(id) && !renewed.has(id)) return r;
+    const kind = added.has(id) ? (SET_ASIDE_KINDS.includes(kinds[r.side]) ? kinds[r.side] : r.kind) : r.kind;
+    return { ...r, kind, note: added.has(id) ? note : r.note || '', until: kind === 'in-development' ? (until || r.until || null) : null };
+  });
+  const ok = await appHost.setGradeCriteria(scope.serviceId, { off: w.off, reason, setAside });
   if (!ok) return;
   if (diagWhatIfState === w) { diagWhatIfState = null; appHost.renderMainView(); }
   document.getElementById('diag-summary')?.focus({ preventScroll: true });
@@ -4303,12 +4444,33 @@ function runDiagAction(id) {
     case 'diag-whatif-keep': {
       const w = diagnoseWhatIf();
       if (!w || !diagGradeScope?.switches?.enabled) break;
-      // A criterion newly left out needs its reason; one graded again needs none.
-      if (!whatIfChanges(state.gradeOff, w.off).turnedOff.length) { diagKeepSave(''); break; }
-      w.keep = { reason: '', focus: true, focused: false, caret: null };
+      // A criterion newly left out needs its reason, a difference newly set aside its kind;
+      // one graded again, or counted again, needs nothing.
+      const aside = asideChanges(savedSetAsides(), w.aside);
+      if (!whatIfChanges(state.gradeOff, w.off).turnedOff.length && !aside.added.length) { diagKeepSave(''); break; }
+      w.keep = { reason: '', focus: true, focused: false, caret: null, kind: { ...DEFAULT_KIND }, until: reviewDate(new Date().toISOString()), note: '' };
       appHost.renderMainView();
       break;
     }
+    // A difference's switch, a layer's, and forgetting set-asides (assessment-page.mjs setAsideListHtml).
+    case 'diag-aside-toggle': {
+      const on = [...document.querySelectorAll('#diag-aside [data-ux-action]')].find((el) => el.dataset.uxAction === id)?.getAttribute('aria-checked') !== 'true';
+      diagSetAside([arg], on, id);
+      break;
+    }
+    case 'diag-aside-group': {
+      const group = [...document.querySelectorAll('#diag-aside details[data-aside-group]')].find((d) => d.dataset.asideGroup === arg);
+      const sw = group?.querySelector('summary [role="switch"]');
+      const ids = [...(group?.querySelectorAll('.diag-aside-items [data-ux-action^="diag-aside-toggle:"]') || [])].map((el) => el.dataset.uxAction.slice('diag-aside-toggle:'.length));
+      diagSetAside(ids, sw?.getAttribute('aria-checked') !== 'true', id);
+      break;
+    }
+    case 'diag-aside-forget':
+      diagForgetAside([arg]);
+      break;
+    case 'diag-aside-forget-stale':
+      diagForgetAside((diagAsideStale || []));
+      break;
     case 'diag-whatif-keep-cancel':
       if (!diagWhatIfState) break;
       diagWhatIfState.keep = null;

@@ -1966,3 +1966,64 @@ test('Upload switched off: an upload is refused (409) before its body is read or
     await call('DELETE', `/api/services/${id}`);
   }
 });
+
+test('a service\'s set-asides: its Check now grades and counts without them — grade.setAside names the set, drift.setAside counts it, lastRun.setAside lists it; they are written into the check its Run saved, so the command line grades the same; [] takes them out of the record and the check; a deletion takes them out of the check that was the service\'s', async () => {
+  const { loadJourneyDef, runJourney } = await import('../tools/lib/journey.mjs');
+  const { applySetAsides, setAsideCandidates, setAsideFingerprint } = await import('../studio/set-asides.mjs');
+  const created = await call('POST', '/api/services', { name: 'Aside Shop', repository: { kind: 'path', location: REPO } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'aside-shop.prod';
+  const defOf = () => { const { __source: _source, ...def } = runWithOrg('default', () => loadJourneyDef(NAME)); return def; };
+  const serverRun = async () => { const r = await call('POST', `/api/journeys/${NAME}/run`, {}); assert.equal(r.status, 200, r.text); return r.json; };
+  try {
+    const run = await call('POST', `${P}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    assert.ok(!('setAside' in defOf()), 'nothing set aside: the saved check carries no setAside key');
+    assert.ok(!('setAside' in run.json.record.grade), 'and the record no grade.setAside');
+    const scan = run.json.pack.id;
+    const live = run.json.livePack.id;
+    // The comparison the engine makes of the two, and what a person could set aside in it.
+    const canonical = (id) => parseYaml(readFileSync(packFileOf(id), 'utf8'));
+    const layeredA = adapt(canonical(scan), { environment: 'prod' });
+    const layeredB = adapt(canonical(live), {});
+    const diff = { ...diffPacks(layeredA, layeredB, { scopeMode: undefined, service: 'aside-shop' }), traceabilityGraph: comparePackBranches(layeredA, layeredB) };
+    const { declared } = setAsideCandidates(diff);
+    assert.ok(declared.length >= 2, `the scan declares things the live side does not show: ${declared.length}`);
+    const list = declared.slice(0, 2).map((c) => ({ key: c.key, side: 'declared', layer: c.layer, label: c.label, kind: 'in-development', until: '2099-01-01' }));
+    const patched = await call('PATCH', P, { setAside: list });
+    assert.deepEqual([patched.status, patched.json.changed], [200, ['setAside']], patched.text);
+    assert.deepEqual(defOf().setAside, list.map(({ key, side, kind, until, label }) => ({ key, side, kind, until, ...(label !== key ? { label } : {}) })),
+      'the PATCH wrote them into the check the Run saved — keys, sides, kinds, review dates, labels; never who or when');
+
+    const check = await serverRun();
+    const now = check.record.startedAt;
+    const adjusted = applySetAsides(diff, list, { now });
+    const expected = computeDiagnosticGrade(layeredA, layeredB, computePostureMatrix(layeredA, layeredB), null, adjusted, {});
+    assert.equal(check.record.grade.score, scoreOf(expected), 'Check now: the engine\'s score over the comparison without them');
+    assert.deepEqual(check.record.grade.setAside, { fingerprint: setAsideFingerprint(list, now), declared: adjusted.setAsides.declared, live: 0, chains: adjusted.setAsides.chains, due: 0 });
+    assert.deepEqual([check.record.drift.declaredNotLive, check.record.drift.setAside], [adjusted.summary.onlyInA, { declaredNotLive: adjusted.setAsides.declared, liveNotDeclared: 0 }]);
+    assert.deepEqual((await listedRun(NAME)).setAside, { fingerprint: setAsideFingerprint(list, now), declared: adjusted.setAsides.declared, live: 0 }, 'the listing says what the last run set aside');
+    // The command line on the saved check has only the file: it grades the same.
+    const cli = await runWithOrg('default', () => runJourney(loadJourneyDef(NAME)));
+    assert.deepEqual([cli.grade.score, cli.grade.setAside.fingerprint, cli.drift.declaredNotLive], [check.record.grade.score, check.record.grade.setAside.fingerprint, check.record.drift.declaredNotLive]);
+
+    // [] takes them out of the record and of the check; the next run counts everything again.
+    assert.deepEqual((await call('PATCH', P, { setAside: [] })).json.changed, ['setAside']);
+    assert.ok(!('setAside' in defOf()), 'the check loses the key');
+    const again = await serverRun();
+    assert.ok(!('setAside' in again.record.grade), `nothing set aside on the record: ${JSON.stringify(again.record.grade)}`);
+    assert.equal(again.record.drift.declaredNotLive, diff.summary.onlyInA);
+    assert.equal((await listedRun(NAME)).setAside, null);
+
+    // Set aside again, then the service deleted: the check stays, without them.
+    assert.equal((await call('PATCH', P, { setAside: list })).status, 200);
+    assert.ok(Array.isArray(defOf().setAside));
+    assert.equal((await call('DELETE', P)).status, 200);
+    assert.ok(!('setAside' in defOf()), 'the deletion takes the set-asides out of the check that was the service\'s');
+  } finally {
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});

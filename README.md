@@ -952,7 +952,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on) |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
@@ -1277,6 +1277,59 @@ service can switch a criterion off, with a reason:
   error. The report's grade row ends *— on 6 of 7 criteria (not graded:
   chaos-validated)*, and a notification's `grade` carries `off`.
 
+#### Differences set aside
+
+The comparison takes everything it finds as the service's: a metric the
+repository declares and production does not run yet counts as missing, and a
+rule production runs for another team counts as undeclared. Nothing tells it
+otherwise, so a person confirms or adapts that while diagnosing — a
+difference can be **set aside** for the service (`studio/set-asides.mjs`):
+
+- **In Expert's Diagnose**, against a live Pack B. The comparison's folded row
+  opens on *The differences*: declared, not live, then live, not declared, a
+  closed row per layer with a switch for the whole layer and a row per
+  difference with its own. A switch is the same what-if as a criterion's: the
+  grade, the counts and the chains are taken again at once, nothing is sent,
+  and **Keep for** the service saves the set with the criteria, asking once
+  how — *Under development* (declared, not running yet; reviewed on a date,
+  30 days on by default) or *Not this service's* (found live, someone
+  else's) — and an optional note.
+- **What it does.** A difference set aside leaves the counts (*declared, not
+  live*, *live, not declared*, the alignment), and the requirement chains are
+  scored without it: a chain whose requirement is set aside leaves the
+  rollup, and a declared link set aside leaves its chain's accounting, so a
+  chain broken only by things set aside is intact. A chain with a link
+  missing (an SLO with no burn-rate alert) stays broken. The engine's own
+  numbers ride beside (`setAsides.engine`), and everything says how many are
+  set aside: the verdict (*on all 7 criteria · 31 set aside*), the
+  comparison's row, Drift-free's line, the board's sentence (*31 more are set
+  aside for this service*) and its tiles, the list row. Remediate proposes
+  nothing for them and says how many it left out. The chain history a run
+  keeps is the engine's: a set-aside says nothing of what runs.
+- **Its life.** A set-aside under development holds through its review date;
+  past it the difference counts again and the row says *Review due* (set it
+  aside again, or *Forget it*). One whose difference is now on both sides, or
+  in neither pack, matches nothing and is listed to forget. It is found again
+  in the next scan by its behavioural key (the comparison's `kind::identity`,
+  the one the chains use), so a rename of the file it is in does not lose it.
+- **The record.** `PATCH /api/services/:id { setAside: [{ key, side, layer,
+  label, kind, note, until }] }` sends the whole list (at most 1,000): `side`
+  `declared` or `live`, `kind` `in-development` or `not-this-service`,
+  `until` `YYYY-MM-DD` or null. The view carries `setAside` with `by` and
+  `at`, kept while an entry stays as it is; the `service.update` row counts
+  each side. Kept beside the row in `schema_meta`
+  (`set_aside:<org>:<id>`), as the criteria are: no schema step.
+- **The runs.** Every run of the service's checks grades, counts and gates
+  without them (`maxDeclaredNotLive` reads the count left), and its record
+  says what it left out: `grade.setAside` (`fingerprint` names the set that
+  held, `declared`, `live`, `chains`, `due`) and `drift.setAside`;
+  `GET /api/journeys` gives `lastRun.setAside`. A run graded on other
+  set-asides than the service's now is not the board's letter: the board
+  grades from the repository alone and says *what is set aside changed since
+  the last live check*. The studio-saved checks carry the list
+  (`setAside:`) for `packc journey run` and a schedule, as they carry
+  `gradeOff`.
+
 #### Whose access reads a repository
 
 Observogram serves several people, so a GitHub or Azure DevOps repository is
@@ -1593,8 +1646,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.24 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.24
+docker build -t observogram:0.8.25 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.25
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1657,7 +1710,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.24
+  observogram:0.8.25
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1665,7 +1718,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.24
+    image: observogram:0.8.25
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -2713,6 +2766,8 @@ gate:
       scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
 keepLivePack: transitions       # snapshot Pack B beside the run: transitions (default) · always · never
 gradeOff: [chaos-validated]     # grade criteria this check is not graded on (a service's own check carries its record's switches)
+setAside:                       # differences this check's grade leaves out (a service's own check carries its record's)
+  - { key: 'metric::{"name":"auth_failures_total"}', side: declared, kind: in-development, until: '2026-12-10' }
 schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared, never fired from here
                                 #   also { cron, timezone } or { every: 15m }
 stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
@@ -3585,7 +3640,7 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on (`changed` lists what differed; nothing → no audit row) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — and `setAside` — the differences with live its grade leaves out (`changed` lists what differed; nothing → no audit row) |
 | `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |

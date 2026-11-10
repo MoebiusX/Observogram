@@ -30,6 +30,7 @@
 
 import { agoText, packForService } from './services-model.mjs';
 import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys } from './diagnostic-grade.mjs';
+import { setAsideFingerprint } from './set-asides.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
@@ -151,11 +152,11 @@ export function journeyIsLive(journey) {
 // grades the repository alone then, and so does Expert), a recording, a
 // listing without the field — and Expert opens on the repository alone, as
 // before: a host whose server keeps no live pack is unchanged.
-export function boardComparison({ journey = null, run = null, catalog = [], pack = null, off = [] } = {}) {
+export function boardComparison({ journey = null, run = null, catalog = [], pack = null, off = [], aside = '' } = {}) {
   const kept = journey?.livePack;
   const read = run?.packB?.refreshedAt;
   if (!kept || typeof kept.id !== 'string' || !kept.id || !read || kept.refreshedAt !== read) return null;
-  if (!runGradesBoard(run, pack, off)) return null;
+  if (!runGradesBoard(run, pack, off, aside)) return null;
   if (!(Array.isArray(catalog) ? catalog : []).some((p) => p && p.id === kept.id && p.ok !== false)) return null;
   return { packBId: kept.id, envB: null, label: typeof kept.label === 'string' && kept.label ? kept.label : null };
 }
@@ -213,12 +214,19 @@ export function verdictWordFor(scorePct) {
 // boardComparison hands Expert the run's live read only by it.
 // `off`: the criteria the service is not graded on (its record's gradeOff).
 // A run that graded on other criteria (its grade.off) scored something else:
-// it is not the board's letter until the next check.
+// it is not the board's letter until the next check. `aside`: the name of the
+// set-asides that hold for the service now (studio/set-asides.mjs
+// setAsideFingerprint, '' for none) — a run that left out other differences
+// (its grade.setAside.fingerprint) is not the letter either.
 const offKey = (off) => gradeOffKeys(off).join(',');
+const asideKey = (run) => (typeof run?.grade?.setAside?.fingerprint === 'string' ? run.grade.setAside.fingerprint : '');
 const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
-export function runGradesBoard(run, pack, off = []) {
-  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && offKey(run.grade?.off) === offKey(off);
+const sameTerms = (run, off, aside) => offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '');
+export function runGradesBoard(run, pack, off = [], aside = '') {
+  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside);
 }
+// The name of a service's set-asides that hold at `now` ('' for none).
+export const serviceAsideKey = (service, now = Date.now()) => setAsideFingerprint(service?.setAside, new Date(now).toISOString());
 
 export function runGradedPack(run, pack) {
   if (!run || !pack) return false;
@@ -431,11 +439,13 @@ const toneForLetter = (letter) => {
 //                others: `criteria` says "Graded on 6 of 7 criteria" (absent when none is
 //                off), `notGraded` lists them. A run that graded on other criteria is not
 //                the letter: the repository alone is, and the source line says to check again.
+//   aside        the name of the service's set-asides that hold now (serviceAsideKey): a run
+//                that left out other differences is not the letter either.
 // The run's letter wins when the run graded this pack and could see the live
 // side (outcome pass or gate-failed); otherwise the pack-alone grade, and the
 // source line says which. A live recording as Pack B is graded "against a
 // recording", never "against live".
-export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now(), off = [] } = {}) {
+export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now(), off = [], aside = '' } = {}) {
   const offCount = gradeOffKeys(off).length;
   const criteria = offCount ? { criteria: `Graded on ${GRADE_CRITERIA.length - offCount} of ${GRADE_CRITERIA.length} criteria` } : {};
   if (!pack || how === 'none') {
@@ -447,7 +457,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // A run that saw less of the live side than the check before graded a
   // smaller picture: not usable as the letter, and the source line says so.
   const shrank = vantageShrank(run);
-  if (runGradesBoard(run, pack, off)) {
+  if (runGradesBoard(run, pack, off, aside)) {
     const ig = instrumentGradeFor(Number(run.grade.score)) || { letter: run.grade.letter, label: run.grade.letterLabel || '', blurb: '' };
     const letter = run.grade.letter;
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
@@ -471,16 +481,18 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   const ig = diagnostic.overall.instrumentGrade || instrumentGradeFor(diagnostic.overall.audit?.scorePctExact ?? 0);
   const lost = run && run.outcome === 'vantage-lost' && runGradedPack(run, pack);
   const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
-  // The last live check graded this pack, on other criteria than the service's now.
-  const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && offKey(run.grade?.off) !== offKey(off);
+  // The last live check graded this pack, on other criteria than the service's now, or
+  // leaving out other differences than its set-asides now.
+  const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside);
+  const whatChanged = offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed' : 'what is set aside changed';
   // A check that reads a recording is not checked again from here: the line does not say to.
   const liveCheck = journey ? journeyIsLive(journey) : /^mcp:/i.test(String(run?.packB?.source || ''));
   return {
     letter: ig.letter, label: shortGradeLabel(ig), word: diagnostic.overall.verdict?.word || verdictWordFor(diagnostic.overall.audit?.scorePctExact),
     source: lost ? 'Graded from the repository alone; the last live check could not see production.'
       : partial ? 'Graded from the repository alone; the last live check saw only part of production.'
-        : regraded ? (liveCheck ? 'Graded from the repository alone: the criteria graded here changed since the last live check. Check again to grade against live.'
-          : 'Graded from the repository alone: the criteria graded here changed since the last check.')
+        : regraded ? (liveCheck ? `Graded from the repository alone: ${whatChanged} since the last live check. Check again to grade against live.`
+          : `Graded from the repository alone: ${whatChanged} since the last check.`)
           : 'Graded from the repository alone.',
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
@@ -546,6 +558,9 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   const against = recording ? `against a live recording${when ? ` from ${when}` : ''}` : 'against live';
   const k = differenceCount(run);
   const extra = Number(run.drift?.liveNotDeclared) || 0;
+  // The differences the service set aside (the run left them out of the counts): said, never hidden.
+  const asideN = (Number(run.drift?.setAside?.declaredNotLive) || 0) + (Number(run.drift?.setAside?.liveNotDeclared) || 0);
+  const asideSays = asideN ? ` ${asideN} more ${asideN === 1 ? 'is' : 'are'} set aside for this service.` : '';
   const t = run.transition || {};
   const changedCount = Array.isArray(t.changed) ? t.changed.length : Number(t.changed) || 0;
   const worseCount = Array.isArray(t.changed) ? t.changed.filter((c) => c && c.direction === 'worse').length : Number(t.worse) || 0;
@@ -571,11 +586,11 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
     // declares, but they are not hidden either: the sentence names them.
     const more = extra ? ` ${extra} more ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.` : '';
     return { ...base, status: 'unchanged', pill: OVERVIEW_STATUS.unchanged, tone: stale ? 'warn' : 'ok', stale,
-      sentence: `Checked ${ago} ${against} — it matches: everything the repository declares is running live.${more}${since}`,
+      sentence: `Checked ${ago} ${against} — it matches: everything the repository declares is running live.${more}${asideSays}${since}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: live && !stale && !extra };
   }
   return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
-    sentence: `Checked ${ago} ${against} — ${things(k)} ${k === 1 ? 'differs' : 'differ'} from what the repository declares.${since}`,
+    sentence: `Checked ${ago} ${against} — ${things(k)} ${k === 1 ? 'differs' : 'differ'} from what the repository declares.${asideSays}${since}`,
     canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
 }
 
@@ -838,8 +853,8 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const tiles = [
     { key: 'aligned', value: n(d.aligned), label: 'match', note: 'declared and running live', tone: 'ok' },
     { key: 'drifted', value: n(d.drifted), label: 'run differently', note: 'running live, not as declared', tone: 'warn' },
-    { key: 'missing', value: n(d.declaredNotLive), label: 'not running live', note: 'declared, nowhere live', tone: 'fail' },
-    { key: 'extra', value: n(d.liveNotDeclared), label: 'live only', note: 'running live, not declared', tone: 'info' },
+    { key: 'missing', value: n(d.declaredNotLive), label: 'not running live', note: `declared, nowhere live${n(d.setAside?.declaredNotLive) ? ` · ${n(d.setAside.declaredNotLive)} set aside` : ''}`, tone: 'fail' },
+    { key: 'extra', value: n(d.liveNotDeclared), label: 'live only', note: `running live, not declared${n(d.setAside?.liveNotDeclared) ? ` · ${n(d.setAside.liveNotDeclared)} set aside` : ''}`, tone: 'info' },
   ];
   const t = run.traceability || {};
   const total = n(t.declaredTotal);
@@ -1018,7 +1033,9 @@ export function buildOverviewModel(input = {}) {
   // The criteria this service is not graded on (its record's gradeOff). `gradeSwitches`: the host
   // wires the switch (setGradeCriterion); without it the board lists what is off and offers no switch.
   const off = Array.isArray(picked.service.gradeOff) ? picked.service.gradeOff : [];
-  const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off });
+  // The differences its grade leaves out (its record's setAside), by the name of those that hold now.
+  const aside = serviceAsideKey(picked.service, now);
+  const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off, aside });
   const canSwitch = gradeSwitches === true && picked.how === 'primary' && !pending;
   // `graded`: the criteria the service is graded on, by name — where the reasons are not offered
   // (they would not add up to the letter), the board lists these so each can still be switched.
@@ -1057,7 +1074,7 @@ export function buildOverviewModel(input = {}) {
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
     // What the columns' "Open in …" carry to the host: the comparison the
     // board graded (boardComparison), null while nothing graded it.
-    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off }) : null,
+    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off, aside }) : null,
     grade, still, next, primary, productName, layout, board,
     ...(startHere ? { start: { a: null }, sources: sourcesOf(access) } : {}),
   };
@@ -1123,8 +1140,9 @@ export function repositoryLine(repository, { now = Date.now() } = {}) {
 // unreachable (the live side did not answer), or checked — the grade letter
 // the score earns and how much matches live (numbers; the renderer writes
 // the sign).
-// `off`: the criteria the service is not graded on now (its record's gradeOff).
-function lastCheckOf(journey, now, off = []) {
+// `off`: the criteria the service is not graded on now (its record's gradeOff);
+// `aside`: the name of its set-asides that hold now (serviceAsideKey).
+function lastCheckOf(journey, now, off = [], aside = '') {
   const last = journey?.lastRun || null;
   if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
   const ago = agoText(last.startedAt, now);
@@ -1136,11 +1154,17 @@ function lastCheckOf(journey, now, off = []) {
   // A letter over fewer criteria (the service's switches at that run) says so where it is named.
   const offCount = gradeOffKeys(last.gradeOff).length;
   const over = ig && offCount ? ` · on ${GRADE_CRITERIA.length - offCount} of ${GRADE_CRITERIA.length} criteria` : '';
-  // A letter graded on other criteria than the service's now says so: the board grades it again.
-  const before = ig && offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed" : '';
+  // A letter graded on other criteria than the service's now, or leaving out other differences, says so:
+  // the board grades it again.
+  const lastAside = typeof last.setAside?.fingerprint === 'string' ? last.setAside.fingerprint : '';
+  const before = !ig ? ''
+    : offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed"
+      : lastAside !== (aside || '') ? " · graded before this service's set-asides changed" : '';
+  const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
+  const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
   return {
     state: 'checked', word: ago ? `Checked ${ago}` : 'Checked', ago,
-    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${before}` : '',
+    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${asideSaid}${before}` : '',
     alignmentPct: Number.isFinite(last.alignmentPct) ? last.alignmentPct : null,
     gate: last.outcome === 'pass' ? 'pass' : (last.outcome === 'gate-failed' ? 'fail' : null),
   };
@@ -1210,7 +1234,7 @@ export function serviceListModel(input = {}) {
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
-        : lastCheckOf(journey, now, s.gradeOff);
+        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now));
       const busy = !!running[key];
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;

@@ -838,6 +838,55 @@ try {
            'and has no off key for a run graded on all seven', bodies[1].grade);
     assert(JSON.stringify(Object.keys(bodies[0])) === JSON.stringify(Object.keys(bodies[1])), 'no other key of the payload comes or goes', Object.keys(bodies[0]));
 
+    // --- set-asides: a run grades the comparison without them, the counts and the gate too; the chain history keeps the engine's ---
+    const { applySetAsides, setAsideCandidates, setAsideFingerprint } = await import('../studio/set-asides.mjs');
+    const candidates = setAsideCandidates(fileDiff);
+    assert(candidates.declared.length > 0, 'the example packs leave declared things not seen on the other side, to set aside', candidates);
+    const asideAll = candidates.declared.map((c) => ({ key: c.key, side: 'declared', kind: 'in-development', until: '2099-01-01' }));
+    const asideDiff = applySetAsides(fileDiff, asideAll, { now: new Date().toISOString() });
+    const asideEngine = computeDiagnosticGrade(fileA, fileB, computePostureMatrix(fileA, fileB), null, asideDiff, {});
+    const aside = await runJourney(fewerDef(), { setAside: asideAll });
+    assert(aside.grade.score === pct(asideEngine) && aside.drift.declaredNotLive === 0 && aside.drift.setAside.declaredNotLive === asideDiff.setAsides.declared
+      && aside.drift.alignmentPct === Math.round(asideDiff.summary.alignment * 100),
+    'a run handed set-asides grades, counts and aligns without them, as the engine does over the comparison without them', { grade: aside.grade, drift: aside.drift });
+    assert(JSON.stringify(aside.grade.setAside) === JSON.stringify({ fingerprint: setAsideFingerprint(asideAll, new Date().toISOString()), declared: asideDiff.setAsides.declared, live: 0, chains: asideDiff.setAsides.chains, due: 0 }),
+      'the record names the set that held (its fingerprint) and how many it left out, by side', aside.grade.setAside);
+    assert(JSON.stringify(aside.branches) === JSON.stringify(plain.branches), 'the chain history is the engine\'s: a set-aside says nothing of what runs', { aside: aside.branches.length, plain: plain.branches.length });
+    assert(!('setAside' in plain.grade) && !('setAside' in plain.drift), 'a run handed none carries no setAside key', { grade: Object.keys(plain.grade), drift: Object.keys(plain.drift) });
+    for (const none of [null, [], 'x', [{ key: 'no-colons', side: 'declared' }]]) {
+      const r = await runJourney(fewerDef(), { setAside: none });
+      assert(r.grade.score === plain.grade.score && r.drift.declaredNotLive === plain.drift.declaredNotLive, 'set-asides null, empty, not a list or naming nothing: the comparison as the engine made it', { none, grade: r.grade });
+    }
+    // A review date passed: the differences count again, and the record says how many are due.
+    const lapsed = await runJourney(fewerDef(), { setAside: asideAll.map((x) => ({ ...x, until: '2020-01-01' })) });
+    assert(lapsed.grade.score === plain.grade.score && lapsed.drift.declaredNotLive === plain.drift.declaredNotLive && lapsed.grade.setAside.due === asideAll.length && lapsed.grade.setAside.fingerprint === '',
+      'every review date passed: graded as if nothing were set aside, the due ones counted', lapsed.grade.setAside);
+    // The gate reads the counts without them: a check that allowed none declared-not-live now passes.
+    offFile('aside-gated', ['gate: { maxDeclaredNotLive: 0 }']);
+    const gatedDef = () => { const d = loadJourneyDef('aside-gated'); d.gate = { maxDeclaredNotLive: 0 }; return d; };
+    const gatedPlain = await runJourney(gatedDef());
+    const gatedAside = await runJourney(gatedDef(), { setAside: asideAll });
+    assert(gatedPlain.gate.breaches.some((b) => b.criterion === 'maxDeclaredNotLive' || /declared artefact/.test(JSON.stringify(b))) && !gatedAside.gate.breaches.some((b) => /declared artefact/.test(JSON.stringify(b))),
+      'maxDeclaredNotLive: breached on the engine\'s count, met once what is under development is set aside', { plain: gatedPlain.gate.breaches, aside: gatedAside.gate.breaches });
+    // The definition's own setAside, what the server writes into a service's check: valid entries load and grade the same.
+    const asYaml = ['setAside:', ...asideAll.slice(0, 2).map((x) => `  - { key: '${x.key.replaceAll("'", "''")}', side: declared, kind: in-development, until: '2099-01-01' }`)];
+    const fromFileAside = await runJourney(loadJourneyDef(offFile('aside-by-file', asYaml)));
+    const twoAside = applySetAsides(fileDiff, asideAll.slice(0, 2), { now: new Date().toISOString() });
+    assert(fromFileAside.drift.declaredNotLive === twoAside.summary.onlyInA && fromFileAside.grade.setAside?.declared === twoAside.setAsides.declared,
+      'a check file\'s own setAside is what a run handed none grades without', { drift: fromFileAside.drift, grade: fromFileAside.grade });
+    const asideError = (name, why) => `journey ${name}: setAside must be a list of { key, side, kind, until } — ${why}`;
+    for (const [line, why] of [
+      ['setAside: metric::x', 'it is not a list'],
+      ['setAside: [metric::x]', 'an entry is not a mapping'],
+      ["setAside: [{ key: 'no-colons', side: declared, kind: in-development }]", '"no-colons" is not a difference\'s key (kind::identity)'],
+      ["setAside: [{ key: 'metric::x', side: a, kind: in-development }]", 'side "a" is not declared or live'],
+      ["setAside: [{ key: 'metric::x', side: live, kind: later }]", 'kind "later" is not in-development or not-this-service'],
+      ["setAside: [{ key: 'metric::x', side: live, kind: not-this-service, until: '10 Dec' }]", 'until "10 Dec" is not YYYY-MM-DD'],
+    ]) {
+      offFile('aside-badly', [line]);
+      assert(thrown(() => loadJourneyDef('aside-badly')) === asideError('aside-badly', why), `a definition that says "${line}" does not load — the error names the journey and why`, thrown(() => loadJourneyDef('aside-badly')));
+    }
+    for (const name of ['aside-gated', 'aside-by-file', 'aside-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     for (const name of ['graded-by-file', 'graded-by-file-two', 'graded-by-file-none', 'graded-and-notified']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
   }
 

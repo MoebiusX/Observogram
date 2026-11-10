@@ -30,6 +30,7 @@
 import { delimiter, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
+import { SET_ASIDE_KINDS, SET_ASIDE_LAYERS, SET_ASIDE_MAX, SET_ASIDE_SIDES, baseKeyOf, setAsideId } from '../studio/set-asides.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
@@ -99,6 +100,14 @@ export const WAYS = Object.freeze({
   gradeOffTwice: (key) => `${key} is listed twice`,
   gradeOffReason: (key) => `say why ${key} is not graded for this service — a reason of 1–200 characters on one line`,
   gradeOffAll: 'a service is graded on at least one criterion — leave one switched on',
+  setAside: `setAside is the whole list of differences this service's grade leaves out — [{ key, side, layer, label, kind, note, until }], [] for none, at most ${SET_ASIDE_MAX}`,
+  setAsideKey: (x) => `${JSON.stringify(x)} is not a difference's key — the comparison's kind::identity, 3–600 characters on one line`,
+  setAsideSide: (x) => `a set-aside's side is ${SET_ASIDE_SIDES.join(' or ')}, not ${JSON.stringify(x)}`,
+  setAsideLayer: (x) => `a set-aside's layer is one of ${SET_ASIDE_LAYERS.join(', ')}, not ${JSON.stringify(x)}`,
+  setAsideKind: (x) => `a set-aside's kind is ${SET_ASIDE_KINDS.join(' or ')}, not ${JSON.stringify(x)}`,
+  setAsideText: (field) => `a set-aside's ${field} is at most 200 characters on one line`,
+  setAsideUntil: (x) => `a set-aside's review date is YYYY-MM-DD or null, not ${JSON.stringify(x)}`,
+  setAsideTwice: (side, key) => `${key} is set aside twice on the ${side} side`,
   repositoryKind: (x) => `a repository's kind is github, ado or path, not ${JSON.stringify(x)}`,
   repositoryUploadNamed: 'an uploaded repository is set by uploading its files (PUT /api/services/:id/repository-upload), not named here',
   repositoryGithub: (x) => `${JSON.stringify(x)} is not a GitHub repository — https://github.com/<owner>/<repo>, or <owner>/<repo>`,
@@ -311,6 +320,42 @@ export function parseGradeOff(value, { current = [], actor, now = new Date().toI
   });
 }
 
+// The differences with live a service's grade leaves out (studio/set-asides.mjs): the whole list, each
+// { key, side, layer, label, kind, note, until } — `by` and `at` are the server's: a set-aside sent again
+// as it is keeps its author and time, a new or changed one takes `actor` and `now`. In the order sent.
+const SET_ASIDE_FIELDS = ['key', 'side', 'layer', 'label', 'kind', 'note', 'until', 'by', 'at'];
+const isDay = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
+const optionalLine = (v, field) => {
+  if (v === undefined || v === null || v === '') return '';
+  if (typeof v !== 'string' || v.length > TEXT_MAX || hasControl(v)) invalid(WAYS.setAsideText(field));
+  return v.trim();
+};
+export function parseSetAside(value, { current = [], actor, now = new Date().toISOString() } = {}) {
+  if (!Array.isArray(value) || value.length > SET_ASIDE_MAX) invalid(WAYS.setAside);
+  const kept = new Map((Array.isArray(current) ? current : []).map((x) => [setAsideId(x.side, x.key), x]));
+  const seen = new Set();
+  return value.map((entry) => {
+    if (!isPlainObject(entry) || Object.keys(entry).some((k) => !SET_ASIDE_FIELDS.includes(k))) invalid(WAYS.setAside);
+    const raw = entry.key;
+    if (typeof raw !== 'string' || raw.length < 3 || raw.length > 600 || hasControl(raw) || raw.trim() !== raw || !raw.includes('::')) invalid(WAYS.setAsideKey(raw));
+    const key = baseKeyOf(raw);
+    if (!SET_ASIDE_SIDES.includes(entry.side)) invalid(WAYS.setAsideSide(entry.side));
+    if (entry.layer !== undefined && entry.layer !== null && !SET_ASIDE_LAYERS.includes(entry.layer)) invalid(WAYS.setAsideLayer(entry.layer));
+    if (!SET_ASIDE_KINDS.includes(entry.kind)) invalid(WAYS.setAsideKind(entry.kind));
+    if (entry.until !== undefined && entry.until !== null && !isDay(entry.until)) invalid(WAYS.setAsideUntil(entry.until));
+    const id = setAsideId(entry.side, key);
+    if (seen.has(id)) invalid(WAYS.setAsideTwice(entry.side, key));
+    seen.add(id);
+    const next = {
+      key, side: entry.side, layer: entry.layer ?? null, label: optionalLine(entry.label, 'label') || key,
+      kind: entry.kind, note: optionalLine(entry.note, 'note'), until: entry.until ?? null,
+    };
+    const was = kept.get(id);
+    const same = was && was.kind === next.kind && (was.note || '') === next.note && (was.until ?? null) === next.until;
+    return same ? { ...next, by: was.by, at: was.at } : { ...next, by: actor, at: now };
+  });
+}
+
 // ---------- the org's repository sources ----------
 //
 // Settings → Repository sources (server/store/orgs.mjs): one switch per
@@ -404,6 +449,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
       catch (e) { if (named && e instanceof AdminRefusal) refuseSourceOff(db, named); throw e; }
     }
     if (patch.gradeOff !== undefined) next.gradeOff = parseGradeOff(patch.gradeOff, { current: current.gradeOff, actor });
+    if (patch.setAside !== undefined) next.setAside = parseSetAside(patch.setAside, { current: current.setAside, actor });
     const changed = changedFields(current, next);
     if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
@@ -574,6 +620,8 @@ function serviceView(service, environments, links) {
     repository: service.repository ?? null,
     // The grade criteria this service is not graded on: [{ key, reason, by, at }], [] for none.
     gradeOff: Array.isArray(service.gradeOff) ? service.gradeOff : [],
+    // The differences with live its grade leaves out: [{ key, side, layer, label, kind, note, until, by, at }], [] for none.
+    setAside: Array.isArray(service.setAside) ? service.setAside : [],
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

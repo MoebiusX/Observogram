@@ -59,7 +59,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: studio
-          image: observogram:0.8.24
+          image: observogram:0.8.25
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

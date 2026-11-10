@@ -625,7 +625,8 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
   // note (its imports pinned by tools/test-remediation-flow-view.mjs), the trace's actions.
   // (the grade is taken twice while a what-if is on screen — over its set and over what is saved — with the same hint).
   assert.ok(view.includes("const gradeOpts = (off) => ({ ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off });"));
-  assert.ok(view.includes('computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(whatIf ? whatIf.off : state.gradeOff));'));
-  assert.ok(view.includes('computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(state.gradeOff))'));
+  // (both over the comparison without the service's set-asides — the what-if's, and the saved ones).
+  assert.ok(view.includes('computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffGraded, gradeOpts(whatIf ? whatIf.off : state.gradeOff));'));
+  assert.ok(view.includes('computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSaved, gradeOpts(state.gradeOff))'));
   for (const file of ['studio/diagnostic-grade.mjs', 'studio/remediation-flow-view.mjs', 'studio/trace-chain.mjs']) assert.doesNotMatch(read(file), /from '\.\/static-remedies\.mjs'|import\('\.\/static-remedies\.mjs'\)/, `${file} does not import the model`);
 });

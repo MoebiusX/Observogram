@@ -258,6 +258,17 @@ names what it left out; a run that graded on other criteria is not the
 board's letter until the next check. README, *Criteria a service is not
 graded on*.
 
+What the comparison finds is taken as the service's until a person says
+otherwise: a difference can be set aside for it. In Expert's Diagnose,
+against live, the comparison's row opens on *The differences* — declared, not
+live and live, not declared, by layer — each with a switch, a layer with one
+for all of it. A switch is the same what-if (the grade, the counts and the
+chains taken again at once), and **Keep for** the service saves it as *Under
+development* (reviewed on a date; past it the difference counts again) or
+*Not this service's*. Every screen that counts the differences says how many
+are set aside, Remediate proposes nothing for them, and every run of the
+service's checks grades without them. README, *Differences set aside*.
+
 On Overview, *Why this grade* gives the seven criteria as seven plain lines,
 each with *Yes*, *Partly* or *No*, the yeses first, and the sum with the next
 band (*3.8 of 7 points. B starts at 4.4.*). Five lines read the repository

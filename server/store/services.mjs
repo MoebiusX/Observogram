@@ -14,6 +14,12 @@
 // step: every build opens the same database, and one that knows nothing of
 // it simply never reads the key. The key goes with the service's deletion,
 // in the same transaction.
+//
+// setAside is the differences with live the service's grade leaves out — the
+// declared things under development, the live things not this service's
+// (studio/set-asides.mjs): [{ key, side, layer, label, kind, note, until, by,
+// at }] as parseSetAside wrote it, [] for none. Kept the same way, under
+// set_aside:<orgId>:<serviceId>.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -23,6 +29,7 @@ import { fromJson, notFound, optionalText, requireOrg, requireText, setClause, t
 const REPO = 'services';
 
 export const gradeOffKey = (orgId, serviceId) => `grade_off:${orgId}:${serviceId}`;
+export const setAsideKey = (orgId, serviceId) => `set_aside:${orgId}:${serviceId}`;
 
 export function rowToService(r) {
   if (!r) return null;
@@ -44,11 +51,21 @@ function storedGradeOff(db, orgId, serviceId) {
   return value;
 }
 
-// The service as the callers read it: the row, and its switches beside it.
+// The stored set-asides, or [] when there are none; damage is named, as above.
+function storedSetAside(db, orgId, serviceId) {
+  const key = setAsideKey(orgId, serviceId);
+  const value = getMetaJson(db, key, []);
+  if (!Array.isArray(value) || value.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.key !== 'string' || typeof x.side !== 'string')) {
+    throw new Error(`observogram store: schema_meta ${key} is not a list of set-asides`);
+  }
+  return value;
+}
+
+// The service as the callers read it: the row, and its switches and set-asides beside it.
 function withGradeOff(db, service) {
   if (!service) return null;
   const { createdAt, updatedAt, ...rest } = service;
-  return { ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), createdAt, updatedAt };
+  return { ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id), createdAt, updatedAt };
 }
 
 // An array of plain objects (the admin module owns their shape); none is no key.
@@ -57,6 +74,14 @@ function gradeOffJson(gradeOff) {
     throw new TypeError('observogram store: gradeOff is an array of { key, reason, by, at }');
   }
   return gradeOff.length ? JSON.stringify(gradeOff) : null;
+}
+
+// An array of plain objects with a key and a side (the admin module owns their shape); none is no key.
+function setAsideJson(setAside) {
+  if (!Array.isArray(setAside) || setAside.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.key !== 'string' || typeof x.side !== 'string')) {
+    throw new TypeError('observogram store: setAside is an array of { key, side, layer, label, kind, note, until, by, at }');
+  }
+  return setAside.length ? JSON.stringify(setAside) : null;
 }
 
 // null, or a plain object (the admin module owns its shape).
@@ -109,6 +134,7 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     // An id is reused after the highest one is deleted (a rowid, no AUTOINCREMENT): a key that
     // outlived its service (one deleted other than by deleteService) is no switch of this one.
     putMeta(db, gradeOffKey(org, row.id), null);
+    putMeta(db, setAsideKey(org, row.id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail });
     return withGradeOff(db, rowToService(row));
   });
@@ -125,15 +151,23 @@ export function updateService(db, actor, id, patch) {
     repository: patch.repository === undefined ? undefined : repositoryJson(patch.repository),
   };
   const gradeOff = patch.gradeOff === undefined ? undefined : gradeOffJson(patch.gradeOff);
+  const setAside = patch.setAside === undefined ? undefined : setAsideJson(patch.setAside);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = patch.gradeOff === undefined ? columns : [...columns, 'gradeOff'];
-  // The row names the criteria now off, so the audit says what the grade stopped counting.
-  const detail = { fields, ...(patch.gradeOff === undefined ? {} : { gradeOff: patch.gradeOff.map((x) => x.key) }) };
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside'])];
+  // The row names the criteria now off, so the audit says what the grade stopped counting,
+  // and how many differences are set aside on each side (the list itself can be long).
+  const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
+  const detail = {
+    fields,
+    ...(patch.gradeOff === undefined ? {} : { gradeOff: patch.gradeOff.map((x) => x.key) }),
+    ...(patch.setAside === undefined ? {} : { setAside: { declared: sideCount('declared'), live: sideCount('live') } }),
+  };
   return atomic(db, () => {
     const current = rowOf(db, org, id);
     if (!current) throw notFound('service', id);
     if (!fields.length) return getService(db, id);
     if (gradeOff !== undefined) putMeta(db, gradeOffKey(org, id), gradeOff);
+    if (setAside !== undefined) putMeta(db, setAsideKey(org, id), setAside);
     prepare(db, `UPDATE services SET ${sql ? `${sql}, ` : ''}updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
     writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail });
@@ -142,18 +176,19 @@ export function updateService(db, actor, id, patch) {
 }
 
 // Deletes the service with its environments and pack links (ON DELETE
-// CASCADE) and its grade criteria's key; detail is the service.delete row's
+// CASCADE) and its grade criteria's and set-asides' keys; detail is the service.delete row's
 // ({ environments, packLinks } — the cascaded rows write none of their own).
 export function deleteService(db, actor, id, { detail = null } = {}) {
   const org = requireOrg(REPO);
   return atomic(db, () => {
     const row = rowOf(db, org, id);
     if (!row) throw notFound('service', id);
-    // The record as it was, its switches with it — none when its key was damaged.
+    // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [] }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [] }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
+    putMeta(db, setAsideKey(org, id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });
