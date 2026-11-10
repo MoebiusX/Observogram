@@ -1,7 +1,11 @@
 // server/store/migrations.mjs — ordered schema steps keyed by PRAGMA
 // user_version (docs/STORE_PLAN.md §1 "Migrations", §2 "Schema v1" and
-// "Schema v2"; schema v3 below adds the service's repository, schema v4 the
-// criteria a service is not graded on).
+// "Schema v2"; schema v3 below adds the service's repository).
+//
+// A value a later build adds beside a row, as the criteria a service is not
+// graded on are (server/store/services.mjs), goes in schema_meta when it can:
+// a step here is a one-way door — a database it moved on is refused by every
+// build before it.
 //
 // Step N takes the store from user_version N-1 to N. For each pending step
 // the runner:
@@ -221,19 +225,6 @@ const SCHEMA_V3 = `
 ALTER TABLE services ADD COLUMN repository TEXT;
 `;
 
-// ---------- schema v4 — the criteria a service is not graded on ----------
-//
-// A service may leave grade criteria out (studio/diagnostic-grade.mjs,
-// `opts.off`): one that does not apply to it — a project that runs no fault
-// injection has no use for Chaos-validated. A JSON array of
-// { key, reason, by, at } — the criterion, why, who switched it off and when,
-// as server/service-admin.mjs parseGradeOff wrote it — or NULL while every
-// criterion is graded. Its own column, like the repository's: a record that
-// never switched one off simply has none.
-const SCHEMA_V4 = `
-ALTER TABLE services ADD COLUMN grade_off TEXT;
-`;
-
 export const STEPS = [
   {
     version: 1,
@@ -255,13 +246,6 @@ export const STEPS = [
     name: 'service-repository',
     up(db) {
       execScript(db, SCHEMA_V3);
-    },
-  },
-  {
-    version: 4,
-    name: 'service-grade-criteria',
-    up(db) {
-      execScript(db, SCHEMA_V4);
     },
   },
 ];

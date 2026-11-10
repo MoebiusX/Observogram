@@ -3013,13 +3013,12 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
    above: a v2 build (0.6.0) refuses a v3 database (`the database is at
    schema v3, but this build knows up to v2`) and a v3 backup, so take a
    `packc store backup` before the upgrade.
-5. **Schema v4** (0.8.22): a store build from this version on migrates a v3
-   database to v4 at its first start — one column, `services.grade_off`
-   (the grade criteria a service is not graded on; `null` on every service
-   it finds, so every one is graded as before); every row a v3 store held is
-   kept. One-way as above: an earlier build refuses a v4 database (`the
-   database is at schema v4, but this build knows up to v3`) and a v4
-   backup, so take a `packc store backup` before the upgrade.
+
+Not every change to what the store holds is a schema step. The criteria a
+service is not graded on (0.8.22) are kept in `schema_meta` beside the
+service's row (`grade_off:<org>:<service id>`), as an org's repository
+sources are: 0.8.22 and every earlier store build open the same database,
+and an earlier build grades every service on all seven.
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
