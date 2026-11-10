@@ -29,6 +29,11 @@
 //                               #   (studio/diagnostic-grade.mjs GRADE_CRITERION_KEYS). A service's
 //                               #   own check carries its record's switches, written by the server;
 //                               #   a run through the server asks the record itself.
+//   setAside:              # optional: differences this check's grade leaves out (studio/set-asides.mjs) —
+//     - { key: 'metric::{"name":"x"}', side: declared, kind: in-development, until: 2026-12-10 }
+//                               #   side declared | live, kind in-development | not-this-service, until
+//                               #   YYYY-MM-DD (the review date; past it the difference counts again).
+//                               #   Written by the server into a service's own checks, like gradeOff.
 //   gate:                  # all optional; omitted criteria don't gate
 //     requireGradePass: true
 //     minAlignmentPct: 85
@@ -109,6 +114,7 @@ import {
 } from './journey-notify.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD, GRADE_CRITERION_KEYS } from '../../studio/diagnostic-grade.mjs';
+import { applySetAsides, SET_ASIDE_KINDS, SET_ASIDE_MAX, SET_ASIDE_SIDES } from '../../studio/set-asides.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -210,6 +216,7 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
   if (def.gradeOff !== undefined) validateGradeOff(def.gradeOff, def.name);
+  if (def.setAside !== undefined) validateSetAside(def.setAside, def.name);
   // Step 5: a typo'd or malformed schedule / stackBudget block is a
   // load-time configuration error (CLI `list` prints it, GET /api/journeys
   // puts it in loadError, capture answers 400) — never a run that silently
@@ -231,6 +238,25 @@ export function validateGradeOff(gradeOff, journeyName = '?') {
       : new Set(gradeOff).size !== gradeOff.length ? 'a criterion is listed twice'
         : gradeOff.length === GRADE_CRITERION_KEYS.length ? 'a check is graded on at least one criterion' : null;
   if (bad) throw new Error(`journey ${journeyName}: gradeOff must be a list of grade criteria (${GRADE_CRITERION_KEYS.join(', ')}) — ${bad}`);
+}
+
+// setAside — the differences a check's grade leaves out: a list of
+// { key, side, kind, until?, label? } (studio/set-asides.mjs). A malformed one
+// is a load-time error, never a run that silently counts what was set aside.
+export function validateSetAside(setAside, journeyName = '?') {
+  const why = (e) => {
+    if (!e || typeof e !== 'object' || Array.isArray(e)) return 'an entry is not a mapping';
+    if (typeof e.key !== 'string' || !e.key.includes('::')) return `${JSON.stringify(e.key ?? null)} is not a difference's key (kind::identity)`;
+    if (!SET_ASIDE_SIDES.includes(e.side)) return `side ${JSON.stringify(e.side ?? null)} is not ${SET_ASIDE_SIDES.join(' or ')}`;
+    if (!SET_ASIDE_KINDS.includes(e.kind)) return `kind ${JSON.stringify(e.kind ?? null)} is not ${SET_ASIDE_KINDS.join(' or ')}`;
+    if (e.until !== undefined && e.until !== null && !(typeof e.until === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.until))) return `until ${JSON.stringify(e.until)} is not YYYY-MM-DD`;
+    if (e.label !== undefined && typeof e.label !== 'string') return 'a label is text';
+    return null;
+  };
+  const bad = !Array.isArray(setAside) ? 'it is not a list'
+    : setAside.length > SET_ASIDE_MAX ? `it has more than ${SET_ASIDE_MAX} entries`
+      : Array.from(setAside).map(why).find(Boolean) || null;
+  if (bad) throw new Error(`journey ${journeyName}: setAside must be a list of { key, side, kind, until } — ${bad}`);
 }
 
 // packB.mcp.endpointId — the org's registered MCP endpoint a server-run
@@ -1179,7 +1205,7 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // recorded as packA.scan. A crawl: Pack A carries its own. A run that is
 // not told (Check now on the last scan) keeps the scan of the newest record
 // of the same Pack A file: the file is that scan's.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1236,10 +1262,19 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // reads it when declared commitments exist. Without it the CLI would
   // grade on raw diff buckets while the studio graded on chain integrity
   // — two scores for one comparison.
-  const diff = {
+  const engineDiff = {
     ...diffPacks(layeredA, layeredB, { scopeMode: def.scopeMode, service: def.service }),
     traceabilityGraph: comparePackBranches(layeredA, layeredB),
   };
+  // The differences this run's grade leaves out: `setAside` when the caller
+  // hands it in (the server: the journey's service record's), else the
+  // definition's own (a service's check carries its record's, written by the
+  // server). The grade, the counts and the gate read the comparison without
+  // them; the chain history keeps the engine's chains, which are about what
+  // runs, not about what a person set aside.
+  const asideList = Array.isArray(setAside) ? setAside : (Array.isArray(def.setAside) ? def.setAside : []);
+  const diff = applySetAsides(engineDiff, asideList, { now: startedAt });
+  const aside = diff.setAsides || null;
   const conformance = evaluateConformance(a.canonical);
   const posture = computePostureMatrix(layeredA, layeredB);
   // The criteria this run is not graded on: `gradeOff` when the caller hands
@@ -1284,7 +1319,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // compared against it. The records between them are named on the
   // transition as `skipped`, so a run after an outage never claims "no
   // previous run" nor compares against nothing.
-  const branches = branchRecordsFromGraph(diff.traceabilityGraph);
+  const branches = branchRecordsFromGraph(engineDiff.traceabilityGraph);
   const chains = chainSummary({ branches });
   const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
   const previousRun = recent[0] || null;
@@ -1342,10 +1377,17 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       // run was made): absent when all seven were graded. A step in the score
       // series beside a change here is a change of what was graded.
       ...(grade.overall?.off?.length ? { off: grade.overall.off } : {}),
+      // The differences left out of this score (the service's set-asides when the
+      // run was made): absent when none was asked for. `fingerprint` names the set
+      // that held (studio/set-asides.mjs), so a reader tells a run graded on other
+      // set-asides apart; `due` the ones whose review date had passed.
+      ...(aside ? { setAside: { fingerprint: aside.fingerprint, declared: aside.declared, live: aside.live, chains: aside.chains, due: aside.due } } : {}),
     },
     traceability: rollup ? {
       integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,
       broken: rollup.broken, undeclared: rollup.undeclared, declaredTotal: rollup.declaredTotal,
+      // Only when chains were left out because their requirement is set aside: how many.
+      ...(rollup.setAside ? { setAside: rollup.setAside } : {}),
     } : null,
     // Step 4: per requirement chain — the scored verdict, the on-wire ladder
     // verdict and the degraded nodes with their blast radius (chain-history.mjs;
@@ -1380,6 +1422,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       // Only when pairs were compared on part of a field (a live rule listing
       // that showed severities and no other label): how many.
       ...(diff.summary?.partlyCompared ? { partlyCompared: diff.summary.partlyCompared } : {}),
+      // Only when set-asides were asked for: the differences left out of the counts above, by side.
+      ...(aside ? { setAside: { declaredNotLive: aside.declared, liveNotDeclared: aside.live } } : {}),
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
     // On-wire liveness of the vantage point itself (Pack B annotations).

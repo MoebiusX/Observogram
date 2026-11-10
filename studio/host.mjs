@@ -14,10 +14,13 @@
 //   renderMainView()   — repaint the active view
 //   renderTabs()       — repaint the top nav
 // and one optional hook:
-//   setGradeCriteria(serviceId, { off, reason }) — keep a set of grade
-//                        criteria for a service: `off` the keys it is not
+//   setGradeCriteria(serviceId, { off, reason, setAside }) — keep a set of
+//                        grade criteria for a service: `off` the keys it is not
 //                        graded on from now on, `reason` for those newly left
-//                        out (PATCH /api/services/:id { gradeOff }); resolve
+//                        out, and — when given — `setAside`, the whole list of
+//                        differences with live its grade leaves out
+//                        (studio/set-asides.mjs; PATCH /api/services/:id
+//                        { gradeOff, setAside }); resolve
 //                        true once saved and repainted. Diagnose's switches are
 //                        a what-if without it: it offers Keep only when it is
 //                        set. (It replaces 0.8.23's setGradeCriterion, which

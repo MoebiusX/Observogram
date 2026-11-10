@@ -163,7 +163,8 @@ A host whose own fetcher writes neither gets "no chaos experiment declared in
 this pack", which is true. `boardGroupsHtml(layerId, entries, { annotations })`
 (studio/discover-board.mjs) reads the same two keys for the empty chaos group;
 without the third argument it says "None in this pack" as before.
-| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `constants.mjs` — copy the four together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `set-asides.mjs` (zero-import), `constants.mjs` — copy the five together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
+| [`studio/set-asides.mjs`](../studio/set-asides.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | a service's set-asides — differences with live its grade leaves out (under development, not this service's): `applySetAsides(diff, list, { now })` returns the comparison without them (its summary and requirement chains scored again, the engine's beside), `setAsideCandidates`, `setAsideFingerprint`, `setAsideState`, `reviewDate`; the server's runs and Expert's Diagnose read the same rules |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
 | [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders (`services-api.mjs` adds `uploadServiceRepository(id, { name, files })` for Upload): `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
 | [`studio/ux-kit-pure.mjs`](../studio/ux-kit-pure.mjs) | `escapeHtml` from `util.mjs` (the stub) | the state-free part of the screen grammar: `GLOSSARY`, `termHtml`, `disclosureHtml`, `emptyStateHtml`, `wireUxActions` (`ux-kit.mjs` re-exports them for the studio's own views) |
@@ -301,20 +302,31 @@ The studio's wiring is `setOverviewGradeCriterion` and `gradeServiceInFocus` in
 Expert's Diagnose (`compare-view.mjs`, with the pure `assessment-page.mjs`
 and `grade-criteria-ui.mjs`) grades with `state.gradeOff` (the keys) and says
 what is off from `state.gradeService` — the record whose primary pack is on
-screen (`{ id, name, gradeOff: [{ key, reason, by, at }] }`), or `null`. Each
+screen (`{ id, name, gradeOff: [{ key, reason, by, at }], setAside: [...] }`), or
+`null`. Against a live Pack B it grades the comparison without the record's
+set-asides (`set-asides.mjs` `applySetAsides`), lists the differences with a
+switch each (the same what-if), and Remediate's plan leaves them out. Each
 scored row of its checks carries a switch, and a switch is a what-if: the
 grade on screen is taken again over the set tried, in the page, and nothing is
 sent. **Keep** is offered only when the host fills the optional
-`host.setGradeCriteria(serviceId, { off, reason })` — `off` the keys the
-service is not graded on from now on, `reason` for those newly left out:
-build the whole list from the record as the server has it (a criterion that
-stays off keeps its reason, so its who and when), save it as above, read the
-services again, repaint, and resolve `true` (`false` when nothing was saved).
+`host.setGradeCriteria(serviceId, { off, reason, setAside })` — `off` the
+keys the service is not graded on from now on, `reason` for those newly left
+out, and, when the what-if changed them, `setAside`, the whole list of
+set-asides (`PATCH /api/services/:id { setAside }`): build the criteria's
+list from the record as the server has it (a criterion that stays off keeps
+its reason, so its who and when), save both in one request, read the services
+again, repaint, and resolve `true` (`false` when nothing was saved).
 Without the hook, or in a static bundle, the switches still try a what-if and
 the page says it is not saved. (0.8.23's `host.setGradeCriterion`, one
 criterion at a time, is replaced by it.)
 
 A hook a host does not supply is a no-op (the view calls them optionally).
+
+The board reads a service record's `setAside` too (`buildOverviewModel`, by
+`serviceAsideKey`): a run whose `grade.setAside.fingerprint` names other
+set-asides than the record's now is not its letter, and its counts and its
+sentence say how many the run set aside (`drift.setAside`). A host whose
+records carry no `setAside` reads none, as before.
 
 The three column links hand their hook `model.compare`: the comparison the
 board graded, so the view the host opens can show the same one. It is

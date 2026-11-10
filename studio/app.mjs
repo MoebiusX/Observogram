@@ -2028,12 +2028,13 @@ async function switchGradeCriterion(service, key, { graded = true, reason = '' }
 }
 // Expert's Diagnose (host.setGradeCriteria): the set its switches tried as a
 // what-if, kept for the service whose own pack is on screen — `off` the
-// criteria it is not graded on from now on. Built from the record as the
+// criteria it is not graded on from now on, and `setAside` (when the what-if
+// changed them) the differences with live its grade leaves out, in one request. Built from the record as the
 // server has it now: a criterion that stays off keeps its reason, who and
 // when; one newly off takes `reason`. Diagnose grades the packs on screen
 // again as it repaints, so no check is started; the board's last check, graded
 // on the other set, is the board's to redo (it says so).
-async function setExpertGradeCriteria(serviceId, { off = [], reason = '' } = {}) {
+async function setExpertGradeCriteria(serviceId, { off = [], reason = '', setAside } = {}) {
   const service = (Array.isArray(state.services) ? state.services : []).find((s) => s?.id === serviceId) || null;
   if (!service) return false;
   if (gradeSwitchBusy) { announce('A switch is being saved: try again once it is done.'); return false; }
@@ -2044,14 +2045,17 @@ async function setExpertGradeCriteria(serviceId, { off = [], reason = '' } = {})
     try { fresh = await loadService(service.id); } catch { fresh = null; }
     const record = fresh || service;
     const had = new Map((Array.isArray(record.gradeOff) ? record.gradeOff : []).map((x) => [x.key, x.reason]));
-    try { await patchService(service.id, { gradeOff: keys.map((key) => ({ key, reason: had.get(key) ?? reason })) }); }
+    // The set-asides, when the what-if changed them: the whole list as Diagnose holds it (the server keeps who and when of one sent again as it is).
+    const aside = Array.isArray(setAside) ? { setAside: setAside.map(({ key, side, layer, label, kind, note, until }) => ({ key, side, layer: layer ?? null, label: label || key, kind, note: note || '', until: until ?? null })) } : {};
+    try { await patchService(service.id, { gradeOff: keys.map((key) => ({ key, reason: had.get(key) ?? reason })), ...aside }); }
     catch (e) { toast(`The criteria could not be kept: ${e?.message || e}`, 'error'); return false; }
     await refreshServices();
   } finally {
     gradeSwitchBusy = false;
   }
   const total = Object.keys(CRITERION_WORDS).length;
-  announce(`${service.name} is now graded on ${keys.length ? `${total - keys.length} of ${total}` : `all ${total}`} criteria.`);
+  const asideN = Array.isArray(setAside) ? setAside.length : 0;
+  announce(`${service.name} is now graded on ${keys.length ? `${total - keys.length} of ${total}` : `all ${total}`} criteria${Array.isArray(setAside) ? `, with ${asideN ? `${asideN} ${asideN === 1 ? 'difference' : 'differences'}` : 'nothing'} set aside` : ''}.`);
   renderMainView();
   return true;
 }

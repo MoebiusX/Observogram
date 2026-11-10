@@ -554,7 +554,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
       assert.deepEqual(payView.environments.map((e) => [e.name, e.tier, e.effectiveTier, e.mcpEndpoint]),
@@ -832,6 +832,97 @@ test('registration takes the caller (D4): none throws; without sign-in (the anon
       const local = { ...callerIn('acme', { kind: 'local', actor: 'local', role: 'admin', owner: true }), posture: 'open-loopback', direct: true };
       assert.equal(createEp(db, 'local', { name: 'listed', url: 'https://mcp.listed.example/mcp' }, { caller: local }).name, 'listed', 'a listed origin registers without sign-in');
     }));
+  } finally {
+    close();
+  }
+});
+
+test('updateServiceFromApi { setAside }: the whole list replaces the record\'s — each entry normalised and signed, the same list again writes nothing, a changed review date re-signs only its entry; one row counting each side; every refusal writes nothing; a deletion takes them, and a reused id starts with none; another org\'s record is not found', async () => {
+  const { db, close } = await freshStore('set-aside');
+  try {
+    runWithOrg('acme', () => {
+      const svc = admin.createServiceFromApi(db, 'oscar', { name: 'Pay', tier: 'tier-1' });
+      assert.deepEqual(svc.setAside, [], 'a new record sets nothing aside');
+      const viewOf = () => admin.serviceViewOf(db, services.getService(db, svc.id));
+      const updates = () => rows(db, 'acme', 'service.update');
+      const metric = 'metric::{"name":"auth_failures_total"}';
+      const rule = 'recording_rule::{"record":"job:up:ratio"}';
+
+      // oscar sets one declared thing aside for review and one live thing for good: normalised, signed, one row.
+      const t0 = Date.now();
+      const up = admin.updateServiceFromApi(db, 'oscar', svc.id, { setAside: [
+        { key: `${metric}#02`, side: 'declared', layer: 'L2', label: ' auth_failures_total ', kind: 'in-development', until: '2026-12-10' },
+        { key: rule, side: 'live', kind: 'not-this-service', note: ' the platform team\'s ' },
+      ] });
+      assert.deepEqual(up.changed, ['setAside']);
+      const [first] = up.service.setAside;
+      assert.deepEqual(up.service.setAside, [
+        { key: metric, side: 'declared', layer: 'L2', label: 'auth_failures_total', kind: 'in-development', note: '', until: '2026-12-10', by: 'oscar', at: first.at },
+        { key: rule, side: 'live', layer: null, label: rule, kind: 'not-this-service', note: 'the platform team\'s', until: null, by: 'oscar', at: first.at },
+      ], 'the occurrence suffix dropped, the texts trimmed, a missing label is the key, one time for the request');
+      assert.match(first.at, ISO_TIME);
+      assert.ok(Date.parse(first.at) >= t0 && Date.parse(first.at) <= Date.now(), first.at);
+      assert.deepEqual(viewOf().setAside, up.service.setAside, 'the view carries them as the record holds them');
+      assert.deepEqual(admin.listServiceViews(db).map((v) => v.setAside), [up.service.setAside]);
+      assert.deepEqual(updates(), [['service.update', 'oscar', 'pay', { fields: ['setAside'], setAside: { declared: 1, live: 1 } }]], 'the row counts each side, never a key');
+
+      // The same list again, as the view gave it or bare: nothing changes, nothing is written.
+      for (const again of [viewOf().setAside, viewOf().setAside.map(({ by: _b, at: _a, ...x }) => x)]) {
+        const same = admin.updateServiceFromApi(db, 'ada', svc.id, { setAside: again });
+        assert.deepEqual([same.changed, same.service.setAside, same.service.updatedAt], [[], up.service.setAside, up.service.updatedAt]);
+      }
+      assert.equal(updates().length, 1);
+
+      // ada moves the review date and adds a criterion off in the same request: her entry is signed by her, oscar's stays his.
+      const next = admin.updateServiceFromApi(db, 'ada', svc.id, {
+        gradeOff: [{ key: 'chaos-validated', reason: 'no fault injection here' }],
+        setAside: [{ ...up.service.setAside[0], until: '2027-01-10' }, up.service.setAside[1]],
+      });
+      assert.deepEqual(next.changed, ['gradeOff', 'setAside']);
+      assert.deepEqual(next.service.setAside.map((x) => [x.until, x.by]), [['2027-01-10', 'ada'], [null, 'oscar']]);
+      assert.equal(next.service.setAside[1].at, first.at, 'the entry she did not touch keeps its time');
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['gradeOff', 'setAside'], gradeOff: ['chaos-validated'], setAside: { declared: 1, live: 1 } }]);
+
+      // A refusal writes nothing — not the list, not the field beside it, not a row.
+      const count = updates().length;
+      const held = services.getService(db, svc.id);
+      const ok = { key: metric, side: 'declared', kind: 'in-development' };
+      for (const [setAside, text] of [
+        [null, admin.WAYS.setAside],
+        [{ key: metric }, admin.WAYS.setAside],
+        [[{ ...ok, why: 'x' }], admin.WAYS.setAside],
+        [Array.from({ length: 1001 }, (_, i) => ({ ...ok, key: `metric::m${i}` })), admin.WAYS.setAside],
+        [[{ ...ok, key: 'no-kind-prefix' }], admin.WAYS.setAsideKey('no-kind-prefix')],
+        [[{ ...ok, key: ' metric::x' }], admin.WAYS.setAsideKey(' metric::x')],
+        [[{ ...ok, key: 'metric::a\nb' }], admin.WAYS.setAsideKey('metric::a\nb')],
+        [[{ ...ok, side: 'a' }], admin.WAYS.setAsideSide('a')],
+        [[{ ...ok, layer: 'L9' }], admin.WAYS.setAsideLayer('L9')],
+        [[{ ...ok, kind: 'later' }], admin.WAYS.setAsideKind('later')],
+        [[{ ...ok, note: 'x'.repeat(201) }], admin.WAYS.setAsideText('note')],
+        [[{ ...ok, label: 'a\tb' }], admin.WAYS.setAsideText('label')],
+        [[{ ...ok, until: '2026-02-30' }], admin.WAYS.setAsideUntil('2026-02-30')],
+        [[{ ...ok, until: '10 Dec' }], admin.WAYS.setAsideUntil('10 Dec')],
+        [[ok, { ...ok, key: `${metric}#03`, kind: 'not-this-service' }], admin.WAYS.setAsideTwice('declared', metric)],
+      ]) {
+        assert.throws(() => admin.updateServiceFromApi(db, 'ada', svc.id, { name: 'Never', setAside }), invalid(text), JSON.stringify(setAside).slice(0, 80));
+      }
+      assert.deepEqual(services.getService(db, svc.id), held, 'the record is as it was');
+      assert.equal(updates().length, count, 'and no row was written');
+      // The same key on both sides is two set-asides, not one twice.
+      const both = admin.updateServiceFromApi(db, 'ada', svc.id, { setAside: [ok, { ...ok, side: 'live', kind: 'not-this-service' }] });
+      assert.deepEqual(both.service.setAside.map((x) => `${x.side}:${x.kind}`), ['declared:in-development', 'live:not-this-service']);
+      // [] sets nothing aside; then the list goes with the record, and a reused id starts with none.
+      assert.deepEqual(admin.updateServiceFromApi(db, 'ada', svc.id, { setAside: [] }).service.setAside, []);
+      const again = admin.updateServiceFromApi(db, 'ada', svc.id, { setAside: [ok] });
+      assert.deepEqual(admin.deleteServiceFromApi(db, 'ada', svc.id).service.setAside, again.service.setAside, 'the deletion\'s view shows them as they were');
+      const reborn = admin.createServiceFromApi(db, 'oscar', { name: 'Pay' });
+      assert.deepEqual(reborn.setAside, [], 'a new service of a reused id sets nothing aside');
+    });
+    const acme = runWithOrg('acme', () => admin.createServiceFromApi(db, 'oscar', { name: 'Ledger' }));
+    runWithOrg('bravo', () => {
+      assert.throws(() => admin.updateServiceFromApi(db, 'bob', acme.id, { setAside: [] }), missing(`no service ${acme.id}`));
+    });
+    assert.deepEqual(rows(db, 'bravo'), [], 'and bravo wrote no row');
   } finally {
     close();
   }

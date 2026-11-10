@@ -10,7 +10,9 @@
 // Each scored row carries a switch. Flipping one is a WHAT-IF: the grade on
 // screen is taken again without (or with) that criterion, at once, and nothing
 // is saved. "Keep" saves the set for the service (one reason for the criteria
-// newly left out); "Reset" goes back to what is saved.
+// newly left out); "Reset" goes back to what is saved. The differences with
+// live are rows too (setAsideListHtml), each with a switch that sets it aside
+// (studio/set-asides.mjs) — the same what-if, kept by the same Keep.
 //
 // Pure: facts in, strings out. compare-view.mjs gathers the facts (the engine's
 // diagnostic, buildAssessmentDecision's `checks`), draws these and routes the
@@ -20,6 +22,7 @@
 import { escapeHtml } from './util.mjs';
 import { termHtml } from './ux-kit-pure.mjs';
 import { GRADE_CRITERIA, GRADE_CRITERION_KEYS, INSTRUMENT_GRADE_SCALE, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER } from './diagnostic-grade.mjs';
+import { KIND_WORDS, SET_ASIDE_KINDS, setAsideId } from './set-asides.mjs';
 
 const LABEL = Object.fromEntries(GRADE_CRITERIA.map((c) => [c.key, c.label]));
 
@@ -75,12 +78,28 @@ export function whatIfChanges(saved, whatIf) {
   return { turnedOff, turnedOn, same: !turnedOff.length && !turnedOn.length };
 }
 
-// "without Chaos-validated and Fresh" · "with Fresh graded again" · both, joined.
-export function whatIfWords({ turnedOff = [], turnedOn = [] } = {}) {
+// "without Chaos-validated and Fresh" · "with Fresh graded again" · "with 31 set aside" ·
+// "with 2 no longer set aside" — joined. `asideAdded` / `asideRemoved`: how many
+// differences the what-if sets aside, and takes back.
+export function whatIfWords({ turnedOff = [], turnedOn = [], asideAdded = 0, asideRemoved = 0 } = {}) {
   const parts = [];
   if (turnedOff.length) parts.push(`without ${joinAnd(turnedOff.map((k) => LABEL[k] || k))}`);
   if (turnedOn.length) parts.push(`with ${joinAnd(turnedOn.map((k) => LABEL[k] || k))} graded again`);
+  if (asideAdded) parts.push(`with ${asideAdded} set aside`);
+  if (asideRemoved) parts.push(`with ${asideRemoved} no longer set aside`);
   return parts.join(', and ');
+}
+
+// What a set-aside what-if changes against the saved list (records, by side and key):
+// { added, removed, changed, same } — `changed`: the same difference, set aside another way.
+export function asideChanges(saved, tried) {
+  const byId = (list) => new Map((Array.isArray(list) ? list : []).filter((r) => r && r.key && r.side).map((r) => [setAsideId(r.side, r.key), r]));
+  const a = byId(saved);
+  const b = byId(tried);
+  const added = [...b.keys()].filter((id) => !a.has(id));
+  const removed = [...a.keys()].filter((id) => !b.has(id));
+  const changed = [...b.keys()].filter((id) => a.has(id) && (a.get(id).kind !== b.get(id).kind || (a.get(id).until ?? null) !== (b.get(id).until ?? null) || (a.get(id).note || '') !== (b.get(id).note || '')));
+  return { added, removed, changed, same: !added.length && !removed.length && !changed.length };
 }
 
 // ---------- the grade scale ----------
@@ -108,18 +127,19 @@ export function gradeScaleHtml(scorePct, letter) {
 //   sentence       the outcome in one sentence
 //   scorePct, scoreExact, threshold, passes
 //   graded, total  the criteria the grade stands on, of how many
+//   aside          how many differences with live the grade leaves out (0: nothing said)
 //   whatIf         true while a what-if is on screen
 //   facts          [{ labelHtml, value, note, tone }] — coverage, trust, live signals, chains
 //   actions        [{ label, action }] — quieter next steps
 export function verdictBarHtml({
   contextHtml = '', tone = 'info', letter = '', gradeName = '', gradeTitle = '', sentence = '',
-  scorePct = 0, scoreExact = null, threshold = 85, passes = false, graded = 7, total = 7, whatIf = false, facts = [], actions = [],
+  scorePct = 0, scoreExact = null, threshold = 85, passes = false, graded = 7, total = 7, aside = 0, whatIf = false, facts = [], actions = [],
 } = {}) {
   const exact = scoreExact == null ? scorePct : scoreExact;
   const gap = passes
     ? `Grade A begins above ${threshold}%`
     : `${(threshold - exact).toFixed(1)} points below grade A, which begins above ${threshold}%`;
-  const on = graded === total ? `on all ${total} criteria` : `on ${graded} of ${total} criteria`;
+  const on = (graded === total ? `on all ${total} criteria` : `on ${graded} of ${total} criteria`) + (aside ? ` · ${aside} set aside` : '');
   const factHtml = facts.filter(Boolean).map((f) => `
         <div class="diag-fact ux-tone-${escapeHtml(f.tone || 'neutral')}"${f.title ? ` title="${escapeHtml(f.title)}"` : ''}>
           <dt>${f.labelHtml ?? escapeHtml(f.label || '')}</dt>
@@ -159,7 +179,11 @@ export function verdictBarHtml({
 //   words        whatIfWords(...)
 //   now, saved   { letter, pct, graded, total }
 //   keep         null (nothing to save to: no service, or a static bundle), or
-//                { enabled, reason, serviceName, needsReason, ask: null | { reason } }
+//                { enabled, reason, serviceName, needsReason, ask: null | {
+//                    count, reason,     the criteria newly left out, and why (count 0: no reason asked)
+//                    aside: null | { declared, live, kind: { declared, live }, until, note } } }
+//                — `aside`: the differences newly set aside on each side, how (the kinds,
+//                the review date of those under development) and an optional note
 export function whatIfBarHtml({ words = '', now = {}, saved = {}, keep = null } = {}) {
   const grade = (g) => `${escapeHtml(g.letter || '')} · ${escapeHtml(String(g.pct ?? 0))}%`;
   const on = (g) => (g.graded === g.total ? `all ${g.total} criteria` : `${g.graded} of ${g.total} criteria`);
@@ -172,8 +196,8 @@ export function whatIfBarHtml({ words = '', now = {}, saved = {}, keep = null } 
         : `<button type="button" class="ux-secondary-btn diag-whatif-keep" data-ux-action="diag-whatif-explain" aria-disabled="true" title="${escapeHtml(keep.reason || '')}">Keep for ${name}</button>`;
   const ask = keep?.ask ? `
       <div class="diag-whatif-ask">
-        <label class="diag-whatif-ask-l"><span>Why ${keep.ask.count === 1 ? 'is it' : 'are they'} not graded for ${name}?</span>
-          <input class="og-input" data-diag-keep-reason value="${escapeHtml(keep.ask.reason || '')}" maxlength="200" autocomplete="off" placeholder="e.g. this project runs no fault injection"></label>
+        ${keep.ask.count ? `<label class="diag-whatif-ask-l"><span>Why ${keep.ask.count === 1 ? 'is it' : 'are they'} not graded for ${name}?</span>
+          <input class="og-input" data-diag-keep-reason value="${escapeHtml(keep.ask.reason || '')}" maxlength="200" autocomplete="off" placeholder="e.g. this project runs no fault injection"></label>` : ''}${keep.ask.aside ? asideAskHtml(keep.ask.aside) : ''}
         <button type="button" class="ux-secondary-btn" data-ux-action="diag-whatif-save">Save</button>
         <button type="button" class="ux-link-btn" data-ux-action="diag-whatif-keep-cancel">Cancel</button>
       </div>` : '';
@@ -182,6 +206,92 @@ export function whatIfBarHtml({ words = '', now = {}, saved = {}, keep = null } 
       <p class="diag-whatif-text"><span class="diag-whatif-tag">What if</span> <span class="diag-whatif-words">${escapeHtml(words.charAt(0).toUpperCase() + words.slice(1))}:</span> <strong class="diag-whatif-now">${grade(now)}</strong> on ${escapeHtml(on(now))}. <span class="diag-whatif-saved">${savedWords}: ${grade(saved)} on ${escapeHtml(on(saved))}.</span></p>
       <div class="diag-whatif-actions">${keepBtn}<button type="button" class="ux-link-btn" data-ux-action="diag-whatif-reset">Reset</button></div>${ask}
     </div>`;
+}
+
+// How the differences newly set aside are set aside: a kind per side (the
+// default the side's), the review date while one is under development, a note.
+function asideAskHtml(a) {
+  const kindSelect = (side, n, words) => (n ? `
+          <label class="diag-whatif-ask-l diag-whatif-ask-kind"><span>${n} ${words}</span>
+            <select class="og-input" data-diag-keep-kind="${side}">${SET_ASIDE_KINDS.map((k) => `<option value="${k}"${a.kind?.[side] === k ? ' selected' : ''}>${escapeHtml(KIND_WORDS[k])}</option>`).join('')}</select></label>` : '');
+  const dated = (a.declared && a.kind?.declared === 'in-development') || (a.live && a.kind?.live === 'in-development');
+  return `<fieldset class="diag-whatif-aside"><legend>Set aside as</legend>${kindSelect('declared', a.declared, 'declared, not live')}${kindSelect('live', a.live, 'live, not declared')}${dated ? `
+          <label class="diag-whatif-ask-l diag-whatif-ask-date"><span>Review on</span><input class="og-input" type="date" data-diag-keep-until value="${escapeHtml(a.until || '')}"></label>` : ''}
+          <label class="diag-whatif-ask-l"><span>Note <span class="diag-whatif-optional">(optional)</span></span><input class="og-input" data-diag-keep-note value="${escapeHtml(a.note || '')}" maxlength="200" autocomplete="off" placeholder="e.g. lands with the next release"></label></fieldset>`;
+}
+
+// ---------- the differences, to set aside ----------
+
+const dayMonth = (iso) => {
+  const t = Date.parse(`${String(iso || '').slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : '';
+};
+
+// What a set-aside says beside its difference.
+export function setAsideWords(rec, state = 'active') {
+  if (!rec) return '';
+  if (state === 'due') return `Review due since ${dayMonth(rec.until)}`;
+  const kind = KIND_WORDS[rec.kind] || rec.kind;
+  return rec.kind === 'in-development' && rec.until ? `${kind} · review ${dayMonth(rec.until)}` : kind;
+}
+
+// setAsideListHtml({ … }) — the differences with live a person can set aside, by
+// side, then by layer (a closed row each, a switch for the whole layer), a row
+// per difference with its switch (on: set aside):
+//   declared, live   setAsideCandidates(...)'s rows, each with `tried` (the record
+//                    that sets it aside on screen, or null), `saved` (the saved one
+//                    that holds, or null) and `due` (a record whose review date has
+//                    passed, so the difference counts again, or null)
+//   stale            saved set-asides that match no difference now (retired, gone)
+//   open             the ids of the layers drawn open ('declared:L2')
+//   layerTitle(L)    a layer's name ("L2 Metrics/Logs/Traces")
+export function setAsideListHtml({ declared = [], live = [], stale = [], open = [], layerTitle = (L) => L } = {}) {
+  const opened = new Set(open);
+  const total = declared.length + live.length;
+  if (!total && !stale.length) return '';
+  const asideN = [...declared, ...live].filter((x) => x.tried).length;
+  const item = (x) => {
+    const on = !!x.tried;
+    const changed = on !== !!x.saved || (on && x.saved && (x.saved.kind !== x.tried.kind || (x.saved.until ?? null) !== (x.tried.until ?? null)));
+    const state = on ? setAsideWords(x.tried) : x.due ? setAsideWords(x.due, 'due') : '';
+    const cls = `diag-aside-item${on ? ' is-aside' : ''}${!on && x.due ? ' is-due' : ''}${changed ? ' is-changed' : ''}`;
+    return `
+          <li class="${cls}">
+            <span class="diag-aside-words"><span class="diag-aside-label">${escapeHtml(x.label)}</span><span class="diag-aside-kind">${escapeHtml(x.kind)}</span>${changed ? '<span class="diag-visually-hidden"> (what if)</span>' : ''}</span>
+            <span class="diag-aside-state">${escapeHtml(state)}${!on && x.due ? ` <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget:${escapeHtml(x.id)}">Forget it</button>` : ''}</span>
+            <button type="button" role="switch" class="diag-switch" aria-checked="${on ? 'true' : 'false'}" aria-label="${escapeHtml(`Set aside ${x.label}`)}" data-ux-action="diag-aside-toggle:${escapeHtml(x.id)}"><span class="diag-switch-knob" aria-hidden="true"></span></button>
+          </li>`;
+  };
+  const side = (key, rows, words) => {
+    if (!rows.length) return '';
+    const layers = [...new Set(rows.map((x) => x.layer))];
+    const groups = layers.map((L) => {
+      const own = rows.filter((x) => x.layer === L);
+      const n = own.filter((x) => x.tried).length;
+      const all = n === own.length;
+      const gid = `${key}:${L}`;
+      return `
+        <details class="diag-aside-layer"${opened.has(gid) ? ' open' : ''} data-aside-group="${escapeHtml(gid)}">
+          <summary class="diag-aside-sum"><span class="diag-more-caret" aria-hidden="true"></span><span class="diag-aside-layer-name">${escapeHtml(layerTitle(L))}</span><span class="diag-aside-layer-n">${own.length}${n ? ` · ${n} set aside` : ''}</span>
+            <button type="button" role="switch" class="diag-switch" aria-checked="${all ? 'true' : 'false'}" aria-label="${escapeHtml(`Set aside all ${own.length} in ${layerTitle(L)}`)}" title="${all ? 'Every one is set aside: switch off to count them again.' : 'Set every one of them aside.'}" data-ux-action="diag-aside-group:${escapeHtml(gid)}"><span class="diag-switch-knob" aria-hidden="true"></span></button></summary>
+          <ul class="diag-aside-items">${own.map(item).join('')}
+          </ul>
+        </details>`;
+    }).join('');
+    return `
+      <div class="diag-aside-side" data-side="${key}">
+        <h4 class="diag-aside-side-title">${escapeHtml(words)} <span class="diag-aside-side-n">${rows.length}</span></h4>${groups}
+      </div>`;
+  };
+  const staleHtml = stale.length ? `
+      <p class="diag-aside-stale">${stale.length} set-aside${stale.length === 1 ? ' matches' : 's match'} no difference now (${escapeHtml(joinAnd([...new Set(stale.map((x) => (x.state === 'retired' ? 'now on both sides' : 'in neither pack')))]))}). <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget-stale">Forget ${stale.length === 1 ? 'it' : 'them'}</button></p>` : '';
+  return `
+    <section class="diag-aside" id="diag-aside" tabindex="-1" aria-labelledby="diag-aside-title">
+      <header class="diag-aside-head">
+        <h3 class="diag-aside-title" id="diag-aside-title">The differences — set aside what does not count against this service</h3>
+        <p class="diag-aside-lede">${total} ${total === 1 ? 'difference' : 'differences'}${asideN ? `, ${asideN} set aside` : ''}. Switch one on to see the grade without it: under development (declared, not running yet) or not this service's (found live, someone else's). Nothing is saved until you keep it.</p>
+      </header>${side('declared', declared, 'Declared, not live')}${side('live', live, 'Live, not declared')}${staleHtml}
+    </section>`;
 }
 
 // ---------- the checks ----------
