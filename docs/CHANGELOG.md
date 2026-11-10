@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.25 — 2026-11-10
+
 **A difference with live can be set aside for a service: under development, or not this service's.** The comparison takes everything it finds as the service's — a metric the repository declares and production does not run yet counts as missing, a rule production runs for another team as undeclared — and nothing told it otherwise. A person now confirms or adapts that while diagnosing, and the grade, the counts, the board and every run go by it, always saying how many are set aside.
 
 ### Added
@@ -24,6 +26,7 @@
 ### Tests
 - `tools/test-overview-model.mjs` +5: `applySetAsides` (a declared difference and every artefact of its identity, the chains scored without it, a missing role still broken, the engine's numbers beside, nothing changed in place; a requirement set aside, a live one, a due one, retired and gone, no list is no change), the helpers (the occurrence suffix, the review date, the states, the fingerprint, the candidates, the load-bearing kinds the engine's word for word), the board (its letter, its tiles, its sentence, a list row), the page (`asideChanges`, the words, Keep's ask, the list).
 - `server/test-service-admin.mjs` +1: `setAside` normalised, signed, kept, re-signed, refused, deleted. `server/test-service-run.mjs` +1: a service's set-asides through Check now, the listing, the saved check, the command line, `[]` and a deletion. `tools/test-journey.mjs`: a run with and without set-asides, a due one, the gate, the check file's own, its refusals. The service view's new field in `server/test-services-api.mjs`, `server/test-service-admin.mjs`, `server/test-store.mjs`; `tools/test-static-remedies.mjs` S5 reads the grade's two calls over the comparison without set-asides.
+- Cut as 0.8.25: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1829 → 1836.
 
 ## 0.8.24 — 2026-11-10
