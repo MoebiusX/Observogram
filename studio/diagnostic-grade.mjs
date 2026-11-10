@@ -380,7 +380,38 @@ export function partialLiveEvidence(packB) {
 // caller, tools/lib/journey.mjs included, reads this one.
 const NO_LIVE_HINT = 'connect MCP or scan live';
 
-// opts: { nowMs, noLiveHint } — the clock (Date.now() by default) and the hint above.
+// The seven scored criteria, in the engine's order. Their keys are the
+// vocabulary of a service's switches (`opts.off` below); the labels are the
+// ones the criteria carry.
+export const GRADE_CRITERIA = Object.freeze([
+  Object.freeze({ key: 'multi-modal', label: 'Multi-modal', group: 'coverage' }),
+  Object.freeze({ key: 'correlated', label: 'Correlated', group: 'coverage' }),
+  Object.freeze({ key: 'calibrated', label: 'Calibrated', group: 'coverage' }),
+  Object.freeze({ key: 'comprehensive', label: 'Comprehensive', group: 'coverage' }),
+  Object.freeze({ key: 'chaos-validated', label: 'Chaos-validated', group: 'trust' }),
+  Object.freeze({ key: 'drift-free', label: 'Drift-free', group: 'trust' }),
+  Object.freeze({ key: 'fresh', label: 'Fresh', group: 'trust' }),
+]);
+export const GRADE_CRITERION_KEYS = Object.freeze(GRADE_CRITERIA.map((c) => c.key));
+
+// The criteria a caller leaves out of a grade, from `opts.off`: keys, or
+// objects with a `key` (a service record's switches), in the engine's order.
+// What names no scored criterion is ignored — and so is a list that names all
+// seven: a grade is always graded on something.
+export function gradeOffKeys(off) {
+  const asked = new Set((Array.isArray(off) ? off : []).map((x) => (x && typeof x === 'object' ? x.key : x)).filter((k) => typeof k === 'string'));
+  const keys = GRADE_CRITERION_KEYS.filter((k) => asked.has(k));
+  return keys.length === GRADE_CRITERION_KEYS.length ? [] : keys;
+}
+
+// opts: { nowMs, noLiveHint, off } — the clock (Date.now() by default), the
+// hint above, and the criteria this grade leaves out (gradeOffKeys): one that
+// does not apply to the service graded — a project that runs no fault
+// injection has no use for Chaos-validated. A criterion left out is still
+// computed and listed, marked `applies: false` (and `informational: true`,
+// which renderers of Operability already understand), and leaves both the points
+// and the total: the grade is over the criteria that apply, and
+// `overall.off` names the ones left out (absent when none is).
 export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, opts = {}) {
   const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
   const noLiveHint = typeof opts.noLiveHint === 'string' && opts.noLiveHint ? opts.noLiveHint : NO_LIVE_HINT;
@@ -659,11 +690,21 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     },
   ];
 
-  const sumScore = (items) => items.reduce((n, c) => n + criterionScore(c), 0);
-  const coveragePassed = sumScore(coverageCriteria);
-  const trustPassed = sumScore(trustCriteria);
+  // The criteria left out (opts.off) stay in the lists, marked; the sums and
+  // the totals count the others. With none left out the lists are the ones
+  // built above, untouched.
+  const off = gradeOffKeys(opts.off);
+  // `informational` beside it: the renderers that already draw a criterion
+  // as shown-not-scored (Operability's) draw these the same way.
+  const listed = (items) => (off.length ? items.map((c) => (off.includes(c.key) ? { ...c, applies: false, informational: true } : c)) : items);
+  const coverageListed = listed(coverageCriteria);
+  const trustListed = listed(trustCriteria);
+  const scored = (items) => items.filter((c) => c.applies !== false);
+  const sumScore = (items) => scored(items).reduce((n, c) => n + criterionScore(c), 0);
+  const coveragePassed = sumScore(coverageListed);
+  const trustPassed = sumScore(trustListed);
   const overallPassed = coveragePassed + trustPassed;
-  const overallTotal = coverageCriteria.length + trustCriteria.length;
+  const overallTotal = scored(coverageListed).length + scored(trustListed).length;
   // Verdict words band on percentage, not raw counts, so they keep their
   // meaning across grade schemas (schema 1 had 8 scored criteria, schema 2
   // has 7). The bands preserve schema 1's fractions: grade was 7/8 = 87.5%
@@ -689,18 +730,21 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // Schema 4 (2026-11-06): Chaos-validated tells declared from proven
     // (spec 1.5) — a declared experiment earns 0.25, the rest needs a
     // recent passing run, a failed newest run earns 0. Same 7 criteria.
+    // Still 4 with criteria left out (opts.off, 2026-11-10): the rule of each
+    // criterion is the same, and a grade over fewer says so itself —
+    // `overall.off` here, `grade.off` on a run record.
     gradeSchema: 4,
     coverage: {
-      criteria: coverageCriteria,
+      criteria: coverageListed,
       passed:   coveragePassed,
-      total:    coverageCriteria.length,
+      total:    scored(coverageListed).length,
       contractLabel: contractLabelFor(packB, catalogBId),
       contractMode:  isObservabilityContractPack(packB, catalogBId),
     },
     trust: {
-      criteria: trustCriteria,
+      criteria: trustListed,
       passed:   trustPassed,
-      total:    trustCriteria.length,
+      total:    scored(trustListed).length,
       hasMcpSource,
     },
     operability: {
@@ -715,6 +759,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       audit,
       instrumentGrade: instrumentGradeFor(overallPctExact),
       liveDriftFree: driftFree,
+      ...(off.length ? { off } : {}),
     },
     traceabilityGraph: diff?.traceabilityGraph || null,
   };

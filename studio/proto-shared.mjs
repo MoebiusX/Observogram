@@ -98,7 +98,7 @@ export function buildProtoModel() {
   const haveB = !!state.packB;
   const posture = computePostureMatrix(state.pack, state.packB);
   const diff = (state.diff && !state.diff.error && state.diff.layers) ? state.diff : null;
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff, { off: state.gradeOff });
   const mode = compareModeFor(state.packB, state.compareBId);
   const bName = catalogEntryFor(state.compareBId)?.label
     || state.packB?.meta?.name || state.packB?.metadata?.name || state.packB?.id || 'Pack B';
@@ -250,13 +250,14 @@ export function projectGrade(uids /* Set<string> | null = fix everything */) {
   const hypo = { ...diff, layers: hypoLayers };
 
   const posture = computePostureMatrix(state.pack, state.packB);
-  const before = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff);
-  const after = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, hypo);
+  const before = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff, { off: state.gradeOff });
+  const after = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, hypo, { off: state.gradeOff });
   return {
     before, after,
     beforePct: Math.round(before.overall.audit.scorePctExact),
     afterPct: Math.round(after.overall.audit.scorePctExact),
-    chainAnchored: (diff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0,
+    // Not when Drift-free — the criterion the chains anchor — is not graded for the service.
+    chainAnchored: (diff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0 && !(Array.isArray(state.gradeOff) && state.gradeOff.includes('drift-free')),
   };
 }
 
@@ -364,6 +365,8 @@ export function chip(status, text) {
 }
 
 export function criterionChip(c) {
+  // A criterion the service is not graded on: shown, never scored.
+  if (c?.applies === false) return chip('info', 'NOT GRADED');
   const s = criterionScore(c);
   if (c.pass) return chip('pass', 'PASS');
   if (s > 0) return chip('partial', 'PARTIAL');
@@ -469,7 +472,8 @@ export function buildEvidenceRows(diagnostic) {
   const C = (key) => all.find(c => c.key === key);
   const row = (field, exp, key, informational = false) => {
     const c = C(key);
-    return { field, exp, obs: c?.detail || '—', pass: !!c?.pass, score: c?.score, informational };
+    // A criterion the service is not graded on (applies: false) is shown, never scored.
+    return { field, exp, obs: c?.detail || '—', pass: !!c?.pass, score: c?.score, informational: informational || c?.applies === false };
   };
   return [
     row('spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)', 'multi-modal'),

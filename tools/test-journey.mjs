@@ -44,6 +44,7 @@ const {
   notifyStatusLine, postNotification, resolveNotifyTarget, validateNotify, NOTIFY_POLICIES, NOTIFY_TIMEOUT_DEFAULT_MS,
   notifyTargetOf, scrubNotifyError,
 inventorySummary, inventoryStatusLine,
+  validateGradeOff,
 } = await import('./lib/journey.mjs');
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
@@ -675,6 +676,170 @@ try {
   assert(liveRec.grade.driftConstruct === 'requirement-chain', 'record says Drift-free was scored on the requirement chain', liveRec.grade.driftConstruct);
   assert(liveRec.traceability && liveRec.traceability.integrityPct === studioDiff.traceabilityGraph.rollup.integrityPct && liveRec.traceability.declaredTotal === studioDiff.traceabilityGraph.rollup.declaredTotal,
          'record carries the chain rollup the grade was scored on', liveRec.traceability);
+
+  // --- criteria a check is not graded on (gradeOff) ---
+  // A run is graded over the criteria that apply: the list its caller hands
+  // in (the server: the switches of the journey's service record), else the
+  // definition's own `gradeOff` (the command line and a schedule have no
+  // record to ask; a service's saved check carries its switches), else all
+  // seven. The record names the ones left out as grade.off — absent when all
+  // seven were graded — and so do the report and the notification. What a
+  // score should be is asked of the engine, over the same two files.
+  {
+    writeFileSync(join(TMP, 'journeys', 'graded-on-fewer.journey.yaml'), [
+      'name: graded-on-fewer',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`,
+      'env: prod',
+      'gate: { minAlignmentPct: 1 }',
+    ].join('\n'));
+    const fewerDef = () => loadJourneyDef('graded-on-fewer');
+    const fileA = adapt(parseYaml(readFileSync(PACK_A, 'utf8')), { environment: 'prod' });
+    const fileB = adapt(parseYaml(readFileSync(PACK_B, 'utf8')), {});
+    const fileDiff = { ...diffPacks(fileA, fileB, {}), traceabilityGraph: comparePackBranches(fileA, fileB) };
+    const engine = (off) => computeDiagnosticGrade(fileA, fileB, computePostureMatrix(fileA, fileB), null, fileDiff, { off });
+    const pct = (g) => Math.round(g.overall.audit.scorePctExact);
+    const onSeven = engine([]);
+    const onSix = engine(['chaos-validated']);
+    assert(onSeven.overall.total === 7 && onSix.overall.total === 6 && pct(onSeven) !== pct(onSix), 'the example packs score differently over seven and over six, so the switch shows in the record', { seven: onSeven.overall, six: onSix.overall });
+
+    // Nothing handed in — the CLI's run — and everything that names nothing: all seven, no grade.off.
+    const plain = await runJourney(fewerDef());
+    assert(!('off' in plain.grade) && plain.grade.score === pct(onSeven), 'a run handed no gradeOff grades on all seven and its record carries no grade.off', plain.grade);
+    assert(JSON.stringify(Object.keys(plain.grade)) === JSON.stringify(['score', 'pass', 'threshold', 'schema', 'letter', 'letterLabel', 'driftConstruct']), 'with nothing off the record\'s grade has the keys it always had', Object.keys(plain.grade));
+    for (const none of [null, [], 'chaos-validated', ['no-such-criterion', 7, null], ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated', 'drift-free', 'fresh']]) {
+      const r = await runJourney(fewerDef(), { gradeOff: none });
+      assert(JSON.stringify(r.grade) === JSON.stringify(plain.grade), 'gradeOff null, empty, not a list, naming nothing the engine scores, or naming all seven: the grade is the one over seven', { none, grade: r.grade });
+    }
+
+    // One criterion off: the record names it, and its score, pass and letter are the engine's over six.
+    const six = await runJourney(fewerDef(), { gradeOff: ['chaos-validated'] });
+    assert(JSON.stringify(six.grade.off) === JSON.stringify(['chaos-validated']), 'the record names the criterion its score left out', six.grade);
+    assert(six.grade.score === pct(onSix) && six.grade.pass === onSix.overall.audit.passes && six.grade.letter === onSix.overall.instrumentGrade.letter,
+           'score, pass and letter are the engine\'s over the six that apply', { record: six.grade, engine: onSix.overall });
+    assert(six.grade.schema === 4 && six.grade.threshold === 85 && six.grade.driftConstruct === plain.grade.driftConstruct, 'the schema, the bar and the Drift-free construct are unchanged', six.grade);
+    assert(JSON.stringify(Object.keys(six.grade)) === JSON.stringify(['score', 'pass', 'threshold', 'schema', 'letter', 'letterLabel', 'driftConstruct', 'off']), 'grade.off comes after the keys the record always had', Object.keys(six.grade));
+    const sixSaved = readJourneyRuns('graded-on-fewer', { limit: 1 })[0];
+    assert(sixSaved.startedAt === six.startedAt && JSON.stringify(sixSaved.grade) === JSON.stringify(six.grade), 'the record on disk says the same', sixSaved.grade);
+    assert(JSON.stringify(six.drift) === JSON.stringify(plain.drift) && JSON.stringify(six.traceability) === JSON.stringify(plain.traceability)
+           && JSON.stringify(six.conformance) === JSON.stringify(plain.conformance) && JSON.stringify(six.branches) === JSON.stringify(plain.branches) && six.outcome === plain.outcome,
+           'nothing but the grade moves: drift, traceability, branches, conformance and the outcome are the run\'s over seven', { six: six.drift, plain: plain.drift });
+
+    // A service record's switches as they are stored — objects with a key — and several, in any order.
+    const two = await runJourney(fewerDef(), { gradeOff: [{ key: 'fresh', reason: 'read by hand each week', by: 'ada', at: '2026-11-10T09:00:00.000Z' }, 'no-such-criterion', 'chaos-validated'] });
+    assert(JSON.stringify(two.grade.off) === JSON.stringify(['chaos-validated', 'fresh']), 'objects with a key are read as their keys; the record lists them in the engine\'s order, unknown ones dropped', two.grade);
+    assert(two.grade.score === pct(engine(['fresh', 'chaos-validated'])), 'and the score is the engine\'s over five', two.grade);
+
+    // --- the definition's own gradeOff: a list of criterion keys, each once, checked when the file loads ---
+    const KEYS = 'multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh';
+    const offError = (name, why) => `journey ${name}: gradeOff must be a list of grade criteria (${KEYS}) — ${why}`;
+    const thrown = (fn) => { try { fn(); return null; } catch (e) { return e.message; } };
+    for (const ok of [[], ['chaos-validated'], ['fresh', 'multi-modal'], KEYS.split(', ').slice(1)]) {
+      assert(thrown(() => validateGradeOff(ok, 'j')) === null, 'validateGradeOff: a list of criterion keys, each once, in any order — the empty list too — is valid', ok);
+    }
+    for (const [bad, why] of [
+      [undefined, 'it is not a list'], [null, 'it is not a list'], ['chaos-validated', 'it is not a list'], [{ key: 'fresh' }, 'it is not a list'], [7, 'it is not a list'],
+      [['chaos'], '"chaos" is not one'], [['fresh', 'Chaos-validated'], '"Chaos-validated" is not one'], [[' fresh'], '" fresh" is not one'], [['actionable'], '"actionable" is not one'],
+      [[7], '7 is not one'], [[null], 'null is not one'], [[{ key: 'fresh' }], '{"key":"fresh"} is not one'],
+      // A list built in code: an undefined entry, a hole in a sparse list (no criterion either).
+      [[undefined], 'null is not one'], [new Array(1), 'null is not one'], [['fresh', undefined], 'null is not one'],
+      [(() => { const a = ['fresh']; a[2] = 'calibrated'; return a; })(), 'null is not one'],
+      [['fresh', 'fresh'], 'a criterion is listed twice'], [['fresh', 'chaos-validated', 'fresh'], 'a criterion is listed twice'],
+      [['fresh', 'fresh', 'nope'], '"nope" is not one'],
+      // All seven: a check is always graded on something (the engine would ignore such a list whole — a file must not say it).
+      [KEYS.split(', '), 'a check is graded on at least one criterion'], [KEYS.split(', ').reverse(), 'a check is graded on at least one criterion'],
+      [[...KEYS.split(', '), 'fresh'], 'a criterion is listed twice'], [[...KEYS.split(', '), 'nope'], '"nope" is not one'],
+    ]) {
+      assert(thrown(() => validateGradeOff(bad, 'j')) === offError('j', why), `validateGradeOff refuses ${JSON.stringify(bad) ?? 'undefined'} — ${why} — naming the journey and the keys`, thrown(() => validateGradeOff(bad, 'j')));
+    }
+    assert(thrown(() => validateGradeOff('fresh')) === offError('?', 'it is not a list'), 'validateGradeOff names the journey ? when it is given none');
+
+    const offFile = (name, lines = []) => {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [
+        `name: ${name}`, `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`, 'env: prod', ...lines, 'gate: { minAlignmentPct: 1 }',
+      ].join('\n'));
+      return name;
+    };
+    for (const [line, why] of [
+      ['gradeOff: chaos-validated', 'it is not a list'], ['gradeOff:', 'it is not a list'], ['gradeOff: { key: fresh }', 'it is not a list'],
+      ['gradeOff: [chaos-validated, ]', 'null is not one'], ['gradeOff: [{ key: fresh }]', '{"key":"fresh"} is not one'],
+      ['gradeOff: [fresh, fresh]', 'a criterion is listed twice'], [`gradeOff: [${KEYS}]`, 'a check is graded on at least one criterion'], ['gradeOff: [chaos]', '"chaos" is not one'],
+    ]) {
+      offFile('graded-badly', [line]);
+      assert(thrown(() => loadJourneyDef('graded-badly')) === offError('graded-badly', why), `a definition that says "${line}" does not load — the error names the journey and why`, thrown(() => loadJourneyDef('graded-badly')));
+    }
+    // The command line on such a file: exit 2 with that sentence, nothing run, nothing recorded.
+    const badCli = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'run', 'graded-badly'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+    assert(badCli.status === 2 && badCli.stderr.includes(`packc journey: ${offError('graded-badly', '"chaos" is not one')}`) && badCli.stdout === '' && readJourneyRuns('graded-badly').length === 0,
+           'packc journey run on a definition with a mistyped criterion exits 2 with the load error and records no run', { status: badCli.status, stderr: badCli.stderr });
+    rmSync(join(TMP, 'journeys', 'graded-badly.journey.yaml'));
+
+    // --- a run with nothing handed in is graded on the definition's own gradeOff ---
+    const byFile = () => loadJourneyDef(offFile('graded-by-file', ['gradeOff: [chaos-validated]']));
+    assert(JSON.stringify(byFile().gradeOff) === JSON.stringify(['chaos-validated']), 'a valid gradeOff loads as written', byFile().gradeOff);
+    const fromFile = await runJourney(byFile());
+    assert(JSON.stringify(fromFile.grade.off) === JSON.stringify(['chaos-validated']) && fromFile.grade.score === pct(onSix) && fromFile.grade.pass === onSix.overall.audit.passes && fromFile.grade.letter === onSix.overall.instrumentGrade.letter,
+           'a run handed no gradeOff — the command line\'s, a schedule\'s — is graded on the definition\'s own: grade.off names it and the score is the engine\'s over six', { record: fromFile.grade, engine: onSix.overall });
+    assert(JSON.stringify(readJourneyRuns('graded-by-file', { limit: 1 })[0].grade) === JSON.stringify(fromFile.grade), 'and the record on disk says the same');
+    for (const notAList of [null, undefined, 'fresh', { key: 'fresh' }, 7]) {
+      const r = await runJourney(byFile(), { gradeOff: notAList });
+      assert(JSON.stringify(r.grade) === JSON.stringify(fromFile.grade), 'an option that is not a list is no option: the definition\'s own gradeOff stands', { notAList, grade: r.grade });
+    }
+    // A list handed in wins over the definition's, both ways.
+    const overruledToSeven = await runJourney(byFile(), { gradeOff: [] });
+    assert(!('off' in overruledToSeven.grade) && JSON.stringify(overruledToSeven.grade) === JSON.stringify(plain.grade), 'an empty list handed in wins over the definition\'s: all seven, no grade.off', overruledToSeven.grade);
+    const overruled = await runJourney(byFile(), { gradeOff: ['fresh'] });
+    assert(JSON.stringify(overruled.grade.off) === JSON.stringify(['fresh']) && overruled.grade.score === pct(engine(['fresh'])), 'another list handed in wins: that criterion is left out, the definition\'s is graded', overruled.grade);
+    // The file's order is the writer's; the record's is the engine's. An empty list in the file is none.
+    const twoFromFile = await runJourney(loadJourneyDef(offFile('graded-by-file-two', ['gradeOff: [fresh, chaos-validated]'])));
+    assert(JSON.stringify(twoFromFile.grade.off) === JSON.stringify(['chaos-validated', 'fresh']) && twoFromFile.grade.score === pct(engine(['chaos-validated', 'fresh'])), 'two criteria in the file: the record lists them in the engine\'s order, the score over five', twoFromFile.grade);
+    const noneFromFile = await runJourney(loadJourneyDef(offFile('graded-by-file-none', ['gradeOff: []'])));
+    assert(JSON.stringify(noneFromFile.grade) === JSON.stringify(plain.grade), 'gradeOff: [] in the file is all seven, no grade.off', noneFromFile.grade);
+
+    // The command line itself (what a schedule runs): the record it prints is graded on the file's list.
+    const cliRun = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'run', 'graded-by-file', '--json'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 120_000 });
+    let cliRecord = null;
+    try { cliRecord = JSON.parse(cliRun.stdout); } catch { /* asserted below */ }
+    assert(cliRun.status === 0 && JSON.stringify(cliRecord?.grade) === JSON.stringify(fromFile.grade), 'packc journey run --json: grade.off and the score over six, as the in-process run', { status: cliRun.status, grade: cliRecord?.grade, stderr: cliRun.stderr });
+
+    // --- the report: the Diagnostic grade row says what the score is over, only when it left a criterion out ---
+    const gradeRow = (r) => renderJourneyMarkdown(r).split('\n').filter((l) => l.startsWith('| Diagnostic grade |'));
+    const scoreCell = (g) => `**${g.letter} · ${g.letterLabel} · ${g.score}%** (${g.pass ? 'PASS' : 'FAIL'}, bar 85%)`;
+    assert(gradeRow(plain).length === 1 && gradeRow(plain)[0] === `| Diagnostic grade | ${scoreCell(plain.grade)} |`, 'a record with no grade.off: the row as it always was', gradeRow(plain));
+    assert(gradeRow(six)[0] === `| Diagnostic grade | ${scoreCell(six.grade)} — on 6 of 7 criteria (not graded: chaos-validated) |`, 'one criterion left out: the row ends with the count and the key', gradeRow(six));
+    assert(gradeRow(two)[0] === `| Diagnostic grade | ${scoreCell(two.grade)} — on 5 of 7 criteria (not graded: chaos-validated, fresh) |`, 'two left out: 5 of 7, the keys in the record\'s order', gradeRow(two));
+    // To the letter, on a record whose grade is given.
+    const given = (grade) => ({ ...plain, grade: { threshold: 85, schema: 4, driftConstruct: 'requirement-chain', ...grade } });
+    const lettered = { score: 98, pass: true, letter: 'A+', letterLabel: 'Laboratory / Research Grade' };
+    assert(gradeRow(given({ ...lettered, off: ['chaos-validated'] }))[0] === '| Diagnostic grade | **A+ · Laboratory / Research Grade · 98%** (PASS, bar 85%) — on 6 of 7 criteria (not graded: chaos-validated) |', 'the row with grade.off, to the letter', gradeRow(given({ ...lettered, off: ['chaos-validated'] })));
+    assert(gradeRow(given(lettered))[0] === '| Diagnostic grade | **A+ · Laboratory / Research Grade · 98%** (PASS, bar 85%) |', 'the row without grade.off, to the letter', gradeRow(given(lettered)));
+    assert(gradeRow(given({ score: 17, pass: false, letter: null, letterLabel: null, off: ['chaos-validated', 'fresh'] }))[0] === '| Diagnostic grade | **17%** (FAIL, bar 85%) — on 5 of 7 criteria (not graded: chaos-validated, fresh) |', 'a failing grade without a letter says it the same way', gradeRow(given({ score: 17, pass: false, letter: null, letterLabel: null, off: ['chaos-validated', 'fresh'] })));
+    for (const none of [[], null, 'chaos-validated']) {
+      assert(renderJourneyMarkdown(given({ ...lettered, off: none })) === renderJourneyMarkdown(given(lettered)), 'grade.off empty or not a list: the report is the one of a record without it', none);
+    }
+    const mdWith = renderJourneyMarkdown(given({ ...lettered, off: ['chaos-validated'] })).split('\n');
+    const mdWithout = renderJourneyMarkdown(given(lettered)).split('\n');
+    assert(mdWith.length === mdWithout.length && mdWith.filter((l, i) => l !== mdWithout[i]).length === 1, 'and the grade row is the only line of the report that differs', mdWith.filter((l, i) => l !== mdWithout[i]));
+
+    // --- the notification of a run graded on fewer says so (a stub in place of the wire: nothing is posted) ---
+    offFile('graded-and-notified', ['gradeOff: [chaos-validated]', 'notify:', '  urlEnv: OBSERVOGRAM_TEST_GRADED_NOTIFY_URL', '  on: always']);
+    const posted = [];
+    const viaStub = {
+      resolveNotify: (n) => notifyTargetOf(n, { url: 'http://127.0.0.1:9/graded-hook' }),
+      notifier: async (request) => { posted.push(request); return { sent: true, httpStatus: 204, attempts: 1, tookMs: 1 }; },
+    };
+    const notified = await runJourney(loadJourneyDef('graded-and-notified'), viaStub);
+    const notifiedSeven = await runJourney(loadJourneyDef('graded-and-notified'), { ...viaStub, gradeOff: [] });
+    const bodies = posted.map((p) => JSON.parse(p.body));
+    assert(posted.length === 2 && notified.notify.status === 'sent' && notifiedSeven.notify.status === 'sent', 'both runs notified through the stub', posted.length);
+    assert(JSON.stringify(bodies[0].grade) === JSON.stringify({ score: notified.grade.score, pass: notified.grade.pass, letter: notified.grade.letter, off: ['chaos-validated'] }),
+           'the payload\'s grade carries off after score, pass and letter when the record\'s grade.off is non-empty', bodies[0].grade);
+    assert(JSON.stringify(bodies[1].grade) === JSON.stringify({ score: notifiedSeven.grade.score, pass: notifiedSeven.grade.pass, letter: notifiedSeven.grade.letter }) && !('off' in notifiedSeven.grade),
+           'and has no off key for a run graded on all seven', bodies[1].grade);
+    assert(JSON.stringify(Object.keys(bodies[0])) === JSON.stringify(Object.keys(bodies[1])), 'no other key of the payload comes or goes', Object.keys(bodies[0]));
+
+    for (const name of ['graded-by-file', 'graded-by-file-two', 'graded-by-file-none', 'graded-and-notified']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
+  }
 
   // --- vantage lost: the live source does not answer ---
   // A closed loopback port makes the fetcher fail on its core tools at

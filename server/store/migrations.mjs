@@ -2,6 +2,11 @@
 // user_version (docs/STORE_PLAN.md §1 "Migrations", §2 "Schema v1" and
 // "Schema v2"; schema v3 below adds the service's repository).
 //
+// A value a later build adds beside a row, as the criteria a service is not
+// graded on are (server/store/services.mjs), goes in schema_meta when it can:
+// a step here is a one-way door — a database it moved on is refused by every
+// build before it.
+//
 // Step N takes the store from user_version N-1 to N. For each pending step
 // the runner:
 //   1. runs PRAGMA foreign_keys=OFF outside any transaction (inside one it

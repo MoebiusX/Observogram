@@ -623,6 +623,6 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
   assert.ok(view.includes('const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });'));
   // The shared modules take theirs as options and import nothing to know them: the grade's hint, the response path's
   // note (its imports pinned by tools/test-remediation-flow-view.mjs), the trace's actions.
-  assert.ok(view.includes("computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {});"));
+  assert.ok(view.includes("computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, { ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off: state.gradeOff });"));
   for (const file of ['studio/diagnostic-grade.mjs', 'studio/remediation-flow-view.mjs', 'studio/trace-chain.mjs']) assert.doesNotMatch(read(file), /from '\.\/static-remedies\.mjs'|import\('\.\/static-remedies\.mjs'\)/, `${file} does not import the model`);
 });

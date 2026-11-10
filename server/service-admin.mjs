@@ -29,6 +29,7 @@
 
 import { delimiter, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
+import { GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
@@ -93,6 +94,11 @@ export const WAYS = Object.freeze({
   anotherVariable: (id) => ` — PATCH /api/mcp-endpoints/${id} names another variable`,
   typedUserinfo: 'a typed MCP URL may not carry user:password — send the token as mcpAuth',
   repository: 'a repository is { kind, location, ref } — kind github, ado or path — or null',
+  gradeOff: `gradeOff is the whole list of grade criteria this service is not graded on — [{ key, reason }], [] for none; a key is one of ${GRADE_CRITERION_KEYS.join(', ')}`,
+  gradeOffKey: (x) => `${JSON.stringify(x)} is not a grade criterion — one of ${GRADE_CRITERION_KEYS.join(', ')}`,
+  gradeOffTwice: (key) => `${key} is listed twice`,
+  gradeOffReason: (key) => `say why ${key} is not graded for this service — a reason of 1–200 characters on one line`,
+  gradeOffAll: 'a service is graded on at least one criterion — leave one switched on',
   repositoryKind: (x) => `a repository's kind is github, ado or path, not ${JSON.stringify(x)}`,
   repositoryUploadNamed: 'an uploaded repository is set by uploading its files (PUT /api/services/:id/repository-upload), not named here',
   repositoryGithub: (x) => `${JSON.stringify(x)} is not a GitHub repository — https://github.com/<owner>/<repo>, or <owner>/<repo>`,
@@ -265,6 +271,46 @@ export function parseRepository(value, { caller = null } = {}) {
   return { kind, location: resolvePath(location), ref: null };
 }
 
+// ---------- the criteria a service is not graded on ----------
+//
+// A service may leave grade criteria out (studio/diagnostic-grade.mjs,
+// `opts.off`): the board, the runs of its checks and the run records then
+// grade it over the others, and say so. The request sends the whole list —
+// [{ key, reason }] — and the record keeps, for each, who switched it off and
+// when: an entry whose key and reason are the record's keeps its `by` and
+// `at`, a new or reworded one is signed by this actor now. Stored in the
+// engine's order. Never all seven: a grade is always graded on something.
+// One line, read as written: no C0 control, DEL, NEL, Unicode line or
+// paragraph separator, or bidirectional embedding, override or isolate
+// (which would reorder the who and when drawn after the reason).
+const hasControl = (s) => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 32 || c === 127 || c === 0x85 || c === 0x2028 || c === 0x2029 || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) return true;
+  }
+  return false;
+};
+
+export function parseGradeOff(value, { current = [], actor, now = new Date().toISOString() } = {}) {
+  if (!Array.isArray(value) || value.length > GRADE_CRITERION_KEYS.length) invalid(WAYS.gradeOff);
+  const asked = new Map();
+  for (const entry of value) {
+    if (!isPlainObject(entry) || Object.keys(entry).some((k) => !['key', 'reason', 'by', 'at'].includes(k))) invalid(WAYS.gradeOff);
+    if (!GRADE_CRITERION_KEYS.includes(entry.key)) invalid(WAYS.gradeOffKey(entry.key));
+    if (asked.has(entry.key)) invalid(WAYS.gradeOffTwice(entry.key));
+    const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
+    if (!textOk(reason, { max: TEXT_MAX }) || hasControl(reason)) invalid(WAYS.gradeOffReason(entry.key));
+    asked.set(entry.key, reason);
+  }
+  if (asked.size === GRADE_CRITERION_KEYS.length) invalid(WAYS.gradeOffAll);
+  const kept = new Map((Array.isArray(current) ? current : []).map((x) => [x.key, x]));
+  return GRADE_CRITERION_KEYS.filter((key) => asked.has(key)).map((key) => {
+    const reason = asked.get(key);
+    const was = kept.get(key);
+    return was && was.reason === reason ? { key, reason, by: was.by, at: was.at } : { key, reason, by: actor, at: now };
+  });
+}
+
 // ---------- the org's repository sources ----------
 //
 // Settings → Repository sources (server/store/orgs.mjs): one switch per
@@ -357,6 +403,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
       try { next.repository = parseRepository(patch.repository, { caller }); }
       catch (e) { if (named && e instanceof AdminRefusal) refuseSourceOff(db, named); throw e; }
     }
+    if (patch.gradeOff !== undefined) next.gradeOff = parseGradeOff(patch.gradeOff, { current: current.gradeOff, actor });
     const changed = changedFields(current, next);
     if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
@@ -525,6 +572,8 @@ function serviceView(service, environments, links) {
   return {
     id: service.id, slug: service.slug, name: service.name, owners: service.owners, tier: service.tier, description: service.description,
     repository: service.repository ?? null,
+    // The grade criteria this service is not graded on: [{ key, reason, by, at }], [] for none.
+    gradeOff: Array.isArray(service.gradeOff) ? service.gradeOff : [],
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

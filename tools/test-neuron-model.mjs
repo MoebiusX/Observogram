@@ -465,3 +465,19 @@ test('Stack evidence reads a sampled value to three significant digits and keeps
     ['0.00333', '0.586', '39805', '1', '0', '2.5', '123', '-0.0123'],
   );
 });
+
+test("the fleet's grade delta pairs a run only with one graded on the same criteria (the record's grade.off): a step over two sets is no delta; alignment is paired as before", () => {
+  const graded = (i, score, off) => run(i, { grade: { score, pass: true, ...(off ? { off } : {}) } });
+  const fleetOf = (runs) => buildNeuronModel({ journeys: [entry('a', runs)], runsByName: { a: runs }, window: 50 }).fleet;
+  // 57 on seven, then chaos switched off and 67 on six: no "+10 vs the run before".
+  const changed = fleetOf([graded(0, 57), graded(1, 67, ['chaos-validated'])]);
+  assert.deepEqual(changed.grade, { mean: 67, delta: null, n: 1 });
+  assert.equal(changed.alignment.delta, -1, 'the alignment is the same measure on both runs');
+  // Both on six (the keys in any order): paired.
+  assert.deepEqual(fleetOf([graded(0, 60, ['fresh', 'chaos-validated']), graded(1, 67, ['chaos-validated', 'fresh'])]).grade, { mean: 67, delta: 7, n: 1 });
+  // Both on seven, as before.
+  assert.deepEqual(fleetOf([graded(0, 60), graded(1, 67)]).grade, { mean: 67, delta: 7, n: 1 });
+  // The previous scored run decides, a gap between is skipped as before.
+  assert.deepEqual(fleetOf([graded(0, 60, ['fresh']), lost(1), graded(2, 64, ['fresh'])]).grade, { mean: 64, delta: 4, n: 1 });
+  assert.deepEqual(fleetOf([graded(0, 60, ['fresh']), graded(1, 50), graded(2, 64, ['fresh'])]).grade.delta, null, 'the run just before was graded on seven');
+});

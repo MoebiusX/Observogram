@@ -160,6 +160,32 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
          'a vantage-lost payload carries the redacted error and null for what was never verified', lostPayload);
   assert(buildNotifyPayload({}).journey === null && buildNotifyPayload({}).links && typeof buildNotifyPayload({}).links === 'object', 'buildNotifyPayload tolerates an empty call');
 
+  // --- grade.off: the criteria the score left out ride with it, only when it left some out ---
+  // A run graded on fewer than seven criteria (its service's switches, or its
+  // definition's gradeOff) records them as grade.off; the payload's grade then
+  // carries `off` after score, pass and letter. A record without it — every
+  // record before the switches existed — gives the payload it always gave.
+  {
+    const build = (grade) => buildNotifyPayload({ record: { ...record, grade }, previousRun: pass('t1'), decision, links, text: 'j: pass · chains 2/3 intact' });
+    const whole = JSON.stringify(payload);
+    assert(JSON.stringify(build(record.grade)) === whole && !('off' in payload.grade), 'a record whose grade has no off: the payload is the one above, and its grade has no off key');
+    const off = ['chaos-validated', 'fresh'];
+    const withOff = build({ ...record.grade, off });
+    assert(JSON.stringify(withOff.grade) === JSON.stringify({ score: 91, pass: true, letter: 'A', off: ['chaos-validated', 'fresh'] }), 'grade.off rides in the payload\'s grade, after score, pass and letter', withOff.grade);
+    assert(withOff.grade.off !== off && off.join() === 'chaos-validated,fresh', 'the list is copied, and the record\'s own is left as it was');
+    assert(JSON.stringify(Object.keys(withOff)) === JSON.stringify(Object.keys(payload)) && JSON.stringify({ ...withOff, grade: { score: 91, pass: true, letter: 'A' } }) === whole,
+           'nothing else of the payload moves: the same keys in the same order, every other value the same');
+    for (const none of [[], null, undefined, 'chaos-validated', 7, { 0: 'fresh', length: 1 }]) {
+      const p = build({ ...record.grade, off: none });
+      assert(JSON.stringify(p) === whole && !('off' in p.grade), 'grade.off empty or not a list: no off key, the payload it always was', { none, grade: p.grade });
+    }
+    assert(build({ ...record.grade, off: ['fresh', 7, null, { key: 'calibrated' }, 'a', 'b', 'c', 'd', 'e', 'f', 'g'] }).grade.off.join() === 'fresh,a,b,c,d,e,f', 'only strings are copied, seven at most');
+    assert(buildNotifyPayload({ record: { ...lost('t9'), grade: undefined }, decision: notifyDecision({ policy: 'breach', record: lost('t9') }) }).grade === null, 'a record that graded nothing still has grade null');
+    assert(JSON.parse(JSON.stringify(withOff)).grade.off.join() === 'chaos-validated,fresh', 'the payload with off is JSON-serialisable');
+    // The text form prints no grade line, so it is the same with and without off.
+    assert(renderNotifyText(withOff) === renderNotifyText(payload), 'the text rendering is unchanged by grade.off');
+  }
+
   // --- text rendering ---
   const text = renderNotifyText(payload);
   const lines = text.split('\n');

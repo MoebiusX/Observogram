@@ -70,6 +70,22 @@ function pairedDelta(perJourneyPairs) {
 // Latest and previous value of a metric for one journey's runs (oldest
 // first), skipping vantage-lost gaps for the PREVIOUS only: the latest is
 // the newest run whatever it holds (a gap is the honest latest).
+// The grade's pair: the previous score only when it was graded on the same
+// criteria as the latest (the run record's grade.off — the service's switches
+// at that run); a pair over two sets is no delta.
+const gradeOffOf = (r) => (Array.isArray(r?.grade?.off) ? r.grade.off.filter((k) => typeof k === 'string').slice().sort().join(',') : '');
+function latestAndPreviousGrade(runs) {
+  const sorted = sortRunsOldestFirst(runs);
+  const last = sorted.length ? sorted[sorted.length - 1] : null;
+  const latest = last ? gradeOf(last) : null;
+  let previous = null;
+  for (let i = sorted.length - 2; i >= 0; i--) {
+    const v = gradeOf(sorted[i]);
+    if (v !== null) { previous = gradeOffOf(sorted[i]) === gradeOffOf(last) ? v : null; break; }
+  }
+  return [latest, previous];
+}
+
 function latestAndPrevious(runs, pick) {
   const sorted = sortRunsOldestFirst(runs);
   const latest = sorted.length ? pick(sorted[sorted.length - 1]) : null;
@@ -288,7 +304,7 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
   };
 
   const alignPairs = list.map((j) => latestAndPrevious(runsOf(j.name), alignmentOf));
-  const gradePairs = list.map((j) => latestAndPrevious(runsOf(j.name), gradeOf));
+  const gradePairs = list.map((j) => latestAndPreviousGrade(runsOf(j.name)));
   const chainsList = lastRuns.map((r) => r.chains).filter(isRecord);
   const ladder = Object.fromEntries(LADDER_KEYS.map((k) => [k, chainsList.reduce((s, c) => s + (num(c.ladder?.[k]) ?? 0), 0)]));
 

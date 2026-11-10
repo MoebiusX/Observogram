@@ -11,6 +11,9 @@ import {
   INSTRUMENT_GRADE_SCALE,
   instrumentGradeFor,
   partialLiveEvidence,
+  GRADE_CRITERIA,
+  GRADE_CRITERION_KEYS,
+  gradeOffKeys,
 } from '../studio/diagnostic-grade.mjs';
 
 function assert(condition, message, details) {
@@ -705,6 +708,120 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   const chaosLayers = ['infra', 'platform', 'app', 'ux'].filter((l) => cells[`${l}:chaos`]?.length);
   assert(JSON.stringify(chaosLayers) === JSON.stringify(['platform', 'app', 'ux']), 'four experiments named after the layers light one row, not four', { chaosLayers, cells: Object.keys(cells) });
   assert(!cells['infra:chaos'], 'no experiment faults infrastructure, so infra has no chaos', cells['infra:chaos']);
+}
+
+// ---------- criteria a service is not graded on (opts.off) ----------
+// A service may leave scored criteria out of its grade: one that does not
+// apply to it (a project that runs no fault injection has no use for
+// Chaos-validated). A criterion left out is still computed and listed, marked
+// `applies: false` and `informational: true` (shown, not scored), and leaves
+// both the points and the totals; `overall.off` names what was left out, in
+// the engine's order. With nothing left out the output is the one it always was.
+{
+  const run = ({ off, packA = baseRepoPack(), packB = livePack({ 'mcp.refreshedAt': '2026-06-09T11:00:00Z' }), integrity = 0.9 } = {}) =>
+    computeDiagnosticGrade(packA, packB, fullPosture(), 'production-live', traceabilityDiff(integrity), off === undefined ? { nowMs } : { nowMs, off });
+  const scoredOf = (r) => [...r.coverage.criteria, ...r.trust.criteria];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const marks = (r) => scoredOf(r).filter((c) => 'applies' in c).map((c) => c.key);
+
+  // The vocabulary is the engine's own: the keys, labels and groups its scored
+  // criteria carry, in its order — whatever the packs hold — so the list a
+  // service's switches are checked against cannot drift from what is graded.
+  const all = run();
+  assert(same(GRADE_CRITERION_KEYS, scoredOf(all).map((c) => c.key)), 'GRADE_CRITERION_KEYS is the keys the scored criteria carry, in the engine\'s order', { keys: GRADE_CRITERION_KEYS, carried: scoredOf(all).map((c) => c.key) });
+  assert(same(GRADE_CRITERIA.map((c) => [c.key, c.label, c.group]),
+    [...all.coverage.criteria.map((c) => [c.key, c.label, 'coverage']), ...all.trust.criteria.map((c) => [c.key, c.label, 'trust'])]),
+  'GRADE_CRITERIA carries each criterion\'s own label and the group it is scored in', GRADE_CRITERIA);
+  assert(same(GRADE_CRITERION_KEYS, GRADE_CRITERIA.map((c) => c.key)) && GRADE_CRITERION_KEYS.length === 7 && all.overall.total === 7, 'seven scored criteria, one key each', GRADE_CRITERION_KEYS);
+  const bare = computeDiagnosticGrade({}, null, { cells: {} }, null, null, { nowMs });
+  assert(same(GRADE_CRITERION_KEYS, scoredOf(bare).map((c) => c.key)), 'an empty pack graded alone carries the same seven keys', scoredOf(bare).map((c) => c.key));
+  assert(!GRADE_CRITERION_KEYS.includes('actionable') && all.operability.criteria.every((c) => !GRADE_CRITERION_KEYS.includes(c.key)), 'the informational operability criterion is not one a service switches');
+  assert(Object.isFrozen(GRADE_CRITERIA) && GRADE_CRITERIA.every((c) => Object.isFrozen(c)) && Object.isFrozen(GRADE_CRITERION_KEYS), 'the vocabulary is frozen: no caller can widen it');
+
+  // Nothing off: the grade as it always was — the same keys, no mark, no `off`.
+  assert(same(Object.keys(all), ['gradeSchema', 'coverage', 'trust', 'operability', 'overall', 'traceabilityGraph']), 'nothing off: the result\'s keys are unchanged', Object.keys(all));
+  assert(same(Object.keys(all.overall), ['passed', 'total', 'verdict', 'audit', 'instrumentGrade', 'liveDriftFree']), 'nothing off: overall carries no `off` key', Object.keys(all.overall));
+  assert(marks(all).length === 0 && scoredOf(all).every((c) => !('informational' in c)), 'nothing off: no scored criterion is marked', marks(all));
+  assert(closeTo(all.overall.passed, 6.9) && all.overall.total === 7 && all.coverage.total === 4 && all.trust.total === 3 && closeTo(all.overall.audit.scorePctExact, 6.9 / 7 * 100),
+    'nothing off: 6.9 of 7, the score the same inputs earn above', all.overall);
+  for (const [what, off] of [['null', null], ['an empty list', []], ['a list of nothing the engine scores', ['no-such-criterion', 'actionable', 7, null, {}]]]) {
+    assert(same(run({ off }), all), `opts.off ${what}: the output is identical to a grade with no opts.off`, run({ off }).overall);
+  }
+
+  // One criterion off: marked, still computed, out of the points and the totals.
+  const one = run({ off: ['chaos-validated'] });
+  const chaosAll = criterion(all, 'chaos-validated');
+  const chaosOne = criterion(one, 'chaos-validated');
+  assert(chaosOne.applies === false && chaosOne.informational === true, 'the criterion left out is marked applies: false and informational: true', chaosOne);
+  const { applies: _applies, informational: _informational, ...chaosRest } = chaosOne;
+  assert(same(chaosRest, chaosAll) && chaosOne.pass === true && chaosOne.score === 1 && chaosOne.proof.state === 'proven', 'it is still computed: everything it says with all seven graded, plus the two marks', { chaosOne, chaosAll });
+  assert(same(marks(one), ['chaos-validated']), 'only the criterion left out is marked', marks(one));
+  assert(scoredOf(one).filter((c) => c.key !== 'chaos-validated').every((c) => same(c, criterion(all, c.key))), 'every other criterion is the one a grade on all seven gives');
+  assert(same(one.operability, all.operability), 'the operability section is untouched');
+  assert(one.coverage.criteria.length === 4 && one.trust.criteria.length === 3, 'it stays in its list', one.trust.criteria.map((c) => c.key));
+  assert(one.coverage.total === 4 && one.trust.total === 2 && one.overall.total === 6, 'the totals drop by one: trust 3 → 2, overall 7 → 6', { coverage: one.coverage.total, trust: one.trust.total, overall: one.overall.total });
+  assert(closeTo(one.coverage.passed, 4) && closeTo(one.trust.passed, 1.9) && closeTo(one.overall.passed, 5.9), 'its point leaves the points: 4 coverage + drift 0.9 + fresh 1', one.overall);
+  assert(closeTo(one.overall.audit.scorePctExact, 5.9 / 6 * 100) && one.overall.audit.status === 'PASS', 'the score is over the six that apply: 5.9/6 = 98.3%', one.overall.audit);
+  assert(same(one.overall.off, ['chaos-validated']), 'overall.off names it', one.overall.off);
+  assert(same(Object.keys(one.overall), ['passed', 'total', 'verdict', 'audit', 'instrumentGrade', 'liveDriftFree', 'off']), 'overall gains `off`, after the keys it always had', Object.keys(one.overall));
+  assert(one.gradeSchema === 4, 'the grade schema stays 4: each criterion\'s rule is the same', one.gradeSchema);
+
+  // The case the switch is for: a project that runs no fault injection. Graded
+  // on seven it loses a whole point for it and fails the audit; graded on the
+  // six that apply, the same evidence passes.
+  const noChaos = () => { const p = baseRepoPack(); p.layers.L5 = [{ id: 'BASE-latency', title: 'MTTD/MTTR baseline' }]; return p; };
+  const onSeven = run({ packA: noChaos() });
+  const onSix = run({ packA: noChaos(), off: ['chaos-validated'] });
+  assert(criterion(onSeven, 'chaos-validated').pass === false && closeTo(onSeven.overall.passed, 5.9) && onSeven.overall.total === 7 && onSeven.overall.audit.status === 'FAIL' && onSeven.overall.instrumentGrade.letter === 'B+',
+    'no chaos experiment, graded on seven: 5.9/7 = 84.3%, FAIL, B+', onSeven.overall);
+  assert(criterion(onSix, 'chaos-validated').pass === false && criterion(onSix, 'chaos-validated').applies === false, 'left out, the criterion still says what it found: nothing declared', criterion(onSix, 'chaos-validated'));
+  assert(closeTo(onSix.overall.passed, 5.9) && onSix.overall.total === 6 && closeTo(onSix.overall.audit.scorePctExact, 5.9 / 6 * 100), 'the points are the same; the score is over six', onSix.overall);
+  assert(onSix.overall.audit.status === 'PASS' && onSix.overall.audit.passes === true && onSix.overall.verdict.word === 'Diagnostic-grade' && onSix.overall.instrumentGrade.letter === 'A+',
+    'the audit, the verdict word and the letter all read the score over six: 98.3%, PASS, A+', onSix.overall);
+  // A failing criterion of the other kind (no refresh time: Fresh fails), on the sub-threshold inputs above.
+  const stale = run({ off: ['fresh'], packB: livePack(), integrity: 0.8 });
+  assert(criterion(stale, 'fresh').pass === false && criterion(stale, 'fresh').applies === false && closeTo(stale.overall.passed, 5.8) && stale.overall.total === 6
+    && closeTo(stale.overall.audit.scorePctExact, 5.8 / 6 * 100) && stale.overall.audit.status === 'PASS', 'Fresh left out of the 5.8/7 grade above: 5.8/6 = 96.7%', stale.overall);
+
+  // Several, in any order, twice, among things that name nothing: the engine's order, once each.
+  const messy = run({ off: ['fresh', 'no-such-criterion', 'actionable', 'Fresh', ' fresh', 7, null, undefined, true, {}, { key: 9 }, ['multi-modal'], 'chaos-validated', 'fresh'] });
+  assert(same(messy.overall.off, ['chaos-validated', 'fresh']), 'unknown keys, another case, padding, non-strings, objects without a string key and nested lists are ignored; the rest is in the engine\'s order, once', messy.overall.off);
+  assert(same(messy, run({ off: ['chaos-validated', 'fresh'] })), 'and the grade is the one the two keys alone give');
+  assert(messy.overall.total === 5 && messy.trust.total === 1 && closeTo(messy.overall.passed, 4.9) && same(marks(messy), ['chaos-validated', 'fresh']), 'two left out: 4.9 of 5', messy.overall);
+  assert(criterion(messy, 'actionable').applies === undefined && criterion(messy, 'actionable').informational === true, 'naming the informational criterion changes nothing of it', criterion(messy, 'actionable'));
+
+  // A service record's switches — objects with a `key` — are read as their keys.
+  const switches = [
+    { key: 'fresh', reason: 'checked by hand each week', by: 'ada', at: '2026-06-01T00:00:00.000Z' },
+    { key: 'multi-modal', reason: 'metrics only, by design', by: 'oscar', at: '2026-06-02T00:00:00.000Z' },
+  ];
+  const byRecord = run({ off: switches });
+  assert(same(byRecord.overall.off, ['multi-modal', 'fresh']) && same(byRecord, run({ off: ['multi-modal', 'fresh'] })), 'objects with a key are accepted, and grade as the keys do', byRecord.overall.off);
+  assert(same(run({ off: ['fresh', { key: 'multi-modal' }] }), byRecord), 'keys and objects mix');
+  assert(byRecord.coverage.total === 3 && closeTo(byRecord.coverage.passed, 3) && byRecord.trust.total === 2 && byRecord.overall.total === 5, 'a coverage criterion left out leaves the coverage total', byRecord.coverage);
+  assert(same(switches.map((s) => Object.keys(s)), [['key', 'reason', 'by', 'at'], ['key', 'reason', 'by', 'at']]) && switches[0].key === 'fresh', 'the list handed in is not rewritten');
+
+  // All seven named: ignored whole — a grade is always graded on something.
+  for (const [what, off] of [['the keys', GRADE_CRITERION_KEYS], ['the keys reversed', [...GRADE_CRITERION_KEYS].reverse()], ['the criteria as objects', GRADE_CRITERIA],
+    ['the keys twice, among unknown ones', [...GRADE_CRITERION_KEYS, 'no-such-criterion', ...GRADE_CRITERION_KEYS]]]) {
+    assert(same(run({ off }), all), `all seven named (${what}): the list is ignored whole`, run({ off }).overall);
+  }
+  // Six named stand: the grade is over the one that is left.
+  const sixOff = GRADE_CRITERION_KEYS.filter((k) => k !== 'drift-free');
+  const lone = run({ off: sixOff });
+  assert(same(lone.overall.off, sixOff) && lone.overall.total === 1 && lone.coverage.total === 0 && lone.coverage.passed === 0 && lone.trust.total === 1, 'six left out: one criterion is graded', lone.overall);
+  assert(closeTo(lone.overall.passed, 0.9) && closeTo(lone.overall.audit.scorePctExact, 90) && lone.overall.instrumentGrade.letter === 'A', 'and the score is its own: drift 0.9 → 90%', lone.overall);
+
+  // gradeOffKeys itself.
+  assert(same(gradeOffKeys(['fresh', 'multi-modal', 'fresh']), ['multi-modal', 'fresh']), 'gradeOffKeys: the engine\'s order, once each', gradeOffKeys(['fresh', 'multi-modal', 'fresh']));
+  assert(same(gradeOffKeys([{ key: 'fresh', reason: 'x' }, 'correlated']), ['correlated', 'fresh']), 'gradeOffKeys: keys and objects with a key', gradeOffKeys([{ key: 'fresh', reason: 'x' }, 'correlated']));
+  assert(same(gradeOffKeys(['no-such-criterion', 'actionable', 'FRESH', 7, null, undefined, true, {}, { key: 7 }, { key: null }, ['fresh']]), []), 'gradeOffKeys: what names no scored criterion is ignored');
+  for (const none of [undefined, null, [], 'fresh', 7, { key: 'fresh' }]) assert(same(gradeOffKeys(none), []), 'gradeOffKeys: nothing, or what is not a list, names nothing', { none, got: gradeOffKeys(none) });
+  assert(same(gradeOffKeys(GRADE_CRITERION_KEYS), []) && same(gradeOffKeys(GRADE_CRITERIA), []) && same(gradeOffKeys([...GRADE_CRITERION_KEYS, 'x']), []), 'gradeOffKeys: all seven named is none');
+  assert(same(gradeOffKeys(sixOff), sixOff) && same(gradeOffKeys([...sixOff].reverse()), sixOff), 'gradeOffKeys: six stand', gradeOffKeys(sixOff));
+  const fromKeys = gradeOffKeys(['fresh']);
+  fromKeys.push('drift-free');
+  assert(GRADE_CRITERION_KEYS.length === 7 && same(gradeOffKeys(['fresh']), ['fresh']), 'gradeOffKeys: the answer is the caller\'s own list');
 }
 
 // ---------- the vendoring seam (docs/VENDORING.md) ----------

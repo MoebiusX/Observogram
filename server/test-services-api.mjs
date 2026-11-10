@@ -205,7 +205,7 @@ const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 90071992
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
-const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
@@ -248,7 +248,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.checkout = json.service.id;
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
   // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
@@ -256,7 +256,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.payments = second.json.service.id;
   assert.deepEqual(stamped(second.json.service), {
     id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
-    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
   // tier: null is "graded by the pack", explicitly.
@@ -292,7 +292,7 @@ test('GET /api/services and GET /api/services/:id: the views by slug, as a viewe
   const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
   assert.deepEqual(stamped(one.json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
   for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
@@ -305,7 +305,7 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
-    repository: null, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
   // Only what differs is a change (and a row names only those fields).
@@ -330,6 +330,178 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   await refused(K, 'oscar', P, { description: 'd'.repeat(4001) }, 400, WAYS.description);
   await refused(K, 'oscar', '/api/services/999999', { name: 'x' }, 404, 'no service 999999');
   for (const id of BAD_IDS) await refused(K, 'oscar', `/api/services/${id}`, { name: 'x' }, 400, SERVICE_ID_TEXT);
+});
+
+// The grade criteria a service is not graded on (server/service-admin.mjs
+// parseGradeOff; studio/diagnostic-grade.mjs opts.off): the PATCH sends the
+// whole list, [{ key, reason }], and the record keeps who switched each off
+// and when. Every member reads it on the service view; its runs grade over
+// the others (server/test-service-run.mjs).
+test('PATCH /api/services/:id { gradeOff }: an operator switches criteria off — changed, the view with each entry signed by the caller at an ISO time, one service.update row naming the keys; the same list again changes nothing and writes no row; a reworded reason is re-signed by whoever reworded it; [] switches everything back on; a viewer is 403; every refusal is 400 with the rule\'s text and no row; another org neither sees nor changes it', async () => {
+  const K = 'PATCH /api/services/:id';
+  const P = `/api/services/${ids.ledgerNulls}`;
+  const why = 'no fault injection on this project';
+  const viewOf = async (who = 'vera') => (await ok('GET /api/services/:id', who, P)).json.service;
+  assert.deepEqual((await viewOf()).gradeOff, [], 'until someone says otherwise, every criterion is graded');
+
+  // oscar (operator) switches two off: in the engine's order, the reason trimmed, signed by him now.
+  const t0 = Date.now();
+  const { json, rows } = await ok(K, 'oscar', P, { gradeOff: [{ key: 'fresh', reason: '  read by hand each week ' }, { key: 'chaos-validated', reason: why }] });
+  assert.deepEqual(json.changed, ['gradeOff']);
+  isServiceView(json.service);
+  const at = json.service.gradeOff[0]?.at;
+  assert.deepEqual(json.service.gradeOff, [
+    { key: 'chaos-validated', reason: why, by: 'oscar', at },
+    { key: 'fresh', reason: 'read by hand each week', by: 'oscar', at },
+  ]);
+  assert.ok(ISO.test(at) && Date.parse(at) >= t0 && Date.parse(at) <= Date.now(), `an ISO time of this request: ${at}`);
+  assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'ledger-nulls', { fields: ['gradeOff'], gradeOff: ['chaos-validated', 'fresh'] }]], 'one row: the field and the keys now off, never a reason');
+  // Every member reads it: the record's view and the listing, as a viewer.
+  assert.deepEqual((await viewOf('vera')).gradeOff, json.service.gradeOff);
+  const list = await ok('GET /api/services', 'vera', '/api/services');
+  list.json.services.forEach(isServiceView);
+  assert.deepEqual(list.json.services.map((s) => [s.slug, s.gradeOff.map((x) => x.key)]), [['checkout-service', []], ['ledger-nulls', ['chaos-validated', 'fresh']], ['payments', []]], 'this record\'s switches only');
+
+  // The same list again — by another person, in another order, padded, or the view's own entries sent back: nothing changes, no row.
+  for (const again of [
+    [{ key: 'chaos-validated', reason: why }, { key: 'fresh', reason: 'read by hand each week' }],
+    [{ key: 'fresh', reason: ' read by hand each week' }, { key: 'chaos-validated', reason: `${why}  ` }],
+    json.service.gradeOff,
+  ]) {
+    const same = await ok(K, 'ada', P, { gradeOff: again });
+    assert.deepEqual([same.json.changed, same.rows, same.json.service.gradeOff, same.json.service.updatedAt], [[], [], json.service.gradeOff, json.service.updatedAt]);
+  }
+  // A by or an at sent with an entry is never taken.
+  const forged = await ok(K, 'ada', P, { gradeOff: json.service.gradeOff.map((x) => ({ ...x, by: 'olive', at: '1999-01-01T00:00:00.000Z' })) });
+  assert.deepEqual([forged.json.changed, forged.rows, forged.json.service.gradeOff], [[], [], json.service.gradeOff]);
+
+  // ada rewords one reason: that entry is hers now; oscar's other entry keeps his name and time.
+  const reworded = await ok(K, 'ada', P, { gradeOff: [{ key: 'chaos-validated', reason: why }, { key: 'fresh', reason: 'read by hand each month' }] });
+  assert.deepEqual(reworded.json.changed, ['gradeOff']);
+  const [kept, hers] = reworded.json.service.gradeOff;
+  assert.deepEqual([kept, hers], [{ key: 'chaos-validated', reason: why, by: 'oscar', at }, { key: 'fresh', reason: 'read by hand each month', by: 'ada', at: hers?.at }]);
+  assert.ok(ISO.test(hers.at) && hers.at >= at, hers.at);
+  assert.deepEqual(reworded.rows, [['service.update', 'ada', 'acme', 'ledger-nulls', { fields: ['gradeOff'], gradeOff: ['chaos-validated', 'fresh'] }]]);
+  // Beside another field (an owner naming the org): one row, both fields; the criterion left out is back on.
+  const both = await ok(K, 'olive', P, { tier: 'tier-2', gradeOff: [{ key: 'chaos-validated', reason: why }] });
+  assert.deepEqual([both.json.changed, both.json.service.tier, both.json.service.gradeOff], [['tier', 'gradeOff'], 'tier-2', [kept]]);
+  assert.deepEqual(both.rows, [['service.update', 'olive', 'acme', 'ledger-nulls', { fields: ['tier', 'gradeOff'], gradeOff: ['chaos-validated'] }]]);
+
+  // A viewer may read it, never change it (the guard's 403, no row).
+  await denied(K, 'vera', P, { gradeOff: [] }, 'role', "requires the operator role in org 'acme' (you are viewer) — ask an admin of acme");
+  // Every refusal of the rule: 400, its text, no row — and nothing sent beside it is written either.
+  const KEYS = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated', 'drift-free', 'fresh'];
+  for (const [gradeOff, text] of [
+    [null, WAYS.gradeOff],
+    ['chaos-validated', WAYS.gradeOff],
+    [{ key: 'fresh', reason: why }, WAYS.gradeOff],
+    [['fresh'], WAYS.gradeOff],
+    [[{ key: 'fresh', reason: why, note: 'an unknown property' }], WAYS.gradeOff],
+    [[...KEYS, 'fresh'].map((key) => ({ key, reason: why })), WAYS.gradeOff],
+    [[{ key: 'chaos', reason: why }], WAYS.gradeOffKey('chaos')],
+    [[{ key: 'actionable', reason: why }], WAYS.gradeOffKey('actionable')],
+    [[{ reason: why }], 'undefined is not a grade criterion — one of multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh'],
+    [[{ key: 'fresh', reason: why }, { key: 'fresh', reason: 'again' }], WAYS.gradeOffTwice('fresh')],
+    [[{ key: 'drift-free' }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: '   ' }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: 42 }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: 'x'.repeat(201) }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: 'two\nlines' }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: `two${String.fromCharCode(0x85)}lines` }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: `two${String.fromCharCode(0x2028)}lines` }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: `two${String.fromCharCode(0x2029)}lines` }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: `an override ${String.fromCharCode(0x202e)}reversed` }], WAYS.gradeOffReason('drift-free')],
+    [[{ key: 'drift-free', reason: `an isolate ${String.fromCharCode(0x2066)}apart${String.fromCharCode(0x2069)}` }], WAYS.gradeOffReason('drift-free')],
+    [KEYS.map((key) => ({ key, reason: why })), WAYS.gradeOffAll],
+  ]) {
+    await refused(K, 'oscar', P, { name: 'Never Written', gradeOff }, 400, text);
+  }
+  assert.equal(WAYS.gradeOff, 'gradeOff is the whole list of grade criteria this service is not graded on — [{ key, reason }], [] for none; a key is one of multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh');
+  assert.equal(WAYS.gradeOffKey('chaos'), '"chaos" is not a grade criterion — one of multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh');
+  assert.equal(WAYS.gradeOffTwice('fresh'), 'fresh is listed twice');
+  assert.equal(WAYS.gradeOffReason('drift-free'), 'say why drift-free is not graded for this service — a reason of 1–200 characters on one line');
+  assert.equal(WAYS.gradeOffAll, 'a service is graded on at least one criterion — leave one switched on');
+  const after = await viewOf();
+  assert.deepEqual([after.name, after.gradeOff], ['Ledger Nulls', [kept]], 'the refusals changed nothing');
+
+  // Another org: bob (bravo's admin) neither sees the record nor changes it.
+  await refused('GET /api/services/:id', 'bob', P, 404, `no service ${ids.ledgerNulls}`);
+  await refused(K, 'bob', P, { gradeOff: [] }, 404, `no service ${ids.ledgerNulls}`);
+  await refused(K, 'bob', P, { gradeOff: [{ key: 'fresh', reason: 'not his to say' }] }, 404, `no service ${ids.ledgerNulls}`);
+  assert.deepEqual((await ok('GET /api/services', 'bob', '/api/services')).json.services, []);
+  assert.deepEqual((await viewOf()).gradeOff, [kept], 'acme\'s record is as acme left it');
+
+  // [] switches every criterion back on (one row saying none is off); [] again is no change.
+  const none = await ok(K, 'oscar', P, { gradeOff: [], tier: null });
+  assert.deepEqual([none.json.changed, none.json.service.gradeOff, none.json.service.tier], [['tier', 'gradeOff'], [], null]);
+  assert.deepEqual(none.rows, [['service.update', 'oscar', 'acme', 'ledger-nulls', { fields: ['tier', 'gradeOff'], gradeOff: [] }]]);
+  const noneAgain = await ok(K, 'oscar', P, { gradeOff: [] });
+  assert.deepEqual([noneAgain.json.changed, noneAgain.rows], [[], []]);
+  assert.deepEqual((await viewOf()).gradeOff, []);
+});
+
+// A run reads the switches of the record its journey names in the caller's
+// own org (server/index.mjs gradeOffOfJourney): the same slug in another org
+// is another record. Two checks of the same name over the same two catalogue
+// packs, one in each org's part of the workspace — files, so no MCP is read.
+test('a journey\'s run is graded on the switches of its own org\'s service record: acme\'s record has a criterion off and its run says so (grade.off, lastRun.gradeOff, the engine\'s score over six); bravo\'s record of the same slug has none, and its run of the same check is over all seven', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { computeDiagnosticGrade, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const { adapt } = await import('../tools/lib/adapter.mjs');
+  const { diffPacks } = await import('../tools/lib/diff.mjs');
+  const { comparePackBranches } = await import('../tools/lib/traceability-graph.mjs');
+  const FILE_A = join(ROOT, 'examples', 'target-advanced.pack.yaml');
+  const FILE_B = join(ROOT, 'examples', 'production-curated.pack.yaml');
+  const NAME = 'grade-switches';
+  const RUN = 'POST /api/journeys/:name/run';
+  // The engine's grade of the two files, scoped as the check is — what a run record's score should be.
+  const layeredA = adapt(parseYaml(readFileSync(FILE_A, 'utf8')), { environment: 'prod' });
+  const layeredB = adapt(parseYaml(readFileSync(FILE_B, 'utf8')), {});
+  const diff = { ...diffPacks(layeredA, layeredB, { service: 'ledger-nulls' }), traceabilityGraph: comparePackBranches(layeredA, layeredB) };
+  const scoreOver = (off) => Math.round(computeDiagnosticGrade(layeredA, layeredB, computePostureMatrix(layeredA, layeredB), null, diff, { off }).overall.audit.scorePctExact);
+  assert.notEqual(scoreOver([]), scoreOver(['chaos-validated']), 'these two packs score differently over seven and over six');
+
+  const written = [];
+  let bravoId = null;
+  try {
+    for (const org of ['acme', 'bravo']) {
+      mkdirSync(join(WORKSPACE, 'orgs', org, 'journeys'), { recursive: true });
+      const file = join(WORKSPACE, 'orgs', org, 'journeys', `${NAME}.journey.yaml`);
+      writeFileSync(file, [`name: ${NAME}`, `packA: { file: ${FILE_A.replaceAll('\\', '/')} }`, `packB: { file: ${FILE_B.replaceAll('\\', '/')} }`, 'env: prod', 'service: ledger-nulls', 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+      written.push(file, join(WORKSPACE, 'orgs', org, 'runs', NAME));
+    }
+    // acme switches one off; bravo has a record of the same slug with nothing off.
+    await ok('PATCH /api/services/:id', 'oscar', `/api/services/${ids.ledgerNulls}`, { gradeOff: [{ key: 'chaos-validated', reason: 'no fault injection on this project' }] });
+    bravoId = (await ok('POST /api/services', 'bob', '/api/services', { name: 'Ledger Nulls' }, 201)).json.service.id;
+    assert.deepEqual((await ok('GET /api/services/:id', 'bob', `/api/services/${bravoId}`)).json.service.gradeOff, []);
+
+    const acme = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([acme.json.record.scope.service, acme.json.record.grade.off, acme.json.record.grade.score], ['ledger-nulls', ['chaos-validated'], scoreOver(['chaos-validated'])]);
+    assert.deepEqual(acme.rows.map(([action, actor, org, target, detail]) => [action, actor, org, target, detail.gradeScore]), [['journey.run', 'oscar', 'acme', NAME, scoreOver(['chaos-validated'])]]);
+    const bravo = await ok(RUN, 'bob', `/api/journeys/${NAME}/run`, {});
+    assert.ok(!('off' in bravo.json.record.grade), `bravo's run knows nothing of acme's switch: ${JSON.stringify(bravo.json.record.grade)}`);
+    assert.equal(bravo.json.record.grade.score, scoreOver([]), 'all seven');
+    assert.deepEqual(bravo.rows.map(([action, actor, org, target, detail]) => [action, actor, org, target, detail.gradeScore]), [['journey.run', 'bob', 'bravo', NAME, scoreOver([])]]);
+
+    // Each org's listing, as its members read it.
+    const lastRunOf = async (who) => (await call(who, 'GET', '/api/journeys')).json.journeys.find((j) => j.name === NAME).lastRun;
+    assert.deepEqual([(await lastRunOf('vera')).gradeOff, (await lastRunOf('vera')).gradeScore], [['chaos-validated'], scoreOver(['chaos-validated'])]);
+    assert.deepEqual([(await lastRunOf('bob')).gradeOff, (await lastRunOf('bob')).gradeScore], [[], scoreOver([])]);
+
+    // bravo switches another criterion off on its own record: its next run names that one, acme's still its own.
+    await ok('PATCH /api/services/:id', 'bob', `/api/services/${bravoId}`, { gradeOff: [{ key: 'fresh', reason: 'read by hand each week' }] });
+    const bravoAgain = await ok(RUN, 'bob', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([bravoAgain.json.record.grade.off, bravoAgain.json.record.grade.score], [['fresh'], scoreOver(['fresh'])]);
+    const acmeAgain = await ok(RUN, 'ada', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([acmeAgain.json.record.grade.off, acmeAgain.json.record.grade.score], [['chaos-validated'], scoreOver(['chaos-validated'])]);
+  } finally {
+    // As the suite had it: bravo holds no service, acme's record is graded on everything, the checks are gone.
+    for (const path of written) rmSync(path, { recursive: true, force: true });
+    if (bravoId !== null) await call('bob', 'DELETE', `/api/services/${bravoId}`);
+    await call('oscar', 'PATCH', `/api/services/${ids.ledgerNulls}`, { gradeOff: [] });
+  }
+  assert.deepEqual((await ok('GET /api/services', 'bob', '/api/services')).json.services, []);
+  assert.deepEqual((await ok('GET /api/services/:id', 'vera', `/api/services/${ids.ledgerNulls}`)).json.service.gradeOff, []);
 });
 
 // ---------- environments ----------
@@ -895,7 +1067,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, source: { kind: 'observogram' },
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
@@ -935,7 +1107,7 @@ test('a register writes the service, environment and link rows by the person reg
   ids.demo = demo.id;
   ids.demoProd = demo.environments[0].id;
   assert.deepEqual(stamped(demo), {
-    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, source: { kind: 'observogram' },
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
     environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1269,7 +1441,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, source: { kind: 'observogram' },
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],

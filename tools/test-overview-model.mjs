@@ -22,7 +22,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import {
   UI_MODES, OVERVIEW_STATUS, FRESH_WINDOW_MS,
   decideUiMode, orderServicesForOverview, pickOverviewService, journeyForService, journeyIsLive, boardComparison,
-  shortGradeLabel, verdictWordFor, runGradedPack, differenceCount, vantageShrank,
+  shortGradeLabel, verdictWordFor, runGradedPack, runGradesBoard, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
   START_IDLE, startChoose, startAdopted,
@@ -34,6 +34,7 @@ import {
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
+import { instrumentGradeFor, GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
 
 // ---------- fixtures ----------
 
@@ -1239,7 +1240,7 @@ test('gradeWhy, grade schema 3 (krystaline audit 2026-11-06): the scan\'s defaul
   const CHAOS = (n, source) => ({ id: `CHAOS-0${n}`, title: `pod-kill-${n}`, spec: { target: 'deployment/kx' }, ...(source ? { source } : {}) });
   // score NaN: the lines are read alone, not held to a letter (null would read as 0).
   const why = (pack, r = null) => gradeWhy({ diagnostic: computeOverviewDiagnostic(pack), run: r, letter: 'D', score: NaN, now: NOW }).why;
-  const line = (w, re) => w.find((x) => re.test(x.text)) || null;
+  const line = (w, re) => { const x = w.find((y) => re.test(y.text)); return x ? { ok: x.ok, text: x.text } : null; };
   const chaos = (w) => line(w, /chaos/i);
   const normal = (w) => line(w, /^Normal is/);
 
@@ -1269,7 +1270,7 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
   // computeOverviewDiagnostic grades on the real clock: the runs are dated from it.
   const ago = (days) => new Date(Date.now() - days * 86400e3).toISOString();
   const exp = (n, last_result, schedule = 'weekly') => ({ id: `CHAOS-0${n}`, title: `fault-${n}`, spec: { id: `fault-${n}`, target: 'deployment/kx', schedule, expected_alerts: ['KxDown'], expected_mttd: '3m', ...(last_result ? { last_result } : {}) } });
-  const chaos = (L5) => gradeWhy({ diagnostic: computeOverviewDiagnostic(layered(L5)), run: null, letter: 'D', score: NaN, now: NOW }).why.find((x) => /chaos|Recovery/i.test(x.text));
+  const chaos = (L5) => { const x = gradeWhy({ diagnostic: computeOverviewDiagnostic(layered(L5)), run: null, letter: 'D', score: NaN, now: NOW }).why.find((y) => /chaos|Recovery/i.test(y.text)); return x && { ok: x.ok, text: x.text }; };
   assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' })]), { ok: 'yes', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 1 chaos experiment passed a recent run (recorded in the repository).` });
   assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' }), exp(2)]), { ok: 'partly', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 2 chaos experiments passed a recent run (recorded in the repository).` }, 'one of two: partly');
   assert.deepEqual(chaos([exp(1, { at: ago(2), outcome: 'fail', alerts_fired: [] })]), { ok: 'no', text: `Chaos experiment fault-1 failed on ${ago(2).slice(0, 10)}: KxDown did not fire within 3m.` });
@@ -1284,6 +1285,202 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
     assert.equal(g.why.length, 7, `the list adds up to the letter (${diagnostic.overall.audit.scorePctExact}%)`);
   }
 });
+
+// ---------- criteria a service is not graded on ----------
+//
+// A service may switch grade criteria off (its record's gradeOff): the board
+// grades it over the others and says so. The promises at the bar make the
+// seven lines add up (3 + 0.85 + 1 of 7); with Chaos-validated off the same
+// lines are 4.85 of 6.
+const OFF = [{ key: 'chaos-validated', reason: 'No fault injection here', by: 'ada', at: '2026-11-10T09:00:00.000Z' }];
+const atBarRun = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
+const SIX_SCORE = 4.85 / 6 * 100;
+const offRun = { ...atBarRun, grade: { ...atBarRun.grade, score: SIX_SCORE, letter: instrumentGradeFor(SIX_SCORE).letter, letterLabel: instrumentGradeFor(SIX_SCORE).label, off: ['chaos-validated'] } };
+
+test('criteria a service is not graded on: each line names its criterion; the ones off leave the lines and the points and are listed with why, who and when; a run that graded on other criteria is not the letter', () => {
+  // Every line names its criterion — what the board's switch acts on.
+  const all = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBarRun, journey, now: NOW }));
+  assert.deepEqual(all.why.map((w) => w.key).sort(), [...GRADE_CRITERION_KEYS].sort());
+  assert.deepEqual(all.why.find((w) => w.key === 'chaos-validated'), { ok: 'no', text: 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.', key: 'chaos-validated', label: 'Chaos-validated' });
+  assert.ok(!('criteria' in all) && !('notGraded' in all) && !('switches' in all), 'nothing off: the model is what it was');
+
+  // Chaos-validated off, and a run that graded without it.
+  const six = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: offRun, journey, now: NOW, off: OFF }));
+  assert.deepEqual([six.letter, six.basis, six.criteria], [offRun.grade.letter, 'live', 'Graded on 6 of 7 criteria']);
+  assert.equal(six.why.length, 6);
+  assert.ok(!six.why.some((w) => w.key === 'chaos-validated'), 'the criterion left out is no reason for the letter');
+  assert.equal(six.points, '4.9 of 6 points. A starts above 5.1.', 'the points and the next band are over six');
+  assert.deepEqual(six.notGraded, [{ key: 'chaos-validated', label: 'Chaos-validated', text: 'Chaos-validated is not graded for this service: No fault injection here', by: 'ada, 10 Nov' }]);
+  // Bare keys (no record's reason): listed without one.
+  assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: offRun, letter: offRun.grade.letter, score: offRun.grade.score, now: NOW, off: ['chaos-validated'] }).notGraded,
+    [{ key: 'chaos-validated', label: 'Chaos-validated', text: 'Chaos-validated is not graded for this service.', by: '' }]);
+  // Two off: the engine's order, whatever the record's.
+  const two = gradeWhy({ diagnostic: diagnosticFull, run: null, letter: 'D', score: NaN, now: NOW, off: [{ key: 'fresh', reason: 'b' }, { key: 'calibrated', reason: 'a' }] });
+  assert.deepEqual([two.why.length, two.notGraded.map((x) => x.key), two.points.startsWith('2 of 5 points.')], [5, ['calibrated', 'fresh'], true]);
+  // What names no criterion, or every one, switches nothing off.
+  assert.ok(!('notGraded' in gradeWhy({ diagnostic: diagnosticFull, run: atBarRun, letter: 'B', score: 69, now: NOW, off: ['nope', 7, null] })));
+  assert.equal(gradeWhy({ diagnostic: diagnosticFull, run: atBarRun, letter: 'B', score: 69, now: NOW, off: GRADE_CRITERION_KEYS }).why.length, 7, 'all seven named: ignored whole, as the engine does');
+
+  // The run's letter is the board's only when it graded on the service's criteria.
+  assert.equal(runGradesBoard(offRun, krystalinePack, OFF), true);
+  assert.equal(runGradesBoard(offRun, krystalinePack, ['nope', 'chaos-validated']), true, 'by the criteria, not by how they are written');
+  assert.equal(runGradesBoard(offRun, krystalinePack), false, 'the run left one out that the service now grades');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack, OFF), false, 'the run graded one the service has switched off');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack), true);
+  const changed = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBarRun, journey, now: NOW, off: OFF }));
+  assert.deepEqual([changed.basis, changed.source, changed.criteria, changed.notGraded.length],
+    ['repository', 'Graded from the repository alone: the criteria graded here changed since the last live check. Check again to grade against live.', 'Graded on 6 of 7 criteria', 1]);
+  assert.equal(changed.letter, 'C', 'the pack-alone letter, never the run\'s');
+  assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: offRun, journey, now: NOW })).basis, 'repository', 'and the other way round');
+  // Expert is handed the run's live read by the same rule.
+  assert.deepEqual(boardComparison({ journey: keptJourney, run: offRun, catalog: [...packs, LIVE_ENTRY], pack: krystalinePack, off: OFF })?.packBId, LIVE_ENTRY.id);
+  assert.equal(boardComparison({ journey: keptJourney, run: offRun, catalog: [...packs, LIVE_ENTRY], pack: krystalinePack }), null);
+  // The pack-alone grade is computed with the same criteria off.
+  const layered = { id: 'kx', meta: { name: 'kx', annotations: {} }, layers: { L1: [{ id: 'SLO-01', title: 'kx_availability', spec: { objective: 0.999 } }], L2: [], L5: [{ id: 'BASE-01', title: 'MTTD / MTTR baselines' }] } };
+  const alone = computeOverviewDiagnostic(layered, null, { off: OFF });
+  assert.deepEqual([alone.overall.off, alone.overall.total, alone.trust.criteria.find((c) => c.key === 'chaos-validated').applies], [['chaos-validated'], 6, false]);
+  assert.deepEqual([computeOverviewDiagnostic(layered).overall.total, 'off' in computeOverviewDiagnostic(layered).overall], [7, false]);
+});
+
+test('the board switches a criterion: only where the host wires it; the ask in place and a reason required; the criteria off listed with a way back; a reader who may not switch is told why; the simple layout lists them and switches nothing', () => {
+  const withOff = services.map((x) => (x.id === 1 ? { ...x, gradeOff: OFF } : x));
+  const full = { diagnostic: diagnosticFull, run: atBarRun };
+  // Opt-in: a host that does not wire the switch draws none.
+  const plain = keep(board(full));
+  assert.ok(!('switches' in plain.grade));
+  const none = overviewContainer();
+  renderOverview(none, plain, { overview: {} });
+  assert.ok(!none.innerHTML.includes('ov-gw__switch') && !none.innerHTML.includes('ov-grade__criteria') && !none.innerHTML.includes('ov-gw-off__h'));
+
+  const on = keep(board({ ...full, gradeSwitches: true }));
+  assert.deepEqual(on.grade.switches, { enabled: true, reason: null });
+  const c = overviewContainer();
+  const calls = [];
+  const host = { overview: { setGradeCriterion: (...a) => calls.push(a), explain: (r) => calls.push(['explain', r]) } };
+  renderOverview(c, on, host);
+  assert.equal(countOf(c.innerHTML, 'data-ux-action="ov-grade-ask"'), 7, 'one switch a criterion');
+  assert.ok(c.innerHTML.includes('<button type="button" class="ov-gw__switch" data-ux-action="ov-grade-ask" data-key="chaos-validated" aria-label="Stop grading Chaos-validated for this service">Not for this service…</button>'));
+  assert.equal(countOf(c.innerHTML, 'og-btn--primary'), primariesOf(on), 'the switches add no primary button');
+  // The ask, in place: the reason is required.
+  c.click('ov-grade-ask', { key: 'chaos-validated' });
+  assert.ok(c.innerHTML.includes('<span class="ov-gw__ask-l">Why is Chaos-validated not graded for this service?</span><input class="og-input" data-grade-reason="chaos-validated" value="" maxlength="200"'));
+  assert.ok(c.innerHTML.includes('data-ux-action="ov-grade-off" data-key="chaos-validated">Stop grading it</button><button type="button" class="og-btn og-btn--text" data-ux-action="ov-grade-ask-cancel">Cancel</button>'));
+  assert.ok(/<details[^>]*class="[^"]*ov-grade__why[^"]*"[^>]*open/.test(c.innerHTML) || /ov-grade__why[^>]*open/.test(c.innerHTML), 'the reasons stay open for the ask');
+  c.click('ov-grade-off', { key: 'chaos-validated' });
+  assert.deepEqual(calls, [], 'no reason typed (the shim has no field): nothing is switched');
+  assert.ok(c.innerHTML.includes('data-grade-reason="chaos-validated"'), 'and the ask stays');
+  c.click('ov-grade-ask-cancel');
+  assert.ok(!c.innerHTML.includes('data-grade-reason'), 'Cancel puts it away');
+  // A reason typed: trimmed, handed to the host with the criterion.
+  c.click('ov-grade-ask', { key: 'chaos-validated' });
+  c.querySelector = (sel) => (sel === '[data-grade-reason]' ? { value: '  No fault injection here  ', dataset: { gradeReason: 'chaos-validated' }, addEventListener() {}, focus() {}, setAttribute() {} } : null);
+  c.click('ov-grade-off', { key: 'chaos-validated' });
+  assert.deepEqual(calls, [['chaos-validated', { graded: false, reason: 'No fault injection here' }]]);
+
+  // With one off: the note, the list, the way back.
+  const off = keep(board({ services: withOff, diagnostic: diagnosticFull, run: offRun, gradeSwitches: true }));
+  assert.deepEqual([off.grade.criteria, off.grade.notGraded.length, off.grade.why.length], ['Graded on 6 of 7 criteria', 1, 6]);
+  const c2 = overviewContainer();
+  renderOverview(c2, off, host);
+  const html = c2.innerHTML;
+  assert.ok(html.includes('<div class="ov-grade__criteria og-muted">Graded on 6 of 7 criteria</div>'));
+  assert.ok(html.includes('<span class="ov-status__part ov-status__part--criteria">on 6 of 7 criteria</span>'), 'the status strip says it beside the source');
+  assert.ok(html.includes('<p class="ov-gw-off__h og-muted">Not graded for this service</p>'));
+  assert.ok(html.includes('<span class="ov-gw__text">Chaos-validated is not graded for this service: No fault injection here <span class="ov-gw__by og-muted">ada, 10 Nov</span></span><button type="button" class="ov-gw__switch" data-ux-action="ov-grade-on" data-key="chaos-validated" aria-label="Grade Chaos-validated for this service again">Grade it again</button>'));
+  assert.equal(countOf(html, 'data-ux-action="ov-grade-ask"'), 6);
+  calls.length = 0;
+  c2.click('ov-grade-on', { key: 'chaos-validated' });
+  assert.deepEqual(calls, [['chaos-validated', { graded: true }]]);
+
+  // A reader who may not switch: the same words, explaining why when pressed.
+  const viewer = keep(board({ services: withOff, diagnostic: diagnosticFull, run: offRun, gradeSwitches: true, access: { canWrite: false, reason: 'needs the operator role in Acme — yours is viewer' } }));
+  assert.deepEqual(viewer.grade.switches, { enabled: false, reason: 'needs the operator role in Acme — yours is viewer' });
+  const c3 = overviewContainer();
+  renderOverview(c3, viewer, host);
+  assert.ok(!c3.innerHTML.includes('data-ux-action="ov-grade-ask"') && !c3.innerHTML.includes('data-ux-action="ov-grade-on"'));
+  assert.ok(c3.innerHTML.includes('data-ux-action="ov-explain" aria-disabled="true" data-reason="needs the operator role in Acme — yours is viewer" title="needs the operator role in Acme — yours is viewer" aria-label="Grade Chaos-validated for this service again">Grade it again</button>'));
+  // The simple layout: what is off is listed, nothing is switched there.
+  const simple = keep(screen({ services: withOff, diagnostic: diagnosticFull, run: offRun, gradeSwitches: true }));
+  const c4 = overviewContainer();
+  renderOverview(c4, simple, host);
+  assert.ok(c4.innerHTML.includes('Graded on 6 of 7 criteria') && c4.innerHTML.includes('Not graded for this service') && !c4.innerHTML.includes('ov-gw__switch'));
+  // No service with a pack of its own: no switch to offer.
+  assert.ok(!('switches' in (screen({ serviceId: 999, gradeSwitches: true, pending: true }).grade || {})));
+});
+
+test('the service list names a letter over fewer criteria where it names the grade, and one graded before the service\'s criteria changed', () => {
+  const lastRun = { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 };
+  const offOf = (keys) => keys.map((key) => ({ key, reason: 'r', by: 'ada', at: '2026-11-10T09:00:00.000Z' }));
+  const rowOf = (over, serviceOff = over.gradeOff || []) => serviceListModel({ services: [svcRow({ gradeOff: offOf(serviceOff.filter((k) => k !== 'nope')) })], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, ...over })], endpoints: [EP], now: NOW }).rows[0];
+  assert.equal(rowOf({}).last.gradeLabel, 'Diagnostic grade');
+  assert.equal(rowOf({ gradeOff: [] }).last.gradeLabel, 'Diagnostic grade');
+  assert.equal(rowOf({ gradeOff: ['chaos-validated'] }).last.gradeLabel, 'Diagnostic grade · on 6 of 7 criteria');
+  assert.equal(rowOf({ gradeOff: ['chaos-validated', 'calibrated', 'nope'] }).last.gradeLabel, 'Diagnostic grade · on 5 of 7 criteria');
+  // The letter of a run graded on other criteria than the service's now: said, both ways.
+  assert.equal(rowOf({}, ['chaos-validated']).last.gradeLabel, "Diagnostic grade · graded before this service's criteria changed");
+  assert.equal(rowOf({ gradeOff: ['chaos-validated'] }, []).last.gradeLabel, "Diagnostic grade · on 6 of 7 criteria · graded before this service's criteria changed");
+  assert.equal(serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, lastRun)], endpoints: [EP], now: NOW }).rows[0].last.gradeLabel, 'Diagnostic grade', 'a record of no switches and a run of none: as before');
+  const c = overviewContainer();
+  renderServiceList(c, serviceListModel({ services: [svcRow({ gradeOff: offOf(['chaos-validated']) })], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, gradeOff: ['chaos-validated'] })], endpoints: [EP], now: NOW }), formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c.innerHTML.includes('aria-label="Grade A" title="Diagnostic grade · on 6 of 7 criteria">A</span>'));
+});
+
+test('the board\'s switch where the reasons are not offered: the criteria graded, by name, each with its switch; a recording\'s source line does not say to check against live; a reason being typed keeps its focus and caret through a repaint', () => {
+  const withOff = services.map((x) => (x.id === 1 ? { ...x, gradeOff: OFF } : x));
+  // A run whose drift was scored on the diff buckets: the reasons are withheld, the switches are not.
+  const bucketRun = { ...atBarRun, grade: { ...atBarRun.grade, driftConstruct: 'diff-buckets' } };
+  const m = keep(board({ diagnostic: diagnosticFull, run: bucketRun, gradeSwitches: true }));
+  assert.deepEqual([m.grade.why.length, m.grade.graded.map((x) => x.key)], [0, GRADE_CRITERION_KEYS]);
+  const c = overviewContainer();
+  const calls = [];
+  renderOverview(c, m, { overview: { setGradeCriterion: (...a) => calls.push(a) } });
+  assert.ok(c.innerHTML.includes('The criteria graded'), 'the disclosure says what it holds');
+  assert.ok(c.innerHTML.includes('<p class="ov-gw-off__h og-muted">Graded for this service</p><ul class="ov-gw-list ov-gw-list--plain ov-gw-list--open"><li class="ov-gw ov-gw--plain"><span class="ov-gw__text">Multi-modal</span><button type="button" class="ov-gw__switch" data-ux-action="ov-grade-ask" data-key="multi-modal" aria-label="Stop grading Multi-modal for this service">Not for this service…</button></li>'));
+  assert.equal(countOf(c.innerHTML, 'data-ux-action="ov-grade-ask"'), 7);
+  c.click('ov-grade-ask', { key: 'chaos-validated' });
+  assert.ok(c.innerHTML.includes('Why is Chaos-validated not graded for this service?'), 'the ask, in place, as on a reason');
+  c.click('ov-grade-ask-cancel');
+  // One off, the reasons withheld: six by name, the one off below with its way back.
+  const m6 = keep(board({ services: withOff, diagnostic: diagnosticFull, run: { ...offRun, grade: { ...offRun.grade, driftConstruct: 'diff-buckets' } }, gradeSwitches: true }));
+  assert.deepEqual([m6.grade.graded.length, m6.grade.notGraded.length], [6, 1]);
+  // Without the switch wired, nothing new is drawn when the reasons are withheld.
+  const plain = overviewContainer();
+  renderOverview(plain, keep(board({ diagnostic: diagnosticFull, run: bucketRun })), { overview: {} });
+  assert.ok(!plain.innerHTML.includes('ov-gw-list--plain') && !plain.innerHTML.includes('The criteria graded'));
+
+  // A recording: the criteria changed, and there is no check against live to ask for.
+  const rec = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBarRun, journey: fileJourney, now: NOW, off: OFF }));
+  assert.equal(rec.source, 'Graded from the repository alone: the criteria graded here changed since the last check.');
+
+  // The reason being typed: a repaint keeps its focus and caret. The shim's page answers with the
+  // field as it was before a draw replaces the markup, and with the new one after.
+  const field = (over = {}) => ({ value: '', dataset: { gradeReason: 'chaos-validated' }, addEventListener() {}, setAttribute() {}, focus(o) { this.focused = o; }, setSelectionRange(a, b) { this.range = [a, b]; }, ...over });
+  const pageOf = () => {
+    const page = overviewContainer();
+    let html = '';
+    const state = { before: null, after: null, swapped: false };
+    Object.defineProperty(page, 'innerHTML', { get: () => html, set: (v) => { html = v; state.swapped = true; }, configurable: true });
+    page.querySelector = (sel) => (sel === '[data-grade-reason]' ? (state.swapped ? state.after : state.before) : null);
+    const draw = (model, before, after) => { Object.assign(state, { before, after, swapped: false }); renderOverview(page, model, host); };
+    return { page, draw };
+  };
+  const host = { overview: { setGradeCriterion() {} } };
+  const doc = {};
+  const { page, draw } = pageOf();
+  draw(m, null, null);
+  page.click('ov-grade-ask', { key: 'chaos-validated' });
+  const typed = field({ value: 'No fault', selectionStart: 3, selectionEnd: 5, ownerDocument: doc });
+  doc.activeElement = typed;
+  const again = field();
+  draw(m, typed, again);
+  assert.deepEqual([again.focused, again.range], [{ preventScroll: true }, [3, 5]], 'the new field takes the focus and the caret');
+  // Not focused before the repaint: the new field takes nothing.
+  doc.activeElement = null;
+  const idle = field();
+  draw(m, field({ ownerDocument: doc }), idle);
+  assert.deepEqual([idle.focused, idle.range], [undefined, undefined]);
+});
+
 
 // ---------- the service list: Overview's front door ----------
 

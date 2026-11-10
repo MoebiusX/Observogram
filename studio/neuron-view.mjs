@@ -52,6 +52,10 @@ import { state } from './state.mjs';
 import { api, getActiveOrg } from './api.mjs';
 import { escapeHtml, toast, packSourceHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
+
+// A score over fewer than the seven criteria (the run record's grade.off: the
+// ones the service had switched off at that run) says so where it is named.
+const overCriteria = (off) => (Array.isArray(off) && off.length && off.length < 7 ? ` on ${7 - off.length} of 7 criteria` : '');
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
   notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing,
@@ -498,7 +502,7 @@ function evidenceLine(d, c) {
   const ch = last.chains;
   const facts = [
     last.drift ? `alignment ${last.drift.alignmentPct}%` : null,
-    last.grade ? `grade ${last.grade.score}%${last.grade.letter ? ` (${last.grade.letter})` : ''}` : null,
+    last.grade ? `grade ${last.grade.score}%${last.grade.letter ? ` (${last.grade.letter})` : ''}${overCriteria(last.grade.off)}` : null,
     ch && ch.declaredTotal ? `${ch.intact ?? 0} of ${ch.declaredTotal} requirement chains intact` : null,
   ].filter(Boolean).map(escapeHtml).join(' · ');
   if (c.outcome === 'gate-failed') {
@@ -810,7 +814,7 @@ function renderFocus(d, charts, stackLib, schedLib, trend, fleetReady) {
     <div class="nrn-focus-head">
       <span class="journey-name">${escapeHtml(d.name)}</span>
       ${outcomeChipHtml(last ? last.outcome : 'never-run')}
-      ${last ? `<span class="journey-outcome">${last.drift ? `alignment ${last.drift.alignmentPct}% · grade ${last.grade?.score ?? '?'}%${last.grade?.letter ? ` (${escapeHtml(last.grade.letter)})` : ''} · ` : ''}${escapeHtml(agoText(Date.now() - Date.parse(last.startedAt || '')))}</span>` : ''}
+      ${last ? `<span class="journey-outcome">${last.drift ? `alignment ${last.drift.alignmentPct}% · grade ${last.grade?.score ?? '?'}%${last.grade?.letter ? ` (${escapeHtml(last.grade.letter)})` : ''}${overCriteria(last.grade?.off)} · ` : ''}${escapeHtml(agoText(Date.now() - Date.parse(last.startedAt || '')))}</span>` : ''}
       <button type="button" class="ctrl-btn nrn-run-focus" data-journey="${escapeHtml(d.name)}">▶ run now</button>
     </div>
     <div class="journey-card-meta">

@@ -29,7 +29,7 @@
 // module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER } from './diagnostic-grade.mjs';
+import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys } from './diagnostic-grade.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
@@ -151,11 +151,11 @@ export function journeyIsLive(journey) {
 // grades the repository alone then, and so does Expert), a recording, a
 // listing without the field — and Expert opens on the repository alone, as
 // before: a host whose server keeps no live pack is unchanged.
-export function boardComparison({ journey = null, run = null, catalog = [], pack = null } = {}) {
+export function boardComparison({ journey = null, run = null, catalog = [], pack = null, off = [] } = {}) {
   const kept = journey?.livePack;
   const read = run?.packB?.refreshedAt;
   if (!kept || typeof kept.id !== 'string' || !kept.id || !read || kept.refreshedAt !== read) return null;
-  if (!runGradesBoard(run, pack)) return null;
+  if (!runGradesBoard(run, pack, off)) return null;
   if (!(Array.isArray(catalog) ? catalog : []).some((p) => p && p.id === kept.id && p.ok !== false)) return null;
   return { packBId: kept.id, envB: null, label: typeof kept.label === 'string' && kept.label ? kept.label : null };
 }
@@ -211,9 +211,13 @@ export function verdictWordFor(scorePct) {
 // or gate-failed) with a letter, graded this pack, and its live side did not
 // shrink since the check before (vantageShrank). gradeModel letters by it;
 // boardComparison hands Expert the run's live read only by it.
-export function runGradesBoard(run, pack) {
-  return !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter
-    && !vantageShrank(run).length && runGradedPack(run, pack);
+// `off`: the criteria the service is not graded on (its record's gradeOff).
+// A run that graded on other criteria (its grade.off) scored something else:
+// it is not the board's letter until the next check.
+const offKey = (off) => gradeOffKeys(off).join(',');
+const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
+export function runGradesBoard(run, pack, off = []) {
+  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && offKey(run.grade?.off) === offKey(off);
 }
 
 export function runGradedPack(run, pack) {
@@ -235,8 +239,12 @@ export function runGradedPack(run, pack) {
 // list is offered only when it adds up to the letter shown (within two
 // points of a hundred): a run of another schema, or a pack whose own
 // annotations already carry live evidence, explains nothing and shows nothing.
-const GRADE_POINTS = 7;
 const GRADE_SCHEMA = 4;
+// The lines' criteria, in the order the two builders below return them.
+const REPOSITORY_LINE_KEYS = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
+const LIVE_LINE_KEYS = ['drift-free', 'fresh'];
+const CRITERION_LABEL = Object.fromEntries(GRADE_CRITERIA.map((c) => [c.key, c.label]));
+const keyed = (keys) => (line, i) => ({ ...line, key: keys[i], label: CRITERION_LABEL[keys[i]] || keys[i] });
 const GRADE_BAR = 85;
 const WHY_RANK = { yes: 0, partly: 1, no: 2 };
 const criterionOf = (diagnostic, key) => [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].find((c) => c && c.key === key) || null;
@@ -354,20 +362,41 @@ const gradePoints = (lines) => lines.reduce((n, l) => n + (typeof l.score === 'n
 
 // "4.8 of 7 points. B+ starts at 5.3." — the next band up in points, so the
 // distance to the next letter is one subtraction.
-function pointsText(points, letter) {
+// `of`: the criteria graded — seven, or fewer when the service switched some off.
+function pointsText(points, letter, of) {
   const bands = INSTRUMENT_GRADE_SCALE.filter((g) => g.minPct !== null).reverse();
   const i = bands.findIndex((g) => g.letter === letter);
   const next = i >= 0 ? bands[i + 1] : null;
-  const head = `${tenth(points)} of ${GRADE_POINTS} points.`;
+  const head = `${tenth(points)} of ${of} points.`;
   if (!next) return head;
-  return `${head} ${next.letter} starts ${next.exclusiveMin ? 'above' : 'at'} ${tenth(next.minPct / 100 * GRADE_POINTS)}.`;
+  return `${head} ${next.letter} starts ${next.exclusiveMin ? 'above' : 'at'} ${tenth(next.minPct / 100 * of)}.`;
 }
 
-// gradeWhy({ diagnostic, run, letter, score, against, where, now }) → { why, points }
-//   why     [{ ok: 'yes' | 'partly' | 'no', text }] — seven lines, or none
-//   points  "4.8 of 7 points. B+ starts at 5.3." — or ''
-export function gradeWhy({ diagnostic = null, run = null, letter = '', score = null, against = 'against live', where = 'live', now = Date.now() } = {}) {
-  const none = { why: [], points: '' };
+// The criteria a service is not graded on, as the board lists them under the
+// reasons: the criterion, why (the reason on the record), who switched it off
+// and when. `off` is the service record's gradeOff ([{ key, reason, by, at }]);
+// bare keys are listed without a reason.
+function notGradedLines(off) {
+  const entries = new Map((Array.isArray(off) ? off : []).filter((x) => x && typeof x === 'object').map((x) => [x.key, x]));
+  return gradeOffKeys(off).map((key) => {
+    const e = entries.get(key) || {};
+    const label = CRITERION_LABEL[key] || key;
+    const reason = typeof e.reason === 'string' ? e.reason.trim() : '';
+    const by = [typeof e.by === 'string' ? e.by : '', dayMonth(e.at)].filter(Boolean).join(', ');
+    return { key, label, text: `${label} is not graded for this service${reason ? `: ${reason}` : '.'}`, by };
+  });
+}
+
+// gradeWhy({ diagnostic, run, letter, score, against, where, now, off }) → { why, points, notGraded? }
+//   why     [{ ok: 'yes' | 'partly' | 'no', text, key, label }] — one line per criterion graded, or none
+//   points  "4.8 of 7 points. B+ starts at 5.3." — or ''; "of 6" when one is off
+//   off     the criteria the service is not graded on (its record's gradeOff): they leave the
+//           lines and the points, and are listed as `notGraded` ([{ key, label, text, by }],
+//           absent when none is off) — also when the lines themselves are not offered
+export function gradeWhy({ diagnostic = null, run = null, letter = '', score = null, against = 'against live', where = 'live', now = Date.now(), off = [] } = {}) {
+  const offKeys = gradeOffKeys(off);
+  const left = offKeys.length ? { notGraded: notGradedLines(off) } : {};
+  const none = { why: [], points: '', ...left };
   if (run && run.grade?.schema != null && Number(run.grade.schema) !== GRADE_SCHEMA) return none;
   if (diagnostic?.gradeSchema != null && Number(diagnostic.gradeSchema) !== GRADE_SCHEMA) return none;
   const fixed = repositoryGradeLines(diagnostic, Array.isArray(run?.packB?.unobserved) ? run.packB.unobserved : []);
@@ -377,12 +406,12 @@ export function gradeWhy({ diagnostic = null, run = null, letter = '', score = n
     { ok: 'no', text: 'Never checked against live.' },
   ];
   if (!live) return none;
-  const lines = [...fixed, ...live];
+  const lines = [...fixed.map(keyed(REPOSITORY_LINE_KEYS)), ...live.map(keyed(LIVE_LINE_KEYS))].filter((l) => !offKeys.includes(l.key));
   const points = gradePoints(lines);
   const pct = Number(score);
-  if (Number.isFinite(pct) && Math.abs(points / GRADE_POINTS * 100 - pct) > 2) return none;
-  const why = lines.slice().sort((a, b) => WHY_RANK[a.ok] - WHY_RANK[b.ok]).map(({ ok, text }) => ({ ok, text }));
-  return { why, points: pointsText(points, letter) };
+  if (Number.isFinite(pct) && Math.abs(points / lines.length * 100 - pct) > 2) return none;
+  const why = lines.slice().sort((a, b) => WHY_RANK[a.ok] - WHY_RANK[b.ok]).map(({ ok, text, key, label }) => ({ ok, text, key, label }));
+  return { why, points: pointsText(points, letter, lines.length), ...left };
 }
 
 const toneForLetter = (letter) => {
@@ -394,14 +423,21 @@ const toneForLetter = (letter) => {
   return 'neutral';
 };
 
-// gradeModel({ pack, how, diagnostic, diagnosticError, run, journey, now })
+// gradeModel({ pack, how, diagnostic, diagnosticError, run, journey, now, off })
 //   diagnostic   computeDiagnosticGrade(packA alone)  — the repository's own grade
 //   run          the journey's newest run record      — the same engine against live
+//   off          the criteria the service is not graded on (its record's gradeOff; the
+//                host computes `diagnostic` with the same). The letter is then over the
+//                others: `criteria` says "Graded on 6 of 7 criteria" (absent when none is
+//                off), `notGraded` lists them. A run that graded on other criteria is not
+//                the letter: the repository alone is, and the source line says to check again.
 // The run's letter wins when the run graded this pack and could see the live
 // side (outcome pass or gate-failed); otherwise the pack-alone grade, and the
 // source line says which. A live recording as Pack B is graded "against a
 // recording", never "against live".
-export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now() } = {}) {
+export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now(), off = [] } = {}) {
+  const offCount = gradeOffKeys(off).length;
+  const criteria = offCount ? { criteria: `Graded on ${GRADE_CRITERIA.length - offCount} of ${GRADE_CRITERIA.length} criteria` } : {};
   if (!pack || how === 'none') {
     return { letter: '–', label: 'No pack yet', word: 'Nothing to grade: no pack is registered for this service.', source: '', tone: 'neutral', title: '', basis: 'none', why: [], points: '' };
   }
@@ -411,7 +447,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // A run that saw less of the live side than the check before graded a
   // smaller picture: not usable as the letter, and the source line says so.
   const shrank = vantageShrank(run);
-  if (runGradesBoard(run, pack)) {
+  if (runGradesBoard(run, pack, off)) {
     const ig = instrumentGradeFor(Number(run.grade.score)) || { letter: run.grade.letter, label: run.grade.letterLabel || '', blurb: '' };
     const letter = run.grade.letter;
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
@@ -422,7 +458,8 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
       source: `Graded ${against}, ${agoText(run.startedAt, now)}.`,
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
-      ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now }),
+      ...criteria,
+      ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now, off }),
     };
   }
   if (diagnosticError) {
@@ -434,14 +471,21 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   const ig = diagnostic.overall.instrumentGrade || instrumentGradeFor(diagnostic.overall.audit?.scorePctExact ?? 0);
   const lost = run && run.outcome === 'vantage-lost' && runGradedPack(run, pack);
   const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
+  // The last live check graded this pack, on other criteria than the service's now.
+  const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && offKey(run.grade?.off) !== offKey(off);
+  // A check that reads a recording is not checked again from here: the line does not say to.
+  const liveCheck = journey ? journeyIsLive(journey) : /^mcp:/i.test(String(run?.packB?.source || ''));
   return {
     letter: ig.letter, label: shortGradeLabel(ig), word: diagnostic.overall.verdict?.word || verdictWordFor(diagnostic.overall.audit?.scorePctExact),
     source: lost ? 'Graded from the repository alone; the last live check could not see production.'
       : partial ? 'Graded from the repository alone; the last live check saw only part of production.'
-        : 'Graded from the repository alone.',
+        : regraded ? (liveCheck ? 'Graded from the repository alone: the criteria graded here changed since the last live check. Check again to grade against live.'
+          : 'Graded from the repository alone: the criteria graded here changed since the last check.')
+          : 'Graded from the repository alone.',
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
-    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now }),
+    ...criteria,
+    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off }),
   };
 }
 
@@ -939,7 +983,7 @@ export function buildOverviewModel(input = {}) {
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
     layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
-    listable = false,
+    listable = false, gradeSwitches = false,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -971,7 +1015,19 @@ export function buildOverviewModel(input = {}) {
     } : blank;
   }
   const journey = journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null });
-  const grade = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now });
+  // The criteria this service is not graded on (its record's gradeOff). `gradeSwitches`: the host
+  // wires the switch (setGradeCriterion); without it the board lists what is off and offers no switch.
+  const off = Array.isArray(picked.service.gradeOff) ? picked.service.gradeOff : [];
+  const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off });
+  const canSwitch = gradeSwitches === true && picked.how === 'primary' && !pending;
+  // `graded`: the criteria the service is graded on, by name — where the reasons are not offered
+  // (they would not add up to the letter), the board lists these so each can still be switched.
+  const offKeys = gradeOffKeys(off);
+  const grade = canSwitch ? {
+    ...graded0,
+    switches: { enabled: access?.canWrite !== false, reason: access?.canWrite !== false ? null : (access?.reason || 'Not available for your role here.') },
+    graded: GRADE_CRITERIA.filter((c) => !offKeys.includes(c.key)).map((c) => ({ key: c.key, label: c.label })),
+  } : graded0;
   const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending });
   // A service with no pack at all has nothing to grade: the drift check
   // starts here, as with no service, under the service's own header — the
@@ -1001,7 +1057,7 @@ export function buildOverviewModel(input = {}) {
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
     // What the columns' "Open in …" carry to the host: the comparison the
     // board graded (boardComparison), null while nothing graded it.
-    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack }) : null,
+    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off }) : null,
     grade, still, next, primary, productName, layout, board,
     ...(startHere ? { start: { a: null }, sources: sourcesOf(access) } : {}),
   };
@@ -1067,7 +1123,8 @@ export function repositoryLine(repository, { now = Date.now() } = {}) {
 // unreachable (the live side did not answer), or checked — the grade letter
 // the score earns and how much matches live (numbers; the renderer writes
 // the sign).
-function lastCheckOf(journey, now) {
+// `off`: the criteria the service is not graded on now (its record's gradeOff).
+function lastCheckOf(journey, now, off = []) {
   const last = journey?.lastRun || null;
   if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
   const ago = agoText(last.startedAt, now);
@@ -1076,9 +1133,14 @@ function lastCheckOf(journey, now) {
   }
   const score = Number.isFinite(last.gradeScore) ? last.gradeScore : null;
   const ig = score === null ? null : instrumentGradeFor(score);
+  // A letter over fewer criteria (the service's switches at that run) says so where it is named.
+  const offCount = gradeOffKeys(last.gradeOff).length;
+  const over = ig && offCount ? ` · on ${GRADE_CRITERIA.length - offCount} of ${GRADE_CRITERIA.length} criteria` : '';
+  // A letter graded on other criteria than the service's now says so: the board grades it again.
+  const before = ig && offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed" : '';
   return {
     state: 'checked', word: ago ? `Checked ${ago}` : 'Checked', ago,
-    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? shortGradeLabel(ig) : '',
+    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${before}` : '',
     alignmentPct: Number.isFinite(last.alignmentPct) ? last.alignmentPct : null,
     gate: last.outcome === 'pass' ? 'pass' : (last.outcome === 'gate-failed' ? 'fail' : null),
   };
@@ -1148,7 +1210,7 @@ export function serviceListModel(input = {}) {
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
-        : lastCheckOf(journey, now);
+        : lastCheckOf(journey, now, s.gradeOff);
       const busy = !!running[key];
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;

@@ -231,6 +231,7 @@ buildOverviewModel({
   unkinded,                                     // computePostureMatrix(layered).unkinded (optional: below)
   access, start, startable,                     // the reader's rank ({ canWrite, reason }); the start's state; true when you run the start (below)
   listable,                                     // true when you draw the service list as the front door (below): the header links back
+  gradeSwitches,                                // true when you wire setGradeCriterion (below): the board offers a switch on each criterion
   now, productName,
 });
 ```
@@ -265,8 +266,37 @@ host.overview = {
   scan(), live(), upload(slot), resetStart(),   // the start's ways in (below): your repo scan, your live draft, your upload into 'a' or 'b'; Change Pack A
   explain(reason),                              // a start card the reader's rank cannot use, activated
   backToList(),                                 // ← Services, with `listable` (the service list: below)
+  setGradeCriterion(key, { graded, reason }),   // with `gradeSwitches`: a criterion off (graded: false, a reason) or on again for the service on the board
 };
 ```
+
+**Criteria a service is not graded on.** A service record may carry
+`gradeOff: [{ key, reason, by, at }]` (README, *Criteria a service is not
+graded on*), and the engine takes the same as `opts.off`:
+`computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, { off })` —
+keys, or objects with a `key` (`gradeOffKeys` normalises; `GRADE_CRITERIA`
+and `GRADE_CRITERION_KEYS` are the vocabulary). A criterion left out is
+still computed and listed, marked `applies: false` and `informational: true`
+(a renderer that already draws Operability's row as shown-not-scored draws it
+the same way), and leaves the sums and the totals; `overall.off` names what
+was left out. Without `off` the output is byte for byte what it was. The
+board needs nothing from you to honour the switches: `buildOverviewModel`
+reads them from the picked service's row and hands them to `gradeModel`,
+`gradeWhy` and `boardComparison` (`off`). Two things are yours: compute the
+pack-alone grade with them — `computeOverviewDiagnostic(layered, posture,
+{ off: service.gradeOff })` — and, to let the reader switch, pass
+`gradeSwitches: true` and implement `setGradeCriterion`: send the service's
+whole list (`PATCH /api/services/:id { gradeOff: [{ key, reason }] }`), read
+the services again, repaint, and run a check, because a run record that
+graded on other criteria (`grade.off`) is not the board's letter
+(`runGradesBoard(run, pack, off)`). Build the list from the record as the
+server has it then (`loadService(id)`), not your copy, and send one switch at a
+time. Where `gradeWhy` offers no lines, the model's `grade.graded` lists the
+criteria graded by name and the board draws each with its switch. Without
+`gradeSwitches` the board lists what is off and offers no switch. Expert's verdict takes the same keys:
+`buildVerdictModel({ …, gradeOff })` and `projectGrade(uids, { …, gradeOff })`.
+The studio's wiring is `setOverviewGradeCriterion` and `gradeOffInFocus` in
+`studio/app.mjs`.
 
 A hook a host does not supply is a no-op (the view calls them optionally).
 

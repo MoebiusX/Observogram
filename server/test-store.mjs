@@ -535,6 +535,38 @@ test('a real v1 file migrates to v3: the verdicts and waivers tables with their 
   }
 });
 
+// The criteria a service is not graded on take no schema step: they sit in
+// schema_meta beside the service's row (server/store/services.mjs), so a
+// store any earlier build wrote opens as it is, and stays at the version it
+// was — every build before and after opens the same database.
+test('the criteria a service is not graded on take no schema step: the store stays at v3, the list sits in schema_meta under grade_off:<org>:<id>, services has no column for it, and a database at v3 opens with nothing applied', async () => {
+  assert.equal(SCHEMA_VERSION, 3, 'no step after the repository\'s');
+  assert.deepEqual(STEPS.map((x) => x.name), ['schema v1', 'gap-batch-2', 'service-repository']);
+  const { db, close } = await freshStore('grade-off-no-step');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const off = [{ key: 'chaos-validated', reason: 'no fault injection here', by: 'alice', at: '2026-11-10T09:00:00.000Z' }];
+    const svc = runWithOrg('acme', () => {
+      const created = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      services.updateService(db, 'alice', created.id, { gradeOff: off });
+      return created;
+    });
+    assert.equal(userVersion(db), 3);
+    assert.ok(!pragma(db, 'table_info(services)').some((c) => c.name === 'grade_off'), 'services has no column for it');
+    assert.deepEqual(prepare(db, "SELECT key, value FROM schema_meta WHERE key LIKE 'grade_off:%'").all().map((r) => [r.key, JSON.parse(r.value)]),
+      [[`grade_off:acme:${svc.id}`, off]], 'one key, the service\'s, holding the list');
+    assert.equal(services.gradeOffKey('acme', svc.id), `grade_off:acme:${svc.id}`);
+  } finally {
+    close();
+  }
+  // A database at v3 (what every store build since 0.6.2 writes) opens with nothing applied.
+  const path = join(tempDir('v3-open'), 'observogram.db');
+  const raw = await openRaw(path);
+  assert.deepEqual(runMigrations(raw), { from: 0, to: 3, applied: [1, 2, 3] });
+  assert.deepEqual(runMigrations(raw), { from: 3, to: 3, applied: [] });
+  raw.close();
+});
+
 test('a database from a newer build is refused, not migrated', async () => {
   const path = join(tempDir(), 'newer.db');
   const db = await v1WithChildren(path);
@@ -1362,6 +1394,96 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
       'mcp_endpoint.create', 'service.create', 'service.update', 'environment.create', 'environment.update', 'mcp_endpoint.delete',
       'pack.register', 'pack.link', 'service.create', 'pack.link', 'pack.unlink', 'service.delete', 'pack.remove',
     ]);
+  } finally {
+    close();
+  }
+});
+
+// The criteria a service is not graded on (schema_meta grade_off:<org>:<id>,
+// no schema step): the repository keeps the list the admin module hands it,
+// whole, as JSON — no key for none — and its service.update row names the
+// keys now off.
+test('services.gradeOff: [] on a new record (no key); updateService round-trips the list as written under grade_off:<org>:<id>, [] deletes the key and reads back []; a deleted service takes its key with it, and a new service of a reused id starts with none; the service.update row names the keys now off, only when the patch carries the field; what is not a list of { key, … } is a TypeError and no write; another org changes none of it', async () => {
+  const { db, close } = await freshStore('grade-off');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    // The stored value: the schema_meta key's, or null when there is none.
+    const column = (id, org = 'acme') => prepare(db, 'SELECT value FROM schema_meta WHERE key = ?').get(`grade_off:${org}:${id}`)?.value ?? null;
+    const updates = () => auditRepo.listAudit(db, { orgId: 'acme', action: 'service.update', limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    const off = [
+      { key: 'chaos-validated', reason: 'no fault injection on this project', by: 'alice', at: '2026-11-10T09:00:00.000Z' },
+      { key: 'fresh', reason: 'read by hand each quarter — "as agreed"', by: 'bob', at: '2026-11-10T09:05:00.000Z' },
+    ];
+    const acme = runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments', tier: 'tier-1' });
+      assert.deepEqual(svc.gradeOff, [], 'a new record is graded on every criterion');
+      assert.equal(column(svc.id), null, 'and no key');
+      assert.deepEqual(Object.keys(svc), ['id', 'orgId', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'createdAt', 'updatedAt']);
+
+      // The list round-trips as written, through every read.
+      const up = services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      assert.deepEqual(up.gradeOff, off);
+      assert.equal(column(svc.id), JSON.stringify(off), 'the key holds the list as JSON');
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, off);
+      assert.deepEqual(services.getServiceBySlug(db, 'pay').gradeOff, off);
+      assert.deepEqual(services.listServices(db).map((s) => [s.slug, s.gradeOff]), [['pay', off]]);
+      assert.deepEqual([up.slug, up.name, up.owners, up.tier, up.description, up.repository, up.createdAt], ['pay', 'Payments', [], 'tier-1', null, null, svc.createdAt], 'nothing else of the record moved');
+      assert.deepEqual(updates(), [['alice', 'service', 'pay', { fields: ['gradeOff'], gradeOff: ['chaos-validated', 'fresh'] }]], 'the row names the field and the keys now off — never a reason');
+
+      // A patch without the field keeps the list, and its row says nothing of it.
+      const renamed = services.updateService(db, 'alice', svc.id, { name: 'Pay' });
+      assert.deepEqual([renamed.name, renamed.gradeOff], ['Pay', off]);
+      assert.deepEqual(updates().at(-1), ['alice', 'service', 'pay', { fields: ['name'] }]);
+      // With another field: both in `fields`, in the repository's order, and the keys.
+      const both = services.updateService(db, 'bob', svc.id, { gradeOff: off.slice(0, 1), tier: 'tier-2' });
+      assert.deepEqual([both.tier, both.gradeOff], ['tier-2', off.slice(0, 1)]);
+      assert.deepEqual(updates().at(-1), ['bob', 'service', 'pay', { fields: ['tier', 'gradeOff'], gradeOff: ['chaos-validated'] }]);
+
+      // [] switches everything back on: no key, [] on the record, and the row says none is off.
+      const cleared = services.updateService(db, 'alice', svc.id, { gradeOff: [] });
+      assert.deepEqual(cleared.gradeOff, []);
+      assert.equal(column(svc.id), null, '[] deletes the key, never stores "[]"');
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, []);
+      assert.deepEqual(updates().at(-1), ['alice', 'service', 'pay', { fields: ['gradeOff'], gradeOff: [] }]);
+
+      // What is not a list of objects with a string key: a TypeError before any write.
+      services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      const rows = updates().length;
+      for (const bad of [null, 'chaos-validated', { key: 'fresh' }, ['fresh'], [null], [[]], [{ reason: 'no key' }], [{ key: 7, reason: 'x' }], [off[0], 'fresh']]) {
+        assert.throws(() => services.updateService(db, 'alice', svc.id, { gradeOff: bad, name: 'Never' }),
+          { name: 'TypeError', message: 'observogram store: gradeOff is an array of { key, reason, by, at }' }, JSON.stringify(bad));
+      }
+      assert.deepEqual([column(svc.id), services.getService(db, svc.id).name, updates().length], [JSON.stringify(off), 'Pay', rows], 'a refused patch wrote nothing — not its other field, not a row');
+      // A key holding anything else was not written by this code: damage, named.
+      prepare(db, 'UPDATE schema_meta SET value = ? WHERE key = ?').run('{"key":"fresh"}', `grade_off:acme:${svc.id}`);
+      assert.throws(() => services.getService(db, svc.id), { message: `observogram store: schema_meta grade_off:acme:${svc.id} is not a list of grade criteria` });
+      services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, off, 'and a write sets it right');
+      // An update that only switches criteria still moves updated_at.
+      const stamped = services.getService(db, svc.id).updatedAt;
+      assert.ok(stamped >= both.updatedAt);
+      return svc;
+    });
+    runWithOrg('bravo', () => {
+      assert.throws(() => services.updateService(db, 'bob', acme.id, { gradeOff: [] }), /no service/);
+      const own = services.createService(db, 'bob', { slug: 'pay', name: 'Bravo pay' });
+      assert.deepEqual(own.gradeOff, [], 'the same slug in another org has its own switches');
+      assert.deepEqual(services.listServices(db).map((s) => s.gradeOff), [[]]);
+    });
+    runWithOrg('acme', () => assert.deepEqual(services.getService(db, acme.id).gradeOff, off, 'acme\'s list is as acme left it'));
+    // The deletion takes the key with it, in the same transaction; a service given the freed id starts with none.
+    runWithOrg('acme', () => {
+      services.deleteService(db, 'alice', acme.id);
+      assert.equal(column(acme.id), null, 'the key went with the service');
+      // The next id (a rowid: the highest plus one, given again once the highest is deleted), with a key left over for it.
+      const next = prepare(db, 'SELECT max(id) AS n FROM services').get().n + 1;
+      prepare(db, 'INSERT INTO schema_meta (key, value) VALUES (?, ?)').run(`grade_off:acme:${next}`, JSON.stringify(off));
+      const reborn = services.createService(db, 'alice', { slug: 'pay', name: 'Payments again' });
+      assert.equal(reborn.id, next);
+      assert.deepEqual([reborn.gradeOff, column(reborn.id)], [[], null], 'a key left over for the id is no switch of the new service');
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create']);
   } finally {
     close();
   }

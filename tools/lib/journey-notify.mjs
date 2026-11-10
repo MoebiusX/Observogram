@@ -148,7 +148,8 @@ export function buildNotifyPayload({ record, previousRun = null, decision, links
     // A vantage-lost record carries the fetch error (credentials redacted).
     error: r.error == null ? null : redactUrlCredentials(r.error),
     gate: { breaches: Array.isArray(r.gate?.breaches) ? r.gate.breaches : [] },
-    grade: isObj(r.grade) ? { score: r.grade.score ?? null, pass: r.grade.pass ?? null, letter: r.grade.letter ?? null } : null,
+    // `off`: the criteria the score left out (the service's switches at that run) — only when it left some out.
+    grade: isObj(r.grade) ? { score: r.grade.score ?? null, pass: r.grade.pass ?? null, letter: r.grade.letter ?? null, ...(Array.isArray(r.grade.off) && r.grade.off.length ? { off: r.grade.off.filter((k) => typeof k === 'string').slice(0, 7) } : {}) } : null,
     drift: isObj(r.drift) ? { alignmentPct: r.drift.alignmentPct ?? null, drifted: r.drift.drifted ?? null, declaredNotLive: r.drift.declaredNotLive ?? null, liveNotDeclared: r.drift.liveNotDeclared ?? null } : null,
     freshness: { liveAgeHours: r.freshness?.liveAgeHours ?? null },
     vantage: r.vantage ?? null,

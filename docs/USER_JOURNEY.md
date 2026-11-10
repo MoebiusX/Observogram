@@ -242,6 +242,18 @@ grade higher while differences are found: the grade says how well the
 service is observed and verified, and a declaration nobody checked cannot
 score on verification.
 
+A criterion that does not apply to a service can be switched off for it — a
+project with no fault injection has no use for *Chaos-validated*. On the
+board each line of *Why this grade* ends with *Not for this service…*, which
+asks why in place; **Stop grading it** saves the switch on the service's
+record (who, when, why) and checks against live again. The letter is then
+over the criteria that are on — *Graded on 6 of 7 criteria*, *3.9 of 6
+points* — and the ones off are listed under the reasons, each with **Grade it
+again**. Every run of the service's checks grades the same way and its record
+names what it left out; a run that graded on other criteria is not the
+board's letter until the next check. README, *Criteria a service is not
+graded on*.
+
 On Overview, *Why this grade* gives the seven criteria as seven plain lines,
 each with *Yes*, *Partly* or *No*, the yeses first, and the sum with the next
 band (*3.8 of 7 points. B starts at 4.4.*). Five lines read the repository
@@ -537,7 +549,10 @@ Belongs here:
     good looks like*): the grade letter in a shield, its ladder name in plain
     words (*Field grade*), the verdict word, the required rules (*11 / 15
     required rules met · tier 2*) and *Why this grade*, closed until the
-    reader opens it;
+    reader opens it — where a criterion that does not apply to this service
+    is switched off (*Not for this service…*, a reason required) and back on
+    (*Grade it again*), and *Graded on 6 of 7 criteria* under the verdict
+    word when one is off;
   - **B — Can you trust what the signals show?** (*The repository against
     live*): the alignment as a ring, four counts — *match · run differently ·
     not running live · live only* — the promises (*5 of 18 promises hold in every
