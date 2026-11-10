@@ -1216,10 +1216,12 @@ read as the person who runs it (`server/repo-auth.mjs`):
   from the start — every GitHub or Azure DevOps row whose host has neither
   the person's token in this tab nor their sign-in — so a Run never has to
   fail to be asked; Run sends what the field holds, and a public GitHub
-  repository runs with it empty. The tab keeps the token in memory for that
-  host's next Runs until it closes, the page is read again or the person
-  forgets it; after a refusal the row says what the host answered. Expert's
-  GitHub scan has a field for it.
+  repository runs with it empty. **Add a service** has the same field under
+  the repository's address: **Save and run** reads the new repository with
+  it, and **Save** keeps it for the tab's next Run. The tab keeps the token
+  in memory for that host's next Runs until it closes, the page is read
+  again or the person forgets it; after a refusal the row says what the host
+  answered. Expert's GitHub scan has a field for it.
 - **Their sign-in to the host** — where the server is set up for it
   ([below](#signing-in-to-github-or-azure-devops)), *Sign in to GitHub* or
   *Sign in to Azure DevOps* on the row that asks (and beside Expert's scan

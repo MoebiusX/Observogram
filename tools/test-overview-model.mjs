@@ -30,7 +30,7 @@ import {
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed,
 } from '../studio/overview-model.mjs';
-import { renderOverview, renderServiceList } from '../studio/overview-view.mjs';
+import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 
@@ -1702,18 +1702,19 @@ test('a Run its host would not read without the person\'s own token asks for it 
   assert.deepEqual(held.tokens, [{ kind: 'ado', label: 'Azure DevOps token', text: 'Your Azure DevOps token is sent with this tab\'s Runs of Azure DevOps repositories; it is never kept on the server.' }]);
   assert.deepEqual(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).tokens, []);
   assert.deepEqual(REPOSITORY_KINDS.slice(0, 2).map((k) => k.hint), [
-    'A public repository, or a private one read with your own GitHub token, given on its row.',
-    'Read with your own Azure DevOps token (Code (Read)), given on its row.',
+    'A public repository, or a private one read with your own GitHub token.',
+    'Read with your own Azure DevOps token (Code (Read)).',
   ], 'no hint says the server reads with its own token');
   // A server that offers Sign in to GitHub says so where the repository is typed.
   const hintFor = (kind, repoSignIn) => formModel({ ...formOpened([], { endpoints: [EP] }), values: { ...formOpened([], { endpoints: [EP] }).values, kind } }, { endpoints: [EP], repoSignIn }).kind.hint;
   assert.equal(hintFor('github', null), REPOSITORY_KINDS[0].hint, 'no sign-in offered (or no one signed in to the studio): the token hint, as before');
   assert.equal(hintFor('github', { github: { available: false }, ado: { available: true } }), REPOSITORY_KINDS[0].hint);
   assert.equal(hintFor('github', { github: { available: true, signedIn: false, account: null } }),
-    'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token, on its row.');
+    'A public repository, or a private one read as you: sign in to GitHub on its row, or give your own GitHub token.');
   assert.equal(hintFor('github', { github: { available: true, signedIn: true, account: 'octo' } }),
     'A public repository, or a private one read as you (you are signed in to GitHub as octo): sign in to GitHub, or give your own GitHub token, on its row.');
-  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), on its row.');
+  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps on its row, or give your own token (Code (Read)).');
+  assert.equal(hintFor('ado', { ado: { available: true, signedIn: true, account: null } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), on its row.', 'signed in: the row is where another account or a token goes');
   assert.equal(hintFor('path', { github: { available: true } }), REPOSITORY_KINDS[2].hint, 'a folder has no sign-in');
   const opened = formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP], repoSignIn: { github: { available: true } } });
   assert.equal(opened.kind.kind, 'github', 'a new service opens on GitHub');
@@ -1782,6 +1783,94 @@ test('renderServiceList: the offered field is on the row before any Run, and Run
   const held = overviewContainer();
   renderServiceList(held, serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['github'] }), formModel(FORM_CLOSED), { overview: {} });
   assert.ok(!held.innerHTML.includes('ov-svc__auth') && held.innerHTML.includes('data-ux-action="ov-svc-forget-token" data-kind="github">Forget it</button>'));
+});
+
+test('the form offers the person\'s own token where a row would — GitHub (optional) and Azure DevOps; never a folder, an upload, a host whose token the tab holds or the person is signed in to, a source switched off, a reader who cannot save; and only for a host that passes heldTokens', () => {
+  const open = (kind) => { const f = formOpened([], { endpoints: [EP] }); return { ...f, values: { ...f.values, kind } }; };
+  const authOf = (kind, opts = {}) => formModel(open(kind), { endpoints: [EP], uploads: true, heldTokens: [], ...opts }).auth;
+  assert.deepEqual(authOf('github'), { kind: 'github', label: 'GitHub token', optional: true, text: 'For a private repository. Sent with this tab\'s Runs only and never kept on the server.' });
+  assert.deepEqual(authOf('ado'), { kind: 'ado', label: 'Azure DevOps token', optional: false, text: 'Sent with this tab\'s Runs only and never kept on the server.' });
+  assert.equal(authOf('path'), null, 'a folder is read by the server');
+  assert.equal(authOf('upload'), null, 'an upload is the person\'s own files');
+  assert.equal(authOf('github', { heldTokens: ['github'] }), null, 'held in the tab: the line above the list names it');
+  assert.equal(authOf('ado', { heldTokens: ['github'] }).kind, 'ado', 'another host\'s token is no use here');
+  assert.equal(authOf('github', { repoSignIn: { github: { available: true, signedIn: true, account: 'octo' } } }), null, 'read as that account');
+  assert.deepEqual(Object.keys(authOf('github', { repoSignIn: { github: { available: true, signedIn: false, account: null } } })), ['kind', 'label', 'optional', 'text'], 'sign-in offered, not signed in: the field alone — Sign in is on the row');
+  assert.equal(authOf('github', { sources: { github: false } }), null, 'a source switched off saves nothing new');
+  assert.equal(authOf('github', { access: { canWrite: false, reason: 'needs the operator role' } }), null);
+  assert.equal(authOf('github', { heldTokens: undefined }), null, 'a host that passes no heldTokens takes no token from the form: no field');
+  assert.equal(formModel(open('github'), { endpoints: [EP] }).auth, null);
+  // The form's values never hold it: nothing typed there is drawn back.
+  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken']);
+  const opened = open('github');
+  assert.equal(formInput(opened, 'repoAuth', 'made-up-token'), opened, 'and typing never reaches them: the field is no form value');
+});
+
+test('renderServiceList: the form\'s token field — a password input with nothing in it; Save and run and Save send what it holds, trimmed, and nothing when it is empty; a typed token outlives a redraw by the drafts handed over, never by the markup', () => {
+  const list = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const form = formModel(formOpened([svcRow()], { endpoints: [EP] }), { endpoints: [EP], heldTokens: [] });
+  const c = overviewContainer();
+  const calls = [];
+  renderServiceList(c, list, form, { overview: { saveService: (o) => calls.push(o) } });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<label class="ov-form__f"><span class="ov-form__l">Your GitHub token <em>optional</em></span><input class="og-input" type="password" data-form-auth="github" autocomplete="off" spellcheck="false" aria-describedby="ov-form-auth-note"></label>'), 'a password field, nothing pre-filled');
+  assert.ok(html.includes('<span class="ov-form__hint og-muted" id="ov-form-auth-note">For a private repository. Sent with this tab&#39;s Runs only and never kept on the server.</span>'));
+  assert.ok(html.indexOf('data-field="location"') < html.indexOf('data-form-auth="github"') && html.indexOf('data-form-auth="github"') < html.indexOf('data-field="endpointId"'), 'under the address it reads, before Live');
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Save and run');
+  // The shim's container has no field to read: saved as it always was.
+  c.click('ov-form-run');
+  c.click('ov-form-save');
+  assert.deepEqual(calls, [{ run: true }, { run: false }], 'an empty field sends no token');
+  // A field that holds one: both buttons send it, trimmed.
+  const filled = overviewContainer();
+  filled.querySelector = (sel) => (sel === '[data-form-auth]' ? { value: '  made-up-token  ' } : null);
+  const sent = [];
+  renderServiceList(filled, list, form, { overview: { saveService: (o) => sent.push(o) } });
+  filled.click('ov-form-run');
+  filled.click('ov-form-save');
+  assert.deepEqual(sent, [{ run: true, repoAuth: 'made-up-token' }, { run: false, repoAuth: 'made-up-token' }]);
+  assert.ok(!filled.innerHTML.includes('made-up-token'), 'the view writes nothing typed');
+  // Azure DevOps: not optional. No heldTokens passed: no field.
+  const adoForm = formOpened([svcRow()], { endpoints: [EP] });
+  const ado = overviewContainer();
+  renderServiceList(ado, list, formModel({ ...adoForm, values: { ...adoForm.values, kind: 'ado' } }, { endpoints: [EP], heldTokens: [] }), { overview: {} });
+  assert.ok(ado.innerHTML.includes('<span class="ov-form__l">Your Azure DevOps token</span><input class="og-input" type="password" data-form-auth="ado"'));
+  const none = overviewContainer();
+  renderServiceList(none, list, formModel(formOpened([svcRow()], { endpoints: [EP] }), { endpoints: [EP] }), { overview: {} });
+  assert.ok(!none.innerHTML.includes('data-form-auth') && !none.innerHTML.includes('ov-form__auth'));
+
+  // The drafts: what the fields hold, read before the page is cleared — a row's by its key, the form's by its host.
+  const FIELDS = '[data-auth-input], [data-form-auth]';
+  const field = (dataset, value, over = {}) => ({ dataset, value, selectionStart: value.length, selectionEnd: value.length, ...over });
+  const doc = {};
+  const typing = field({ formAuth: 'github' }, 'made-up-1', { selectionStart: 3, selectionEnd: 5, ownerDocument: doc });
+  doc.activeElement = typing;
+  const page = { querySelectorAll: (sel) => (sel === FIELDS ? [field({ authInput: '1:prod' }, 'made-up-2'), field({ authInput: '2:prod' }, ''), typing] : []) };
+  const drafts = readTokenDrafts(page);
+  assert.deepEqual(drafts, [
+    { row: '1:prod', form: null, value: 'made-up-2', focused: false, start: 9, end: 9 },
+    { row: null, form: 'github', value: 'made-up-1', focused: true, start: 3, end: 5 },
+  ], 'an empty field that is not being typed in is no draft');
+  assert.equal(readTokenDrafts(overviewContainer()), null, 'no field, no drafts');
+  assert.equal(readTokenDrafts(null), null);
+  // Handed to the next draw: each goes to the field drawn in its place, the caret where it was.
+  const fresh = {
+    row: { dataset: { authInput: '1:prod' }, value: '' },
+    other: { dataset: { authInput: '3:prod' }, value: '' },
+    form: { dataset: { formAuth: 'github' }, value: '', focus(o) { this.focused = o; }, setSelectionRange(a, b) { this.range = [a, b]; } },
+  };
+  const next = overviewContainer();
+  next.querySelectorAll = (sel) => (sel === FIELDS ? Object.values(fresh) : []);
+  renderServiceList(next, list, form, { overview: {} }, { drafts });
+  assert.deepEqual([fresh.row.value, fresh.other.value, fresh.form.value, fresh.form.focused, fresh.form.range], ['made-up-2', '', 'made-up-1', { preventScroll: true }, [3, 5]]);
+  assert.ok(!next.innerHTML.includes('made-up'), 'through the fields, never the markup');
+  // A draft whose field is not drawn again is dropped: the form now asks for another host's, the row is gone.
+  const other = { dataset: { formAuth: 'ado' }, value: '' };
+  const changed = overviewContainer();
+  changed.querySelectorAll = (sel) => (sel === FIELDS ? [other, fresh.other] : []);
+  renderServiceList(changed, list, form, { overview: {} }, { drafts });
+  assert.deepEqual([other.value, fresh.other.value], ['', '']);
+  assert.doesNotThrow(() => renderServiceList(overviewContainer(), list, form, { overview: {} }, { drafts }), 'a page with no field takes none');
 });
 
 test('renderServiceList: the row\'s token field (a password input, Run with it) and the held-token line with Forget it; both proxied to host.overview; nothing typed is kept in the markup', () => {

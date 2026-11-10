@@ -583,7 +583,9 @@ export function renderOverview(container, model, host = appHost) {
 // renderServiceList(container, list, form, host): `list` is overview-model.mjs
 // serviceListModel(...), `form` its formModel(...). The actions ride on
 // host.overview: addService(), editService(serviceId, env), runService(key),
-// openService(serviceId, env), formInput(field, value), saveService({ run }),
+// openService(serviceId, env), formInput(field, value), saveService({ run,
+// repoAuth }) — `repoAuth` the person's own token when the form's field holds
+// one (drawn only where the model offers it: formModel's `heldTokens`) —
 // closeForm(), showAll(), compare(), runService(key, { repoAuth }) — a row's
 // Run with the person's own token (asked for on the row when its host wants
 // it) — and forgetRepoToken(kind); and the Folder answer's panel when the
@@ -744,6 +746,13 @@ function svcFormHtml(f) {
             <label class="ov-form__f"><span class="ov-form__l">Token variable <em>optional</em></span><input class="og-input" data-field="epToken" value="${attr(v.epToken)}" placeholder="the server's variable holding its token" autocomplete="off" spellcheck="false"></label>
           </div>` : '';
   const off = !f.canWrite;
+  // The person's own token for the repository's host, where the model offers it: a password
+  // field with nothing in it — what is typed is read when Save is pressed, never drawn.
+  const auth = f.auth ? `
+            <div class="ov-form__auth">
+              <label class="ov-form__f"><span class="ov-form__l">Your ${escapeHtml(f.auth.label)}${f.auth.optional ? ' <em>optional</em>' : ''}</span><input class="og-input" type="password" data-form-auth="${attr(f.auth.kind)}" autocomplete="off" spellcheck="false" aria-describedby="ov-form-auth-note"></label>
+              <span class="ov-form__hint og-muted" id="ov-form-auth-note">${escapeHtml(f.auth.text)}</span>
+            </div>` : '';
   return `
     <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
       <header class="ov-form__head">
@@ -769,7 +778,7 @@ function svcFormHtml(f) {
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
-            ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}
+            ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}${auth}
           </div>
         </li>
         <li class="ov-form__step">
@@ -840,14 +849,56 @@ export function serviceListHtml(list, form, ov = {}) {
     </section>`;
 }
 
-// Draws the list into `container` and wires it to host.overview.
-export function renderServiceList(container, list, form, host = appHost) {
+// What a person typed into a token field and has not sent yet. The list is
+// drawn again whenever a fact arrives — a Run that ends, the endpoints read,
+// a select in the form — and a token is never written into the markup, so a
+// host that clears the page before a draw reads the fields first
+// (readTokenDrafts) and hands the answer to renderServiceList (`drafts`),
+// which puts each in the field drawn in its place: a row's by the row's key,
+// the form's by its host, with the caret where it was. A draft whose field is
+// not drawn again (the row runs, the kind changed, the form closed) is
+// dropped. Nothing is kept between two draws but that hand-over.
+const TOKEN_FIELDS = '[data-auth-input], [data-form-auth]';
+export function readTokenDrafts(container) {
+  const out = [];
+  for (const el of container?.querySelectorAll?.(TOKEN_FIELDS) || []) {
+    const focused = !!el.ownerDocument && el.ownerDocument.activeElement === el;
+    const value = String(el.value ?? '');
+    if (!value && !focused) continue;
+    const row = el.dataset?.authInput ?? null;
+    out.push({ row, form: row === null ? (el.dataset?.formAuth ?? null) : null, value, focused, start: el.selectionStart ?? null, end: el.selectionEnd ?? null });
+  }
+  return out.length ? out : null;
+}
+
+function restoreTokenDrafts(container, drafts) {
+  if (!Array.isArray(drafts) || !drafts.length) return;
+  const fields = [...(container.querySelectorAll?.(TOKEN_FIELDS) || [])];
+  for (const d of drafts) {
+    const el = fields.find((x) => (d.row !== null ? x.dataset?.authInput === d.row : x.dataset?.authInput === undefined && x.dataset?.formAuth === d.form));
+    if (!el) continue;
+    el.value = d.value;
+    if (!d.focused) continue;
+    el.focus?.({ preventScroll: true });
+    try { el.setSelectionRange?.(d.start, d.end); } catch { /* a field that takes no range */ }
+  }
+}
+
+// Draws the list into `container` and wires it to host.overview. `drafts`:
+// what readTokenDrafts read from the page before it was cleared, or nothing.
+export function renderServiceList(container, list, form, host = appHost, { drafts = null } = {}) {
   const ov = host?.overview || {};
   container.innerHTML = `<div class="ov-page ov-page--list">${serviceListHtml(list, form, ov)}</div>`;
+  restoreTokenDrafts(container, drafts);
   const svcEnv = (el) => (el.dataset.env ? el.dataset.env : null);
   // The token typed on a row (read when Run with it is pressed, never kept by the view).
   const authInput = (key) => container.querySelector?.(`[data-auth-input="${String(key).replace(/["\\]/g, '')}"]`) || null;
   const authValue = (key) => String(authInput(key)?.value ?? '').trim();
+  // The token typed in the form: read when Save is pressed, sent only when there is one.
+  const saveWith = (run) => {
+    const repoAuth = String(container.querySelector?.('[data-form-auth]')?.value ?? '').trim();
+    return repoAuth ? { run, repoAuth } : { run };
+  };
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
     'ov-svc-edit': (ev, el) => ov.editService?.(Number(el.dataset.service), svcEnv(el)),
@@ -861,8 +912,8 @@ export function renderServiceList(container, list, form, host = appHost) {
     'ov-svc-all': () => ov.showAll?.(),
     'ov-svc-compare': () => ov.compare?.(),
     'ov-form-kind': (ev, el) => ov.formInput?.('kind', el.dataset.kind, { redraw: true }),
-    'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.({ run: true }); },
-    'ov-form-save': () => ov.saveService?.({ run: false }),
+    'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.(saveWith(true)); },
+    'ov-form-save': () => ov.saveService?.(saveWith(false)),
     'ov-form-close': () => ov.closeForm?.(),
     'ov-form-browse': () => ov.browseFolders?.(),
     'ov-folders-open': (ev, el) => ov.openFolder?.(el.dataset.path ? el.dataset.path : null),
@@ -883,7 +934,7 @@ export function renderServiceList(container, list, form, host = appHost) {
   });
   const formEl = container.querySelector('.ov-form');
   if (formEl) {
-    formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.({ run: true }); });
+    formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.(saveWith(true)); });
     formEl.querySelectorAll('[data-field]').forEach((input) => {
       // The select re-draws the form (the new-endpoint fields); typing keeps the host's copy in step.
       const event = input.tagName === 'SELECT' ? 'change' : 'input';

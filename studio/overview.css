@@ -480,6 +480,8 @@ p.ov-scan__sum { cursor: default; }
 .ov-form__hint { font: 400 12px/1.35 var(--og-font); }
 .ov-form__err { font: 500 12px/1.35 var(--og-font); color: var(--og-fail); }
 .ov-form__sub { display: grid; gap: 8px; margin-top: 4px; padding: 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; }
+/* The person's own token for the repository's host, under the address it reads. */
+.ov-form__auth { display: grid; gap: 6px; margin-top: 4px; min-width: 0; }
 .ov-form__error { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--og-fail-bg); color: var(--og-text); font: 400 13px/1.45 var(--og-font); }
 .ov-form__acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .ov-form__browse { min-height: 34px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
