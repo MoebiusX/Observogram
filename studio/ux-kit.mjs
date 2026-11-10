@@ -201,6 +201,21 @@ export function layerSpecTip(code) {
   return p && p.spec && p.spec !== p.name ? `In the ObservabilityPack spec: ${code} ${p.spec}.` : '';
 }
 
+// ---------- the working context line ----------
+//
+// context: [{ key, value, title? }] — service, environment, pack and version
+// (A and B named on comparison screens). '' when nothing has a value. The
+// decision header draws it; so does a screen with a header of its own
+// (Diagnose's Assessment).
+export function contextLineHtml(context = []) {
+  const ctx = context.filter(c => c && (c.value ?? '') !== '').map(c => `
+      <span class="ux-ctx-item"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>
+        ${c.key ? `<span class="ux-ctx-key">${escapeHtml(c.key)}</span>` : ''}
+        <span class="ux-ctx-val">${escapeHtml(c.value)}</span>
+      </span>`).join('<span class="ux-ctx-sep" aria-hidden="true">·</span>');
+  return ctx ? `<div class="ux-ctx">${ctx}</div>` : '';
+}
+
 // ---------- the decision header ----------
 //
 // context:   [{ key, value, title? }] — the working context line (service,
@@ -219,11 +234,6 @@ export function decisionHeaderHtml({
   context = [], eyebrow = '', decision = '', decisionHtml = null, tone = 'info', verdict = '',
   verdictTitle = '', primary = null, secondary = [], causes = [], measures = [], id = '', sticky = false, note = '',
 } = {}) {
-  const ctx = context.filter(c => c && (c.value ?? '') !== '').map(c => `
-      <span class="ux-ctx-item"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>
-        ${c.key ? `<span class="ux-ctx-key">${escapeHtml(c.key)}</span>` : ''}
-        <span class="ux-ctx-val">${escapeHtml(c.value)}</span>
-      </span>`).join('<span class="ux-ctx-sep" aria-hidden="true">·</span>');
   const btn = (b, cls) => b ? `<button type="button" class="${cls}"${b.id ? ` id="${escapeHtml(b.id)}"` : ''}${b.action ? ` data-ux-action="${escapeHtml(b.action)}"` : ''}${b.title ? ` title="${escapeHtml(b.title)}"` : ''}>${escapeHtml(b.label)}</button>` : '';
   const causeList = causes.length ? `
       <ol class="ux-causes" aria-label="Main causes">
@@ -246,7 +256,7 @@ export function decisionHeaderHtml({
       </dl>` : '';
   return `
     <section class="ux-decision ux-tone-${escapeHtml(tone)}${sticky ? ' is-sticky' : ''}"${id ? ` id="${escapeHtml(id)}"` : ''} aria-label="${escapeHtml(eyebrow || 'Summary')}">
-      ${ctx ? `<div class="ux-ctx">${ctx}</div>` : ''}
+      ${contextLineHtml(context)}
       <div class="ux-decision-main">
         <div class="ux-decision-text">
           ${eyebrow ? `<div class="ux-eyebrow">${escapeHtml(eyebrow)}</div>` : ''}

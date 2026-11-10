@@ -875,7 +875,7 @@ export function renderLayerFilterChips() {
 // screens grade with them (state.gradeOff), so Diagnose's letter is the
 // board's; a pack that is no service's own is graded on all seven. The record
 // itself (state.gradeService) lets Diagnose say what is off — why, who, when —
-// and switch it (setExpertGradeCriterion).
+// and keep a set its switches tried (setExpertGradeCriteria).
 function gradeServiceInFocus() {
   const id = state.selectedPackId;
   if (!id || !Array.isArray(state.services)) return null;
@@ -1458,7 +1458,7 @@ function routeTo(id) {
   renderMainView();
 }
 
-// The sticky strips below the context bar (.ux-section-nav, .diag-sticky,
+// The sticky strips below the context bar (.ux-section-nav, .diag-whatif,
 // .ux-decision.is-sticky) pin at chrome + --ux-context-h. The bar wraps onto
 // more rows on narrow screens and is hidden on home and in Build, so measure
 // it; ux.css holds the single-row default for when this cannot run.
@@ -2026,13 +2026,32 @@ async function switchGradeCriterion(service, key, { graded = true, reason = '' }
   announce(graded ? `${CRITERION_WORDS[key]} is graded for ${service.name} again.` : `${CRITERION_WORDS[key]} is no longer graded for ${service.name}.`);
   return true;
 }
-// Expert's Diagnose (host.setGradeCriterion): the service whose own pack is on
-// screen. Diagnose grades the packs on screen again as it repaints, so no check
-// is started; the board's last check, graded on the other set, is the board's
-// to redo (it says so).
-async function setExpertGradeCriterion(serviceId, key, opts = {}) {
+// Expert's Diagnose (host.setGradeCriteria): the set its switches tried as a
+// what-if, kept for the service whose own pack is on screen — `off` the
+// criteria it is not graded on from now on. Built from the record as the
+// server has it now: a criterion that stays off keeps its reason, who and
+// when; one newly off takes `reason`. Diagnose grades the packs on screen
+// again as it repaints, so no check is started; the board's last check, graded
+// on the other set, is the board's to redo (it says so).
+async function setExpertGradeCriteria(serviceId, { off = [], reason = '' } = {}) {
   const service = (Array.isArray(state.services) ? state.services : []).find((s) => s?.id === serviceId) || null;
-  if (!(await switchGradeCriterion(service, key, opts))) return false;
+  if (!service) return false;
+  if (gradeSwitchBusy) { announce('A switch is being saved: try again once it is done.'); return false; }
+  const keys = Object.keys(CRITERION_WORDS).filter((k) => Array.isArray(off) && off.includes(k));
+  gradeSwitchBusy = true;
+  try {
+    let fresh = null;
+    try { fresh = await loadService(service.id); } catch { fresh = null; }
+    const record = fresh || service;
+    const had = new Map((Array.isArray(record.gradeOff) ? record.gradeOff : []).map((x) => [x.key, x.reason]));
+    try { await patchService(service.id, { gradeOff: keys.map((key) => ({ key, reason: had.get(key) ?? reason })) }); }
+    catch (e) { toast(`The criteria could not be kept: ${e?.message || e}`, 'error'); return false; }
+    await refreshServices();
+  } finally {
+    gradeSwitchBusy = false;
+  }
+  const total = Object.keys(CRITERION_WORDS).length;
+  announce(`${service.name} is now graded on ${keys.length ? `${total - keys.length} of ${total}` : `all ${total}`} criteria.`);
   renderMainView();
   return true;
 }
@@ -9747,6 +9766,6 @@ function setupTheme() {
 // re-render / loader / modal entrypoints through it instead of importing
 // app.mjs (docs/VENDORING.md, docs/UI_CONVENTIONS.md). Function declarations
 // hoist, so binding them here (before boot) is safe.
-initHost({ loadPackB, openDeployModal, renderMainView, renderTabs, setGradeCriterion: setExpertGradeCriterion });
+initHost({ loadPackB, openDeployModal, renderMainView, renderTabs, setGradeCriteria: setExpertGradeCriteria });
 
 boot();

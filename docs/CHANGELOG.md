@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.8.24 — 2026-11-10
+
+**Expert's Assessment is one screen, and a criterion's switch is an instant what-if.** The Assessment said the seven checks five times — the header's causes, the measures, the gaps, two tables and a ledger — down six screens (5,672 px at 1440 wide for a pack read on its own; 1,366 px now), and switching a criterion meant typing a reason and saving before the grade moved. A check is now said once, in its row; everything else is folded into closed rows; and a switch regrades the page at once, with nothing saved until **Keep**.
+
+### Changed
+- **The page** (`studio/compare-view.mjs`, drawn by the new pure `studio/assessment-page.mjs`; `studio/ux-diagnose.css`).
+  - *The verdict*, one band: the letter and its plain name, one sentence, the score on the grade scale — a segment per grade as wide as its span of the score, the one the score lands on filled, a mark at the score — with the distance to grade A and *on 6 of 7 criteria*; then coverage, trust, live signals and requirement chains in a number each (the checks of a group by name on hover). *Compare with live* and *Resolve gaps in Remediate* stay, quieter.
+  - *The checks behind the grade*, one table under the board's three questions (*Are the right signals in place?* · *Can you trust what the signals show?* · *Can oncall act on what it sees?*): a row per check — result, its name and what it asks in plain words, what was observed, the points it earns of those it is worth, its switch. A row opens in place (no repaint, the page does not move) for what failed, why it matters, the fix with its action, what was expected and the field it was read from. A criterion left out reads *Off* with why, who and when. What is found beside the checks (partial live evidence, the baseline's own gaps) is listed in the same table under *Also found*, never scored.
+  - *Everything else, folded*: Layer scores (the four layers as small bars on the closed row), the comparison (its counts on the row), Requirement chains, the Response path, the Evidence ledger and *How the grade is calculated* — a closed row each with its headline and its issue count, kept open through repaints once opened, and opened by an action that leads into it (*View layer scores*, *Review differences*).
+  - Gone, each said by a row now: the header's three causes and *Review N gaps*, the three groups of measures, the *Criteria graded for* panel, the sticky section index, the Gaps block and the coverage, trust and operability tables.
+- **A switch is a what-if.** Flipping a criterion's switch takes the grade on screen again without it (or with it) in the page, and sends nothing. The verdict is marked *What if*; a bar pinned under the header says what the set gives against what is saved — *Without Chaos-validated: B · 65% on 6 of 7 criteria. Saved for krystaline: C · 60% on all 7 criteria.* — with **Reset**. The last criterion still graded stays on. It works for any reader, for a pack that is no service's own and in a static bundle, where the bar says it is not saved.
+- **Keep** saves the set for the service on its record — the board's — in one request: one reason, asked once in the bar, for the criteria newly left out (Enter saves, Escape gives up, what is typed keeps its focus through a repaint); a criterion that stays off keeps its reason, who and when, and one graded again needs no reason. `studio/host.mjs`: the optional `setGradeCriteria(serviceId, { off, reason })` **replaces 0.8.23's `setGradeCriterion(serviceId, key, { graded, reason })`**; `studio/app.mjs` fills it (`setExpertGradeCriteria`), building the list from the record as the server has it. Without the hook the switches are a what-if only.
+- `buildAssessmentDecision` also returns `checks`: every check as a row reads it — its state, the points it earns of those it is worth, and, failing, its own title, why and fix (never merged with another check's, as the header's causes were).
+- `studio/ux-kit.mjs` exports `contextLineHtml` (the decision header's context line, for a screen with a header of its own); `decisionHeaderHtml` draws it, byte for byte as before. `studio/grade-criteria-ui.mjs` loses `criteriaPanelHtml`, `switchHtml` and `askRowHtml` (0.8.23's panel and per-row link).
+- **Docs.** `README.md` (*Criteria a service is not graded on*: Expert's Diagnose; the Diagnose screenshot, `docs/img/expert-diagnose.png`, taken again), `docs/USER_JOURNEY.md`, `docs/VENDORING.md` (`host.setGradeCriteria`, `assessment-page.mjs`), `docs/UI_CONVENTIONS.md`, `docs/DOWNSTREAM.md`.
+
+### Not here
+- The board's switch is as it was: it asks why, saves and checks again.
+- Settings offers no switch yet.
+- **Setting aside things found in the repository or live** (under development, not this service's) is still the next change.
+
+### Tests
+- `tools/test-overview-model.mjs` +5 (two of 0.8.23's go with the panel, seven come): the what-if set (`offSet`, `toggleOff` refusing the last one graded, `whatIfChanges`, `whatIfWords`); the grade scale; `verdictBarHtml`; `whatIfBarHtml` (Keep with and without a reason to ask, the ask, a reader who may not, nowhere to save); `checksTableHtml` (rows, points, a criterion left out saved and in a what-if, the switches, *Also found*, open rows, the last one graded, a host that wants no switch); `checkDetailHtml` byte for byte; the folded rows' line, the layers' bars and the view's wiring to the host's hook.
+- `tools/test-ux-kit.mjs`: `contextLineHtml` is the header's line. `tools/test-static-remedies.mjs` S5: the grade's hint is passed for both grades a what-if takes. `tools/test-remediation-flow-view.mjs`: the response path's block is in its folded row. `tools/test-studio-layout.mjs`: the what-if bar is the pinned strip that clears both bars. `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling 6,400,000 → 6,500,000 (the studio's own code reached 6,435,231 with `studio/assessment-page.mjs`; it stood 227 bytes under the last ceiling; no dependency).
+- `tools/test-bundle-compare.mjs` C8 (the browser check, run only where Playwright is installed): its steps open the folded row or the check they read.
+- Cut as 0.8.24: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1824 → 1829.
+
 ## 0.8.23 — 2026-11-10
 
 **Expert's Diagnose says on how many criteria a service is graded, and switches them.** Since 0.8.22 Diagnose graded a service's pack on its switches — *Checks passed 3 of 6* — but said so only deep under Evidence: the summary read as if all seven counted, and *Trust* still named *recently verified* with Fresh off.

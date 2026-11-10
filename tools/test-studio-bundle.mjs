@@ -345,7 +345,9 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 6,250,000 since Overview's service list (2026-11-04: the studio's own code, +45 KB as data: modules; no dependency).
   // 6,400,000 since the 0.8.7 walkthrough fixes (2026-11-06: the studio's own code reached 6,255,083 with
   // studio/chaos-copy.mjs and studio/symbol-refs.mjs; no dependency).
-  assert.ok(built.bytes < 6_400_000, `the two-pack bundle is under 6,400,000 bytes (${built.bytes})`);
+  // 6,500,000 since the Assessment's one screen (2026-11-10: the studio's own code reached 6,435,231 with
+  // studio/assessment-page.mjs — it stood at 6,399,773, 227 bytes under the last ceiling; no dependency).
+  assert.ok(built.bytes < 6_500_000, `the two-pack bundle is under 6,500,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

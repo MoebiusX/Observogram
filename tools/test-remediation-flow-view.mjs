@@ -8,7 +8,7 @@
 // goldens and the three remediation-free catalogue packs rest on. The view model names the other
 // side from the compare mode, counts a comparison only with Pack B and an errorless diff, and
 // hands each deploy step its SLO's deploy surface. The HTML: '' without a model, the Diagnose
-// block with the report's heading markup and its sticky-index target, the Remediate section after
+// block with the report's heading markup inside the Assessment's folded row, the Remediate section after
 // the plan; the deploy button on Remediate alone, only when compared, only for a deployable SLO;
 // every operator string escaped. The renderer appends and returns the handlers (deploy through the
 // host seam). The `.rflow-*` zone of studio/ux-remediate.css reads --ux-* tokens only, moves
@@ -284,7 +284,7 @@ test('renderRemediationFlow appends the panel to the container and returns the r
 
 // ---------- 5. the wiring, the zone and the tokens ----------
 
-test('the views reach the panel through the view module and the host seam: compile-view renders it after the plan behind the gate, compare-view inserts the block and its sticky-index entry; the view module imports neither app.mjs nor state.mjs', () => {
+test('the views reach the panel through the view module and the host seam: compile-view renders it after the plan behind the gate, compare-view inserts the block in a folded row of the Assessment; the view module imports neither app.mjs nor state.mjs', () => {
   const view = read('studio/remediation-flow-view.mjs');
   const imports = [...view.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ['./util.mjs', './ux-kit.mjs', './host.mjs', './diagnostic-grade.mjs', './artifact-model.mjs']);
@@ -298,7 +298,7 @@ test('the views reach the panel through the view module and the host seam: compi
   assert.match(compile, /screen: 'remediate'/);
   const compare = read('studio/compare-view.mjs');
   assert.match(compare, /from '\.\/remediation-flow-view\.mjs'/);
-  assert.match(compare, /id: 'diag-flow', label: 'Response path'/);
+  assert.match(compare, /id: 'diag-flow-row', title: 'Response path',/);
   // The static posture's note comes in as an option (follow-up compare-in-bundle), never as an import of this module.
   assert.match(compare, /remediationFlowHtml\(flowModel, \{ screen: 'diagnose'(?:, notComparedNote: isStatic\(\) \? [^}]+ : null)? \}\)/);
   assert.match(read('docs/UI_CONVENTIONS.md'), /`\.rflow-\*`/, 'the zone is listed');

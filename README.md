@@ -243,11 +243,11 @@ Load the declared repo pack as **Pack A** and the live production pack as
   displayed but never scored
 - **Verified**: whether a live MCP signal is present
 
-![Expert's Diagnose view: the Assessment of the repository pack against live, with its grade, the gaps that keep it below A and the evidence](docs/img/expert-diagnose.png)
+![Expert's Diagnose view: the Assessment of the repository pack against live on one screen — the grade and its score on the scale, then the checks behind it, one row each with its switch](docs/img/expert-diagnose.png)
 
 The score maps onto a metrology-style **instrument grade** — the rating users
-actually read; the full ladder renders on the grade card with the current rung
-highlighted:
+actually read; the scale is drawn under the score with the grade it lands on
+filled, and the full ladder is under *How the grade is calculated*:
 
 | Grade | Class | Score band |
 |---|---|---|
@@ -1221,13 +1221,22 @@ service can switch a criterion off, with a reason:
   the reasons — what, why, who and when — each with **Grade it again**. A
   reader below operator sees the same words and is told why they are not
   theirs to press.
-- **In Expert's Diagnose.** The summary says it first — *Graded on 6 of 7
-  criteria: Fresh is not graded for this service.* — and *Criteria graded for*
-  and the service's name, under the measures, lists each criterion off with why, who and
-  when, and **Grade it again**. Each row of the coverage and trust tables
-  under Evidence carries *Not for this service…*, which asks why in a row
-  under it, then **Stop grading it**. It is the board's switch, on the same
-  record; Diagnose grades the packs on screen again at once.
+- **In Expert's Diagnose.** The Assessment is one screen: the verdict — the
+  letter, the score on the grade scale, *on 6 of 7 criteria* — and the checks
+  behind the grade, one row each (result, what it asks, what was observed, its
+  points) with a switch on every scored row. A switch is a **what-if**: the
+  grade on screen is taken again without that criterion at once, and nothing
+  is saved. A bar pinned under the header says what it gives against what is
+  saved — *Without Chaos-validated: B · 65% on 6 of 7 criteria. Saved for
+  krystaline: C · 60% on all 7 criteria.* — with **Reset**. **Keep for** the
+  service saves the set on the board's record: one reason, asked once, for the
+  criteria newly left out (a criterion graded again needs none), and a row
+  left out then reads *Off* with why, who and when. A reader below operator, a
+  pack that is no service's own and a static bundle can try a what-if and keep
+  nothing. A row opens for what failed, why it matters, the fix and the field
+  it was read from; layer scores, the comparison, requirement chains, the
+  response path, the evidence ledger and *How the grade is calculated* are
+  folded rows under the checks, each with its headline on the row.
 - **What changes.** The grade is over the criteria that are on: a criterion
   switched off leaves both the points and the total, so the board reads
   *Graded on 6 of 7 criteria* and *3.9 of 6 points*. It is never hidden: the
@@ -1584,8 +1593,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.23 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.23
+docker build -t observogram:0.8.24 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.24
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1648,7 +1657,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.23
+  observogram:0.8.24
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1656,7 +1665,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.23
+    image: observogram:0.8.24
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

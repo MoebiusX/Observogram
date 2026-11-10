@@ -1,7 +1,7 @@
 // studio/remediation-flow-view.mjs — the response path (GAP batch 2, B3.3):
 // the "what next" panel from a firing alert to the remediation the pack
-// declares for it, drawn on Diagnose (inside the assessment report, with its
-// sticky-index entry) and on Remediate (after the plan), from the same HTML.
+// declares for it, drawn on Diagnose (inside the Assessment, in a folded row of
+// its own since 0.8.24) and on Remediate (after the plan), from the same HTML.
 //
 // docs/UI_CONVENTIONS.md §1–4: the app is reached through the host seam
 // (`appHost.openDeployModal`, `appHost.renderMainView`), never app.mjs; the
@@ -186,7 +186,7 @@ function unresolvedHtml(item, model, screen) {
 /**
  * The panel's HTML for a view model, or '' when there is none to draw. Diagnose
  * gets a `.diag-block` section with the report's heading markup (and the
- * sticky index's `#diag-flow` target); Remediate a `.ux-rm-flow` section after
+ * `#diag-flow` id; the Assessment draws it inside its folded row); Remediate a `.ux-rm-flow` section after
  * the plan. The deploy button renders on Remediate only, only when compared,
  * only for a deployable SLO. `notComparedNote` replaces the note shown before
  * a comparison (the caller's text — the static posture's, from

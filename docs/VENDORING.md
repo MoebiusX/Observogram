@@ -298,16 +298,21 @@ criteria graded by name and the board draws each with its switch. Without
 The studio's wiring is `setOverviewGradeCriterion` and `gradeServiceInFocus` in
 `studio/app.mjs`.
 
-Expert's Diagnose (`compare-view.mjs`, with the pure `grade-criteria-ui.mjs`)
-grades with `state.gradeOff` (the keys) and says what is off from
-`state.gradeService` — the record whose primary pack is on screen
-(`{ id, name, gradeOff: [{ key, reason, by, at }] }`), or `null`. Its
-switches are drawn only when the host fills the optional
-`host.setGradeCriterion(serviceId, key, { graded, reason })`: save the whole
-list as above, read the services again, repaint, and resolve `true` (`false`
-when nothing was saved). Without the hook, or in a static bundle, Diagnose
-still says on how many criteria the grade stands and lists what is off, with
-no button; with nothing off and no hook its markup is what it was.
+Expert's Diagnose (`compare-view.mjs`, with the pure `assessment-page.mjs`
+and `grade-criteria-ui.mjs`) grades with `state.gradeOff` (the keys) and says
+what is off from `state.gradeService` — the record whose primary pack is on
+screen (`{ id, name, gradeOff: [{ key, reason, by, at }] }`), or `null`. Each
+scored row of its checks carries a switch, and a switch is a what-if: the
+grade on screen is taken again over the set tried, in the page, and nothing is
+sent. **Keep** is offered only when the host fills the optional
+`host.setGradeCriteria(serviceId, { off, reason })` — `off` the keys the
+service is not graded on from now on, `reason` for those newly left out:
+build the whole list from the record as the server has it (a criterion that
+stays off keeps its reason, so its who and when), save it as above, read the
+services again, repaint, and resolve `true` (`false` when nothing was saved).
+Without the hook, or in a static bundle, the switches still try a what-if and
+the page says it is not saved. (0.8.23's `host.setGradeCriterion`, one
+criterion at a time, is replaced by it.)
 
 A hook a host does not supply is a no-op (the view calls them optionally).
 
@@ -602,8 +607,9 @@ initHost({ loadPackB, openDeployModal, renderMainView, renderTabs });
 Views import the live object as `import { host as appHost } from './host.mjs'`
 (see docs/UI_CONVENTIONS.md for the naming rule). A TypeScript host writes a
 ~10-line adapter object with its own implementations of those four hooks.
-One more is optional: `setGradeCriterion`, Diagnose's switch for a service's
-grade criteria (above); left out, Diagnose offers no switch.
+One more is optional: `setGradeCriteria`, which keeps the set of grade
+criteria Diagnose's switches tried for a service (above); left out, the
+switches are a what-if only.
 (The synthesis view also reuses production renderers from `compare-view.mjs`
 — those are Observogram-specific; port them or swap in your own panels.)
 

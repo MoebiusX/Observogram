@@ -44,8 +44,13 @@ import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 import * as diagUx from './ux-kit.mjs';
 import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
 import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, remediationFlowHtml } from './remediation-flow-view.mjs';
-// A service's grade criteria in Diagnose: what the grade is taken over, and the switch.
-import { criteriaScope, criteriaPanelHtml, groupNames, notGradedSentence, switchHtml, askRowHtml, CRITERION_LONG } from './grade-criteria-ui.mjs';
+// A service's grade criteria in Diagnose: what the grade is taken over, and who may keep a set.
+import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from './grade-criteria-ui.mjs';
+// The Assessment as one screen: the verdict, the checks as rows with their switches, the rest folded.
+import {
+  verdictBarHtml, whatIfBarHtml, checksTableHtml, moreSummaryHtml, layerCoverage, layerMiniHtml,
+  toggleOff, whatIfChanges, whatIfWords, fmtChecks,
+} from './assessment-page.mjs';
 
 // Requirements traceability (the TRACEABILITY VIEW section below).
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
@@ -1119,14 +1124,19 @@ function renderDiagnose(view) {
   // the verdict's "comprehensive" criterion and the layer scores below.
   const posture = computePostureMatrix(state.pack, state.packB);
 
+  // The service's criteria (grade-criteria-ui.mjs) and the what-if on screen
+  // (assessment-page.mjs): the grade is taken over the what-if's set while one
+  // is on, over the service's saved switches (state.gradeOff) otherwise.
+  const scope = diagnoseCriteriaScope();
+  const whatIf = diagnoseWhatIf();
+  const gradeOpts = (off) => ({ ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off });
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  // `off`: the criteria the pack's service is not graded on (state.gradeOff), as the board grades it.
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, { ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off: state.gradeOff });
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(whatIf ? whatIf.off : state.gradeOff));
+  // What is saved, beside a what-if: the grade the service has today.
+  const savedDiagnostic = whatIf ? computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, gradeOpts(state.gradeOff)) : null;
 
-  // The screen grammar (docs/UX_SCREEN_GRAMMAR.md): context · decision ·
-  // next action · explanation first, then the report's sections behind a
-  // sticky index. The decision is DERIVED from the same diagnostic (and the
-  // same lensed comparison digest the drill renders) — nothing re-scores.
+  // The decision is DERIVED from the same diagnostic (and the same lensed
+  // comparison digest the drill renders) — nothing re-scores.
   const ctx = diagnoseContext();
   const digest = haveB ? diffDigest(diffSafe, state.packB, lens) : null;
   // The probe record the engine scored "fresh" / "drift-free" from: Pack B's
@@ -1138,12 +1148,10 @@ function renderDiagnose(view) {
     diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
     remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,
   });
-  // The service's criteria (grade-criteria-ui.mjs): said in the summary, switched under Evidence.
-  const scope = diagnoseCriteriaScope();
-  const parts = renderDiagnosticGradeVerdict(diagnostic, scope);
+  const parts = renderDiagnosticGradeVerdict(diagnostic);
   // The response path (GAP batch 2, B3.3): only for a pack that declares a
   // remediation; the engine loads at call time and repaints once when it
-  // lands, so the block and its index entry appear together.
+  // lands, so the row appears with its block.
   const flowModel = packDeclaresRemediation(state.pack)
     ? buildRemediationFlowViewModel(remediationFlowEngine({ onLoaded: () => appHost.renderMainView() }), {
       pack: state.pack, packB: haveB ? state.packB : null, diff: diffSafe, compareBId: state.compareBId, packId: state.selectedPackId,
@@ -1154,43 +1162,46 @@ function renderDiagnose(view) {
   report.className = 'diag-report diag-assess';
   scaffold.appendChild(report);
 
-  // 1–4. Context · decision · next action · top causes, then the measures
-  // grouped by meaning and the (collapsed) scoring reference.
-  report.insertAdjacentHTML('beforeend', renderAssessmentHeaderHtml(decision, ctx, diagnostic));
-  const summary = report.querySelector('#diag-summary');
-  if (summary) {
-    summary.classList.add('ux-section-target');
-    summary.tabIndex = -1;
-    summary.insertAdjacentHTML('beforeend', assessmentMeasuresHtml(diagnostic, decision)
-      + criteriaPanelHtml(scope)
-      + diagUx.disclosureHtml('How the grade is calculated', assessmentCalcHtml(diagnostic, parts.ladderHtml), { cls: 'diag-calc-disclosure' }));
-  }
+  // One screen (assessment-page.mjs): the verdict, a what-if while one is
+  // tried, the checks — one row each, a switch on each — and everything else
+  // folded into closed rows that say their headline.
+  report.insertAdjacentHTML('beforeend', assessmentVerdictHtml(decision, ctx, diagnostic, !!whatIf));
+  if (whatIf) report.insertAdjacentHTML('beforeend', assessmentWhatIfHtml(whatIf, scope, diagnostic, savedDiagnostic));
+  report.insertAdjacentHTML('beforeend', checksTableHtml(assessmentChecks(decision, diagnostic, scope, whatIf)));
 
-  // 5. Details — one sticky index over the long report, issue count per section.
-  const rollup = diagnostic.traceabilityGraph?.rollup;
-  const thinLayers = POSTURE_LAYERS.filter(l => POSTURE_MECHANISMS_PER_LAYER
-    .filter(m => (posture.cells[`${l.key}:${m.key}`] || []).length > 0).length <= 3).length;
-  const countTone = (n, bad = 'fail') => (n > 0 ? bad : 'ok');
-  const navSections = [
-    { id: 'diag-summary', label: 'Summary' },
-    { id: 'diag-gaps', label: 'Gaps', count: decision.gapCount, tone: countTone(decision.gapCount) },
-    { id: 'diag-compare', label: 'Comparison', count: digest ? decision.qualityGaps : null, tone: countTone(decision.qualityGaps, 'warn') },
-    { id: 'diag-evidence', label: 'Evidence', count: parts.failingChecks, tone: countTone(parts.failingChecks, 'warn') },
-    parts.requirementsHtml ? { id: 'diag-requirements', label: 'Requirements', count: (rollup?.broken || 0) + (rollup?.partial || 0), tone: countTone((rollup?.broken || 0) + (rollup?.partial || 0), 'warn') } : null,
-    flowModel ? { id: 'diag-flow', label: 'Response path', count: flowModel.counts.blocked + flowModel.counts.unresolved, tone: countTone(flowModel.counts.blocked + flowModel.counts.unresolved, 'warn') } : null,
-    { id: 'diag-layers', label: 'Layer scores', count: thinLayers, tone: countTone(thinLayers, 'warn') },
-  ];
-  report.insertAdjacentHTML('beforeend', assessmentStickyHtml(decision, ctx, navSections, diagnostic));
+  const more = document.createElement('div');
+  more.className = 'diag-more';
+  report.appendChild(more);
 
-  // Gaps — the blockers in priority order: what failed → why → fix.
-  report.insertAdjacentHTML('beforeend', assessmentGapsHtml(decision, diagnostic));
+  // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
+  // it's the "why" behind the coverage checks whether or not a Pack B exists.
+  const cov = layerCoverage(posture);
+  const thinLayers = cov.layers.filter((l) => l.observed <= 3).length;
+  const layers = diagMoreRow(more, {
+    id: 'diag-layers', title: 'Layer scores',
+    metaHtml: `<span>${cov.observed} of ${cov.total} mechanisms observed</span>${layerMiniHtml(cov)}`,
+    count: thinLayers, countTitle: thinLayers === 1 ? 'thin layer' : 'thin layers', tone: 'warn',
+  });
+  layers.appendChild(renderBenchmarkHeadline(posture, lens));
+  layers.appendChild(renderPosturePieRow(posture));
+  layers.appendChild(renderPostureMatrix(posture));
+  layers.appendChild(renderPostureNarrative(posture));
 
   // Comparison with the selected baseline (or the invitation to choose one).
-  const cmp = diagBlockEl('diag-compare', haveB ? ctx.roles.title : 'Comparison with a baseline',
-    haveB && ctx.b
-      ? `<strong>${escapeHtml(packLine(ctx.a))}</strong> compared with <strong>${escapeHtml(packLine(ctx.b))}</strong>. Structural differences (additional artefacts) and quality gaps (missing or changed artefacts) are weighted differently.`
-      : '');
-  if (!haveB && state.compareBId && !state.selectedPackId) {
+  const cannotCompare = !haveB && state.compareBId && !state.selectedPackId;
+  const t = digest?.totals;
+  const cmp = diagMoreRow(more, {
+    id: 'diag-compare', title: haveB ? ctx.roles.title : 'Comparison with a baseline',
+    metaHtml: escapeHtml(cannotCompare ? 'this pack cannot be compared yet'
+      : !haveB ? 'no baseline selected: the pack is read on its own'
+        : t && t.universe > 0 ? `${t.onlyInA} ${ctx.roles.aDelta.toLowerCase()} · ${t.drifted} changed · ${t.onlyInB} ${ctx.roles.bDelta.toLowerCase()} · ${t.aligned} match`
+          : 'nothing to compare in this scope'),
+    count: digest ? decision.qualityGaps : null, countTitle: decision.qualityGaps === 1 ? 'quality gap' : 'quality gaps', tone: 'warn',
+  });
+  if (haveB && ctx.b) {
+    cmp.insertAdjacentHTML('beforeend', `<p class="diag-block-lede"><strong>${escapeHtml(packLine(ctx.a))}</strong> compared with <strong>${escapeHtml(packLine(ctx.b))}</strong>. Structural differences (additional artefacts) and quality gaps (missing or changed artefacts) are weighted differently.</p>`);
+  }
+  if (cannotCompare) {
     // A baseline is picked, but this pack has no server id, so no diff can
     // be computed — say that, rather than "no baseline selected".
     cmp.insertAdjacentHTML('beforeend', diagUx.emptyStateHtml({
@@ -1212,97 +1223,268 @@ function renderDiagnose(view) {
     }));
     cmp.appendChild(renderLiveScopeControl({ standalone: true }));
   }
-  report.appendChild(cmp);
 
-  // Evidence (the scored checks + the evidence ledger), then requirement chains.
-  report.insertAdjacentHTML('beforeend', parts.evidenceHtml);
-  if (parts.requirementsHtml) report.insertAdjacentHTML('beforeend', parts.requirementsHtml);
-  if (flowModel) report.insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-diagnose', staticInput()) : null }));
+  // Requirement chains, then the response path of a pack that declares one.
+  const rollup = diagnostic.traceabilityGraph?.rollup;
+  if (parts.requirementsHtml) {
+    const hurt = (rollup?.broken || 0) + (rollup?.partial || 0);
+    diagMoreRow(more, {
+      id: 'diag-requirements', title: 'Requirement chains',
+      metaHtml: escapeHtml(rollup?.declaredTotal ? `${rollup.intact} of ${rollup.declaredTotal} intact · ${rollup.broken} broken · ${rollup.partial} partial` : 'from each objective to the signals that prove it'),
+      count: hurt, countTitle: hurt === 1 ? 'chain not intact' : 'chains not intact', tone: 'warn',
+    }).insertAdjacentHTML('beforeend', parts.requirementsHtml);
+  }
+  if (flowModel) {
+    const stuck = flowModel.counts.blocked + flowModel.counts.unresolved;
+    diagMoreRow(more, {
+      id: 'diag-flow-row', title: 'Response path',
+      metaHtml: escapeHtml(`from a firing alert to its remediation${stuck ? ` · ${stuck} not resolved` : ''}`),
+      count: stuck, countTitle: 'not resolved', tone: 'warn',
+    }).insertAdjacentHTML('beforeend', remediationFlowHtml(flowModel, { screen: 'diagnose', notComparedNote: isStatic() ? staticRemedy('flow-not-compared-diagnose', staticInput()) : null }));
+  }
 
-  // Layer scores — per-layer × per-mechanism coverage. Pack-A-derived, so
-  // it's the "why" behind the coverage checks whether or not a Pack B exists.
-  const layers = diagBlockEl('diag-layers', 'Layer scores — where coverage is thin',
-    'How many of the expected mechanisms each layer observes, declared in the pack or seen as evidence.');
-  layers.appendChild(renderBenchmarkHeadline(posture, lens));
-  layers.appendChild(renderPosturePieRow(posture));
-  layers.appendChild(renderPostureMatrix(posture));
-  layers.appendChild(renderPostureNarrative(posture));
-  report.appendChild(layers);
+  // Where each result was read, field by field; then the scale and the rules.
+  diagMoreRow(more, { id: 'diag-ledger', title: 'Evidence ledger', metaHtml: escapeHtml(`expected against observed, field by field · ${parts.ledgerMeta}`) })
+    .insertAdjacentHTML('beforeend', parts.ledgerHtml);
+  diagMoreRow(more, { id: 'diag-calc', title: 'How the grade is calculated', metaHtml: escapeHtml(`${fmtChecks(diagnostic.overall.passed)} of ${diagnostic.overall.total} checks = ${decision.scorePct}% → grade ${decision.ig.letter}`) })
+    .insertAdjacentHTML('beforeend', assessmentCalcHtml(diagnostic, parts.ladderHtml));
 
   wireDiagActions(report);
-  wireDiagGradeAsk(report);
-  diagUx.wireSectionNav(report);
+  wireDiagKeepAsk(report);
 }
 
-// The criteria of the grade on screen: those of the service whose own pack it
-// is (state.gradeService, set by the host at each repaint), with the switch
-// where the host saves one (host.setGradeCriterion) — never in a static
-// bundle, which has no server to keep it. The reason being typed for a switch
-// (diagGradeAsk) is kept through repaints and dropped with its service.
-let diagGradeAsk = null;
+// ---------- the Assessment's page state ----------
+//
+// What the Assessment keeps through its repaints, for the pack on screen: the
+// check rows and the folded rows drawn open, and a what-if — the set of
+// criteria the grade is taken without while one is tried ({ off, keep }),
+// null when the page shows what is saved. `keep` is the reason being typed
+// once Keep asks for one. All of it is dropped when another pack, or another
+// service's, comes on screen.
+let diagPageKey = null;
+const diagOpenChecks = new Set();
+const diagOpenRows = new Set();
+let diagWhatIfState = null;
 let diagGradeScope = null;
+
+// The criteria of the grade on screen: those of the service whose own pack it
+// is (state.gradeService, set by the host at each repaint), and whether a set
+// can be kept for it — where the host saves one (host.setGradeCriteria), never
+// in a static bundle, which has no server to keep it.
 function diagnoseCriteriaScope() {
   const scope = criteriaScope({
     service: state.gradeService,
-    canSwitch: typeof appHost.setGradeCriterion === 'function' && !isStatic(),
+    canSwitch: typeof appHost.setGradeCriteria === 'function' && !isStatic(),
     canWrite: state.access?.canWrite,
     writeReason: state.access?.reason || '',
   });
-  if (diagGradeAsk && (!scope?.switches?.enabled || diagGradeAsk.service !== scope.serviceId || scope.offKeys.includes(diagGradeAsk.key))) diagGradeAsk = null;
+  const key = `${scope?.serviceId ?? ''}|${state.selectedPackId ?? ''}`;
+  if (key !== diagPageKey) { diagPageKey = key; diagOpenChecks.clear(); diagOpenRows.clear(); diagWhatIfState = null; }
   diagGradeScope = scope;
   return scope;
 }
 
-// The ask's field: what is typed stays with the ask, and so does the focus
-// through a repaint; Enter switches the criterion off, Escape gives up.
-function wireDiagGradeAsk(root) {
-  const input = root.querySelector('[data-diag-grade-reason]');
-  const ask = diagGradeAsk;
-  if (!input || !ask) return;
-  input.addEventListener('input', () => { ask.reason = input.value; ask.caret = input.selectionStart; input.removeAttribute('aria-invalid'); });
-  input.addEventListener('focus', () => { ask.focused = true; });
-  // A field taken away by a repaint keeps the ask focused; one left by the person does not.
-  input.addEventListener('blur', () => { queueMicrotask(() => { if (input.isConnected) ask.focused = false; }); });
-  input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); diagGradeOff(input.dataset.diagGradeReason); }
-    else if (ev.key === 'Escape') { ev.preventDefault(); runDiagAction('diag-grade-cancel'); }
+// The what-if on screen, or null: a set that is what the service already keeps is none.
+function diagnoseWhatIf() {
+  const w = diagWhatIfState;
+  if (!w) return null;
+  if (whatIfChanges(state.gradeOff, w.off).same) { diagWhatIfState = null; return null; }
+  return w;
+}
+
+// A folded row: closed unless it was opened on this pack, its headline on the row.
+function diagMoreRow(parent, { id, title, metaHtml = '', count = null, countTitle = '', tone = 'neutral' }) {
+  const row = document.createElement('details');
+  row.className = 'diag-more-row ux-section-target';
+  row.id = id;
+  row.open = diagOpenRows.has(id);
+  row.innerHTML = `${moreSummaryHtml({ title, metaHtml, count, countTitle, tone })}<div class="diag-more-body"></div>`;
+  row.addEventListener('toggle', () => { if (row.open) diagOpenRows.add(id); else diagOpenRows.delete(id); });
+  parent.appendChild(row);
+  return row.querySelector('.diag-more-body');
+}
+
+// The verdict band: the grade, the score on the scale, and coverage, trust and
+// the live read in a number each (the measures, grouped by meaning since the
+// 2026-09 review, now one line of facts).
+function assessmentVerdictHtml(d, ctx, diagnostic, whatIf = false) {
+  const context = [
+    ctx.service ? { key: 'Service', value: ctx.service } : null,
+    { key: ctx.roles.aKey, value: packLine(ctx.a), title: 'Pack A — the pack being assessed' },
+    ctx.b
+      ? { key: ctx.roles.bKey, value: packLine(ctx.b), title: `Pack B — the ${ctx.roles.bNoun} it is compared with` }
+      : { key: 'Baseline', value: 'none selected', title: 'Choose a Pack B in the header to compare with live or a baseline' },
+  ];
+  const pct = (p, t) => (t ? Math.round((p / t) * 100) : 0);
+  const toneFor = (p, t) => (p >= t ? 'ok' : p > 0 ? 'warn' : 'fail');
+  const rollup = diagnostic.traceabilityGraph?.rollup;
+  const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
+    : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
+      : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
+        : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
+          : { v: 'Detected', note: 'the live probes answered for this read', tone: 'ok' };
+  // Coverage or trust: the share of its checks, the checks by name on hover; a
+  // group left out whole is said to be, not scored 0%.
+  const group = (term, g) => {
+    const n = groupNames(g);
+    if (!n.count) return { labelHtml: diagUx.termHtml(term), value: 'Not graded', note: 'every check left out', tone: 'neutral', title: `${n.off}: not graded for this service` };
+    return {
+      labelHtml: diagUx.termHtml(term), value: `${pct(g.passed, g.total)}%`,
+      note: `${fmtChecks(g.passed)} of ${g.total} ${g.total === 1 ? 'check' : 'checks'}`, tone: toneFor(g.passed, g.total),
+      title: `${n.graded}${n.off ? ` · ${n.off} not graded for this service` : ''}`,
+    };
+  };
+  const s = scoredChecksOf(diagnostic);
+  const graded = s.coverage + s.trust;
+  const lead = `${d.gradeName}: `;
+  return verdictBarHtml({
+    contextHtml: diagUx.contextLineHtml(context),
+    tone: d.tone, letter: d.ig.letter, gradeName: d.gradeName, gradeTitle: d.verdictTitle,
+    sentence: d.sentence.startsWith(lead) ? capitalize(d.sentence.slice(lead.length)) : d.sentence,
+    scorePct: d.scorePct, scoreExact: d.audit.scorePctExact, threshold: d.audit.threshold, passes: d.passes,
+    graded, total: graded + s.off.length, whatIf,
+    facts: [
+      group('coverage', diagnostic.coverage),
+      group('trust', diagnostic.trust),
+      { label: 'Live signals', value: live.v, note: live.note, tone: live.tone },
+      rollup?.declaredTotal
+        ? { label: 'Requirement chains', value: `${rollup.intact} of ${rollup.declaredTotal}`, note: `intact · ${rollup.broken} broken · ${rollup.partial} partial`, tone: rollup.broken ? 'fail' : rollup.partial ? 'warn' : 'ok' }
+        : null,
+    ],
+    actions: d.secondary,
   });
-  if (ask.focus || ask.focused) {
-    ask.focus = false;
+}
+
+// A grade as the what-if bar names it: letter, score, and on how many criteria.
+function gradeInBrief(diagnostic) {
+  const overall = diagnostic.overall;
+  const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
+  const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
+  const s = scoredChecksOf(diagnostic);
+  const graded = s.coverage + s.trust;
+  return { letter: ig.letter, pct: Math.round(audit.scorePctExact), graded, total: graded + s.off.length };
+}
+
+// The what-if bar: what the set on screen gives against what is saved, with
+// Keep where a set can be saved for the service, and Reset.
+function assessmentWhatIfHtml(whatIf, scope, diagnostic, savedDiagnostic) {
+  const changes = whatIfChanges(state.gradeOff, whatIf.off);
+  const sw = scope?.switches || null;
+  return whatIfBarHtml({
+    words: whatIfWords(changes),
+    now: gradeInBrief(diagnostic),
+    saved: gradeInBrief(savedDiagnostic),
+    keep: sw ? {
+      enabled: sw.enabled, reason: sw.reason, serviceName: scope.serviceName,
+      needsReason: changes.turnedOff.length > 0,
+      ask: sw.enabled && whatIf.keep ? { reason: whatIf.keep.reason, count: changes.turnedOff.length } : null,
+    } : null,
+  });
+}
+
+// The rows of the checks table: the decision's checks by group, each marked
+// when the what-if changed it, and — left out and saved — with why, who and when.
+function assessmentChecks(decision, diagnostic, scope, whatIf) {
+  const changes = whatIf ? whatIfChanges(state.gradeOff, whatIf.off) : { turnedOff: [], turnedOn: [] };
+  const changed = new Set([...changes.turnedOff, ...changes.turnedOn]);
+  const reasons = new Map((Array.isArray(state.gradeService?.gradeOff) ? state.gradeService.gradeOff : []).map((x) => [x?.key, typeof x?.reason === 'string' ? x.reason.trim() : '']));
+  const by = new Map((scope?.notGraded || []).map((x) => [x.key, x.by]));
+  const rowsOf = (group) => decision.checks.filter((c) => c.group === group).map((c) => ({
+    ...c,
+    changed: changed.has(c.key),
+    saved: c.state === 'off' && !changed.has(c.key) && reasons.has(c.key) ? { reason: reasons.get(c.key), by: by.get(c.key) || '' } : null,
+  }));
+  const trust = diagnostic.trust;
+  return {
+    groups: [
+      { key: 'coverage', passed: diagnostic.coverage.passed, total: diagnostic.coverage.total, rows: rowsOf('coverage') },
+      {
+        key: 'trust', passed: trust.passed, total: trust.total, rows: rowsOf('trust'),
+        note: !trust.hasMcpSource ? (isStatic() ? escapeHtml(staticRemedy('diagnose-banner', staticInput())) : 'Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.') : '',
+      },
+      { key: 'operability', passed: 0, total: 0, rows: rowsOf('operability') },
+    ],
+    // Found beside the checks (live evidence, the baseline's own gaps): rows of the same table, never scored.
+    also: decision.blockers.filter((b) => !b.scored).map((b) => ({
+      key: b.key, label: b.title, tone: b.tone, observed: b.observed || '',
+      title: b.title, why: b.why || '', fix: b.fix || '', cost: b.cost || '', actionLabel: b.actionLabel || '', actionId: b.actionId || '',
+    })),
+    open: [...diagOpenChecks],
+  };
+}
+
+// Keep's field: what is typed stays with the what-if, and so does the focus
+// through a repaint; Enter saves, Escape gives the ask up.
+function wireDiagKeepAsk(root) {
+  const input = root.querySelector('[data-diag-keep-reason]');
+  const keep = diagWhatIfState?.keep;
+  if (!input || !keep) return;
+  input.addEventListener('input', () => { keep.reason = input.value; keep.caret = input.selectionStart; input.removeAttribute('aria-invalid'); });
+  input.addEventListener('focus', () => { keep.focused = true; });
+  // A field taken away by a repaint keeps the ask focused; one left by the person does not.
+  input.addEventListener('blur', () => { queueMicrotask(() => { if (input.isConnected) keep.focused = false; }); });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); diagKeepSubmit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); runDiagAction('diag-whatif-keep-cancel'); }
+  });
+  if (keep.focus || keep.focused) {
+    keep.focus = false;
     input.focus({ preventScroll: true });
-    const at = typeof ask.caret === 'number' ? ask.caret : input.value.length;
+    const at = typeof keep.caret === 'number' ? keep.caret : input.value.length;
     try { input.setSelectionRange(at, at); } catch { /* a field that takes no range */ }
   }
 }
 
-// "Stop grading it": a reason is required — an empty one keeps the ask open, marked.
-function diagGradeOff(key) {
-  const input = document.querySelector('[data-diag-grade-reason]');
-  const reason = String(input?.value ?? diagGradeAsk?.reason ?? '').trim();
+const cssKey = (key) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(key) : key);
+
+// A check's row, opened or closed in place: no repaint, so the page does not move.
+function setCheckOpen(key, open) {
+  if (open) diagOpenChecks.add(key); else diagOpenChecks.delete(key);
+  const btn = document.querySelector(`.diag-checks [data-ux-action="diag-check-open:${cssKey(key)}"]`);
+  btn?.setAttribute('aria-expanded', open ? 'true' : 'false');
+  const detail = btn ? document.getElementById(btn.getAttribute('aria-controls')) : null;
+  if (detail) detail.hidden = !open;
+}
+
+// A criterion's switch: the grade on screen is taken again without it (or with
+// it), at once. Nothing is saved — Keep does that.
+function diagToggleCheck(key) {
+  const { off, refused } = toggleOff(diagWhatIfState ? diagWhatIfState.off : state.gradeOff, key);
+  if (refused) {
+    toast('A grade stands on at least one criterion.');
+    diagUx.announce('A grade stands on at least one criterion.');
+    return;
+  }
+  const changes = whatIfChanges(state.gradeOff, off);
+  diagWhatIfState = changes.same ? null : { off, keep: changes.turnedOff.length ? (diagWhatIfState?.keep || null) : null };
+  appHost.renderMainView();
+  document.querySelector(`.diag-checks [data-ux-action="diag-check-toggle:${cssKey(key)}"]`)?.focus({ preventScroll: true });
+  diagUx.announce(document.querySelector('.diag-whatif-text')?.textContent.replace(/\s+/g, ' ').trim() || 'Back to what is saved.');
+}
+
+// Keep, once a reason is typed: it is required for the criteria newly left out.
+function diagKeepSubmit() {
+  const input = document.querySelector('[data-diag-keep-reason]');
+  const reason = String(input?.value ?? diagWhatIfState?.keep?.reason ?? '').trim();
   if (!reason) {
     input?.setAttribute('aria-invalid', 'true');
     input?.focus({ preventScroll: true });
     diagUx.announce('Say why first: a reason is required.');
     return;
   }
-  diagGradeAsk = null;
-  diagGradeSave(key, { graded: false, reason });
+  diagKeepSave(reason);
 }
 
-// The host saves the switch and draws Diagnose again on the criteria the service
-// has now; the focus then goes to that criterion's switch, now the other way round.
-async function diagGradeSave(key, opts) {
+// The host saves the set and draws Diagnose again on what the service now
+// keeps — which is the what-if, so the page then shows it as saved.
+async function diagKeepSave(reason) {
+  const w = diagWhatIfState;
   const scope = diagGradeScope;
-  if (!scope?.switches?.enabled || typeof appHost.setGradeCriterion !== 'function') return;
-  const fromEvidence = !!document.activeElement?.closest?.('#diag-evidence') || !opts.graded;
-  const ok = await appHost.setGradeCriterion(scope.serviceId, key, opts);
+  if (!w || !scope?.switches?.enabled || typeof appHost.setGradeCriteria !== 'function') return;
+  const ok = await appHost.setGradeCriteria(scope.serviceId, { off: w.off, reason });
   if (!ok) return;
-  const which = opts.graded ? 'ask' : 'on';
-  const sel = `[data-ux-action="diag-grade-${which}:${typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(key) : key}"]`;
-  const target = (fromEvidence ? document.querySelector(`#diag-evidence ${sel}`) : null)
-    || document.querySelector(`.diag-criteria ${sel}`)
-    || document.querySelector('.diag-criteria [data-ux-action="diag-goto:diag-evidence"]');
-  target?.focus?.({ preventScroll: true });
+  if (diagWhatIfState === w) { diagWhatIfState = null; appHost.renderMainView(); }
+  document.getElementById('diag-summary')?.focus({ preventScroll: true });
 }
 
 // Affordance shown in Diagnose when only Pack A is loaded. Points the
@@ -1930,56 +2112,40 @@ export function renderPostureNarrative(posture) {
 //   below  → Far from diagnostic-grade
 // ============================================================
 
-// Diagnose view — the compliance report's DETAIL sections. Density and
-// evidence are the design language; every row encodes observed vs
-// expected. Since the 2026-09 UX review the report no longer leads: the
-// decision header (renderAssessmentHeaderHtml) states the result, top
-// causes and next action first, and this function supplies the evidence
-// behind it as parts the view places under its section index:
-//   evidenceHtml      #diag-evidence — the scored checks (2A/2B, 2C info)
-//                     plus the expected-vs-observed ledger
-//   requirementsHtml  #diag-requirements — requirement-chain integrity
+// Diagnose view — the evidence behind the Assessment's rows, as the parts the
+// view folds into closed rows (assessment-page.mjs):
+//   ledgerHtml        the expected-vs-observed ledger, field by field
+//   ledgerMeta        its headline: the evidence score
+//   requirementsHtml  requirement-chain integrity ('' without chains)
 //   ladderHtml        the instrument-grade ladder, for "How the grade is
 //                     calculated"
-//   failingChecks     scored checks not passing (the section's issue count)
+// The scored checks themselves are the page's rows (buildAssessmentDecision's
+// `checks`): since 0.8.24 they are said once, there, not in tables of their own.
+
 // The scored checks, counted from the diagnostic: a criterion the service is
-// not graded on (applies: false) is no scored check. With none left out the
-// words are the ones they always were.
-const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
-const countWord = (n) => COUNT_WORDS[n] ?? String(n);
+// not graded on (applies: false) is no scored check.
 function scoredChecksOf(diagnostic) {
   const on = (g) => (g?.criteria || []).filter((c) => c.applies !== false).length;
   const off = [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].filter((c) => c.applies === false).map((c) => c.label || c.key);
   return { coverage: on(diagnostic?.coverage), trust: on(diagnostic?.trust), off };
 }
 const notGradedWords = (off) => notGradedSentence(off);
-// "on 6 of 7 criteria" and "Graded on 6 of 7 criteria: Fresh is not graded for this service." —
-// both '' when every criterion is graded, so the sentences they join read as they always have.
-function gradedOnWords(diagnostic) {
-  const s = scoredChecksOf(diagnostic);
-  if (!s.off.length) return { on: '', sentence: '' };
-  const n = s.coverage + s.trust;
-  return { on: `on ${n} of ${n + s.off.length} criteria`, sentence: `Graded on ${n} of ${n + s.off.length} criteria: ${notGradedWords(s.off)}.` };
-}
-function scoredChecksLede(diagnostic, letter) {
-  const s = scoredChecksOf(diagnostic);
-  const n = s.coverage + s.trust;
-  const head = `${countWord(n).replace(/^./, (c) => c.toUpperCase())} scored check${n === 1 ? '' : 's'} make${n === 1 ? 's' : ''} up the ${escapeHtml(letter)} grade: ${countWord(s.coverage)} for ${diagUx.termHtml('coverage')} and ${countWord(s.trust)} for ${diagUx.termHtml('trust')}`;
-  return `${head}${s.off.length ? `; ${escapeHtml(notGradedWords(s.off))}` : ''}. Operability is shown for context and never scored.`;
-}
-// "seven scored checks (four for coverage, three for trust)", for a sentence of the gaps block.
-function scoredChecksPhrase(diagnostic) {
-  const s = scoredChecksOf(diagnostic);
-  const n = s.coverage + s.trust;
-  return `${countWord(n)} scored check${n === 1 ? '' : 's'} (${countWord(s.coverage)} for coverage, ${countWord(s.trust)} for trust${s.off.length ? `; ${notGradedWords(s.off)}` : ''})`;
-}
 
-// `scope`: the service's criteria (diagnoseCriteriaScope) — with a switch, each
-// scored row of the coverage and trust tables carries it, and the row being
-// switched off asks why under it. Without one the tables are what they were.
-function renderDiagnosticGradeVerdict(diagnostic, scope = null) {
-  const sw = scope?.switches || null;
-  const ask = sw?.enabled ? diagGradeAsk : null;
+// Where each check reads its evidence and what it expects there: the ledger's
+// rows, and "Expected" / "Read from" in a check's opened row.
+const CRITERION_EVIDENCE = Object.freeze({
+  'multi-modal': { field: 'spec.telemetry.backends[].signal', expected: 'metrics + logs + traces (≥ 3 of 4)' },
+  correlated: { field: 'spec.otel.sdk.propagators', expected: 'includes tracecontext' },
+  calibrated: { field: 'spec.slos[].objective + spec.baselines', expected: '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared (a scaffold does not count)' },
+  comprehensive: { field: 'posture matrix · 4 layers × 10 mechanisms', expected: 'average ≥ 50% observed' },
+  actionable: { field: 'spec.remediation[]', expected: '≥ 1 remediation runbook declared (informational — not scored)' },
+  'chaos-validated': { field: 'spec.validation.chaos_experiments[] · last_result / the live run feed', expected: 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)' },
+  'drift-free': { field: 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', expected: 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded' },
+  fresh: { field: 'metadata.annotations.mcp.refreshedAt', expected: 'within last 24h' },
+});
+const LEDGER_ORDER = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'actionable', 'chaos-validated', 'drift-free', 'fresh'];
+
+function renderDiagnosticGradeVerdict(diagnostic) {
   const cov = diagnostic.coverage;
   const trust = diagnostic.trust;
   const operability = diagnostic.operability || { criteria: [], informational: true, note: '' };
@@ -1998,8 +2164,6 @@ function renderDiagnosticGradeVerdict(diagnostic, scope = null) {
       : diagUx.statusChipHtml('assessment', 'fail');
   const infoChip = (c) => `<span class="ux-chip ux-chip-neutral ux-chip-assessment" title="Shown for context; never scored.">Not scored · ${c.pass ? 'yes' : 'no'}</span>`;
   const overallPct = pct(overall.passed, overall.total);
-  const covPct   = pct(cov.passed, cov.total);
-  const trustPct = pct(trust.passed, trust.total);
   const chainBlock = renderDiagnosticTraceabilityGraph(diagnostic.traceabilityGraph);
 
   // The audit (PASS when score >85%) stays the machine contract — journey
@@ -2009,60 +2173,24 @@ function renderDiagnosticGradeVerdict(diagnostic, scope = null) {
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
 
-  // ---------- Criterion table (2A, 2B or 2C) ----------
-  // One row per criterion. Tight. Result · name · observed · expected.
-  const critTable = (criteria, { informational = false } = {}) => `
-    <table class="diag-crit-table">
-      <thead>
-        <tr>
-          <th class="c-pip" scope="col">Result</th>
-          <th class="c-name" scope="col">Check</th>
-          <th class="c-obs" scope="col">Observed</th>
-          <th class="c-exp" scope="col">Expected</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${criteria.map(c => `
-          <tr class="diag-crit ${c.applies === false ? 'is-info' : criterionState(c)}" data-key="${escapeHtml(c.key)}">
-            <td class="c-pip">${informational || c.applies === false ? infoChip(c) : criterionChip(c)}</td>
-            <td class="c-name">${escapeHtml(c.label)}${c.applies === false ? ' (not graded for this service)' : ''}${!informational && sw ? switchHtml(sw, c.applies === false ? 'on' : 'off', c.key, c.label) : ''}</td>
-            <td class="c-obs">${escapeHtml(c.detail)}</td>
-            <td class="c-exp">${escapeHtml(c.sub)}</td>
-          </tr>${!informational && ask && ask.key === c.key && c.applies !== false ? askRowHtml(ask, c.key) : ''}
-        `).join('')}
-      </tbody>
-    </table>
-  `;
-
   // ---------- Evidence ledger — the "where the data came from" audit trail ----------
-  // Every claim above is backed by a specific pack field; this table
-  // names the field, what we expected, what we observed, and the verdict.
-  // For an audit tool this is the most important section, not the least.
-  const evidenceRows = [];
-  // Collect from criteria themselves — each criterion encodes an evidence assertion.
+  // Every check is backed by a specific pack field; this table names the
+  // field, what we expected, what we observed, and the verdict. For an audit
+  // tool this is the most important section, not the least.
   const C = (key) => cov.criteria.find(c => c.key === key)
     || trust.criteria.find(c => c.key === key)
     || operability.criteria.find(c => c.key === key);
-  const rowFor = (key, field, exp, extra = {}) => ({
-    key, field, exp,
+  const evidenceRows = LEDGER_ORDER.map((key) => ({
+    key, field: CRITERION_EVIDENCE[key].field, exp: CRITERION_EVIDENCE[key].expected,
     obs: C(key)?.detail || '—',
     pass: C(key)?.pass,
     score: C(key)?.score,
-    // A criterion the service is not graded on (applies: false) is shown, never scored.
-    ...(C(key)?.applies === false ? { informational: true } : {}),
-    ...extra,
-  });
-  evidenceRows.push(rowFor('multi-modal', 'spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)'));
-  evidenceRows.push(rowFor('correlated', 'spec.otel.sdk.propagators', 'includes tracecontext'));
-  evidenceRows.push(rowFor('calibrated', 'spec.slos[].objective + spec.baselines', '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared (a scaffold does not count)'));
-  evidenceRows.push(rowFor('comprehensive', 'posture matrix · 4 layers × 10 mechanisms', 'average ≥ 50% observed'));
-  evidenceRows.push(rowFor('actionable', 'spec.remediation[]', '≥ 1 remediation runbook declared (informational — not scored)', { informational: true }));
-  evidenceRows.push(rowFor('chaos-validated', 'spec.validation.chaos_experiments[] · last_result / the live run feed', 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)'));
-  evidenceRows.push(rowFor('drift-free', 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded'));
-  evidenceRows.push(rowFor('fresh', 'metadata.annotations.mcp.refreshedAt', 'within last 24h'));
+    // Operability, and a criterion the service is not graded on (applies: false), are shown, never scored.
+    ...(key === 'actionable' || C(key)?.applies === false ? { informational: true } : {}),
+  }));
   const scoredRows = evidenceRows.filter(r => !r.informational);
 
-  const evidenceTable = `
+  const ledgerHtml = `
     <table class="diag-evidence-table">
       <thead>
         <tr>
@@ -2084,16 +2212,17 @@ function renderDiagnosticGradeVerdict(diagnostic, scope = null) {
       </tbody>
     </table>
   `;
+  const ledgerMeta = `${fmtScore(scoredRows.reduce((n, r) => n + criterionScore(r), 0))} of ${scoredRows.length} evidence score · +${evidenceRows.length - scoredRows.length} informational`;
 
   // The instrument-grade ladder: every rung rendered top (best) → bottom,
   // the rung the score lands on highlighted. The grade is NEVER shown
-  // naked — the decision header carries letter + class + blurb, the rung
-  // labels carry the metrology vocabulary, and the ladder note explains
-  // what the scale derives from. (These narrative pieces are maintainer-
-  // ratified — 2026-06-11: "grades cannot be put into context without some
-  // narrative". Do not strip them to de-duplicate.) Since the 2026-09 UX
-  // review the ladder is reference material under "How the grade is
-  // calculated" rather than an equal-weight panel beside the result.
+  // naked — the verdict carries letter + class + sentence, the rung labels
+  // carry the metrology vocabulary, and the ladder note explains what the
+  // scale derives from. (These narrative pieces are maintainer-ratified —
+  // 2026-06-11: "grades cannot be put into context without some narrative".
+  // Do not strip them to de-duplicate.) Since the 2026-09 UX review the
+  // ladder is reference material under "How the grade is calculated" rather
+  // than an equal-weight panel beside the result.
   const ladderHtml = `
     <ul class="grade-ladder">
       ${INSTRUMENT_GRADE_SCALE.map(g => {
@@ -2111,69 +2240,7 @@ function renderDiagnosticGradeVerdict(diagnostic, scope = null) {
     <p class="grade-ladder-note">Grades derive from the verification score — A starts strictly above the ${audit.threshold}% audit bar, so the letter and the machine PASS/FAIL always agree. Verification evidence, not incident-validation. A++ needs external reference evidence this instrument cannot produce alone.</p>
   `;
 
-  const failingChecks = [...cov.criteria, ...trust.criteria].filter(c => c.applies !== false && !c.pass).length;
-
-  const evidenceHtml = `
-    <section class="diag-block ux-section-target" id="diag-evidence" tabindex="-1" aria-labelledby="diag-evidence-title">
-      <header class="diag-block-head">
-        <h2 class="diag-block-title" id="diag-evidence-title">Evidence — the checks behind the grade</h2>
-        <p class="diag-block-lede">${scoredChecksLede(diagnostic, ig.letter)}</p>
-      </header>
-
-      <section class="diag-section">
-        <header class="diag-section-head">
-          <span class="diag-section-num">2A</span>
-          <span class="diag-section-title">Coverage — are we observing the right signals?</span>
-          <span class="diag-section-meta">${fmtScore(cov.passed)} of ${cov.total} checks · ${covPct}%</span>
-        </header>
-        ${critTable(cov.criteria)}
-      </section>
-
-      <section class="diag-section">
-        <header class="diag-section-head">
-          <span class="diag-section-num">2B</span>
-          <span class="diag-section-title">Trust — can we trust what the signals show?</span>
-          <span class="diag-section-meta">${fmtScore(trust.passed)} of ${trust.total} checks · ${trustPct}%</span>
-        </header>
-        ${!trust.hasMcpSource ? `
-          <div class="diag-banner" role="note">
-            <span class="diag-banner-key">WARN</span>
-            ${isStatic() ? escapeHtml(staticRemedy('diagnose-banner', staticInput())) : 'Nothing live backs this pack. “Drift-free” and “Fresh” need a live draft (MCP) or a live refresh to verify.'}
-          </div>
-        ` : ''}
-        ${critTable(trust.criteria)}
-      </section>
-
-      <section class="diag-section diag-section-info">
-        <header class="diag-section-head">
-          <span class="diag-section-num">2C</span>
-          <span class="diag-section-title">Operability — can oncall act on what it sees?</span>
-          <span class="diag-section-meta">informational · not scored</span>
-        </header>
-        <div class="diag-banner" role="note">
-          <span class="diag-banner-key">INFO</span>
-          ${escapeHtml(operability.note || 'response readiness, not diagnostic capability — observed, displayed, never scored')}
-        </div>
-        ${critTable(operability.criteria, { informational: true })}
-      </section>
-
-      <section class="diag-section">
-        <header class="diag-section-head">
-          <span class="diag-section-num">⊜</span>
-          <span class="diag-section-title">Evidence ledger — expected vs observed, field by field</span>
-          <span class="diag-section-meta">${fmtScore(scoredRows.reduce((n, r) => n + criterionScore(r), 0))} of ${scoredRows.length} evidence score · +${evidenceRows.length - scoredRows.length} informational</span>
-        </header>
-        ${evidenceTable}
-      </section>
-    </section>
-  `;
-
-  const requirementsHtml = chainBlock ? `
-    <div class="diag-block ux-section-target" id="diag-requirements" tabindex="-1">
-      ${chainBlock}
-    </div>` : '';
-
-  return { evidenceHtml, requirementsHtml, ladderHtml, failingChecks };
+  return { ledgerHtml, ledgerMeta, requirementsHtml: chainBlock || '', ladderHtml };
 }
 
 // ---------- requirement-branch reconciliation (item 6) ----------
@@ -3853,7 +3920,6 @@ function diagnoseContext() {
 const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 // "Diagnostic / Clinical Grade" → "Diagnostic / clinical grade"
 const sentenceCase = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
-const GRADE_TONE = { a: 'ok', b: 'warn', c: 'warn', d: 'fail', ref: 'info' };
 
 // Plain-language copy for each scored check: what failed → why it matters
 // → what to do. The engine's own `detail` string rides along as the
@@ -3897,6 +3963,8 @@ const CRITERION_COPY = {
     fix: 'Refresh the live draft: scan live or fetch again from MCP.',
   },
 };
+// Why the one unscored check is shown at all, in its row.
+const OPERABILITY_WHY = 'Runbooks say how ready the response is, not how well the service can be diagnosed: it is shown, and never scored.';
 // Tie-break for checks that lose the same points: evidence first (a stale
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
@@ -4077,6 +4145,32 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   }
   const gapCount = blockers.filter(b => b.key !== 'live-evidence').length;
 
+  // Every check as the Assessment's rows read it (assessment-page.mjs): its
+  // state, the points it earns of those it is worth, and — failing — its own
+  // title, why and fix. Never merged with another check's, as two of the
+  // blockers above are: a row is one check.
+  const checkOf = (c, group) => {
+    const informational = group === 'operability';
+    const left = !informational && c.applies === false;
+    const score = criterionScore(c);
+    const st = informational ? 'info' : left ? 'off' : c.pass ? 'pass' : score > 0 ? 'partial' : 'fail';
+    const b = st === 'fail' || st === 'partial' ? criterionBlocker(c, 1 - score, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy }) : null;
+    const elsewhere = b && b.actionId !== `diag-crit:${c.key}`;   // "View the check" is the row itself
+    const counts = st === 'pass' || st === 'partial' || st === 'fail';
+    return {
+      key: c.key, label: c.label, group, state: st, met: !!c.pass,
+      observed: c.detail || '', expected: CRITERION_EVIDENCE[c.key]?.expected || c.sub || '', field: CRITERION_EVIDENCE[c.key]?.field || '',
+      earned: counts ? score * pointsPerCheck : 0, worth: counts ? pointsPerCheck : 0,
+      title: b?.title || '', why: b?.why || CRITERION_COPY[c.key]?.why || (informational ? OPERABILITY_WHY : ''), fix: b?.fix || '', cost: b?.cost || '',
+      actionLabel: elsewhere ? b.actionLabel : '', actionId: elsewhere ? b.actionId : '',
+    };
+  };
+  const checks = [
+    ...(diagnostic.coverage?.criteria || []).map((c) => checkOf(c, 'coverage')),
+    ...(diagnostic.trust?.criteria || []).map((c) => checkOf(c, 'trust')),
+    ...(diagnostic.operability?.criteria || []).map((c) => checkOf(c, 'operability')),
+  ];
+
   // The one sentence. Plain words first; the formal "diagnostic grade"
   // stays in the details ("How the grade is calculated").
   const liveClause = !hasLive ? ''
@@ -4124,87 +4218,12 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     note: notes.join(' '),
     primary, secondary,
     causes: blockers.slice(0, 3).map(b => ({ title: b.title, why: b.why, actionLabel: b.actionLabel, actionId: b.actionId, tone: b.tone })),
-    blockers, gapCount, qualityGaps,
+    blockers, gapCount, qualityGaps, checks,
     passes, hasLive, liveSeen, vantage, ig, audit, scorePct, gradeName,
     compared: !!digest && digest.totals.universe > 0, haveB,
     // A product lens narrows what was compared: "no gaps" then holds inside the lens only.
     lensed: !!digest?.useLens, lensLabel,
   };
-}
-
-// `diagnostic`: the grade the header names — what it left out of its criteria opens the note.
-function renderAssessmentHeaderHtml(d, ctx, diagnostic = null) {
-  const gradedOn = diagnostic ? gradedOnWords(diagnostic).sentence : '';
-  const context = [
-    ctx.service ? { key: 'Service', value: ctx.service } : null,
-    { key: ctx.roles.aKey, value: packLine(ctx.a), title: 'Pack A — the pack being assessed' },
-    ctx.b
-      ? { key: ctx.roles.bKey, value: packLine(ctx.b), title: `Pack B — the ${ctx.roles.bNoun} it is compared with` }
-      : { key: 'Baseline', value: 'none selected', title: 'Choose a Pack B in the header to compare with live or a baseline' },
-  ];
-  return diagUx.decisionHeaderHtml({
-    id: 'diag-summary', eyebrow: 'Assessment', context,
-    tone: d.tone, verdict: d.verdict, verdictTitle: d.verdictTitle,
-    decision: d.sentence, note: gradedOn ? `${gradedOn} ${d.note}` : d.note,
-    primary: d.primary, secondary: d.secondary, causes: d.causes,
-  });
-}
-
-// The measures, grouped by meaning (review §3 Diagnose): the overall
-// assessment, WHY (coverage · trust · audit gate) and the EVIDENCE behind
-// it (live signals, individual checks, requirement chains).
-function assessmentMeasuresHtml(diagnostic, d) {
-  const cov = diagnostic.coverage;
-  const trust = diagnostic.trust;
-  const fmt = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
-  const pct = (p, t) => (t ? Math.round((p / t) * 100) : 0);
-  const toneFor = (p, t) => (p >= t ? 'ok' : p > 0 ? 'warn' : 'fail');
-  const scored = [...cov.criteria, ...trust.criteria].filter(c => c.applies !== false);
-  const nPass = scored.filter(c => c.pass).length;
-  const nPartial = scored.filter(c => !c.pass && criterionScore(c) > 0).length;
-  const nFail = scored.length - nPass - nPartial;
-  // What the grade left out of its criteria (the service's switches), said where the counts are.
-  const left = scoredChecksOf(diagnostic).off.length;
-  const { on: onWords } = gradedOnWords(diagnostic);
-  const rollup = diagnostic.traceabilityGraph?.rollup;
-  const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
-    : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
-      : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
-        : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
-          : { v: 'Detected', note: 'the live probes answered for this read', tone: 'ok' };
-  const m = (labelHtml, value, note, tone, title = '') => `
-        <div class="ux-measure ux-tone-${tone}"${title ? ` title="${escapeHtml(title)}"` : ''}>
-          <dt>${labelHtml}</dt>
-          <dd><span class="ux-measure-val">${escapeHtml(value)}</span>${note ? `<span class="ux-measure-note">${escapeHtml(note)}</span>` : ''}</dd>
-        </div>`;
-  const group = (title, body) => `
-      <section class="diag-measure-group" aria-label="${escapeHtml(title)}">
-        <h3 class="diag-measure-group-title">${escapeHtml(title)}</h3>
-        <dl class="ux-measures">${body}</dl>
-      </section>`;
-  // Coverage or trust: the checks graded, by name, then any the service left out;
-  // a group left out whole is said to be, not scored 0%.
-  const why = (term, g) => {
-    const n = groupNames(g);
-    if (!n.count) return m(diagUx.termHtml(term), 'Not graded', `${n.off}: not graded for this service`, 'neutral');
-    return m(diagUx.termHtml(term), `${pct(g.passed, g.total)}%`, `${fmt(g.passed)} of ${g.total} checks: ${n.graded}${n.off ? ` · ${n.off} not graded for this service` : ''}`, toneFor(g.passed, g.total));
-  };
-  return `
-    <div class="diag-measure-groups">
-      ${group('Overall assessment',
-        m('Grade', `${d.ig.letter} · ${d.gradeName}`, d.ig.blurb || '', GRADE_TONE[d.ig.tier] || 'info', 'The instrument grade: where the score lands on the diagnostic-grade scale')
-        + m('Meets the target?', d.passes ? 'Yes' : 'No', `target: grade A, above ${d.audit.threshold}% · this pack ${d.scorePct}%${onWords ? ` ${onWords}` : ''}`, d.passes ? 'ok' : 'fail'))}
-      ${group('Why',
-        why('coverage', cov)
-        + why('trust', trust)
-        + m(diagUx.termHtml('audit-gate'), d.passes ? 'Met' : 'Not met', `passes above ${d.audit.threshold}%, where grade A begins`, d.passes ? 'ok' : 'fail'))}
-      ${group('Evidence',
-        m('Live signals', live.v, live.note, live.tone)
-        + m('Checks passed', `${nPass} of ${scored.length}`, ([nPartial ? `${nPartial} partial` : '', nFail ? `${nFail} failed` : ''].filter(Boolean).join(' · ') || 'every scored check passes') + (left ? ` · ${left} not graded` : ''), nFail ? 'fail' : nPartial ? 'warn' : 'ok')
-        + (rollup?.declaredTotal
-          ? m('Requirement chains', `${rollup.intact} of ${rollup.declaredTotal} intact`, `${rollup.broken} broken · ${rollup.partial} partial`, rollup.broken ? 'fail' : rollup.partial ? 'warn' : 'ok')
-          : ''))}
-    </div>`;
 }
 
 // "How the grade is calculated" — the ladder and the scoring rules as
@@ -4235,77 +4254,6 @@ function assessmentCalcHtml(diagnostic, ladderHtml) {
     </div>`;
 }
 
-// The persistent strip: grade + both packs named, and the section index
-// with an issue count per section.
-function assessmentStickyHtml(d, ctx, navSections, diagnostic = null) {
-  const vs = ctx.b ? ` compared with <strong>${escapeHtml(packLine(ctx.b))}</strong>` : '';
-  const on = diagnostic ? gradedOnWords(diagnostic).on : '';
-  return `
-    <div class="diag-sticky">
-      <p class="diag-sticky-ctx"><span class="diag-sticky-grade ux-tone-${escapeHtml(d.tone)}" title="${escapeHtml(d.verdictTitle)}">${escapeHtml(d.ig.letter)}</span> ${escapeHtml(d.gradeName)}${on ? ` ${escapeHtml(on)}` : ''} · <strong>${escapeHtml(packLine(ctx.a))}</strong>${vs}</p>
-      ${diagUx.sectionNavHtml(navSections, { label: 'Assessment sections' })}
-    </div>`;
-}
-
-// Blockers in priority order: what failed → why it matters → fix / evidence.
-function assessmentGapsHtml(d, diagnostic = null) {
-  const checks = diagnostic ? scoredChecksPhrase(diagnostic) : 'seven scored checks (four for coverage, three for trust)';
-  const items = d.blockers.map((b, i) => `
-      <li class="diag-blocker ux-tone-${escapeHtml(b.tone)}">
-        <div class="diag-blocker-col diag-blocker-what">
-          <span class="diag-blocker-key">What failed</span>
-          <span class="diag-blocker-title"><span class="diag-blocker-num">${i + 1}.</span> ${escapeHtml(b.title)}</span>
-          ${b.observed ? `<span class="diag-blocker-observed">${escapeHtml(b.observed)}</span>` : ''}
-          <span class="diag-blocker-cost">${escapeHtml(b.cost || '')}</span>
-        </div>
-        <div class="diag-blocker-col diag-blocker-why">
-          <span class="diag-blocker-key">Why it matters</span>
-          <p>${escapeHtml(b.why)}</p>
-        </div>
-        <div class="diag-blocker-col diag-blocker-fix">
-          <span class="diag-blocker-key">Fix</span>
-          <p>${escapeHtml(b.fix)}</p>
-          <div class="diag-blocker-actions">
-            ${b.actionId ? `<button type="button" class="ux-secondary-btn" data-ux-action="${escapeHtml(b.actionId)}">${escapeHtml(b.actionLabel)}</button>` : ''}
-            ${b.evidenceId && b.evidenceId !== b.actionId ? `<button type="button" class="ux-link-btn" data-ux-action="${escapeHtml(b.evidenceId)}">View evidence →</button>` : ''}
-          </div>
-        </div>
-      </li>`).join('');
-  const body = d.blockers.length
-    ? `<ol class="diag-blockers">${items}</ol>`
-    : diagUx.emptyStateHtml({
-      title: 'No gaps: every scored check passes.',
-      checked: d.compared
-        ? (d.lensed
-          ? `The ${checks} and the artefacts the selected baseline expects within the ${d.lensLabel || 'selected'} lens — artefacts outside the lens were not checked.`
-          : `The ${checks} and the artefacts the selected baseline expects.`)
-        : `The ${checks}.${d.haveB ? ' No artefact of the baseline could be compared in this scope, so none was checked.' : ''}`,
-      tone: 'ok',
-    });
-  return `
-    <section class="diag-block ux-section-target" id="diag-gaps" tabindex="-1" aria-labelledby="diag-gaps-title">
-      <header class="diag-block-head">
-        <h2 class="diag-block-title" id="diag-gaps-title">Gaps — what keeps this pack ${d.passes ? 'from a perfect score' : 'below grade A'}</h2>
-        <p class="diag-block-lede">In priority order: the checks that cost the most points come first. Each gap says what failed, why it matters and what to do next.</p>
-      </header>
-      ${body}
-    </section>`;
-}
-
-function diagBlockEl(id, title, ledeHtml = '') {
-  const sec = document.createElement('section');
-  sec.className = 'diag-block ux-section-target';
-  sec.id = id;
-  sec.tabIndex = -1;
-  sec.setAttribute('aria-labelledby', `${id}-title`);
-  sec.innerHTML = `
-    <header class="diag-block-head">
-      <h2 class="diag-block-title" id="${escapeHtml(id)}-title">${escapeHtml(title)}</h2>
-      ${ledeHtml ? `<p class="diag-block-lede">${ledeHtml}</p>` : ''}
-    </header>`;
-  return sec;
-}
-
 // ---------- actions ----------
 // Every Diagnose action is a [data-ux-action] routed through ux-kit's
 // wireUxActions: "verb" or "verb:argument".
@@ -4323,13 +4271,58 @@ function runDiagAction(id) {
   const verb = i < 0 ? id : id.slice(0, i);
   const arg = i < 0 ? '' : id.slice(i + 1);
   switch (verb) {
-    case 'diag-goto':
-      scrollToDiag(document.getElementById(arg));
+    // A section of the page: a folded row is opened first. The gaps are the
+    // checks' own rows now, so a jump to them lands on the checks.
+    case 'diag-goto': {
+      const el = document.getElementById(arg) || document.getElementById('diag-evidence');
+      const row = el?.closest?.('details.diag-more-row');
+      if (row && !row.open) row.open = true;
+      scrollToDiag(row || el);
       break;
+    }
+    // A check: its row, opened.
     case 'diag-crit': {
-      const key = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(arg) : arg;
-      const row = document.querySelector(`#diag-evidence tr.diag-crit[data-key="${key}"]`);
+      setCheckOpen(arg, true);
+      const row = document.querySelector(`.diag-checks tr.diag-check[data-key="${cssKey(arg)}"]`);
       scrollToDiag(row || document.getElementById('diag-evidence'), { block: row ? 'center' : 'start' });
+      break;
+    }
+    case 'diag-check-open':
+      setCheckOpen(arg, !diagOpenChecks.has(arg));
+      break;
+    // A criterion's switch (assessment-page.mjs): a what-if, at once; Keep saves the set, Reset drops it.
+    case 'diag-check-toggle':
+      diagToggleCheck(arg);
+      break;
+    case 'diag-whatif-reset':
+      diagWhatIfState = null;
+      appHost.renderMainView();
+      document.getElementById('diag-summary')?.focus({ preventScroll: true });
+      diagUx.announce('Back to what is saved.');
+      break;
+    case 'diag-whatif-keep': {
+      const w = diagnoseWhatIf();
+      if (!w || !diagGradeScope?.switches?.enabled) break;
+      // A criterion newly left out needs its reason; one graded again needs none.
+      if (!whatIfChanges(state.gradeOff, w.off).turnedOff.length) { diagKeepSave(''); break; }
+      w.keep = { reason: '', focus: true, focused: false, caret: null };
+      appHost.renderMainView();
+      break;
+    }
+    case 'diag-whatif-keep-cancel':
+      if (!diagWhatIfState) break;
+      diagWhatIfState.keep = null;
+      appHost.renderMainView();
+      document.querySelector('[data-ux-action="diag-whatif-keep"]')?.focus({ preventScroll: true });
+      break;
+    case 'diag-whatif-save':
+      diagKeepSubmit();
+      break;
+    case 'diag-whatif-explain': {
+      const reason = diagGradeScope?.switches?.reason || 'not available for your role here.';
+      const text = reason.charAt(0).toUpperCase() + reason.slice(1);
+      toast(text);
+      diagUx.announce(text);
       break;
     }
     case 'diag-remediate':
@@ -4358,32 +4351,6 @@ function runDiagAction(id) {
       appHost.renderMainView();
       document.querySelector(`.compare-slice-pill[data-slice="${arg}"]`)?.focus();
       break;
-    // A criterion's switch (grade-criteria-ui.mjs): ask why in place, then the host saves it.
-    case 'diag-grade-ask':
-      if (!diagGradeScope?.switches?.enabled) break;
-      diagGradeAsk = { service: diagGradeScope.serviceId, key: arg, reason: '', focus: true, focused: false, caret: null };
-      appHost.renderMainView();
-      break;
-    case 'diag-grade-cancel': {
-      const key = diagGradeAsk?.key;
-      diagGradeAsk = null;
-      appHost.renderMainView();
-      if (key) document.querySelector(`#diag-evidence [data-ux-action="diag-grade-ask:${typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(key) : key}"]`)?.focus({ preventScroll: true });
-      break;
-    }
-    case 'diag-grade-off':
-      diagGradeOff(arg);
-      break;
-    case 'diag-grade-on':
-      diagGradeSave(arg, { graded: true });
-      break;
-    case 'diag-grade-explain': {
-      const reason = diagGradeScope?.switches?.reason || 'not available for your role here.';
-      const text = reason.charAt(0).toUpperCase() + reason.slice(1);
-      toast(text);
-      diagUx.announce(text);
-      break;
-    }
     default:
       break;
   }
