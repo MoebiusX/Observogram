@@ -1090,6 +1090,83 @@ test('a Run of a private GitHub repository sends the person\'s token for that re
   }
 });
 
+// What read the repository rides on the scan (packA.scan.access), so the service list can stop offering the
+// person's token field for a repository that was read without their access (studio/overview-model.mjs authOffer).
+test('a Run keeps how it read a GitHub repository with its scan — with nothing (a public one), with the person\'s token, with the server\'s own on a server without sign-in — and never the value; a Check now keeps it and the journeys listing gives it; a folder has none; a record that holds anything else gives none', async () => {
+  const { repositoryAccess, recordedAccess, REPOSITORY_ACCESS } = REPO_AUTH;
+  const repo = { kind: 'github', location: 'https://github.com/acme/public-shop' };
+  assert.deepEqual(REPOSITORY_ACCESS, ['token', 'sign-in', 'server', 'none']);
+  assert.deepEqual(repositoryAccess(repo, { token: null, source: 'none' }), { by: 'none', ...repo });
+  assert.deepEqual(repositoryAccess(repo, { token: 'made-up-value', source: 'request' }), { by: 'token', ...repo });
+  assert.deepEqual(repositoryAccess(repo, { token: 'made-up-value', source: 'link', account: 'ada-gh' }), { by: 'sign-in', ...repo }, 'never the account');
+  assert.deepEqual(repositoryAccess({ kind: 'ado', location: 'https://dev.azure.com/a/b/_git/c', ref: 'main' }, { token: 'made-up-value', source: 'server' }), { by: 'server', kind: 'ado', location: 'https://dev.azure.com/a/b/_git/c' });
+  for (const none of [{ kind: 'path', location: '/srv/x' }, { kind: 'upload', location: 'x.zip' }, { kind: 'github' }, { kind: 'github', location: '' }, null]) assert.equal(repositoryAccess(none, { source: 'none' }), null);
+  assert.deepEqual(recordedAccess({ by: 'none', ...repo, token: 'made-up-value', extra: 1 }), { by: 'none', ...repo }, 'the three fields, nothing else a record may hold');
+  for (const junk of [null, undefined, 'none', {}, { by: 'admin', ...repo }, { by: 'none', kind: 'path', location: '/x' }, { by: 'none', kind: 'github', location: '' }, { by: 'none', kind: 'github', location: 'x'.repeat(2049) }, { by: 'none', kind: 'github', location: 7 }]) assert.equal(recordedAccess(junk), null);
+
+  const created = await call('POST', '/api/services', { name: 'Public Shop', repository: { kind: 'github', location: 'acme/public-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const id = created.json.service.id;
+  const location = created.json.service.repository.location;
+  assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const MINE = 'ghp_PersonalToken0123456789';
+  const SERVER = 'ghp_ServerToken0123456789';
+  const RULES = readFileSync(join(REPO, 'prometheus', 'rules.yml'), 'utf8');
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  // GitHub, stubbed: a public repository, which answers whoever asks.
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
+    seen.push(init.headers?.Authorization ?? null);
+    if (u.endsWith('/repos/acme/public-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
+    if (u.includes('/repos/acme/public-shop/git/trees/main')) return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] }));
+    if (u.includes('/repos/acme/public-shop/contents/') || u.startsWith('https://raw.githubusercontent.com/acme/public-shop/')) return new Response(RULES);
+    return new Response('', { status: 404 });
+  };
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const run = (body) => call('POST', `/api/services/${id}/run`, body);
+    const listed = async (name) => (await call('GET', '/api/journeys')).json.journeys.find((j) => j.name === name).lastRun.repositoryAccess;
+
+    const none = await run({});
+    assert.equal(none.status, 200, none.text);
+    assert.ok(seen.length > 0 && seen.every((auth) => auth === null), 'read with nothing');
+    assert.deepEqual(none.json.scan.access, { by: 'none', kind: 'github', location });
+    assert.deepEqual(none.json.record.packA.scan.access, none.json.scan.access, 'the record keeps it with the scan');
+    assert.deepEqual(await listed(none.json.journey), { by: 'none', kind: 'github', location });
+
+    const mine = await run({ repoAuth: MINE });
+    assert.equal(mine.status, 200, mine.text);
+    assert.deepEqual(mine.json.scan.access, { by: 'token', kind: 'github', location });
+    assert.ok(!mine.text.includes(MINE), 'the kind of access, never its value');
+    const check = await call('POST', `/api/journeys/${mine.json.journey}/run`, {});
+    assert.equal(check.status, 200, check.text);
+    assert.deepEqual(check.json.record.packA.scan.access, { by: 'token', kind: 'github', location }, 'a Check now is on the same scan: it keeps what read it');
+    assert.deepEqual(await listed(mine.json.journey), { by: 'token', kind: 'github', location });
+
+    // A server without sign-in (this suite's posture) reads with its own.
+    process.env.GITHUB_TOKEN = SERVER;
+    seen.length = 0;
+    const server = await run({});
+    assert.equal(server.status, 200, server.text);
+    assert.ok(seen.every((auth) => auth === `Bearer ${SERVER}`));
+    assert.deepEqual(server.json.scan.access, { by: 'server', kind: 'github', location });
+    assert.deepEqual(await listed(server.json.journey), { by: 'server', kind: 'github', location });
+    assert.ok(!server.text.includes(SERVER));
+
+    // A folder is read by the server itself: nothing to say.
+    const folder = await call('POST', `/api/services/${ids.shop}/run`, {});
+    assert.equal(folder.status, 200, folder.text);
+    assert.equal(folder.json.scan.access, undefined);
+    assert.equal(Object.hasOwn(folder.json.record.packA.scan, 'access'), false);
+    assert.equal(await listed(folder.json.journey), null);
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.GITHUB_TOKEN;
+  }
+});
+
 test('a Run of a private Azure DevOps repository on a server without sign-in: the refusal asks for the person\'s token (never "fetch failed") and names the server\'s own; the person\'s token reads it; a wrong one, the server\'s refused one and an unreachable host each say so, exactly', async () => {
   const created = await call('POST', '/api/services', { name: 'Private Ado', repository: { kind: 'ado', location: 'https://dev.azure.com/acme/Private/_git/shop' } });
   assert.equal(created.status, 201, created.text);

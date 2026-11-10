@@ -88,7 +88,7 @@ import { verdictsDocument } from './verdict-admin.mjs';
 import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
-import { RepoAuthRefusal, parseRepoAuth, redactToken, repoAuthNeed, repoAuthTail, repositoryCredential, signInOn } from './repo-auth.mjs';
+import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
 import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
 import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
@@ -1038,6 +1038,10 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
           // Inventory coverage of the last run (inventory-coverage.mjs inventorySummary): status,
           // reason and per kind expected / up / down / silent / unexpected. null without a block.
           inventory: inventorySummary(lastRun),
+          // How the scan behind the last run read its GitHub or Azure DevOps repository
+          // (packA.scan.access: { by, kind, location }; server/repo-auth.mjs repositoryAccess) —
+          // null for a folder, an upload, or a record written before it was kept.
+          repositoryAccess: recordedAccess(lastRun.packA?.scan?.access),
         },
       };
     });
@@ -1404,7 +1408,11 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
     const tail = need ? ` — ${repoAuthTail(need, { serverToken: !signInOn() })}` : '';
     return res.status(status).json({ ok: false, error: `the repository could not be read: ${message}${tail}`, ...(need ? { repoAuth: need } : {}) });
   }
-  let scan = scanReport(read);
+  // What read it rides on the scan (`access`: the kind of access, never its
+  // value), so the record says whether the person's own was needed.
+  const access = remote ? repositoryAccess(service.repository, credential) : null;
+  const withAccess = (report) => (access ? { ...report, access } : report);
+  let scan = withAccess(scanReport(read));
   if (!scan.files) {
     return res.status(422).json({ ok: false, error: `${read.source} has no file the scan reads — Prometheus rules, OpenTelemetry collector configs, Grafana dashboards, compose files, Helm values or metrics code`, scan });
   }
@@ -1412,7 +1420,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   try {
     let summary;
     ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name }));
-    scan = scanReport(read, summary);
+    scan = withAccess(scanReport(read, summary));
   } catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
   const errors = validateCanonical(canonical, SCHEMA);
   if (errors.length) {

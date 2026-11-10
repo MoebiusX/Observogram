@@ -413,7 +413,9 @@ Belongs here:
   repository needs none) or *Your Azure DevOps token* — the person's own,
   sent with the Run that **Save and run** starts and kept for the tab by
   **Save**, not drawn where this tab already holds that host's token or the
-  person is signed in to the host; **Folder**, its full path on the server, typed or picked with
+  person is signed in to the host — with **Sign in to GitHub** (or Azure
+  DevOps) before it where the server offers that sign-in, the form's
+  answers kept while it is under way; **Folder**, its full path on the server, typed or picked with
   **Browse…** (the server's folders by name — *Up*, each repository marked,
   *Use this folder*, *Close* — drawn only where the server would take a folder
   from this reader); **Upload**, *Choose a folder*, *Choose a .zip* or a drop,
@@ -445,10 +447,13 @@ Does not belong here:
 
 A row whose repository is on GitHub or Azure DevOps has the place for the
 person's own access on it from the start, unless this tab already holds
-their token for that host or they are signed in to it: no Run has to fail
-to be asked. The form that adds or changes a service has the token's field
-too, so a new private repository's first **Save and run** reads it. After a
-refusal the row says what the host answered, and runs again once answered.
+their token for that host, they are signed in to it, or its last Run read
+the repository without their access — a public repository, or the server's
+own token on a server without sign-in. No Run has to fail to be asked, and
+a row that needs nothing shows nothing. The form that adds or changes a
+service has the same two ways, so a new private repository's first **Save
+and run** reads it. After a refusal the row says what the host answered,
+and runs again once answered.
 
 Belongs here:
 
@@ -465,7 +470,13 @@ Belongs here:
 - the same field in the form, under the repository's address: **Save and
   run** sends it with the Run that follows, **Save** keeps it for the tab's
   next Run of that host, and neither keeps it when the save is refused;
-  signing in stays on the row;
+- **Sign in to …** in the form too, before the field: a window where the
+  browser allows one, else this tab goes to the host and comes back — the
+  form's answers (never the token's field) are kept for the tab meanwhile
+  and are there again, once, when it returns;
+- no field on a row whose last Run read the repository with nothing or with
+  the server's own token; a repository that stops being readable that way
+  answers its next Run with the ask;
 - a token typed and not sent yet staying in its field while the list is
   drawn again (a Run that ends, a select in the form), the caret where it
   was — and going with its field: a row that starts to run, another kind
@@ -478,6 +489,10 @@ Belongs here:
 
 Does not belong here:
 
+- a browser's own password store on these fields: each is marked so that
+  it neither offers to keep what is typed nor fills a saved sign-in into it
+  (measured in Chrome; its key icon in the address bar still shows while one
+  is typed in);
 - the host's token on any page: it comes back to the person's browser
   sealed in an HttpOnly cookie the page cannot read, bound to their login and
   session, and ends with the host's token, the session, signing out of the
@@ -847,8 +862,8 @@ The path a person takes today, end to end:
    where it is.
 3. For a private repository, give your own token first: in the form's
    field before **Save and run**, or in the row's before **Run** — both are
-   there from the start. Or **Sign in to GitHub** (or Azure DevOps) on the
-   row.
+   there from the start. Or **Sign in to GitHub** (or Azure DevOps), in the
+   form or on the row, where the server offers it.
 4. Read the toast: the files read, of how many, from where, what was left
    out, the grade and how much matches live.
 5. Press **Open →**. On the board, read what the scan left out under

@@ -103,6 +103,34 @@ export function repoAuthNeed(kind, credential, status, { signIn = false } = {}) 
   return need;
 }
 
+// How a repository on GitHub or Azure DevOps was read, for the record a Run
+// keeps with its scan (packA.scan.access) — the kind of access, never its
+// value, and the repository it read, so a record of another repository is
+// never taken for this one's:
+//   by  'token'    the person's own token, sent with the Run
+//       'sign-in'  the person's sign-in to the host
+//       'server'   the server's own token (a server without sign-in)
+//       'none'     no token at all: a public repository
+// The service list reads it (GET /api/journeys, lastRun.repositoryAccess) to
+// stop offering the person's token field on a row whose repository was read
+// without their access. null for a folder or an upload.
+const ACCESS_BY = Object.freeze({ request: 'token', link: 'sign-in', server: 'server', none: 'none' });
+export const REPOSITORY_ACCESS = Object.freeze(Object.values(ACCESS_BY));
+export function repositoryAccess(repository, credential) {
+  const kind = repository?.kind;
+  if (!HOST_LABEL[kind] || typeof repository.location !== 'string' || !repository.location) return null;
+  return { by: ACCESS_BY[credential?.source] || 'none', kind, location: repository.location };
+}
+
+// A record's `access` as the listing gives it: the three known fields, or null
+// when the record has none or holds anything else (an older record, a hand-edited one).
+export function recordedAccess(access) {
+  if (!access || typeof access !== 'object') return null;
+  const { by, kind, location } = access;
+  if (!REPOSITORY_ACCESS.includes(by) || !HOST_LABEL[kind] || typeof location !== 'string' || !location || location.length > 2048) return null;
+  return { by, kind, location };
+}
+
 // Every occurrence of the token in a text a person or a log will read, masked.
 export function redactToken(text, token) {
   const s = String(text ?? '');

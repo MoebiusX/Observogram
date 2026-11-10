@@ -120,7 +120,7 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, scanLossText } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
 
@@ -1850,6 +1850,8 @@ async function boot() {
     : await rehydrateFromPersistence();
   persistence.resume();
   if (!restored) goHome();
+  // A sign-in to a repository host that took this tab away from the service form: its answers, once.
+  restoreListFormDraft();
 }
 
 // ============================================================
@@ -1992,6 +1994,45 @@ let listRunning = {};
 let listResults = {};
 let listShowAll = false;
 let listGeneration = 0;
+
+// The form's answers while a sign-in to a repository host is under way
+// (overview-model.mjs formDraft / formRestored): a blocked window, or a
+// browser that opens windows in the tab, takes this tab to the host's own
+// page and back, and the page boots again. Kept for the tab only
+// (sessionStorage), for this org, taken once at the next boot, dropped when
+// the sign-in reports back to a tab that never left, when the form closes or
+// saves. Never a token: the form holds none.
+const LIST_FORM_DRAFT_KEY = 'studioServiceFormDraft.v1';
+
+function stashListForm() {
+  const draft = formDraft(listForm);
+  if (!draft) return;
+  try { sessionStorage.setItem(LIST_FORM_DRAFT_KEY, JSON.stringify({ ...draft, org: getActiveOrg() ?? null })); } catch (_) { /* private mode: the answers are typed again */ }
+}
+
+function dropListFormDraft() {
+  try { sessionStorage.removeItem(LIST_FORM_DRAFT_KEY); } catch (_) { /* nothing was kept */ }
+}
+
+// Taken once, whatever it holds; opened after the list's facts are read — the
+// endpoints the form offers are known then, and the draw they bring would
+// take the focus from a form opened before it.
+async function restoreListFormDraft() {
+  let raw = null;
+  try { raw = sessionStorage.getItem(LIST_FORM_DRAFT_KEY); sessionStorage.removeItem(LIST_FORM_DRAFT_KEY); } catch (_) { return; }
+  const onList = () => state.mode === 'overview' && overviewScreen === 'list' && serviceListAvailable();
+  if (!raw || !onList()) return;
+  let draft = null;
+  try { draft = JSON.parse(raw); } catch (_) { return; }
+  if (!draft || (draft.org ?? null) !== (getActiveOrg() ?? null)) return;
+  if (!listFacts.loaded) { try { await refreshListFacts(); } catch (_) { /* the form opens on what is known */ } }
+  // The person may have moved on, or opened the form themselves, while the facts were read.
+  if (!onList() || listForm.open) return;
+  const form = formRestored(state.services, draft, { endpoints: listFacts.endpoints || [], sources: listFacts.sources });
+  if (!form) return;
+  listForm = { ...form, focus: form.mode === 'add' && !form.values.name ? 'name' : 'location' };
+  renderMainView();
+}
 
 // The list needs the services table: the static bundle has none.
 function serviceListAvailable() {
@@ -2210,6 +2251,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   }
   await refreshServices();
   listForm = FORM_CLOSED;
+  dropListFormDraft();
   if (token) repoTokens.set(tokenHost, token);
   await refreshListFacts();
   announce(`${plan.name} · ${plan.envName} saved.`);
@@ -2270,16 +2312,27 @@ async function runListRow(key, { repoAuth = '' } = {}) {
 // own (`popup`): the window closes only when the tab that started it answers
 // for that id, and otherwise goes back to the page, so a browser that opened
 // it in this very tab keeps the studio. A blocked window: this tab goes
-// through the sign-in itself and comes back to this page.
+// through the sign-in itself and comes back to this page. From the service
+// form (`fromForm`) there is no row to run again, and the form's answers are
+// kept for the tab first (stashListForm), so either way back finds them.
 const REPO_HOST = Object.freeze({ github: 'GitHub', ado: 'Azure DevOps' });
 let repoSignInPending = null;
 let repoSignInChannel = null;
-function signInRepoHost(kind, key = null) {
+function signInRepoHost(kind, key = null, { fromForm = false } = {}) {
   if (!REPO_HOST[kind]) return;
+  if (fromForm) {
+    // The address typed since the form was drawn may be one the sign-in does not read (an Azure DevOps Server).
+    if (!listForm.open || serviceFormModelNow().auth?.signIn?.kind !== kind) {
+      renderMainView();
+      announce(`Signing in to ${REPO_HOST[kind]} does not read this repository: give your own token.`);
+      return;
+    }
+    stashListForm();
+  }
   const start = `/auth/repo/${kind}/start`;
   const rid = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
   const back = encodeURIComponent(`${location.pathname}${location.search}${location.hash}`);
-  repoSignInPending = { kind, key: key || null, rid };
+  repoSignInPending = { kind, key: key || null, rid, fromForm };
   const win = window.open(`${start}?popup=${rid}&return=${back}`, 'observogram-repo-sign-in', 'popup,width=640,height=760');
   if (!win) { location.assign(`${start}?return=${back}`); return; }
   announce(`Signing in to ${REPO_HOST[kind]} in a new window…`);
@@ -2290,6 +2343,8 @@ async function onRepoSignedIn(note) {
   const pending = repoSignInPending?.kind === note.kind && repoSignInPending.rid === note.rid ? repoSignInPending : null;
   if (pending) {
     repoSignInPending = null;
+    // This tab never left: the form is as it was, and its kept answers are not needed.
+    if (pending.fromForm) dropListFormDraft();
     // This tab started it: the window may close.
     try { repoSignInChannel?.postMessage({ type: 'observogram-repo-sign-in-ack', rid: note.rid }); } catch { /* it stays open and says so */ }
   }
@@ -2469,7 +2524,7 @@ const overviewActions = {
   editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
   formInput: listFormInput,
   saveService: saveListForm,
-  closeForm: () => { folderGeneration++; listForm = FORM_CLOSED; renderMainView(); },
+  closeForm: () => { folderGeneration++; listForm = FORM_CLOSED; dropListFormDraft(); renderMainView(); },
   browseFolders: listBrowseFolders,
   openFolder: (path) => { listOpenFolder(path); },
   chooseFolder: (path) => { folderGeneration++; listForm = folderBrowseChosen(listForm, path); renderMainView(); },
@@ -6005,7 +6060,7 @@ function renderHomeView() {
         <div id="home-mcp-advanced" class="home-mcp-advanced" hidden>
           <label class="home-mcp-field">
             <span class="home-mcp-key">Auth token <em>not persisted</em></span>
-            <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="off">
+            <input id="home-mcp-auth" type="password" placeholder="bearer" autocomplete="one-time-code">
           </label>
         </div>
       </div>

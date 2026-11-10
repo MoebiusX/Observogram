@@ -214,7 +214,7 @@
       <div class="deploy-field-grid">
         <label class="deploy-field">
           <span class="deploy-field-key">MCP client key <em>(optional, not persisted)</em></span>
-          <input id="deploy-target-auth" type="password" placeholder="sk-..." autocomplete="off">
+          <input id="deploy-target-auth" type="password" placeholder="sk-..." autocomplete="one-time-code">
         </label>
         <label class="deploy-field">
           <span class="deploy-field-key">Grafana folder UID</span>
@@ -324,7 +324,7 @@
         </label>
         <label class="mcp-field">
           <span class="mcp-field-key">Auth token <em>(optional, not persisted)</em></span>
-          <input id="draft-mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
+          <input id="draft-mcp-auth" type="password" placeholder="bearer token" autocomplete="one-time-code">
         </label>
       </div>
       <div class="crawl-panel-actions">
@@ -480,7 +480,7 @@
       <div class="crawl-github-inputs">
         <input id="crawl-github-url" type="text" placeholder="github.com/owner/repo or owner/repo" autocomplete="off" class="crawl-github-input">
         <input id="crawl-github-ref" type="text" placeholder="branch (default)" autocomplete="off" class="crawl-github-ref">
-        <input id="crawl-github-token" type="password" placeholder="your token (private)" autocomplete="off" spellcheck="false" class="crawl-github-ref" aria-label="Your GitHub token, for a private repository">
+        <input id="crawl-github-token" type="password" placeholder="your token (private)" autocomplete="one-time-code" spellcheck="false" class="crawl-github-ref" aria-label="Your GitHub token, for a private repository">
         <button id="crawl-github-go-btn" type="button" class="ctrl-btn crawl-github-go-btn" disabled>scan github</button>
       </div>
       <div id="crawl-github-status" class="crawl-github-status"></div>
@@ -541,7 +541,7 @@
     </label>
     <label class="mcp-field">
       <span class="mcp-field-key">Auth token <em>(optional, not persisted)</em></span>
-      <input id="mcp-auth" type="password" placeholder="bearer token" autocomplete="off">
+      <input id="mcp-auth" type="password" placeholder="bearer token" autocomplete="one-time-code">
     </label>
     <div class="mcp-panel-actions">
       <button id="mcp-refresh-btn" class="mcp-refresh-btn" type="button">test connection</button>
@@ -571,7 +571,7 @@
 </div>
 
 <footer class="ftr">
-  <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.8.20</span></div>
+  <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.8.21</span></div>
   <div>
     <a href="https://github.com/MoebiusX/otel-observability-pack/blob/5be3baa7b3c354d84aabe60aaac23f9be5f8b702/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.5</a>
     ·
