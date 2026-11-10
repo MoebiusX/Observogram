@@ -1007,14 +1007,30 @@ export function crawlFiles(filesInput, opts = {}) {
     summary.warnings.push('No Grafana dashboards found — emitted stub service-overview pointer.');
   }
 
-  // ----- baselines (always stubbed; nothing in repos infers MTTD/MTTR) -----
-  const baselines = {
-    mttd_target_p50: '15m',
-    mttr_target_p50: '1d',
-    review_cadence: 'monthly',
-  };
-  scaffoldSymbols.push('baselines');
-  summary.inferred.baselines = true;
+  // ----- baselines -----
+  // Nothing in code says the MTTD / MTTR a team holds itself to: the
+  // repository's own pack (.observability/*.yaml, spec.baselines) declares
+  // them, the later file winning; without one the targets are placeholders.
+  for (const { relPath, read } of repoPacks) {
+    if (read?.baselinesRefused) summary.warnings.push(`${relPath}: spec.baselines is not a valid spec 1.5 Baselines and is left out (${read.baselinesRefused}).`);
+  }
+  const declaredBaselines = repoPacks.map(p => p.read?.baselines).filter(Boolean);
+  const ownBaselines = declaredBaselines[declaredBaselines.length - 1] || null;
+  let baselines;
+  if (ownBaselines) {
+    baselines = { ...ownBaselines.entry };
+    evidence.baselines = ownBaselines.source;
+    summary.discovered.baselines = ownBaselines.source;
+    if (declaredBaselines.length > 1) summary.warnings.push(`spec.baselines is declared ${declaredBaselines.length} times under .observability/; the last (${ownBaselines.source}) wins.`);
+  } else {
+    baselines = {
+      mttd_target_p50: '15m',
+      mttr_target_p50: '1d',
+      review_cadence: 'monthly',
+    };
+    scaffoldSymbols.push('baselines');
+    summary.inferred.baselines = true;
+  }
 
   // ----- chaos experiments (spec 1.5; chaos-detect.mjs) -----
   // Read from the repository in a pass of their own over every in-scope file

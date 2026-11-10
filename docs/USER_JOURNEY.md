@@ -81,10 +81,12 @@ diagnostic-grade.
 
 What code cannot say, a repository can declare about itself: an
 `.observability/*.yaml` file holding `kind: ObservabilityPack` is read by
-every scan, in every environment scope. Today the scan takes its
-`spec.validation.chaos_experiments` (spec 1.5), merged by id; the declared
-entry wins over the one the scan discovered, and an entry that does not
-validate is left out with a warning, never a failed scan.
+every scan, in every environment scope. The scan takes its
+`spec.validation.chaos_experiments` (spec 1.5), merged by id — the declared
+entry wins over the one the scan discovered — and its `spec.baselines`, the
+MTTD / MTTR targets the team holds itself to, in place of the placeholder
+the scan writes otherwise. An entry that does not validate is left out with
+a warning, never a failed scan.
 
 ## North-Star Flow
 
@@ -540,17 +542,26 @@ Remediate*, each over its column in a 30 / 40 / 30 rhythm.
 
 Belongs here:
 
-- **Discover — Layers** (*The stack, top down, as the repository declares
-  it*):
-  - *In the repository*, the pack's own layers as Discover names them
-    (*SLI/SLO*, *Metrics/Logs/Traces* …), each with its count;
-  - behind *Show the layers*, the stack — user experience, application,
-    platform, infrastructure — each layer with its ten kinds of signal
-    (*SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*), lit
-    where the repository declares that kind and carrying the count, and a
-    pill such as *7 of 10 kinds*;
-  - three stats — *Declared*, *Coverage*, *Unplaced* — where the layers plus
-    *Unplaced* are *Declared*, each artefact once;
+- **Discover — The chain** (*Exporters, alerts, dashboards and MTTD / MTTR,
+  as the repository declares them*):
+  - three tiles in the order a signal travels — **Exporters** (scrape jobs),
+    **Alerts** (alert rules and burn-rate alerts, each counted under the
+    tile), **Dashboards** (whole dashboards, never their panels) — each a
+    count, its top edge green, amber or red; under the row, the warning a
+    link carries (*10 of 18 objectives have no burn-rate alert.*, *No
+    dashboard found in the repository.*);
+  - the **MTTD / MTTR** tile: the targets the repository states (*MTTD 5m ·
+    MTTR 2h*) or *Not declared* — the scan's placeholder never counts — and
+    the MTTD a chaos test recorded, or *Not measured yet*;
+  - *Under it*, the detail in one line (*18 indicators · 18 objectives · 208
+    metrics · 11 backends · 8 alert routes · 5 chaos tests*);
+  - behind *The machinery and the layers*, the machinery in one line (*324
+    panels · 39 recording rules · …*), the stack — user experience,
+    application, platform, infrastructure — each layer with its ten kinds of
+    signal (*SLI · SLO · Met · Log · Trc · Dash · Alrt · Run · Chaos · Syn*),
+    lit where the repository declares that kind and carrying the count, a
+    pill such as *7 of 10 kinds* — and the coverage (*Coverage reaches 35 in
+    100 across the four layers.*) with what found no layer;
   - the scan line, *Read 200 of 396 files from … — 196 past the file cap, …*,
     amber when files the rule takes were lost, and behind it each group:
     *Not read* with each file and why, *Past the file cap* (a count: the read
@@ -571,14 +582,24 @@ Belongs here:
     (*Grade it again*), and *Graded on 6 of 7 criteria* under the verdict
     word when one is off;
   - **B — Can you trust what the signals show?** (*The repository against
-    live*): the alignment as a ring, four counts — *match · run differently ·
-    not running live · live only* — the promises (*5 of 18 promises hold in every
-    link, 1 in part, 12 broken.*), then the status word, one sentence with a time and
-    **Check again**;
+    live*): one line per link of the chain (*Exporters 21/21*, *Dashboards 7
+    not read live –*, *Alerts 1 not as declared 66/66*), the chain's alignment
+    as the ring; the promises (*5 of 18 promises hold in every link, 1 in part, 12
+    broken.*), then the status word, one sentence with a time — the chain
+    first (*… — 3 in the chain differ from what the repository declares, and
+    31 details beyond it.*) — and **Check again**. A check recorded before
+    the runs counted by tier draws the alignment and four counts of
+    everything — *match · run differently · not running live · live only* —
+    as before;
   - **Open in Diagnose**;
 - **Remediate — Changes to apply** (*Between the repository and live*): *to
   add · to update · to review*, each with its note (*review* never reads as
-  removal); the next step, one sentence and one button — **See the
+  removal) — the chain's exporters, alerts and dashboards alone, the details
+  in one line under them (*Beyond the chain, 31 details differ: 31 metrics. 4
+  more run live, not declared.*); the next step, one sentence and one button — the
+  chain first (*Fix the 3 things in the chain the live side does
+  differently.*, or *The chain matches live; look at the 31 details beyond
+  it.*) — **See the
   differences** (Neuron, on the run whose numbers the board showed), **See
   what to fix** (Expert's Diagnose, with the assessment's first three causes
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
@@ -602,6 +623,8 @@ Belongs here:
 Does not belong here:
 
 - a count drawn as zero, or a letter graded against a smaller live picture;
+- a count of everything the repository declares (*741 things*): the chain
+  is counted, the rest named in a line;
 - anything without an engine behind it: cost and ingestion, a quality trend,
   a 3-D tomogram;
 - a second primary button;
@@ -794,6 +817,10 @@ Belongs here:
 - an empty group that says why when its producer could not look (*None
   declared — the live side cannot observe chaos experiments*), else *None in
   this pack*
+- the machinery (panels, recording rules, derived views, pipeline parts,
+  instrumentation settings) folded on the board, each band saying what it
+  folds with **Show the machinery**, and one *Machinery* switch, remembered,
+  that draws it here and in Compare
 
 Does not belong here:
 
@@ -821,7 +848,10 @@ Belongs here:
 - traceability to explain why an artifact matters
 - the response path: which alert each declared remediation answers to, and
   whether that alert is live (read-only here; the fixes are on Remediate)
-- Compare: Pack A and Pack B side by side, paired by behaviour, name or id
+- Compare: Pack A and Pack B side by side, paired by behaviour, name or id,
+  the machinery folded until the *Machinery* switch draws it
+- the differences to set aside, a closed row per layer and the machinery's
+  last, in one row of its own
 - comparison and atlas analysis as advanced diagnostics
 
 Does not belong here:

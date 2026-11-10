@@ -31,6 +31,7 @@
 import { agoText, packForService } from './services-model.mjs';
 import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
+import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
@@ -518,6 +519,24 @@ export function differenceCount(run) {
   return (Number(d.declaredNotLive) || 0) + (Number(d.drifted) || 0);
 }
 
+// The same, split at the chain (a record with drift.tiers; else null): what
+// differs in the exporters, alerts and dashboards, what differs beyond them,
+// and the links live could not read.
+//   → { chain, beyond, links: [{ key, many, one, missing, drifted }], unread: ['dashboards'] } | null
+export function chainDifferences(run) {
+  const tiers = run?.drift?.tiers;
+  if (!tiers || typeof tiers !== 'object' || !CHAIN_LINKS.every((l) => tiers[l.key] && typeof tiers[l.key] === 'object')) return null;
+  const n = (v) => Number(v) || 0;
+  const links = CHAIN_LINKS.map((l) => ({ key: l.key, many: l.many, one: l.one, missing: n(tiers[l.key].declaredNotLive), drifted: n(tiers[l.key].drifted) }));
+  const beyondOf = (t) => n(t?.declaredNotLive) + n(t?.drifted);
+  return {
+    chain: links.reduce((k, l) => k + l.missing + l.drifted, 0),
+    beyond: beyondOf(tiers.detail) + beyondOf(tiers.machinery),
+    links,
+    unread: CHAIN_LINKS.filter((l) => n(tiers[l.key].notRead)).map((l) => l.many),
+  };
+}
+
 // stillTrueModel({ journey, run, now, running, startError, journeysError })
 //   journey   the GET /api/journeys entry for this service (or null)
 //   run       its newest run record (GET /api/journeys/:name/runs?limit=1), or null
@@ -589,8 +608,17 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
       sentence: `Checked ${ago} ${against} — it matches: everything the repository declares is running live.${more}${asideSays}${since}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: live && !stale && !extra };
   }
+  // A record that counts the chain says the chain first, and the rest beyond it.
+  const split = chainDifferences(run);
+  let what = `${things(k)} ${k === 1 ? 'differs' : 'differ'} from what the repository declares.`;
+  if (split && split.chain) {
+    what = `${split.chain} in the chain ${split.chain === 1 ? 'differs' : 'differ'} from what the repository declares${split.beyond ? `, and ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it` : ''}.`;
+  } else if (split) {
+    const unread = split.unread.length ? `: its ${listWords(split.unread)} could not be read` : '';
+    what = `the chain matches what live showed${unread}. ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'} beyond it.`;
+  }
   return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
-    sentence: `Checked ${ago} ${against} — ${things(k)} ${k === 1 ? 'differs' : 'differ'} from what the repository declares.${asideSays}${since}`,
+    sentence: `Checked ${ago} ${against} — ${what}${asideSays}${since}`,
     canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
 }
 
@@ -660,6 +688,21 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     return { sentence: 'Nothing to do right now: live matches what the repository declares.', button: null, why: [], primary: false };
   }
   // changed
+  // A record that counts the chain: the chain's differences are the thing to fix; the
+  // details beyond it are one line.
+  const split = chainDifferences(run);
+  if (split) {
+    const why = [];
+    for (const l of split.links) {
+      if (l.missing) why.push(`${l.missing} declared ${l.missing === 1 ? `${l.one} is` : `${l.many} are`} not running live.`);
+      if (l.drifted) why.push(`${l.drifted} ${l.drifted === 1 ? `${l.one} runs` : `${l.many} run`} differently live than declared.`);
+    }
+    if (split.beyond) why.push(`Beyond the chain, ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'}.`);
+    const sentence = split.chain
+      ? `Fix the ${split.chain} ${split.chain === 1 ? 'thing' : 'things'} in the chain the live side does differently.`
+      : `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
+    return { sentence, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
+  }
   const d = run?.drift || {};
   const why = [];
   const dnl = Number(d.declaredNotLive) || 0, dr = Number(d.drifted) || 0, lnd = Number(d.liveNotDeclared) || 0;
@@ -802,6 +845,102 @@ export function layersModel({ cells = null, layered = null, unkinded = null } = 
   };
 }
 
+// ---------- the board: the chain ----------
+//
+// What people know and care about (studio/artefact-tiers.mjs): the exporters
+// that are scraped, the alerts that fire, the dashboards they open, and the
+// MTTD / MTTR the team holds itself to. Discover draws these four and says
+// the rest in one line — the detail (indicators, objectives, metrics, …) —
+// with the machinery (panels, recording rules, pipeline parts) behind the
+// layers. Nothing here is graded: the letter is the engine's, as before.
+
+const CHAIN_EMPTY = {
+  exporters: 'No scrape job found in the repository.',
+  alerts: 'No alert found in the repository.',
+  dashboards: 'No dashboard found in the repository.',
+};
+const familyList = (families) => families.map((x) => x.words).join(' · ');
+
+// chainModel({ layered }) → null without a pack, else
+//   { links: [{ key, name, hint, count, words, parts, note, tone }],
+//     mttx: { declared, targets, measured, note, hint, tone },
+//     detail: { count, line }, machinery: { count, line } }
+//   parts  for a link of several families, each one's count ("58 alert rules · 8 burn-rate alerts")
+//   note   alerts: the objectives no burn-rate alert covers; a link with none: that none was found
+export function chainModel({ layered = null } = {}) {
+  if (!layered) return null;
+  const d = declaredByTier(layered);
+  const links = CHAIN_LINKS.map((l) => {
+    const x = d.links[l.key];
+    // A link of several families says each, when more than one is there ("58 alert rules · 8 burn-rate alerts").
+    const present = l.families.filter((f) => x.families[f]);
+    const parts = present.length > 1 ? present.map((f) => tierWords(f, x.families[f])).join(' · ') : '';
+    const bare = l.key === 'alerts' && d.objectives.withoutAlert
+      ? `${d.objectives.withoutAlert} of ${d.objectives.total} objectives ${d.objectives.withoutAlert === 1 ? 'has' : 'have'} no burn-rate alert.`
+      : '';
+    const note = x.count ? bare : CHAIN_EMPTY[l.key];
+    return { key: l.key, name: l.name, hint: l.hint, count: x.count, words: x.count === 1 ? l.one : l.many, parts, note, tone: !x.count ? 'fail' : (bare ? 'warn' : 'ok') };
+  });
+  const m = d.mttx;
+  const measured = m.measured ? `MTTD ${m.measured.mttd} in a chaos test on ${dayMonth(m.measured.at)}` : '';
+  const mttx = {
+    declared: m.declared,
+    targets: m.declared ? `MTTD ${m.mttd} · MTTR ${m.mttr}` : '',
+    measured,
+    note: m.declared
+      ? (measured ? '' : 'Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.')
+      : 'The repository states no MTTD / MTTR targets.',
+    hint: 'A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.',
+    tone: m.declared ? (measured ? 'ok' : 'warn') : 'fail',
+  };
+  return {
+    links, mttx,
+    detail: { count: d.detail.count, line: familyList(d.detail.families) },
+    machinery: { count: d.machinery.count, line: familyList(d.machinery.families) },
+  };
+}
+
+// What a run says about the chain, from its record's drift.tiers (a record
+// written before it has none: null, and the board counts everything, as before).
+//   links  [{ key, name, live, of, line, tone, counts }] — live of declared (21 of 21) drawn as
+//          the count; `line` what else holds ("1 not as declared · 7 not read live"), or ''
+//   pct    the chain's alignment: what matches of what was compared, over the three links
+//   beyond { count, liveOnly, line } — outside the chain, what differs from what the
+//          repository declares (by family), and what runs live undeclared
+function chainLive(run) {
+  const tiers = run?.drift?.tiers;
+  if (!tiers || typeof tiers !== 'object' || !CHAIN_LINKS.every((l) => tiers[l.key] && typeof tiers[l.key] === 'object')) return null;
+  const n = (v) => Number(v) || 0;
+  let matched = 0, compared = 0;
+  const links = CHAIN_LINKS.map((l) => {
+    const c = tiers[l.key];
+    const of = n(c.aligned) + n(c.drifted) + n(c.declaredNotLive);
+    matched += n(c.aligned);
+    compared += of + n(c.liveNotDeclared);
+    const parts = [];
+    if (n(c.drifted)) parts.push(`${n(c.drifted)} not as declared`);
+    if (n(c.notRead)) parts.push(`${n(c.notRead)} not read live`);
+    if (n(c.liveNotDeclared)) parts.push(`${n(c.liveNotDeclared)} live only`);
+    if (n(c.setAside)) parts.push(`${n(c.setAside)} set aside`);
+    const tone = n(c.declaredNotLive) ? 'fail' : (n(c.drifted) || n(c.liveNotDeclared) || n(c.notRead)) ? 'warn' : of ? 'ok' : 'neutral';
+    return { key: l.key, name: l.name, live: n(c.aligned) + n(c.drifted), of, line: parts.join(' · ') || (of ? '' : `no ${l.many} declared`), tone, counts: c };
+  });
+  const families = {};
+  for (const t of [tiers.detail, tiers.machinery]) for (const [f, k] of Object.entries(t?.families || {})) families[f] = (families[f] || 0) + n(k);
+  const beyondCount = differencesOf(tiers.detail) + differencesOf(tiers.machinery);
+  const liveOnly = n(tiers.detail?.liveNotDeclared) + n(tiers.machinery?.liveNotDeclared);
+  const list = Object.entries(families).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'en')).map(([f, k]) => tierWords(f, k));
+  const more = liveOnly ? ` ${liveOnly} more ${liveOnly === 1 ? 'runs' : 'run'} live, not declared.` : '';
+  const beyond = {
+    count: beyondCount,
+    liveOnly,
+    line: beyondCount
+      ? `Beyond the chain, ${beyondCount} ${beyondCount === 1 ? 'detail differs' : 'details differ'}: ${listWords(list.slice(0, 3))}${list.length > 3 ? ' and more' : ''}.${more}`
+      : `Beyond the chain, the details match too.${more}`,
+  };
+  return { links, pct: compared ? Math.round(matched / compared * 100) : null, beyond };
+}
+
 // ---------- the board: the specification's rules ----------
 
 // rulesModel(conformance, { error }) → { passed, total, pct, tier, met, unknown, sentence, tone } | null
@@ -842,9 +981,12 @@ export function rulesModel(conformance, { error = null } = {}) {
 //   partial    what of the live side was not read, in the strip's words: the
 //              failed probe families, and "rule labels" when the run compared
 //              rules on part of their labels (drift.partlyCompared)
+//   chain      the chain's links against live (chainLive), when the record
+//              counts them (drift.tiers); the board then draws the links and
+//              their alignment, and says the rest in one line
 export function fidelityModel({ run = null, journey = null, pack = null, now = Date.now() } = {}) {
   const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
-  const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [] };
+  const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [], chain: null };
   if (!run || !runGradedPack(run, pack)) return { ...base, note: 'Never checked against live.' };
   if (run.outcome === 'vantage-lost') return { ...base, note: 'The live side did not answer the last check, so nothing is known about it right now.' };
   if (vantageShrank(run).length) return { ...base, note: 'The live side showed less than the check before, so the counts cannot be compared yet.' };
@@ -878,7 +1020,7 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared without the labels the live side does not show.`);
   const startedMs = Date.parse(run.startedAt || '');
   if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
-  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels'] : [])] };
+  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels'] : [])], chain: chainLive(run) };
 }
 
 // ---------- the board: what the scan read ----------
@@ -933,12 +1075,30 @@ export function scanModel({ run = null } = {}) {
 
 // ---------- the board: what to change ----------
 
-// changesModel({ fidelity }) → { known, items, total, sentence }
+// changesModel({ fidelity }) → { known, items, total, sentence, beyond }
 //   items  [{ key, value, label, note, tone }] — to add (declared, not running
 //          live: what Remediate compiles) · to update (runs differently) · to
 //          review (live only, not in the repository)
+//   When the run counts the chain (fidelity.chain), the items count the
+//   chain's links alone and `beyond` says the rest in one line ('' when the
+//   record counts everything together).
 export function changesModel({ fidelity = null } = {}) {
-  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.' };
+  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.', beyond: '' };
+  const chain = fidelity.chain;
+  if (chain) {
+    const sum = (k) => chain.links.reduce((n, l) => n + (Number(l.counts?.[k]) || 0), 0);
+    const items = [
+      { key: 'add', value: sum('declaredNotLive'), label: 'to add', note: 'exporters, alerts or dashboards declared in the repository, not running live', tone: 'fail' },
+      { key: 'update', value: sum('drifted'), label: 'to update', note: 'exporters, alerts or dashboards running live, but not as declared', tone: 'warn' },
+      { key: 'review', value: sum('liveNotDeclared'), label: 'to review', note: 'exporters, alerts or dashboards running live, not in the repository', tone: 'info' },
+    ];
+    const total = items.reduce((n, i) => n + i.value, 0);
+    return {
+      known: true, items, total,
+      sentence: total ? '' : (chain.beyond.count || chain.beyond.liveOnly ? 'Nothing to change in the chain: its exporters, alerts and dashboards match live.' : 'Nothing to change: live matches what the repository declares.'),
+      beyond: chain.beyond.count || chain.beyond.liveOnly ? chain.beyond.line : '',
+    };
+  }
   const v = (k) => fidelity.tiles.find((t) => t.key === k)?.value || 0;
   const items = [
     { key: 'add', value: v('missing'), label: 'to add', note: 'declared in the repository, not running live', tone: 'fail' },
@@ -946,7 +1106,7 @@ export function changesModel({ fidelity = null } = {}) {
     { key: 'review', value: v('extra'), label: 'to review', note: 'running live, not in the repository', tone: 'info' },
   ];
   const total = items.reduce((n, i) => n + i.value, 0);
-  return { known: true, items, total, sentence: total ? '' : 'Nothing to change: live matches what the repository declares.' };
+  return { known: true, items, total, sentence: total ? '' : 'Nothing to change: live matches what the repository declares.', beyond: '' };
 }
 
 // ---------- the drift check started here ----------
@@ -1060,6 +1220,8 @@ export function buildOverviewModel(input = {}) {
   const graded = picked.how === 'primary' && !pending;
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
+    // The chain the repository declares (exporters, alerts, dashboards, MTTD / MTTR).
+    chain: graded ? chainModel({ layered }) : null,
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     // What the last Run's scan read and left out (null: no record says).
     scan: graded && journey ? scanModel({ run }) : null,

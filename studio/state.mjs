@@ -70,6 +70,20 @@ export function defaultBuildState() {
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
 export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId', 'serviceId', 'additions', 'update', 'opened'];
 
+// The machinery switch (Discover's board, Compare): a browser preference,
+// like Overview or Expert, under its own key — never in the workspace
+// snapshot, so it holds through Overview and across workspaces. Every read
+// and write tolerates a browser that stores nothing.
+export const SHOW_MACHINERY_KEY = 'studioShowMachinery.v1';
+function readShowMachinery() {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(SHOW_MACHINERY_KEY) === '1'; } catch { return false; }
+}
+/** Switch the machinery on or off, and remember it in this browser. */
+export function setShowMachinery(on) {
+  state.showMachinery = !!on;
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(SHOW_MACHINERY_KEY, on ? '1' : '0'); } catch { /* not remembered */ }
+}
+
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
   // Compare (two packs). Once chosen, mode becomes 'single' or 'compare'
@@ -197,6 +211,10 @@ export const state = {
   expandL2: false,
   expandL3Panels: false,
   expandL3Queries: false,
+  // The machinery (studio/artefact-tiers.mjs tier 3: panels, recording rules,
+  // pipeline parts, instrumentation settings) — folded on Discover's board and
+  // in Compare until asked for; the browser's preference (setShowMachinery).
+  showMachinery: readShowMachinery(),
   // Discover content filters (only active on view='layers').
   layersSearch: '',            // free-text over card id/title/desc/tags/tool
   layersDomain: 'all',         // facet over artefact tool/system

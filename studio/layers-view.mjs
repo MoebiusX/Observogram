@@ -8,7 +8,7 @@
 // Re-renders via the host seam (host.mjs); still imports scan helpers back
 // from app.mjs and the drawer opener (safe cycles).
 
-import { state, persistence } from './state.mjs';
+import { state, persistence, setShowMachinery } from './state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS, DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord } from './constants.mjs';
 import { focusedConformance } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
@@ -435,6 +435,7 @@ export function renderLayersView(view) {
     <section class="dv-overview" aria-label="The pack, layer by layer">
       <div class="dv-filters">
         <div class="dv-filter-row dv-refine"></div>
+        <div class="dv-filter-row dv-machinery"></div>
       </div>
       <ol class="dv-layers" aria-label="Layers of this pack"></ol>
     </section>`;
@@ -442,6 +443,7 @@ export function renderLayersView(view) {
 
   const ctx = { root, model };
   renderRefine(ctx);
+  renderMachinery(ctx);
   renderLayerList(ctx);
   wireUxActions(root, discoverHandlers(ctx));
   // The glossary marks on the board and the rows (studio/glossary.mjs):
@@ -566,6 +568,20 @@ function viewSwitchHtml(layerId) {
 
 // ---------- the layer overview ----------
 
+// The machinery (studio/artefact-tiers.mjs tier 3: panels, recording rules,
+// pipeline parts, instrumentation settings) is folded on the board until
+// asked for; one switch, remembered, shows it in Discover and Compare.
+function renderMachinery(ctx) {
+  const wrap = ctx.root.querySelector('.dv-machinery');
+  if (!wrap) return;
+  const on = !!state.showMachinery;
+  wrap.innerHTML = `
+    <span class="dv-filter-key" id="dv-machinery-key">Machinery</span>
+    <button type="button" role="switch" class="diag-switch dv-machinery-switch" aria-checked="${on}" aria-labelledby="dv-machinery-key dv-machinery-word" aria-describedby="dv-machinery-hint" data-ux-action="dv-machinery" data-dv-focus="machinery-switch"><span class="diag-switch-knob" aria-hidden="true"></span></button>
+    <span class="dv-machinery-word" id="dv-machinery-word">${on ? 'Shown' : 'Folded'}</span>
+    <span class="dv-refine-hint" id="dv-machinery-hint">Panels, recording rules, pipeline parts and instrumentation settings: what makes the rest work. ${on ? 'Drawn on the board and in Compare.' : 'Folded on the board and in Compare, each band says what it folds.'}</span>`;
+}
+
 function renderLayerList(ctx) {
   const list = ctx.root.querySelector('.dv-layers');
   list.innerHTML = ctx.model.layers.map(L => layerItemHtml(L, state.layerFilter === L.id)).join('');
@@ -602,7 +618,7 @@ function layerItemHtml(L, open) {
           </button>
           ${narrowing ? `<span class="dv-match" title="${escapeHtml(matchTip)}">${matchN} match</span>` : ''}
         </div>
-        ${boardGroupsHtml(L.id, L.entries, { annotations: state.pack?.meta?.annotations })}
+        ${boardGroupsHtml(L.id, L.entries, { annotations: state.pack?.meta?.annotations, machinery: !!state.showMachinery })}
       </div>
       <div class="dv-panel" id="dv-panel-${L.id}" role="region" aria-labelledby="dv-toggle-${L.id}"${open ? '' : ' hidden'}></div>
     </li>`;
@@ -757,6 +773,13 @@ function discoverHandlers(ctx) {
       state[key] = !state[key];
       persistence.schedule();
       repaintList(ctx, `detail-${key}`);
+    },
+    'dv-machinery': () => {
+      setShowMachinery(!state.showMachinery);
+      renderMachinery(ctx);
+      // The band's own button is gone once the machinery shows: the switch takes the focus.
+      repaintList(ctx, 'machinery-switch');
+      announce(state.showMachinery ? 'The machinery is shown.' : 'The machinery is folded.');
     },
     'dv-show-all': (_ev, el) => showAllRows(ctx, el.dataset.layer),
     'dv-view': (_ev, el) => setView(ctx, el.dataset.view),

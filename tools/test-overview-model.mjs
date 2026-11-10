@@ -25,6 +25,7 @@ import {
   shortGradeLabel, verdictWordFor, runGradedPack, runGradesBoard, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
+  chainModel, chainDifferences,
   START_IDLE, startChoose, startAdopted,
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, sourceOffText, ALL_SOURCES_OFF,
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
@@ -927,10 +928,17 @@ test('while a check is running, the next panel offers no second Check beside the
 
 const posture = fixture('krystaline-posture');
 const conformance = fixture('krystaline-conformance');
+// The repository pack as the board reads it: the layers' sizes for the composition, and ids the
+// artefact model knows for the chain — 21 exporters and 204 metrics, 4 dashboards and their 317
+// panels, 7 alert rules and 8 burn-rate alerts over 18 objectives, the scan's placeholder MTTD /
+// MTTR targets and a chaos test.
 const layeredStub = {
   layers: {
-    L1: Array.from({ length: 36 }, (_, i) => ({ id: `SLI-${i}` })), L2: Array.from({ length: 225 }, () => ({})), L2X: [{}], L3: Array.from({ length: 321 }, () => ({})),
-    L4: { policy: Array.from({ length: 8 }, () => ({})), alerting: Array.from({ length: 7 }, () => ({})), healing: [] }, L5: [{}, {}], GOV: [],
+    L1: [...Array.from({ length: 18 }, (_, i) => ({ id: `SLI-${i}` })), ...Array.from({ length: 18 }, (_, i) => ({ id: `SLO-${i}`, defines: `slos.s${i}` }))],
+    L2: Array.from({ length: 225 }, (_, i) => ({ id: i < 21 ? `SCRAPE-SRC-${i}` : `METRIC-${i}` })), L2X: [{}],
+    L3: Array.from({ length: 321 }, (_, i) => ({ id: i < 4 ? `DASH-${i}` : `PANEL-${i}` })),
+    L4: { policy: Array.from({ length: 8 }, (_, i) => ({ id: `POL-${i}`, refs: [`slos.s${i}`] })), alerting: Array.from({ length: 7 }, (_, i) => ({ id: `RULE-${i}` })), healing: [] },
+    L5: [{ id: 'BASE-01', source: 'Scaffold', spec: { mttd_target_p50: '15m', mttr_target_p50: '1d' } }, { id: 'CHAOS-01', spec: { id: 'kill-pod' } }], GOV: [],
   },
 };
 const board = (over = {}) => screen({ layout: 'board', cells: posture.cells, layered: layeredStub, conformance, ...over });
@@ -1017,7 +1025,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
     ['add', 38, 'to add', 'declared in the repository, not running live', 'fail'], ['update', 5, 'to update', 'running live, but not as declared', 'warn'], ['review', 30, 'to review', 'running live, not in the repository', 'info'],
   ]);
   assert.deepEqual([c.known, c.total, c.sentence], [true, 73, '']);
-  assert.deepEqual(keep(changesModel({ fidelity: never })), { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.' });
+  assert.deepEqual(keep(changesModel({ fidelity: never })), { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.', beyond: '' });
   const none = keep(changesModel({ fidelity: fidelityModel({ run: unchangedRun, journey, pack: krystalinePack }) }));
   assert.deepEqual([none.total, none.sentence], [0, 'Nothing to change: live matches what the repository declares.']);
 });
@@ -1030,8 +1038,8 @@ test('decideOverviewLayout: the query wins, then the saved preference, else the 
 test('buildOverviewModel: the board from the same facts — layers, rules, fidelity, changes; nothing while the facts are read, nothing for a service without a pack of its own; the layout rides on the model and the renderer decides', () => {
   const m = keep(board());
   assert.deepEqual([m.layout, m.board.layers.declared, m.board.rules.pct, m.board.fidelity.alignmentPct, m.board.changes.total, m.grade.letter, m.still.status, m.primary], ['board', 600, 80, 78, 73, 'B', 'changed', 'next']);
-  assert.deepEqual(keep(board({ pending: true })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
-  assert.deepEqual(keep(board({ serviceId: 2 })).board, { layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
+  assert.deepEqual(keep(board({ pending: true })).board, { chain: null, layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'reading: nothing yet');
+  assert.deepEqual(keep(board({ serviceId: 2 })).board, { chain: null, layers: null, scan: null, rules: null, fidelity: null, changes: null }, 'no pack of its own: nothing to picture');
   assert.equal(m.board.scan, null, 'a record that carries no scan says nothing of one');
   const scanned = keep(board({ run: { ...run, packA: { ...run.packA, scan: { source: 'the folder /src/shop', files: 40, candidates: 40, skipped: 1, skippedFiles: [{ path: 'k8s/values-secrets.yaml', why: 'its name says it holds secrets, which a scan never reads' }], unclassified: 3, unknownFiles: ['notes/a.json'], environment: { profile: 'prod', excluded: 0, excludedFiles: [] }, warnings: [] } } } }));
   assert.deepEqual([scanned.board.scan.sentence, scanned.board.scan.tone, scanned.board.scan.groups.map((g) => g.key)],
@@ -1061,7 +1069,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
     assert.ok(html.includes(`<li class="ov-stage ov-stage--${key}">`) && html.includes(`<span class="ov-stage__n" aria-hidden="true">${n}</span>`) && html.includes(`${word}</span><span class="ov-stage__ask">${ask}</span>`), `stage ${n}`);
   }
   for (const piece of ['<div class="ov-board">', 'class="ov-col ov-col--discover og-panel og-panel--pad"', 'class="ov-col ov-col--diagnose"', 'class="ov-col ov-col--remediate og-panel og-panel--pad"']) assert.ok(html.includes(piece), piece);
-  assert.ok(html.includes('<h2 class="ov-card__h" id="ov-discover-h">Layers</h2>') && html.includes('>Are the right signals in place?</span></h2>') && html.includes('<h2 class="ov-card__h" id="ov-live-eyebrow">Can you trust what the signals show?</h2>') && html.includes('<h2 class="ov-card__h" id="ov-remediate-h">Changes to apply</h2>'), 'the panel headings');
+  assert.ok(html.includes('<h2 class="ov-card__h" id="ov-discover-h">The chain</h2>') && html.includes('>Are the right signals in place?</span></h2>') && html.includes('<h2 class="ov-card__h" id="ov-live-eyebrow">Can you trust what the signals show?</h2>') && html.includes('<h2 class="ov-card__h" id="ov-remediate-h">Changes to apply</h2>'), 'the panel headings');
   assert.ok(html.includes('<span class="ov-card__badge" aria-hidden="true">A</span>') && html.includes('<span class="ov-card__badge" aria-hidden="true">B</span>'), 'the two groups are lettered');
   // Discover: the kinds labelled once above the stack, then the four layers top down, each with its plate, its identity, its health and its count.
   assert.ok(html.includes('<div class="ov-cells ov-cells--head" aria-hidden="true"><span class="ov-cell-h" title="indicators">SLI</span><span class="ov-cell-h" title="objectives">SLO</span>') && html.includes('<span class="ov-cell-h" title="synthetic checks">Syn</span></div>'));
@@ -1079,15 +1087,24 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(!html.includes('ov-layer__hint" title='), 'no tooltip repeats a hint that is never cut');
   assert.ok(html.includes('<span class="ov-layer__total" title="declared on this layer"><b>80</b><small>declared</small></span>'), 'the count');
   assert.ok(html.includes('<div class="ov-layer__kinds og-muted">17 indicators · 15 objectives · 37 metrics · 2 logs · 1 trace · 4 dashboards and panels · 4 alerts</div>') && html.includes('<div class="ov-layer__kinds og-muted">nothing declared on this layer</div>'));
-  assert.ok(html.includes('<div class="ov-stat" title="600 things declared in the repository."><dt>Declared</dt><dd>600</dd></div>') && html.includes('<dt>Coverage</dt><dd>35<small>%</small></dd>') && html.includes('<div class="ov-stat" title="7 things could not be placed on a layer."><dt>Unplaced</dt><dd>7</dd></div>'), 'the three stats');
-  // The column opens on the summary: In the repository and its counts, closed; the stack is what it opens to; the stats stay outside.
-  assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'the summary is the default, closed');
+  // The column opens on the chain: three tiles in the order a signal travels, the warning under them, MTTD / MTTR.
+  assert.equal(countOf(html, '<div class="ov-clink ov-clink--'), 3, 'a tile per link');
+  assert.ok(html.indexOf('<span class="ov-clink__name">Exporters</span>') < html.indexOf('<span class="ov-clink__name">Alerts</span>') && html.indexOf('<span class="ov-clink__name">Alerts</span>') < html.indexOf('<span class="ov-clink__name">Dashboards</span>'), 'in the order a signal travels');
+  assert.equal(countOf(html, '<span class="ov-chain__arrow" aria-hidden="true">→</span>'), 2);
+  assert.ok(html.includes('<div class="ov-clink ov-clink--ok" role="listitem" title="21 exporters — what is scraped">') && html.includes('<span class="ov-clink__n">21</span>'), 'the exporters');
+  assert.ok(html.includes('<div class="ov-clink ov-clink--warn" role="listitem" title="15 alerts — what fires">') && html.includes('<span class="ov-clink__n">15</span>') && html.includes('<span class="ov-clink__parts og-muted">7 alert rules · 8 burn-rate alerts</span>'), 'the alerts, rules and burn-rate together');
+  assert.ok(html.includes('<div class="ov-clink ov-clink--ok" role="listitem" title="4 dashboards — what people open">') && html.includes('<span class="ov-clink__n">4</span>'), 'the dashboards, without their panels');
+  assert.ok(html.includes('<ul class="ov-chain__notes"><li class="ov-chain__note ov-chain__note--warn">10 of 18 objectives have no burn-rate alert.</li></ul>'), 'the warning under the row');
+  assert.ok(html.includes('<div class="ov-mttx ov-mttx--fail" title="A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.">') && html.includes('<span class="ov-mttx__val">Not declared</span>') && html.includes('<span class="ov-mttx__note">The repository states no MTTD / MTTR targets.</span>'), 'placeholder targets are not declared ones');
+  assert.ok(html.includes('<p class="ov-detail"><span class="ov-detail__h">Under it</span> 18 indicators · 18 objectives · 204 metrics · 1 chaos test</p>'), 'the detail in one line');
+  assert.ok(!html.includes('<dl class="ov-stats">') && !html.includes('>600<'), 'no big number of everything');
+  // The machinery and the stack behind one disclosure, closed.
+  assert.ok(html.includes('<details class="ov-repo">') && !html.includes('<details class="ov-repo" open>'), 'closed by default');
   const sum = html.slice(html.indexOf('<summary class="ov-repo__sum">'), html.indexOf('</summary>', html.indexOf('<summary class="ov-repo__sum">')));
-  assert.ok(sum.includes('<span class="ov-repo__title">In the repository</span>') && sum.includes('<span class="ov-comp__row"><span class="ov-comp__name">Dashboards/Recording Rules</span><b class="ov-comp__n">321</b></span>'), 'the counts are the summary itself');
-  assert.equal(countOf(sum, '<span class="ov-comp__row">'), 5, 'one row per kind: a list, not a sentence');
-  assert.ok(!sum.includes(' · '), 'no run-on separators');
+  assert.ok(sum.includes('<span class="ov-repo__title">The machinery and the layers</span>') && sum.includes('<span class="ov-repo__line">317 panels</span>'), 'the machinery is the summary');
   assert.ok(!sum.includes('ov-layer') && html.indexOf('</summary>') < html.indexOf('<ol class="ov-stack"') && html.indexOf('<ol class="ov-stack"') < html.indexOf('</details>', html.indexOf('<details class="ov-repo">')), 'the layers are inside, behind the summary');
-  assert.ok(html.indexOf('</details>', html.indexOf('<details class="ov-repo">')) < html.indexOf('<dl class="ov-stats">'), 'the stats stay in view, after it');
+  assert.ok(html.includes('<p class="ov-repo__cov og-muted">Coverage reaches 35 in 100 across the four layers. 7 things could not be placed on a layer.</p>'), 'the coverage and the unplaced, with the layers');
+  assert.ok(html.indexOf('<div class="ov-chain"') < html.indexOf('<details class="ov-repo">'), 'the chain first');
   assert.ok(!html.includes('ov-legend') && !html.includes('Cells, left to right'), 'the cells are labelled directly: no legend paragraph');
   // Diagnose: one status strip for the column — what was graded against what, when, which families were not read, the cadence.
   assert.ok(html.includes('<div class="ov-status ov-status--warn" role="status"><span class="ov-status__dot" aria-hidden="true"></span>'));
@@ -1127,7 +1144,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   nc.click('ov-next-diagnose');
   assert.deepEqual(carried, [['discover', withLive.compare], ['diagnose', withLive.compare], ['remediate', withLive.compare], ['diagnose', null]]);
   assert.ok(!/<(img|script)\b/.test(html), 'no raw markup');
-  assert.equal((html.match(/%<\//g) || []).length, 2, 'two percent signs reach the page: the ring\'s and the coverage stat\'s');
+  assert.equal((html.match(/%<\//g) || []).length, 1, 'one percent sign reaches the page: the ring\'s');
   // Never checked: the strip says so, the ring is empty, the counts withheld with their reason; the next step is the one primary.
   const never = overviewContainer();
   renderOverview(never, board({ run: null, journeys: [] }), { overview: {} });
@@ -1194,6 +1211,105 @@ test('the board agrees with the engine: a cell lit by live evidence alone is pre
   const dot = overviewContainer();
   renderOverview(dot, board({ cells: { ...posture.cells, 'ux:metric': [{ id: 'scrape/rum', _evidence: true }] } }), { overview: {} });
   assert.ok(dot.innerHTML.includes('<span class="ov-cell ov-cell--on" title="metrics seen live">•</span>'));
+});
+
+// ---------- the chain ----------
+//
+// A run written since the records count by tier (tools/lib/journey.mjs drift.tiers): krystaline as its
+// live check counted it on 2026-11-10 — every exporter and alert running live, the dashboards not read
+// (the live side had no access to Grafana), 31 metrics declared and not live.
+const tiered = (over = {}) => ({
+  ...run,
+  drift: {
+    ...run.drift, aligned: 347, drifted: 0, declaredNotLive: 31, liveNotDeclared: 0,
+    tiers: {
+      exporters: { aligned: 21, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 },
+      alerts: { aligned: 66, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 },
+      dashboards: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 7, setAside: 0 },
+      detail: { aligned: 219, drifted: 0, declaredNotLive: 31, liveNotDeclared: 0, notRead: 5, setAside: 0, families: { metric: 31 } },
+      machinery: { aligned: 41, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 12, setAside: 0, families: {} },
+      ...over,
+    },
+  },
+});
+
+test('chainModel: the chain the repository declares — three links, the objectives no burn-rate alert covers, MTTD / MTTR declared or not, measured or not, the detail and the machinery in a line each', () => {
+  const C = keep(chainModel({ layered: layeredStub }));
+  assert.deepEqual(C.links.map((l) => [l.key, l.name, l.count, l.words, l.parts, l.note, l.tone]), [
+    ['exporters', 'Exporters', 21, 'exporters', '', '', 'ok'],
+    ['alerts', 'Alerts', 15, 'alerts', '7 alert rules · 8 burn-rate alerts', '10 of 18 objectives have no burn-rate alert.', 'warn'],
+    ['dashboards', 'Dashboards', 4, 'dashboards', '', '', 'ok'],
+  ]);
+  assert.deepEqual(C.mttx, { declared: false, targets: '', measured: '', note: 'The repository states no MTTD / MTTR targets.', hint: 'A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.', tone: 'fail' }, 'the scan\'s placeholder targets are not declared ones');
+  assert.deepEqual(C.detail, { count: 241, line: '18 indicators · 18 objectives · 204 metrics · 1 chaos test' });
+  assert.deepEqual(C.machinery, { count: 317, line: '317 panels' });
+  const own = (L5) => keep(chainModel({ layered: { layers: { ...layeredStub.layers, L5 } } })).mttx;
+  const declared = own([{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }]);
+  assert.deepEqual([declared.declared, declared.targets, declared.measured, declared.note, declared.tone], [true, 'MTTD 5m · MTTR 2h', '', 'Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.', 'warn']);
+  const measured = own([{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }, { id: 'CHAOS-01', spec: { id: 'kill-pod', last_result: { at: '2026-11-01T10:00:00Z', outcome: 'pass', observed_mttd: '3m' } } }]);
+  assert.deepEqual([measured.measured, measured.note, measured.tone], ['MTTD 3m in a chaos test on 1 Nov', '', 'ok']);
+  const none = keep(chainModel({ layered: { layers: { L1: [{ id: 'SLI-1' }] } } }));
+  assert.deepEqual(none.links.map((l) => [l.count, l.note, l.tone]), [[0, 'No scrape job found in the repository.', 'fail'], [0, 'No alert found in the repository.', 'fail'], [0, 'No dashboard found in the repository.', 'fail']]);
+  assert.equal(chainModel({ layered: null }), null);
+});
+
+test('the chain against live: a run that counts by tier draws the links and their alignment, counts the chain alone to change, and says the details beyond it in one line', () => {
+  const f = keep(fidelityModel({ run: tiered(), journey, pack: krystalinePack, now: NOW }));
+  assert.deepEqual(f.chain.links.map((l) => [l.key, l.live, l.of, l.line, l.tone]), [
+    ['exporters', 21, 21, '', 'ok'],
+    ['alerts', 66, 66, '', 'ok'],
+    ['dashboards', 0, 0, '7 not read live', 'warn'],
+  ]);
+  assert.equal(f.chain.pct, 100, 'what matches of what was compared, the chain alone');
+  assert.equal(f.alignmentPct, 78, 'the record\'s own alignment is kept beside it');
+  assert.deepEqual(f.chain.beyond, { count: 31, liveOnly: 0, line: 'Beyond the chain, 31 details differ: 31 metrics.' });
+  // Live-only things beyond the chain are said apart: they do not differ from what the repository declares.
+  const extra = keep(fidelityModel({ run: tiered({ detail: { aligned: 219, drifted: 0, declaredNotLive: 31, liveNotDeclared: 4, notRead: 5, setAside: 0, families: { metric: 31 } } }), journey, pack: krystalinePack, now: NOW }));
+  assert.deepEqual(extra.chain.beyond, { count: 31, liveOnly: 4, line: 'Beyond the chain, 31 details differ: 31 metrics. 4 more run live, not declared.' });
+  const c = keep(changesModel({ fidelity: f }));
+  assert.deepEqual(c.items.map((i) => [i.key, i.value]), [['add', 0], ['update', 0], ['review', 0]]);
+  assert.deepEqual([c.total, c.sentence, c.beyond], [0, 'Nothing to change in the chain: its exporters, alerts and dashboards match live.', 'Beyond the chain, 31 details differ: 31 metrics.']);
+  const s = keep(stillTrueModel({ journey, run: tiered(), now: NOW }));
+  assert.deepEqual([s.status, s.sentence], ['changed', 'Checked 2 hours ago against live — the chain matches what live showed: its dashboards could not be read. 31 details differ beyond it.']);
+  const n = keep(nextActionModel({ still: s, grade: { basis: 'live' }, run: tiered(), journey, now: NOW }));
+  assert.deepEqual([n.sentence, n.button.label, n.why], ['The chain matches live; look at the 31 details beyond it.', 'See the differences', ['Beyond the chain, 31 details differ.']]);
+  // The chain itself differs: two alerts not live, an exporter scraped differently, one alert live only.
+  const worse = tiered({
+    exporters: { aligned: 20, drifted: 1, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 },
+    alerts: { aligned: 64, drifted: 0, declaredNotLive: 2, liveNotDeclared: 1, notRead: 0, setAside: 0 },
+  });
+  const fw = keep(fidelityModel({ run: worse, journey, pack: krystalinePack, now: NOW }));
+  assert.deepEqual(fw.chain.links.map((l) => [l.live, l.of, l.line, l.tone]), [[21, 21, '1 not as declared', 'warn'], [64, 66, '1 live only', 'fail'], [0, 0, '7 not read live', 'warn']]);
+  assert.equal(fw.chain.pct, 95, '84 of 88 compared');
+  const cw = keep(changesModel({ fidelity: fw }));
+  assert.deepEqual([cw.items.map((i) => i.value), cw.total, cw.sentence], [[2, 1, 1], 4, '']);
+  const sw = keep(stillTrueModel({ journey, run: worse, now: NOW }));
+  assert.equal(sw.sentence, 'Checked 2 hours ago against live — 3 in the chain differ from what the repository declares, and 31 details beyond it.');
+  const nw = keep(nextActionModel({ still: sw, grade: { basis: 'live' }, run: worse, journey, now: NOW }));
+  assert.deepEqual([nw.sentence, nw.why], ['Fix the 3 things in the chain the live side does differently.', ['1 exporter runs differently live than declared.', '2 declared alerts are not running live.', 'Beyond the chain, 31 details differ.']]);
+  assert.deepEqual(chainDifferences(worse), { chain: 3, beyond: 31, links: [{ key: 'exporters', many: 'exporters', one: 'exporter', missing: 0, drifted: 1 }, { key: 'alerts', many: 'alerts', one: 'alert', missing: 2, drifted: 0 }, { key: 'dashboards', many: 'dashboards', one: 'dashboard', missing: 0, drifted: 0 }], unread: ['dashboards'] });
+  // A record written before the tiers counts everything, as before.
+  assert.equal(chainDifferences(run), null);
+  assert.equal(keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW })).chain, null);
+  assert.equal(keep(changesModel({ fidelity: fidelityModel({ run, journey, pack: krystalinePack, now: NOW }) })).beyond, '');
+});
+
+test('renderOverview: with a run that counts by tier, Diagnose draws a row per link and the chain\'s ring, and Remediate the chain\'s changes with the details beyond in one line; a pack the board cannot sort keeps the layers', () => {
+  const c = overviewContainer();
+  renderOverview(c, board({ diagnostic: diagnosticFull, run: tiered() }), {});
+  const html = c.innerHTML;
+  assert.ok(html.includes('aria-label="100 in 100 of the chain aligned"') && html.includes('<text class="ov-ring__pct" x="44" y="42">100%</text>'), 'the chain\'s ring');
+  assert.equal(countOf(html, '<li class="ov-clive__row ov-clive__row--'), 3, 'a row per link');
+  assert.ok(html.includes('<li class="ov-clive__row ov-clive__row--ok" title="21 of 21 declared exporters live">') && html.includes('<span class="ov-clive__name">Exporters</span><span class="ov-clive__line og-muted"></span><span class="ov-clive__n">21<small>/21</small></span>'), 'one line: the count says live of declared');
+  assert.ok(html.includes('<li class="ov-clive__row ov-clive__row--warn">') && html.includes('<span class="ov-clive__name">Dashboards</span><span class="ov-clive__line og-muted">7 not read live</span><span class="ov-clive__n">–</span>'), 'what was not read is said, not counted as missing');
+  assert.ok(!html.includes('<div class="ov-tiles">'), 'the four counts of everything are gone');
+  assert.equal(countOf(html, 'Beyond the chain, 31 details differ: 31 metrics.'), 1, 'said once, under the changes: the sentence in Diagnose already counts them');
+  assert.ok(html.includes('<p class="ov-col__note og-muted">Nothing to change in the chain: its exporters, alerts and dashboards match live.</p>'));
+  assert.ok(html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — the chain matches what live showed: its dashboards could not be read. 31 details differ beyond it.</p>'));
+  // No layered pack (an older host): the layers' summary and the three stats, as before.
+  const old = overviewContainer();
+  renderOverview(old, board({ diagnostic: diagnosticFull, layered: null }), {});
+  assert.ok(old.innerHTML.includes('<h2 class="ov-card__h" id="ov-discover-h">Layers</h2>') && old.innerHTML.includes('<dl class="ov-stats">') && !old.innerHTML.includes('ov-clink'));
 });
 
 // ---------- the vocabulary ----------
@@ -2277,7 +2393,8 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './constants.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './constants.mjs'],
+  'studio/artefact-tiers.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
   'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],
@@ -2807,6 +2924,18 @@ test('the differences to set aside on the page: asideChanges tells a what-if fro
   assert.ok(html.includes('<li class="diag-aside-item is-due">') && html.includes('Review due since 1 Nov <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget:declared:metric::{&quot;name&quot;:&quot;m3&quot;}">Forget it</button>'), 'a due one counts again, with Forget');
   assert.ok(html.includes('aria-checked="false" aria-label="Set aside x" data-ux-action="diag-aside-toggle:live:metric::{&quot;name&quot;:&quot;x&quot;}"'), 'the key rides in the action, escaped');
   assert.ok(html.includes('2 set-asides match no difference now (now on both sides and in neither pack). <button type="button" class="ux-link-btn" data-ux-action="diag-aside-forget-stale">Forget them</button>'));
+  // The machinery's differences (panels, recording rules, pipeline parts) share one closed row, last, whatever their layer.
+  const mixed = setAsideListHtml({
+    declared: [
+      row('panel::{"title":"p1"}', 'declared', 'L3', { kind: 'panel' }),
+      row('metric::{"name":"m1"}', 'declared', 'L2'),
+      row('recording_rule::{"record":"r"}', 'declared', 'L3', { kind: 'recording_rule' }),
+      row('dashboard::{"id":"d"}', 'declared', 'L3', { kind: 'dashboard' }),
+    ],
+    layerTitle: (L) => `${L} name`,
+  });
+  assert.deepEqual([...mixed.matchAll(/data-aside-group="([^"]+)"/g)].map((m) => m[1]), ['declared:L2', 'declared:L3', 'declared:machinery'], 'the machinery last, the dashboard on its layer');
+  assert.ok(mixed.includes('<details class="diag-aside-layer" data-aside-group="declared:machinery">') && mixed.includes('<span class="diag-aside-layer-name">The machinery — panels, recording rules, pipeline parts</span><span class="diag-aside-layer-n">2</span>') && mixed.includes('aria-label="Set aside all 2 in the machinery"'), 'closed, named, with its own switch');
   assert.equal(setAsideListHtml({}), '', 'no differences and nothing stale: nothing drawn');
   assert.ok(!setAsideListHtml({ declared: [row('metric::{"name":"<b>"}', 'declared', 'L2')] }).includes('<b>'), 'labels escaped');
   assert.equal(setAsideWords({ kind: 'not-this-service' }), "Not this service's");

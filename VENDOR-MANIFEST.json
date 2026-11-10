@@ -457,8 +457,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "05b4eb3088635caa748249c912290ea7e961c2d30c58703f62b8d7e2e6911bb3",
-      "bytes": 156445,
+      "sha256": "f2a2a544be20073851e2480c89cb3c1aa6d2b8dc7b67c9fa4c9fd9464db04d34",
+      "bytes": 157388,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -1136,9 +1136,10 @@
       "changedSinceRelease": false
     },
     "tools/lib/repo-pack.mjs": {
-      "sha256": "2441bc9355a887239a5a4ec2bcf13ceb2f7442b5d64c0dbc2b87bb71038f5fe2",
-      "bytes": 3044,
+      "sha256": "0426c19d4156ae7a2897061e514a1f4006c248879a1f12c5092e247e17fa7302",
+      "bytes": 5373,
       "exports": [
+        "baselinesErrors",
         "isRepoPackPath",
         "readRepoPack",
         "repoPackDocuments"
@@ -1148,7 +1149,12 @@
         "tools/lib/mini-yaml.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "isRepoPackPath",
+        "readRepoPack",
+        "repoPackDocuments"
+      ]
     },
     "tools/lib/schedule-snippets.mjs": {
       "sha256": "a7eac2632b83b511100d37b1c80801ff9cc68880a0458c212e2e54ed1dc6e4ce",

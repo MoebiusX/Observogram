@@ -9,7 +9,7 @@
 // and the card opener from drawer.mjs (safe call-time cycles).
 
 import { chaosBlockerCopy } from './chaos-copy.mjs';
-import { state } from './state.mjs';
+import { state, setShowMachinery } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { LAYER_DEFS, LAYER_NAMES } from './constants.mjs';
@@ -61,6 +61,8 @@ import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, 
 // The static posture — no server behind the page (a static bundle): the deploy controls drawn unavailable.
 import { serverNeeded, DEPLOY_CONTROLS, staticRemedy, staticInputOf, staticTraceActions } from './static-remedies.mjs';
 import { markUnavailable } from './services-view.mjs';
+import { classifyArtefact } from './taxonomy.mjs';
+import { isMachinery } from './artefact-tiers.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
 // (kept importable from the view for compile-view.mjs and proto-shared.mjs).
@@ -3399,6 +3401,22 @@ function renderCompareFilters(matchedBy = DEFAULT_PAIRING) {
   };
   lensWrap.appendChild(lensSel);
   wrap.appendChild(lensWrap);
+  // The machinery (panels, recording rules, pipeline parts): folded until asked
+  // for — the same remembered switch as Discover's.
+  const machWrap = document.createElement('div');
+  machWrap.className = 'compare-lens-wrap compare-machinery';
+  const machOn = !!state.showMachinery;
+  machWrap.innerHTML = `
+    <span class="compare-lens-label" id="compare-machinery-key">Machinery</span>
+    <button type="button" role="switch" class="diag-switch" aria-checked="${machOn}" aria-labelledby="compare-machinery-key compare-machinery-word" title="Panels, recording rules, pipeline parts and instrumentation settings: what makes the rest work. ${machOn ? 'Both panes draw them.' : 'Left out of both panes until you ask.'}"><span class="diag-switch-knob" aria-hidden="true"></span></button>
+    <span class="compare-machinery-word" id="compare-machinery-word">${machOn ? 'Shown' : 'Folded'}</span>`;
+  machWrap.querySelector('[role="switch"]').onclick = () => {
+    setShowMachinery(!state.showMachinery);
+    appHost.renderMainView();
+    document.querySelector('.compare-machinery [role="switch"]')?.focus({ preventScroll: true });
+    diagUx.announce(state.showMachinery ? 'The machinery is shown.' : 'The machinery is folded.');
+  };
+  wrap.appendChild(machWrap);
   wrap.appendChild(renderLiveScopeControl());
 
   // View — how much of each artefact both panes draw.
@@ -3520,7 +3538,7 @@ function renderCompareLayerRow(L, sets) {
   // "36 vs 6" said in words: how many artefacts each side holds in this
   // layer after the current filter, lens and search — not a defect count.
   const roles = sets.roles || compareRoles('gap');
-  const countTip = `${filteredA.length} artefact${filteredA.length === 1 ? '' : 's'} in the ${roles.aNoun} (Pack A) and ${filteredB.length} in the ${roles.bNoun} (Pack B) in this layer, after the current filter, lens and search.`;
+  const countTip = `${filteredA.length} artefact${filteredA.length === 1 ? '' : 's'} in the ${roles.aNoun} (Pack A) and ${filteredB.length} in the ${roles.bNoun} (Pack B) in this layer, after the current filter, lens and search${state.showMachinery ? '' : ', the machinery folded'}.`;
   head.innerHTML = `
     <span class="section-num">${L}</span>
     <span class="section-name" title="${escapeHtml(diagUx.layerTitle(L))}">${escapeHtml(layerNames[L] || L)}</span>
@@ -3671,7 +3689,9 @@ function filterCompareItems(items, L, side, sets) {
   const search = (state.compareSearch || '').trim().toLowerCase();
   const lens = state.compareLens || 'all';
   const sidePack = side === 'a' ? state.pack : state.packB;
+  const machinery = !!state.showMachinery;
   return items.filter(art => {
+    if (!machinery && isMachinery(classifyArtefact(art).family)) return false;
     if (lens !== 'all' && !productSurface(art, lens, sidePack)) return false;
     const status = compareStatusFor(side, L, art, sets);
     const inBoth = status === 'both';
