@@ -20,9 +20,14 @@
  *      must see through;
  *   2. what the live side has no way to look at (the collector's
  *      configuration, dashboards behind a refused login) is reported as
- *      NOT OBSERVED, never as missing;
+ *      NOT OBSERVED, never as missing — and so is the part of an artefact
+ *      it was not shown: a rule listing that gives each rule a flat
+ *      `severity` and no `labels` object never showed the rule's `service`
+ *      or `team` label, which therefore cannot differ;
  *   3. real drift still shows: take one rule, one route, one metric away
- *      from the live side and each surfaces, and only it.
+ *      from the live side and each surfaces, and only it — as does a
+ *      severity that differs, a label that differs where the listing does
+ *      show labels, and one of two rules that share a name.
  */
 
 import { readFileSync } from 'node:fs';
@@ -98,6 +103,19 @@ services:
         expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
         labels:
           severity: warning
+          service: shop
+          team: platform
+      # One name, two rules: a warning and a critical threshold.
+      - alert: DiskFilling
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2
+        for: 10m
+        labels:
+          severity: warning
+      - alert: DiskFilling
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.05
+        for: 1m
+        labels:
+          severity: critical
 `,
   'observability/alertmanager.yml': `route:
   receiver: oncall
@@ -204,10 +222,16 @@ JOB_SECONDS = Histogram('shop_job_duration_seconds', 'job latency')
 const probe = (name) => PROBES.find(p => p.name === name);
 
 // vmalert: groups in ANOTHER order, `query` for expr, `duration` seconds
-// for `for`, `severity` at the top level, on-wire evaluation state.
+// for `for`, `severity` at the top level and no `labels` object (the MCP's
+// rule listing projects that one label), on-wire evaluation state. The two
+// DiskFilling rules come critical first, the file's order reversed.
 const ruler = () => ({
   groups: [
     { name: 'shop.alerts', interval: 15, rules: [
+      { name: 'DiskFilling', type: 'alerting', severity: 'critical', duration: 60, health: 'ok', state: 'inactive',
+        query: 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.05\n' },
+      { name: 'DiskFilling', type: 'alerting', severity: 'warning', duration: 600, health: 'ok', state: 'inactive',
+        query: 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2\n' },
       { name: 'DiskAlmostFull', type: 'alerting', severity: 'warning', duration: 0, health: 'ok', state: 'inactive',
         query: 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1\n' },
       { name: 'ShopLatencyHigh', type: 'alerting', severity: 'warning', duration: 900, health: 'ok', state: 'inactive',
@@ -340,8 +364,8 @@ function liveInputs({ rules = ruler(), amConfig = AM_CONFIG, metricNames = METRI
   };
 }
 
-function compare(live) {
-  const { canonical: repoPack } = crawlFiles(REPO, { repoName: 'shop', now: '2026-10-01T00:00:00.000Z' });
+function compare(live, files = REPO) {
+  const { canonical: repoPack } = crawlFiles(files, { repoName: 'shop', now: '2026-10-01T00:00:00.000Z' });
   const livePack = buildCanonicalPack(live);
   return {
     repoPack,
@@ -382,14 +406,43 @@ assert(both('L4').burn_rate === 2,
   'L4: the alerts that guard a recorded SLO pair as burn-rate entries on both sides', both('L4'));
 assert(both('L4').alert_route === 4,
   'L4: all four routes pair — including the one whose address the repository takes from a deploy-time variable', both('L4'));
-assert(both('L4').alert_rule === 1
-  && repoPack.spec.alerting.rules.map(r => r.name).join() === 'DiskAlmostFull'
-  && livePack.spec.alerting.rules.map(r => r.name).join() === 'DiskAlmostFull',
-'L4: the operational alert (spec 1.4 alerting.rules) pairs by its exact name — the rule file\'s `alert:` against the ruler\'s listing', [both('L4'), repoPack.spec.alerting.rules, livePack.spec.alerting.rules]);
+assert(both('L4').alert_rule === 3
+  && repoPack.spec.alerting.rules.map(r => r.name).sort().join() === 'DiskAlmostFull,DiskFilling,DiskFilling'
+  && livePack.spec.alerting.rules.map(r => r.name).sort().join() === 'DiskAlmostFull,DiskFilling,DiskFilling',
+'L4: the operational alerts (spec 1.4 alerting.rules) pair by their exact name — the rule file\'s `alert:` against the ruler\'s listing — and two rules under one name are two on both sides', [both('L4'), repoPack.spec.alerting.rules, livePack.spec.alerting.rules]);
 {
-  const rule = diff.layers.L4.inBoth.find(e => e.key.startsWith('alert_rule::'));
+  const rule = diff.layers.L4.inBoth.find(e => e.key.startsWith('alert_rule::{"name":"diskalmostfull"}'));
   assert(rule?.match === 'aligned' && rule.deltas.length === 0 && rule.a.spec.engine === 'prometheus' && rule.b.spec.engine === 'victoriametrics',
     'the operational rule is aligned with no delta: the file says prometheus and the ruler attests victoriametrics, and the engine is reader knowledge, not behaviour; its `duration: 0` is no wait, like the file\'s absent `for`', rule && [rule.match, rule.deltas, rule.a.spec, rule.b.spec]);
+  // The file gives the rule `service` and `team` labels; the listing showed its severity and no labels object.
+  assert(JSON.stringify(rule?.a.spec.labels) === JSON.stringify({ severity: 'warning', service: 'shop', team: 'platform' })
+    && JSON.stringify(rule?.b.spec.labels) === JSON.stringify({ severity: 'warning' }),
+  'the file\'s rule carries service and team labels; the live rule holds the severity the listing gave', rule && [rule.a.spec.labels, rule.b.spec.labels]);
+  assert(JSON.stringify(rule?.b.partial) === JSON.stringify({ labels: ['severity'] }) && rule?.a.partial === undefined,
+    'the live rule says what it was shown of its labels: the severity, no other', rule && [rule.a.partial, rule.b.partial]);
+  assert(JSON.stringify(rule?.unobserved) === JSON.stringify([{ field: 'labels', side: 'b', keys: ['service', 'team'] }]),
+    'labels the listing never showed are not a difference: the pair names them as unobserved on the live side', rule?.unobserved);
+  assert(diff.summary.partlyCompared === 1,
+    'and the summary counts the pairs compared on part of a field: this one', diff.summary.partlyCompared);
+  const at = livePack.spec.alerting.rules.findIndex(r => r.name === 'DiskAlmostFull');
+  assert(livePack.metadata.annotations[`observogram.partial.alerting.rules[${at}]`] === 'labels=severity'
+    && Object.keys(livePack.metadata.annotations).filter(k => k.startsWith('observogram.partial.')).length === 3
+    && !Object.keys(repoPack.metadata.annotations).some(k => k.startsWith('observogram.partial.')),
+  'the live pack states it per rule (observogram.partial.<symbol> = labels=severity); a rule file is read whole and states nothing',
+  Object.entries(livePack.metadata.annotations).filter(([k]) => k.startsWith('observogram.partial.')));
+}
+{
+  // One name, a warning and a critical threshold: two rules in the file, two in the ruler (which lists the critical first).
+  const pairs = diff.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::{"name":"diskfilling"}'));
+  assert(pairs.length === 2 && pairs.every(e => e.match === 'aligned' && e.deltas.length === 0)
+    && JSON.stringify(pairs.map(e => e.key)) === JSON.stringify(['alert_rule::{"name":"diskfilling"}#01', 'alert_rule::{"name":"diskfilling"}#02']),
+  'two rules under one name pair two to two, each aligned', pairs.map(e => [e.key, e.match, e.deltas]));
+  assert(pairs.every(e => e.a.spec.expr === e.b.spec.expr.trim() && e.a.spec.severity === e.b.spec.severity),
+    'each with its own counterpart — the warning with the warning — whatever order the ruler lists them in', pairs.map(e => [e.a.spec.expr, e.b.spec.expr]));
+  assert(pairs.every(e => !('unobserved' in e)),
+    'a pair whose labels were all shown (the file states a severity and no more) carries no note', pairs.map(e => e.unobserved));
+  assert(diff.collisions.some(c => c.kind === 'alert_rule' && c.aCount === 2 && c.bCount === 2),
+    'and the shared name is on the collisions list, two on each side', diff.collisions);
 }
 assert(both('L2').backend === 7,
   'L2: the seven products the repository deploys are the seven the live side found evidence of', both('L2'));
@@ -506,6 +559,142 @@ assert(both('L2').metric >= 11, 'L2: declared metrics pair with the series the s
   const drifted = Object.values(d.layers).flatMap(l => l.inBoth.filter(e => e.match === 'drifted'));
   assert(drifted.length === 1 && drifted[0].key.startsWith('alert_route::') && drifted[0].deltas[0].field === 'channels',
     'redaction hides only what was redacted: a changed e-mail address on the same route is drift', drifted.map(e => [e.key, e.deltas]));
+}
+const driftedRules = (d) => Object.values(d.layers).flatMap(l => l.inBoth.filter(e => e.match === 'drifted' && e.key.startsWith('alert_rule::')));
+const liveRule = (rules, name, at = 0) => rules.groups[0].rules.filter(r => r.name === name)[at];
+{
+  // The severity the listing DOES show differs: the file says warning, production runs critical.
+  const rules = ruler();
+  liveRule(rules, 'DiskAlmostFull').severity = 'critical';
+  const d = compare(liveInputs({ rules })).diff;
+  const drifted = driftedRules(d);
+  assert(d.summary.drifted === 1 && drifted.length === 1 && drifted[0].key === 'alert_rule::{"name":"diskalmostfull"}'
+    && JSON.stringify(drifted[0].deltas) === JSON.stringify([
+      { field: 'labels', a: { severity: 'warning' }, b: { severity: 'critical' } },
+      { field: 'severity', a: 'SEV2', b: 'SEV1' },
+    ]),
+  'a severity that differs is drift, reported on the label both sides were shown — the unshown service and team are not in the delta', drifted.map(e => [e.key, e.deltas]));
+  assert(JSON.stringify(drifted[0]?.unobserved) === JSON.stringify([{ field: 'labels', side: 'b', keys: ['service', 'team'] }]),
+    'and the pair still names what went uncompared', drifted[0]?.unobserved);
+}
+{
+  // The listing projects severity (the other rules have one) and this rule has none: no severity label in production.
+  const rules = ruler();
+  delete liveRule(rules, 'DiskAlmostFull').severity;
+  const d = compare(liveInputs({ rules })).diff;
+  const drifted = driftedRules(d);
+  assert(drifted.length === 1 && drifted[0].key === 'alert_rule::{"name":"diskalmostfull"}'
+    && JSON.stringify(drifted[0].deltas.map(x => [x.field, x.a, x.b])) === JSON.stringify([['labels', { severity: 'warning' }, {}], ['severity', 'SEV2', null]]),
+  'a rule with no severity in a listing that shows severities has none: against a declared one, drift', drifted.map(e => [e.key, e.deltas]));
+}
+{
+  // A ruler's own API: every rule with its labels object. There a missing label IS a difference.
+  const rules = ruler();
+  for (const r of rules.groups[0].rules) { r.labels = { severity: r.severity }; delete r.severity; }
+  const { diff: d, livePack: live } = compare(liveInputs({ rules }));
+  const drifted = driftedRules(d);
+  assert(!Object.keys(live.metadata.annotations).some(k => k.startsWith('observogram.partial.')),
+    'a listing that gives each rule its labels object was shown whole: no partial statement', Object.keys(live.metadata.annotations).filter(k => k.startsWith('observogram.partial.')));
+  assert(drifted.length === 1 && drifted[0].key === 'alert_rule::{"name":"diskalmostfull"}' && !('unobserved' in drifted[0])
+    && JSON.stringify(drifted[0].deltas) === JSON.stringify([{ field: 'labels', a: { service: 'shop', severity: 'warning', team: 'platform' }, b: { severity: 'warning' } }]),
+  'labels the live side WAS shown and that lack service and team are drift, in full', drifted.map(e => [e.key, e.deltas, e.unobserved]));
+  assert(!('partlyCompared' in d.summary), 'with every pair compared whole the summary has no such count', d.summary.partlyCompared);
+}
+{
+  // One of the two rules that share a name is not deployed.
+  const rules = ruler();
+  rules.groups[0].rules = rules.groups[0].rules.filter(r => !(r.name === 'DiskFilling' && r.severity === 'critical'));
+  const d = compare(liveInputs({ rules })).diff;
+  const left = Object.values(d.layers).flatMap(l => l.onlyInA);
+  assert(left.length === 1 && left[0].key === 'alert_rule::{"name":"diskfilling"}#02' && left[0].artefact.spec.severity === 'SEV1' && d.summary.onlyInB === 0 && d.summary.drifted === 0,
+    'one of two same-named rules missing live reads "not live" — the critical one, and the warning stays aligned', left.map(e => [e.key, e.artefact.spec.severity]));
+}
+{
+  // A ruler leaves the labels key out of a rule that has none. In a listing where another rule carries its labels,
+  // the one without the key has no labels — shown whole, and against a file that declares some, drift.
+  const rules = ruler();
+  for (const r of rules.groups[0].rules) { if (r.name !== 'DiskAlmostFull') r.labels = { severity: r.severity }; delete r.severity; }
+  const { diff: d, livePack: live } = compare(liveInputs({ rules }));
+  const drifted = driftedRules(d);
+  assert(!Object.keys(live.metadata.annotations).some(k => k.startsWith('observogram.partial.')),
+    'a listing that shows labels on any rule shows them on all: a rule without the key states nothing', Object.keys(live.metadata.annotations).filter(k => k.startsWith('observogram.partial.')));
+  assert(drifted.length === 1 && drifted[0].key === 'alert_rule::{"name":"diskalmostfull"}' && !('unobserved' in drifted[0])
+    && JSON.stringify(drifted[0].deltas.map(x => x.field)) === JSON.stringify(['labels', 'severity']),
+  'a rule with no labels live, declared with three, is drift — never "labels not shown"', drifted.map(e => [e.key, e.deltas, e.unobserved]));
+}
+{
+  // The recording rules count as the listing's evidence too: one of them with labels, and the alerting rules are shown whole.
+  const rules = ruler();
+  for (const r of rules.groups[0].rules) delete r.severity;
+  rules.groups[1].rules[0].labels = { tier: 'gold' };
+  const { livePack: live } = compare(liveInputs({ rules }));
+  assert(!Object.keys(live.metadata.annotations).some(k => k.startsWith('observogram.partial.')),
+    'a labels map on a recording rule of the same listing says the listing shows labels', Object.keys(live.metadata.annotations).filter(k => k.startsWith('observogram.partial.')));
+}
+{
+  // The statement names the rule by its place in spec.alerting.rules: a listed rule with no expression is not declared and takes no place.
+  const rules = ruler();
+  rules.groups[0].rules.unshift({ name: 'NoBody', type: 'alerting', severity: 'warning', duration: 0, health: 'ok', state: 'inactive', query: '' });
+  const { livePack: live } = compare(liveInputs({ rules }));
+  const stated = Object.keys(live.metadata.annotations).filter(k => k.startsWith('observogram.partial.')).sort();
+  assert(!live.spec.alerting.rules.some(r => r.name === 'NoBody')
+    && JSON.stringify(stated) === JSON.stringify(live.spec.alerting.rules.map((_, i) => `observogram.partial.alerting.rules[${i}]`)),
+  'each statement is at its rule\'s own index, whatever was listed and not declared', [stated, live.spec.alerting.rules.map(r => r.name)]);
+}
+{
+  // Two rules of one name that differ only in a label the listing does not show: the ruler lists two, so two run.
+  const files = { ...REPO, 'observability/alerting-rules.yml': `${REPO['observability/alerting-rules.yml']}      - alert: QueueDepth
+        expr: node_filesystem_avail_bytes < 1
+        labels:
+          severity: warning
+          team: a
+      - alert: QueueDepth
+        expr: node_filesystem_avail_bytes < 1
+        labels:
+          severity: warning
+          team: b
+` };
+  const rules = ruler();
+  const listed = { name: 'QueueDepth', type: 'alerting', severity: 'warning', duration: 0, health: 'ok', state: 'inactive', query: 'node_filesystem_avail_bytes < 1\n' };
+  rules.groups[0].rules.push({ ...listed }, { ...listed });
+  const { diff: d, livePack: live } = compare(liveInputs({ rules }), files);
+  const pairs = d.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::{"name":"queuedepth"}'));
+  assert(live.spec.alerting.rules.filter(r => r.name === 'QueueDepth').length === 2 && pairs.length === 2 && pairs.every(e => e.match === 'aligned')
+    && d.summary.onlyInA === 0 && d.summary.onlyInB === 0 && d.summary.drifted === 0,
+  'rules alike on everything the listing shows are still the rules the ruler listed: two declared, two live, none folded away', [live.spec.alerting.rules.map(r => r.name), pairs.map(e => [e.key, e.match])]);
+  // And a rule the ruler really lists once more than the file holds it is a rule running that is not declared.
+  rules.groups[0].rules.push({ ...listed });
+  const more = compare(liveInputs({ rules }), files).diff;
+  assert(JSON.stringify(Object.values(more.layers).flatMap(l => l.onlyInB).map(e => e.key)) === JSON.stringify(['alert_rule::{"name":"queuedepth"}#03']) && more.summary.onlyInA === 0,
+    'a third listing of it reads "live, not declared" — once', Object.values(more.layers).flatMap(l => l.onlyInB).map(e => e.key));
+}
+{
+  // One alert name, one rule that guards a recorded SLO and one that does not: each is read for what it is, on both sides.
+  const shared = (first, second) => `      - alert: ShopHealth
+        expr: ${first}
+        labels:
+          severity: warning
+      - alert: ShopHealth
+        expr: ${second}
+        labels:
+          severity: warning
+`;
+  const live = (first, second) => {
+    const rules = ruler();
+    for (const query of [first, second]) rules.groups[0].rules.push({ name: 'ShopHealth', type: 'alerting', severity: 'warning', duration: 0, health: 'ok', state: 'inactive', query: `${query}\n` });
+    return liveInputs({ rules });
+  };
+  for (const [label, first, second] of [
+    ['the operational rule first', 'node_filesystem_avail_bytes < 2', 'shop:availability:ratio_5m < 0.9'],
+    ['the SLO\'s rule first', 'shop:availability:ratio_5m < 0.9', 'node_filesystem_avail_bytes < 2'],
+  ]) {
+    const files = { ...REPO, 'observability/alerting-rules.yml': REPO['observability/alerting-rules.yml'] + shared(first, second) };
+    const { diff: d, repoPack: repo, livePack: pack } = compare(live(first, second), files);
+    const count = (p) => p.spec.alerting.rules.filter(r => r.name === 'ShopHealth').length;
+    assert(count(repo) === 1 && count(pack) === 1 && d.summary.onlyInA === 0 && d.summary.onlyInB === 0 && d.summary.drifted === 0,
+      `a name shared by an operational rule and an SLO's rule, ${label}: one operational rule on each side, nothing only on one`,
+      [count(repo), count(pack), Object.values(d.layers).flatMap(l => [...l.onlyInA, ...l.onlyInB]).map(e => e.key)]);
+  }
 }
 
 report('scan-vs-live', 'a repository scan and the live draft of the same system match.');

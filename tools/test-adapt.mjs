@@ -17,6 +17,7 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from './lib/adapter.mjs';
 import { brandEnvFrom } from './lib/brand-env.mjs';
 import { diffPacks } from './lib/diff.mjs';
+import { deltasOf, unobservedOf, partialAnnotation, parsePartialAnnotation, PARTIAL_ANNOTATION_PREFIX } from './lib/artefact-model.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -363,6 +364,95 @@ assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'service',
     'a rule whose expression changed reads drifted, on expr', drifted && [drifted.a.title, drifted.deltas]);
   assert(ruleEntries('onlyInB').map(e => e.artefact.title).join() === 'PaymentNodeDown' && ruleEntries('onlyInA').length === 0,
     'a rule only the live side holds reads "live, not declared"', [ruleEntries('onlyInA').length, ruleEntries('onlyInB').map(e => e.artefact.title)]);
+}
+
+// ---------- a rule the producer was shown only in part (observogram.partial.<symbol>) ----------
+// A live listing that gives a rule's severity and no labels object showed
+// that label and no other. The pack says so per rule; the adapter puts it on
+// the artefact; the comparison holds the rule to the keys it was shown.
+{
+  const rulesOf = (layered) => layered.layers.L4.alerting.filter(a => a.id.startsWith('RULE-'));
+  const pairOf = (d, title) => d.layers.L4.inBoth.find(e => e.key.startsWith('alert_rule::') && e.a.title === title);
+  // The example's rules carry { severity, team }. A listing that shows severities only:
+  const shown = (keys) => (rule) => ({ ...rule, labels: Object.fromEntries(Object.entries(rule.labels).filter(([k]) => keys.includes(k))) });
+  const live = clone(canonical);
+  live.spec.alerting.rules = canonical.spec.alerting.rules.map(shown(['severity']));
+  const stated = clone(live);
+  canonical.spec.alerting.rules.forEach((_, i) => { stated.metadata.annotations = { ...stated.metadata.annotations, [`${PARTIAL_ANNOTATION_PREFIX}alerting.rules[${i}]`]: 'labels=severity' }; });
+
+  assert(rulesOf(adapt(stated)).every(a => JSON.stringify(a.partial) === JSON.stringify({ labels: ['severity'] }))
+    && rulesOf(prod).every(a => !('partial' in a)) && rulesOf(adapt(live)).every(a => !('partial' in a)),
+  'the adapter puts the statement on the rule as `partial`; without one, no key', rulesOf(adapt(stated)).map(a => a.partial));
+
+  // Not stated: the missing team label is a difference, in full.
+  const blind = diffPacks(prod, adapt(live));
+  assert(blind.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::')).length === 3 && !('partlyCompared' in blind.summary)
+    && blind.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::')).every(e => e.match === 'drifted' && e.deltas.map(x => x.field).join() === 'labels' && !('unobserved' in e)),
+    'labels a pack does not say it saw in part are compared whole: three rules drifted on labels', blind.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::')).map(e => [e.match, e.deltas]));
+
+  // Stated: held to the severity it was shown; the team label is named as unobserved, on the side that did not see it.
+  const seen = diffPacks(prod, adapt(stated));
+  const pair = pairOf(seen, 'PaymentServicePodRestarting');
+  assert(seen.layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::')).every(e => e.match === 'aligned' && e.deltas.length === 0)
+    && JSON.stringify(pair.unobserved) === JSON.stringify([{ field: 'labels', side: 'b', keys: ['team'] }]) && seen.summary.drifted === blind.summary.drifted - 3 && seen.summary.partlyCompared === 3,
+  'a rule shown only its severity is aligned, the label it was not shown named on the pair', pair && [pair.match, pair.deltas, pair.unobserved]);
+  const swapped = pairOf(diffPacks(adapt(stated), prod), 'PaymentServicePodRestarting');
+  assert(swapped.match === 'aligned' && JSON.stringify(swapped.unobserved) === JSON.stringify([{ field: 'labels', side: 'a', keys: ['team'] }]),
+    'either side may be the one that saw in part', swapped && [swapped.match, swapped.unobserved]);
+
+  // A severity that differs is still a difference, on the shown key alone.
+  const wrong = clone(stated);
+  wrong.spec.alerting.rules[0] = { ...wrong.spec.alerting.rules[0], severity: 'SEV1', labels: { severity: 'critical' } };
+  const drifted = pairOf(diffPacks(prod, adapt(wrong)), 'PaymentServicePodRestarting');
+  assert(drifted.match === 'drifted' && JSON.stringify(drifted.deltas) === JSON.stringify([
+    { field: 'labels', a: { severity: 'warning' }, b: { severity: 'critical' } }, { field: 'severity', a: 'SEV3', b: 'SEV1' }]),
+  'what was shown and differs is drift; the delta holds the shown keys only', drifted && drifted.deltas);
+
+  // Nothing of the labels shown (`labels=`): neither the labels nor the severity read from them is compared.
+  const none = clone(live);
+  none.spec.alerting.rules[0] = (({ severity: _s, labels: _l, ...rest }) => rest)(none.spec.alerting.rules[0]);
+  none.metadata.annotations = { ...none.metadata.annotations, [`${PARTIAL_ANNOTATION_PREFIX}alerting.rules[0]`]: 'labels=' };
+  const dark = pairOf(diffPacks(prod, adapt(none)), 'PaymentServicePodRestarting');
+  assert(dark.match === 'aligned' && JSON.stringify(dark.unobserved) === JSON.stringify([{ field: 'labels', side: 'b', keys: ['severity', 'team'] }]),
+    'a rule shown nothing of its labels is not compared on them, nor on the severity read from them', dark && [dark.match, dark.deltas, dark.unobserved]);
+
+  // A pack-level severity with no severity label, against a side shown nothing of the labels: uncompared, and named.
+  const bare = { ...rulesOf(prod)[0], spec: (({ labels: _l, ...rest }) => rest)(rulesOf(prod)[0].spec) };
+  const unseen = { ...rulesOf(adapt(none))[0] };
+  assert(deltasOf(bare, unseen).length === 0 && JSON.stringify(unobservedOf(bare, unseen)) === JSON.stringify([{ field: 'labels', side: 'b', keys: ['severity'] }]),
+    'a severity the pack states without the label is named as uncompared too', [bare.spec, unseen.spec, deltasOf(bare, unseen), unobservedOf(bare, unseen)]);
+
+  // A whole match is taken before a match on part: a rule seen in part must not take the counterpart of one that matches in full.
+  {
+    const two = clone(canonical);
+    const [first] = two.spec.alerting.rules;
+    two.spec.alerting.rules = [{ ...first, labels: { severity: 'warning', team: 'b' } }, { ...first, labels: { severity: 'warning', team: 'a' } }];
+    const other = clone(canonical);
+    other.spec.alerting.rules = [{ ...first, labels: { severity: 'warning' } }, { ...first, labels: { severity: 'warning', team: 'b' } }];
+    other.metadata.annotations = { ...other.metadata.annotations, [`${PARTIAL_ANNOTATION_PREFIX}alerting.rules[0]`]: 'labels=severity' };
+    const pairs = diffPacks(adapt(two), adapt(other)).layers.L4.inBoth.filter(e => e.key.startsWith('alert_rule::'));
+    assert(pairs.length === 2 && pairs.every(e => e.match === 'aligned')
+      && JSON.stringify(pairs.map(e => [e.a.spec.labels.team, e.b.spec.labels.team ?? null, e.unobserved?.[0]?.keys ?? null])) === JSON.stringify([['b', 'b', null], ['a', null, ['team']]]),
+    'two same-named rules against one seen whole and one seen in part: the whole match first, then the part — both aligned', pairs.map(e => [e.key, e.match, e.a.spec.labels, e.b.spec.labels, e.unobserved]));
+  }
+
+  // Both sides in part: compared on what both were shown.
+  const [a] = rulesOf(adapt(stated));
+  const b = { ...rulesOf(prod)[0], partial: { labels: ['team'] } };
+  assert(deltasOf(a, b).length === 0 && JSON.stringify(unobservedOf(a, b)) === JSON.stringify([{ field: 'labels', side: 'a', keys: ['team'] }, { field: 'labels', side: 'b', keys: ['severity'] }]),
+    'two sides that each saw a part are compared on the keys both saw (here none), each naming what it missed', [deltasOf(a, b), unobservedOf(a, b)]);
+
+  // The statement's form.
+  assert(partialAnnotation({ labels: ['team', 'severity', 'team'] }) === 'labels=severity,team' && partialAnnotation({ labels: [] }) === 'labels='
+    && partialAnnotation({ labels: ['x'], annotations: [] }) === 'annotations=;labels=x',
+  'partialAnnotation writes <field>=<keys>, fields and keys sorted, each key once', partialAnnotation({ labels: ['team', 'severity', 'team'] }));
+  assert(JSON.stringify(parsePartialAnnotation('labels=severity,team')) === JSON.stringify({ labels: ['severity', 'team'] })
+    && JSON.stringify(parsePartialAnnotation('annotations=;labels= severity ')) === JSON.stringify({ annotations: [], labels: ['severity'] })
+    && [undefined, null, '', 'labels', '=x', 42].every(v => parsePartialAnnotation(v) === null),
+  'parsePartialAnnotation reads it back; a value that states nothing is null', parsePartialAnnotation('labels=severity,team'));
+  const sli = prod.layers.L1[0];
+  assert(unobservedOf(sli, sli).length === 0 && unobservedOf(rulesOf(prod)[0], rulesOf(prod)[0]).length === 0,
+    'a pair compared whole, and every other family, has nothing unobserved');
 }
 
 // ---------- an override path never walks the prototype chain ----------

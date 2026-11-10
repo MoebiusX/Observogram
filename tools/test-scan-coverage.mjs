@@ -40,7 +40,7 @@ const {
   crawlFiles, scanReadsPath, scanRefusal, scanRefusesName, SCAN_WHY, SCAN_MAX_FILE_BYTES,
   walkScanFolder, gitignoreOf, scanHonoursGitignore, scanReport, SCAN_REPORT_SHOWN,
 } = await import('./lib/crawler.mjs');
-const { planCrawlerFetch, selectCrawlerFiles, settleFetched, fetchGithubFiles, HOST_READ_CAPS } = await import('../server/github-crawl.mjs');
+const { planCrawlerFetch, selectCrawlerFiles, settleFetched, fetchGithubFiles, HOST_READ_CAPS, isUiSourcePath, isServiceSourcePath } = await import('../server/github-crawl.mjs');
 const { readRepoFolder } = await import('./lib/repo-folder.mjs');
 const { scanRepoFolder, walkRepoFiles, runJourney, readJourneyRuns } = await import('./lib/journey.mjs');
 const { scanModel, scanLossText } = await import('../studio/overview-model.mjs');
@@ -195,6 +195,51 @@ test('planCrawlerFetch: the crawler\'s rule decides what is read; the keywords o
   assert.deepEqual([budget.selected.map((n) => n.path), budget.skipped], [['a.rules.yaml', 'c.rules.yaml'], [{ path: 'b.rules.yaml', why: SCAN_WHY.totalCap(100) }]], 'the total cap by the tree\'s sizes, in plan order, named');
 });
 
+// A repository shaped like the one a Run read 200 files of 545 from: a client's components sort first in the
+// tree and filled the cap, and the service file that declared three live metrics was cut.
+test('planCrawlerFetch under the cap: the service\'s own source before what is around it, a user interface\'s after both, tests last — a client\'s components never push out the service that declares the metrics', () => {
+  const blob = (path) => ({ type: 'blob', path, size: 100 });
+  // isCrawlerFile's names: a client's telemetry among them, and a dashboard in a folder no exact name matches.
+  const named = ['charts/app/templates/rules.yaml', 'client/src/lib/otel.ts', 'deploy/grafana-dashboards/api-overview.json', 'server/metrics/registry.ts'];
+  const exporter = ['config.yaml'];
+  // The service's own: its YAML first (a rule file with a plain name), then its source — an API client in Go and a
+  // script folder inside a chart among it.
+  const service = ['rules/alerts.yml', 'worker/limits.yaml', 'k8s/charts/app/scripts/config.js', 'pkg/client/http.go', 'server/services/price-feed-manager.ts', 'server/wallet/ledger.ts', 'src/data/repository.ts', 'worker/main.go'];
+  const around = ['data/history.json', 'docs/api/openapi.yaml', 'drizzle/meta/0000_snapshot.json', 'scripts/seed.js', 'tools/gen.py', 'vite.config.ts'];
+  const ui = ['android/app/src/main/java/app/MainActivity.java', 'client/src/App.tsx', ...Array.from({ length: 40 }, (_, i) => `client/src/components/ui/widget-${String(i).padStart(2, '0')}.tsx`),
+    'client/src/lib/api.ts', 'server/admin/panel.jsx', 'ui/index.ts'];
+  const tests = ['client/src/App.test.tsx', 'tests/services/price-feed.test.ts'];
+  // Tree order, as a host lists it: `client/` before `server/`.
+  const tree = [...named, ...exporter, ...service, ...around, ...ui, ...tests].sort().map(blob);
+  const order = (maxFiles) => planCrawlerFetch(tree, { ...HOST_READ_CAPS, maxFiles });
+
+  const all = order(1000);
+  assert.equal(all.candidates, tree.length);
+  assert.equal(all.capped, 0);
+  assert.deepEqual(all.selected.map((n) => n.path), [...named, ...exporter, ...service, ...around, ...ui, ...tests].map((p) => p),
+    'the named artefacts, the exporter candidates, the service (its YAML, then its source), what is around it, the user interface, the tests — each group in tree order');
+
+  // A cap with room for the service and nothing after it.
+  const room = named.length + exporter.length + service.length;
+  const capped = order(room);
+  assert.deepEqual(capped.selected.map((n) => n.path), [...named, ...exporter, ...service]);
+  assert.ok(capped.selected.some((n) => n.path === 'server/services/price-feed-manager.ts'), 'the service file that declares the metrics is read');
+  assert.equal(capped.candidates, tree.length, 'the order changes nothing about what counts');
+  assert.equal(capped.capped, tree.length - room, 'and the cap\'s loss is still counted');
+  // In tree order alone the forty components and the scripts would have been read before it.
+  const before = tree.map((n) => n.path).indexOf('server/services/price-feed-manager.ts');
+  assert.ok(before > room, `in tree order it is file ${before + 1}, past a cap of ${room}`);
+
+  // The two path rules by themselves.
+  for (const p of ui) assert.equal(isUiSourcePath(p), true, p);
+  for (const p of [...service, ...around, 'server/components.ts', 'src/client.ts', 'services/ui-gateway/main.go', 'services/frontend/handlers.go', 'internal/ui/server.go', 'client/client.py']) assert.equal(isUiSourcePath(p), false, p);
+  for (const p of service) assert.equal(isServiceSourcePath(p), true, p);
+  for (const p of [...around, 'package.json', 'README.md', 'webpack.config.js']) assert.equal(isServiceSourcePath(p), false, p);
+  assert.equal(isServiceSourcePath('internal/tools/reconcile.go'), true, 'a folder around a service is one at the root');
+  assert.equal(isServiceSourcePath('server/vite.config.ts'), true, 'a *.config.* below the root is the service\'s');
+  assert.equal(isUiSourcePath('Client\\Src\\App.TSX'), true, 'whatever the case or the separator');
+});
+
 test('settleFetched: files in path order whatever order they arrived in; the caps in plan order; a failed download named', () => {
   const selected = ['z.rules.yaml', 'a.rules.yaml', 'm.rules.yaml', 'bad.rules.yaml'].map((path) => ({ path }));
   const texts = new Map([['m.rules.yaml', { text: 'mm' }], ['bad.rules.yaml', { error: 'GitHub 500' }], ['a.rules.yaml', { text: 'aaaa' }], ['z.rules.yaml', { text: 'zzzz' }]]);
@@ -290,6 +335,18 @@ test('runJourney keeps the scan as packA.scan; a run told nothing keeps the scan
   writeFileSync(other, readFileSync(a, 'utf8'));
   const moved = await runJourney({ ...def, packA: { file: other } });
   assert.equal(moved.packA.scan, undefined, 'another Pack A file: no scan is claimed');
+
+  // A live side shown a rule's labels only in part: the record counts the pairs compared that way, and only then.
+  assert.ok(!('partlyCompared' in first.drift), 'every pair compared whole: the record has no such count');
+  const labelled = JSON.parse(JSON.stringify(canonical));
+  labelled.spec.alerting = { ...labelled.spec.alerting, rules: [{ name: 'DiskLow', expr: 'node_filesystem_avail_bytes < 1', severity: 'SEV2', labels: { severity: 'warning', team: 'x' } }] };
+  const shown = JSON.parse(JSON.stringify(labelled));
+  shown.spec.alerting.rules[0].labels = { severity: 'warning' };
+  shown.metadata.annotations = { ...shown.metadata.annotations, 'observogram.partial.alerting.rules[0]': 'labels=severity' };
+  writeFileSync(join(dir, 'd.pack.json'), JSON.stringify(labelled));
+  writeFileSync(join(dir, 'e.pack.json'), JSON.stringify(shown));
+  const partly = await runJourney({ name: 'scan-partly', packA: { file: join(dir, 'd.pack.json') }, packB: { file: join(dir, 'e.pack.json') }, gate: {} });
+  assert.deepEqual([partly.drift.drifted, partly.drift.partlyCompared], [0, 1], 'the rule matches on what was shown, and the record says one pair was compared in part');
 });
 
 // ---------- 6. the board and the toast ----------

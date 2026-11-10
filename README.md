@@ -1190,7 +1190,15 @@ service has one environment) does the whole check:
    `server/github-crawl.mjs`): 25 rounds of 8 for 200 files, so a host that
    answers a file in under about 5 s fits, and a slower one loses the tail of
    the plan. A file the time ran out for is listed among the files not read
-   with *the read's 120 s for its files ran out*, never a failed Run.
+   with *the read's 120 s for its files ran out*, never a failed Run. When
+   the rule takes more than 200 files, the cap reaches the likely artefacts
+   last: rule files, collector configs, charts and dashboards first (and
+   source whose path says telemetry), then the files that may describe an
+   exporter (`config.yaml`, a saved `/metrics`), then the service's own YAML
+   and its source, then tooling, documentation and data (a top-level
+   `scripts/` or `docs/`, a JSON no name singles out), then a user
+   interface's source (`.tsx`, JavaScript under a `client/` folder, a mobile
+   app), then tests — each group in the tree's order.
 3. **The check** — saved as the journey `<slug>.<env>` (the scan as Pack A,
    the endpoint as Pack B; an existing one keeps its gate, schedule, notify
    and budget) and run, exactly as `POST /api/journeys/:name/run` runs it.
@@ -1496,8 +1504,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.18 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.18
+docker build -t observogram:0.8.19 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.19
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1560,7 +1568,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.18
+  observogram:0.8.19
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1568,7 +1576,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.18
+    image: observogram:0.8.19
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

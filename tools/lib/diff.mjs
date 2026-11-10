@@ -11,7 +11,7 @@
 //   artefact DOES (a backend's product+signal, a metric's series name, a
 //   rule's output series, a panel's binding target) and a `behavior` that
 //   captures its full deployed contract. `identityKeyOf` pairs A↔B by
-//   behaviour; `behaviorEqual` / `deltasOf` decide aligned vs drifted.
+//   behaviour; `deltasOf` decides aligned vs drifted.
 //
 // SET OPS
 //   For each layer we produce these buckets:
@@ -46,6 +46,15 @@
 //                  not say what the scope needs — a crawled dashboard names no
 //                  folder uid — with a reason that states only that. An
 //                  artefact inside the scope is compared as usual.
+//
+// PARTLY OBSERVED FIELDS
+//   The same distinction one level down: a producer may have been shown a
+//   field of an artefact only in part (a live rule listing that gives a
+//   rule's severity and no labels object). Its pack says so per artefact
+//   (`observogram.partial.<symbol>`, artefact-model.mjs), the pair is
+//   compared on what both sides were shown, and its inBoth entry carries
+//   `unobserved: [{ field, side, keys }]` — the keys one side states that the
+//   other was never shown. A pair compared whole has no such key.
 //
 // METRIC FAMILIES
 //   Metrics are compared as families, not series: a declared histogram and
@@ -103,6 +112,7 @@ import {
   identityKeyOf,
   behaviorOf,
   deltasOf,
+  unobservedOf,
   foldMetricFamilies,
 } from './artefact-model.mjs';
 import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
@@ -196,7 +206,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   let declaredAhead = 0;
   const layers = {};
   const collisions = [];
-  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
+  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0, partlyCompared = 0;
 
   for (const layerId of LAYER_ORDER) {
     const aAll = layerArtefacts(aLayered, layerId);
@@ -306,6 +316,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     outOfScope += bucket.outOfScope.length;
     scaffold += bucket.scaffold.length;
     notObserved += bucket.notObserved.length;
+    partlyCompared += bucket.inBoth.filter((e) => e.unobserved).length;
     declaredAhead += bucket.declaredAhead?.length || 0;
   }
 
@@ -339,6 +350,10 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // Artefacts one side holds in a family the other side could not
       // observe: unchecked, not missing. Never paired, never counted.
       notObserved,
+      // Only when a pair was compared on part of a field (a side shown its
+      // labels only in part): how many pairs carry `unobserved`. They are
+      // counted aligned or drifted on what was shown.
+      ...(partlyCompared ? { partlyCompared } : {}),
       // Only when a side declares a dynamic family, so a pack without one
       // keeps its bytes: what each family claimed, and what it could not.
       ...(dynamicFamilies ? { dynamicFamilies } : {}),
@@ -906,6 +921,14 @@ function collectCollisions(target, layerId, aByKey, bByKey) {
   }
 }
 
+// A pair one side of which was shown a field only in part carries what went
+// uncompared (`unobserved`, artefact-model.mjs unobservedOf); a pair compared
+// whole carries no such key, so its bytes are what they were.
+function unobservedNote(a, b) {
+  const unobserved = unobservedOf(a, b);
+  return unobserved.length ? { unobserved } : {};
+}
+
 function matchGroups(baseKey, aGroup, bGroup, bucket) {
   const suffix = Math.max(aGroup.length, bGroup.length) > 1;
   let seq = 0;
@@ -913,19 +936,28 @@ function matchGroups(baseKey, aGroup, bGroup, bucket) {
   const usedA = new Set();
 
   // Pair exact behavioural matches first so a self-diff remains fully aligned
-  // even when one pack contains duplicate identity keys.
-  for (let ai = 0; ai < aGroup.length; ai++) {
-    const bi = unusedB.findIndex(({ b }) => deltasOf(aGroup[ai], b).length === 0);
-    if (bi === -1) continue;
-    const [{ b }] = unusedB.splice(bi, 1);
-    bucket.inBoth.push({
-      key: occurrenceKey(baseKey, seq++, suffix),
-      a: aGroup[ai],
-      b,
-      match: 'aligned',
-      deltas: [],
-    });
-    usedA.add(ai);
+  // even when one pack contains duplicate identity keys — and, among those, a
+  // pair compared whole before one that only matches on the part it was
+  // shown: a rule seen in part must not take the counterpart of a rule that
+  // matches in full.
+  const exact = (a, b) => deltasOf(a, b).length === 0;
+  const whole = (a, b) => exact(a, b) && unobservedOf(a, b).length === 0;
+  for (const matches of [whole, exact]) {
+    for (let ai = 0; ai < aGroup.length; ai++) {
+      if (usedA.has(ai)) continue;
+      const bi = unusedB.findIndex(({ b }) => matches(aGroup[ai], b));
+      if (bi === -1) continue;
+      const [{ b }] = unusedB.splice(bi, 1);
+      bucket.inBoth.push({
+        key: occurrenceKey(baseKey, seq++, suffix),
+        a: aGroup[ai],
+        b,
+        match: 'aligned',
+        deltas: [],
+        ...unobservedNote(aGroup[ai], b),
+      });
+      usedA.add(ai);
+    }
   }
 
   const unusedA = aGroup
@@ -952,6 +984,7 @@ function matchGroups(baseKey, aGroup, bGroup, bucket) {
       b,
       match: 'drifted',
       deltas: bestDeltas,
+      ...unobservedNote(a, b),
     });
   }
 

@@ -194,6 +194,34 @@ fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
 look at*); a pack without them behaves exactly as before.
 `summary.notObserved` counts the entries; they are outside the union.
 
+The same holds one level down, for a **field a producer was shown only in
+part**. A live rule listing that gives each alert rule a flat `severity` and
+no `labels` object showed that one label and no other; the rule's `service`
+or `team` label was never shown, so it cannot differ. The pack says so per
+artefact — `observogram.partial.<symbol>` = `<field>=<key>,<key>` (of that
+field, the keys the producer was shown; none after the `=`, nothing of it;
+`alerting.rules[4]` = `labels=severity`) — the adapter puts it on the
+artefact as `partial: { labels: ['severity'] }`, and `deltasOf` compares the
+pair's labels on the keys both sides were shown: equal there, no delta;
+different there, a `labels` delta holding those keys alone. The pack's
+`severity` is read from the severity label, so it is compared only when that
+key was shown. The pair then carries what went uncompared, `unobserved:
+[{ field: 'labels', side: 'b', keys: ['service', 'team'] }]` — `side` the
+one that did not see the keys the other states (`unobservedOf`) — and
+`summary.partlyCompared` counts such pairs (the key is absent when there is
+none; a run record carries it as `drift.partlyCompared`). A pair
+compared whole has no such key, and a listing that does give each rule its
+labels object is compared in full: there a missing label is drift. Today one
+field of one family uses it, an alert rule's labels; the live fetcher writes
+the statement (docs/MCP_INTEGRATION.md).
+
+Two alert rules that **share a name** — a warning and a critical threshold
+under one alert — are two rules on both sides: a rule file keeps both and
+the live fetcher keeps every operational rule the ruler lists, folding
+none. The pair of groups is matched closest first — a pair that matches
+whole, then one that matches on the part it was shown, then the fewest
+deltas — under `#01` / `#02` occurrence keys and one `collisions` row.
+
 A live **snapshot** read within a scope (rebadge batch 3, C1: metric
 prefixes, dashboard or rule folder uids) records it per family as
 `observogram.scope.<kind>` (`tools/lib/live-fetch.mjs` `scopeAnnotations`),

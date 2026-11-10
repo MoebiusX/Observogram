@@ -19,6 +19,7 @@ import { annotationList, buildRequirementTraceability } from './traceability.mjs
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
 import { toolLabels as activeToolLabels } from './artefact-classify.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation } from './artefact-model.mjs';
 
 // `metadata.annotations["observogram.artefact.type.<symbol>"]` declares the
 // type of the artefact a canonical symbol projects to (`slis.<id>`,
@@ -119,6 +120,15 @@ export function adapt(canonical, opts = {}) {
     // A statement that the artefact was authored ahead of an environment
     // (tools/lib/lifecycle.mjs). No statement, no key.
     lifecycle: (symbol) => (lifecycleStatements.has(symbol) ? { lifecycle: lifecycleStatements.get(symbol) } : {}),
+    // What the producer was shown of the artefact only in part
+    // (`observogram.partial.<symbol>`, tools/lib/artefact-model.mjs): a live
+    // rule listing that gave a rule's severity and no labels object. It rides
+    // on the artefact as `partial: { labels: [keys shown] }`, which the
+    // comparison reads. No statement, no key.
+    partial: (id) => {
+      const stated = parsePartialAnnotation(annotations[`${PARTIAL_ANNOTATION_PREFIX}${id}`]);
+      return stated ? { partial: stated } : {};
+    },
   };
 
   const layers = {
@@ -896,6 +906,7 @@ function adaptAlertRules(ctx) {
 
       ...ctx.typed(`alerting.rules[${i}]`),
       ...ctx.lifecycle(`alerting.rules.${r.name}`),
+      ...ctx.partial(`alerting.rules[${i}]`),
       spec: r,
       mcp: ctx.mcpEvidence(`alerting.rules[${i}]`),
     };

@@ -859,7 +859,10 @@ test('the rule-group scope: alert and recording rules kept by their group when e
   assert.equal(last.get('alert_rules').message, null);
   assert.deepEqual(last.get('recording_rules').counts, { listed: vmRules('recording').length, kept: vmRules('recording', 'finops:ingestion').length, fromInventory: 0 });
   assert.equal(last.get('recording_rules').message, null);
-  assert.deepEqual(pack.spec.alerting.rules.map((r) => r.name).sort(), [...new Set(vmRules('alerting', 'krystalinex.cold-wallet').map((r) => r.name))].sort());
+  // Every rule of the group, the two CustodyWebhookSignatureFailures among them: one name, a warning and a critical threshold, two rules.
+  const coldWallet = vmRules('alerting', 'krystalinex.cold-wallet').map((r) => r.name).sort();
+  assert.deepEqual(pack.spec.alerting.rules.map((r) => r.name).sort(), coldWallet);
+  assert.equal(coldWallet.filter((n) => n === 'CustodyWebhookSignatureFailures').length, 2, 'the recording holds the name twice');
   assert.ok(pack.spec.queries.recording_rules.every((r) => r.name.startsWith('finops:')), 'only the group\'s recording rules');
   assert.ok(!JSON.stringify(pack.spec).includes('"group"'), 'the canonical never carries a group');
   const ann = pack.metadata.annotations;

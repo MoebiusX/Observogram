@@ -778,7 +778,11 @@ export function rulesModel(conformance, { error = null } = {}) {
 //              not running live · live only, the run's drift counts
 //   chains     { total, intact, partial, broken, integrityPct, sentence } | null
 //   note       beside the numbers: the probe families that could not be read,
+//              the rules compared without labels the live side does not show,
 //              and a reading older than a day, which the engine does not trust
+//   partial    what of the live side was not read, in the strip's words: the
+//              failed probe families, and "rule labels" when the run compared
+//              rules on part of their labels (drift.partlyCompared)
 export function fidelityModel({ run = null, journey = null, pack = null, now = Date.now() } = {}) {
   const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
   const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [] };
@@ -808,9 +812,14 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const failed = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
   const notes = [];
   if (failed.length) notes.push(`The live side answered only in part: its ${listWords(failed)} could not be read.`);
+  // Rules matched on what the live listing showed of them: a listing that
+  // gives a severity and no other label never showed the rest, so "match"
+  // says nothing about those labels — and the board says that.
+  const partly = n(d.partlyCompared);
+  if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared without the labels the live side does not show.`);
   const startedMs = Date.parse(run.startedAt || '');
   if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
-  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: failed };
+  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels'] : [])] };
 }
 
 // ---------- the board: what the scan read ----------

@@ -56,7 +56,8 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName, alertRuleExpr } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr } from './lib/sli-inference.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation } from './lib/artefact-model.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -1936,9 +1937,16 @@ export function buildCanonicalPack({
     annotations[`mcp.derived.policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`] =
       `alerting rule(s) on the SLO's recorded series: ${entry.alertNames.slice(0, 16).join(', ')}`;
   }
+  // An operational rule, decided rule by rule as the crawler decides it for a
+  // rule file (operationalAlertRules): one whose expression references no
+  // recorded series of an SLO. Not by name: a name two rules share may hold
+  // one that guards an SLO and one that does not.
+  const hasSlo = (id) => slos.some(s => s.id === id);
+  const operationalAlerts = discoveredAlerts.filter(a => a?.name && a?.labels?.kind !== 'forecast'
+    && !parseBurnAlert(a) && !recordedSloForExpr(alertRuleExpr(a), hasSlo));
   if (discoveredAlerts.length) {
     annotations['mcp.discovered.alert_rules_linked'] = String(linkedCount);
-    annotations['mcp.discovered.alert_rules_operational'] = String(linkedBurn.unlinked.length);
+    annotations['mcp.discovered.alert_rules_operational'] = String(operationalAlerts.length);
   }
   // The operational rules are not dropped either: spec 1.4 keeps them in
   // spec.alerting.rules, read with the same reading the crawler applies to
@@ -1948,22 +1956,30 @@ export function buildCanonicalPack({
   // vmalert → victoriametrics); a plain Prometheus-API answer states none,
   // which means prometheus. A rule the ruler reports unhealthy is declared
   // but not stamped Verified, as a burn entry fed by such a rule is not.
+  //
+  // Every rule the ruler lists is a rule, as every rule a file holds is: two
+  // that share a name (a warning and a critical threshold under one alert
+  // name) are two, and the comparison pairs them by occurrence. Nothing is
+  // folded — a listing that shows no labels cannot say two rules are one.
+  //
+  // A rule whose listing showed its labels only in part (`labelsObserved`,
+  // the alert-rules probe) says so in `observogram.partial.<symbol>`, so the
+  // comparison holds it to the labels the listing showed and no other.
   const liveAlertRules = [];
   {
-    const unlinked = new Set(linkedBurn.unlinked);
     const unhealthy = new Set(unhealthyRuleNames(discoveredAlerts));
     const engineOf = (attested) => (attested === 'vmalert' ? 'victoriametrics'
       : ['grafana', 'mimir', 'loki', 'thanos', 'alertmanager'].includes(attested) ? attested : undefined);
     const engine = engineOf(productAttestedByTool(String(probeResults?.alert_rules?.tool || '').split('+')[0]));
-    for (const a of discoveredAlerts) {
-      if (!a?.name || !unlinked.has(a.name) || a?.labels?.kind === 'forecast') continue;
-      if (liveAlertRules.some(r => r.name === a.name)) continue;
+    for (const a of operationalAlerts) {
       // A snapshot unions every alert-rule engine: each rule names what its
       // own tool attests (`observedBy`, null for a plain Prometheus API).
       const entry = operationalAlertRule(a, { engine: 'observedBy' in a ? engineOf(a.observedBy) : engine });
       if (!entry) continue;   // a rule the ruler listed without its expression cannot be declared (expr is required)
       liveAlertRules.push(entry);
-      if (!unhealthy.has(a.name)) markVerified(`alerting.rules[${liveAlertRules.length - 1}]`);
+      const symbol = `alerting.rules[${liveAlertRules.length - 1}]`;
+      if (!unhealthy.has(a.name)) markVerified(symbol);
+      if (Array.isArray(a.labelsObserved)) annotations[`${PARTIAL_ANNOTATION_PREFIX}${symbol}`] = partialAnnotation({ labels: a.labelsObserved });
     }
   }
   if (burnMapping.severityInferred.length) {
@@ -2289,6 +2305,34 @@ function flatRules(response) {
 // operationalAlertRule read what they always did — the scope does).
 const withGroup = (read, flat) => (typeof flat._group === 'string' && flat._group.trim() ? { ...read, group: flat._group.trim() } : read);
 
+const isLabelMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// A rule's severity given flat, beside the rule: what a tool that projects the
+// ruler's answer gives in place of the labels map. No ruler's own API has it.
+const flatSeverity = (r) => typeof r?.severity === 'string' && r.severity !== '';
+
+/**
+ * The alert rules of one listing, read, each saying what the listing showed
+ * of its labels when that was not all of them.
+ *
+ * Whether labels are shown is the LISTING's to say, not the rule's: a ruler
+ * leaves the `labels` key out of a rule that has none (vmalert's API omits an
+ * empty map), so a rule without the key, in a listing where another rule —
+ * alerting or recording — carries a labels map, has no labels and is read
+ * whole. A listing in which no rule carries a labels map and at least one
+ * carries a flat `severity` comes from a tool that projects that one label
+ * (otel-mcp-server's rule listing does): there a rule's `service`, `team` or
+ * `category` label was never shown, so it must not read as absent. Each of
+ * its rules carries `labelsObserved: ['severity']` — the severity was shown,
+ * so a rule without one has none; no other label was. A listing with neither
+ * a labels map nor a flat severity states nothing and is read whole, as its
+ * rules were before. The marker never enters the spec; the pack builder turns
+ * it into `observogram.partial.<symbol>`.
+ */
+function readAlertRules(rawRules, read, listing = rawRules) {
+  const projectsSeverity = !listing.some((r) => isLabelMap(r?.labels)) && listing.some(flatSeverity);
+  return rawRules.map((r) => (projectsSeverity ? { ...read(r), labelsObserved: ['severity'] } : read(r)));
+}
+
 export const PROBES = [
   {
     name: 'recording_rules',
@@ -2348,7 +2392,7 @@ export const PROBES = [
         // rule never stated.)
         ...((r.for || (r.duration ? secondsToPromDuration(r.duration) : null))
           ? { for: r.for || secondsToPromDuration(r.duration) } : {}),
-        labels: r.labels || (r.severity ? { severity: r.severity } : {}),
+        labels: isLabelMap(r.labels) ? r.labels : (flatSeverity(r) ? { severity: r.severity } : {}),
         annotations: r.annotations || {},
         ...(interval ? { interval } : {}),
         // On-wire evaluation state: health/lastError/lastEvaluation plus
@@ -2358,13 +2402,15 @@ export const PROBES = [
       };
     },
     adapt(response) {
-      return flatRules(response).filter(this.isRule).map(this.read);
+      const listing = flatRules(response);
+      return readAlertRules(listing.filter(this.isRule), this.read, listing);
     },
     // A snapshot also reads Grafana-managed rules in the provisioning shape
-    // (D9) and keeps each rule's group beside it (the rule-group scope); the
-    // draft keeps `adapt` alone, byte for byte.
+    // (D9) and keeps each rule's group beside it (the rule-group scope).
     adaptSnapshot(response) {
-      return provisionedRuleList(response) ? adaptProvisionedAlertRules(response) : flatRules(response).filter(this.isRule).map(r => withGroup(this.read(r), r));
+      if (provisionedRuleList(response)) return adaptProvisionedAlertRules(response);
+      const listing = flatRules(response);
+      return readAlertRules(listing.filter(this.isRule), r => withGroup(this.read(r), r), listing);
     },
   },
   {
