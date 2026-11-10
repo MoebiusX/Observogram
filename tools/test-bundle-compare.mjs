@@ -1413,6 +1413,16 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     return out;
   }, { paths, headers: HEADERS });
   const viewText = (page) => page.evaluate(() => document.querySelector('#layer-view')?.innerText || '');
+  // The Assessment is one screen: the verdict and the checks, everything else in folded rows, a check's why and fix in
+  // its own row. A step that reads one opens it first, as a reader does: `rows` the folded rows by id, `checks` the
+  // checks by key.
+  const openAssessment = (page, { rows = [], checks = [] } = {}) => page.evaluate(({ rows, checks }) => {
+    for (const id of rows) { const row = document.getElementById(id); if (row && !row.open) row.open = true; }
+    for (const key of checks) {
+      const btn = document.querySelector(`.diag-checks [data-ux-action="diag-check-open:${key}"]`);
+      if (btn && btn.getAttribute('aria-expanded') !== 'true') btn.click();
+    }
+  }, { rows, checks });
   // Remediate's strategy cards drawn disabled with no Pack B (row 28): each one's next step to enable it.
   const disabledStrategies = (page) => page.evaluate(() => [...document.querySelectorAll('.ux-rm-strategy:disabled')].map((b) => [b.dataset.op, b.querySelector('.ux-rm-strategy-flow').textContent]));
   const NEED_B = ['retrofeed', 'drift', 'all'];
@@ -1580,6 +1590,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await page.click('.diag-subtab[data-sub="grade"]');
     await page.waitForSelector('#diag-compare #drift-deploy-missing', { state: 'attached', timeout: T });
     await page.waitForSelector('.diag-chain-deploy', { state: 'attached', timeout: T });
+    await openAssessment(page, { rows: ['diag-compare', 'diag-requirements'], checks: ['drift-free'] });
     assert.deepEqual(await drawnUnavailable(page, '#drift-deploy-missing'), [{ aria: 'true', why: DEPLOY, title: null }], 'the drift drill\'s deploy is drawn unavailable with the reason');
     await readsAA(page, 'Diagnose → Assessment', ['#drift-deploy-missing', '.diag-chain-deploy']);
     await clickExplains(page, '#drift-deploy-missing');
@@ -1767,6 +1778,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     await page.waitForSelector('.diag-subtab[data-sub="grade"]', { timeout: T });
     await page.click('.diag-subtab[data-sub="grade"]');
     await page.waitForSelector('#diag-summary', { timeout: T });
+    await openAssessment(page, { checks: ['drift-free'] });
     const row6 = staticRemedy('drift-free-no-live', { product, liveBuiltIn: true });
     await page.waitForFunction((want) => (document.querySelector('#layer-view')?.innerText || '').includes(want), row6, { timeout: 5_000 }).catch(() => {});
     assert.ok((await viewText(page)).includes(row6), `row 6: ${row6}`);
@@ -1789,7 +1801,7 @@ test('C8 the bundle in Chromium: the in-page /api/diff text equals a server\'s u
     assert.equal((await page.textContent(RM_PRIMARY)).trim(), staticRemedy('remediate-no-b-primary', { product }), 'row 30 in a bundle of one pack');
     assert.equal(staticRemedy('remediate-no-b-primary', { product }), 'Review the assessment');
     await page.click(RM_PRIMARY);
-    await page.waitForSelector('#diag-compare .diag-compare-prompt .ux-empty-body', { timeout: T });
+    await page.waitForSelector('#diag-compare .diag-compare-prompt .ux-empty-body', { state: 'attached', timeout: T });
     assert.deepEqual(await activeSub(page), ['grade', 'Assessment'], 'row 30: the Assessment it names');
     assert.deepEqual(await comparePrompt(page), { body: staticRemedy('compare-one-pack', { product }), packB: ['— none —'] }, 'row 4 on the Assessment: no baseline to choose');
     await noServerAction(page, 'Diagnose (one pack)');

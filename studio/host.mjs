@@ -14,12 +14,14 @@
 //   renderMainView()   — repaint the active view
 //   renderTabs()       — repaint the top nav
 // and one optional hook:
-//   setGradeCriterion(serviceId, key, { graded, reason }) — switch a grade
-//                        criterion on or off for a service (PATCH
-//                        /api/services/:id { gradeOff }), resolve true once
-//                        saved and repainted. Diagnose offers its switches
-//                        only when it is set; without it, it still says what
-//                        is off.
+//   setGradeCriteria(serviceId, { off, reason }) — keep a set of grade
+//                        criteria for a service: `off` the keys it is not
+//                        graded on from now on, `reason` for those newly left
+//                        out (PATCH /api/services/:id { gradeOff }); resolve
+//                        true once saved and repainted. Diagnose's switches are
+//                        a what-if without it: it offers Keep only when it is
+//                        set. (It replaces 0.8.23's setGradeCriterion, which
+//                        saved one criterion at a time.)
 //
 // Like state.mjs, `host` is never reassigned — initHost merges into it, so
 // the imported binding stays live across modules. The defaults no-op so a
@@ -30,7 +32,7 @@ export const host = {
   openDeployModal: () => {},
   renderMainView: () => {},
   renderTabs: () => {},
-  setGradeCriterion: null,
+  setGradeCriteria: null,
 };
 
 export function initHost(fns) { Object.assign(host, fns); }

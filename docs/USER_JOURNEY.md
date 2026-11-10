@@ -249,11 +249,11 @@ asks why in place; **Stop grading it** saves the switch on the service's
 record (who, when, why) and checks against live again. The letter is then
 over the criteria that are on — *Graded on 6 of 7 criteria*, *3.9 of 6
 points* — and the ones off are listed under the reasons, each with **Grade it
-again**. Expert's Diagnose says it too — *Graded on 6 of 7 criteria: Fresh is
-not graded for this service.* opens its summary, *Criteria graded for*
-and the service's name lists what is off with **Grade it again**, and each row of the
-coverage and trust tables under Evidence has the same *Not for this
-service…*. Every run of the service's checks grades the same way and its record
+again**. Expert's Diagnose says it too — *on 6 of 7 criteria* beside its
+score, and the criterion's own row reads *Off* with why, who and when. Each
+scored row of its checks has a switch: flipping one is a what-if (the grade
+is taken again at once, nothing saved), and **Keep for** the service saves
+the set, asking once why. Every run of the service's checks grades the same way and its record
 names what it left out; a run that graded on other criteria is not the
 board's letter until the next check. README, *Criteria a service is not
 graded on*.
@@ -363,13 +363,15 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    B, so Diagnose shows the board's letter; when the board graded the
    repository alone, it opens with no Pack B.
 
-10. **The Assessment heading stays focused.** Diagnose's decision header
-    carries the grade letter, its plain name and one sentence; its context
+10. **The Assessment is one screen.** Diagnose's verdict band carries the
+    grade letter, its plain name and one sentence, and the score on the grade
+    scale with the distance to the target (grade A, above 85%); its context
     line names both packs (*Declared* and *Live*, or the pack and its
     *Baseline*). The live target belongs in the context and the comparison,
-    not in the grade title. The formal term, the ladder and the scoring rules
-    sit behind *How the grade is calculated*; the measures under the header
-    name the target (grade A, above 85%) and whether it is met.
+    not in the grade title. Under it, the checks behind the grade: one row
+    each, said once, opened for the why and the fix. The formal term, the
+    ladder and the scoring rules sit behind *How the grade is calculated*, a
+    folded row like the comparison, the layer scores and the evidence ledger.
 
 11. **Drift remains evidence, not decoration.** Declared-not-live, drifted, and
     live-only signals must stay visible even when the overall grade passes.
@@ -794,13 +796,15 @@ Does not belong here:
 
 Belongs here:
 
-- the Assessment: the decision header (the grade letter and its plain name,
-  one sentence, one next action, the top causes), the measures (overall
-  assessment, coverage, trust, the audit gate, live signals, checks passed,
-  requirement chains) and *How the grade is calculated*, collapsed
+- the Assessment, on one screen: the verdict band (the grade letter and its
+  plain name, one sentence, the score on the grade scale; coverage, trust,
+  live signals and requirement chains in a number each), then the checks
+  behind the grade — one row per check, a what-if switch on each scored one,
+  the row opened for what failed, why it matters and the fix
 - score, coverage, trust, verified status
-- the sections behind one sticky index: Summary, Gaps, Comparison, Evidence,
-  Requirements, Response path, Layer scores
+- everything else folded under the checks, a closed row each with its
+  headline: Layer scores, the comparison, Requirement chains, Response path,
+  the Evidence ledger, *How the grade is calculated*
 - evidence table
 - drift drill
 - traceability to explain why an artifact matters

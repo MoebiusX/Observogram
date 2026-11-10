@@ -45,7 +45,7 @@ const CLEARS = [
   '.drawer',               // the artefact drawers (right; Pack A's on the left in Compare)
   '.ux-decision.is-sticky',
   '.ux-section-nav',
-  '.diag-sticky',
+  '.diag-whatif',          // the Assessment's what-if bar (shown only while one is tried)
   '.compare-cols-head',    // Compare's pinned Pack A | Pack B heads
 ];
 

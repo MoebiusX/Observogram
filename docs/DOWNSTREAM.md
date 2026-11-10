@@ -943,7 +943,7 @@ the live side's `mcp.discovered.alert_rules_unhealthy`; `declared` without
 one) and the steps are what a responder walks (deploy the missing burn alert
 through the deploy modal, reconcile, fix, route, register the automation,
 open the runbook, annotate an unresolved trigger). The studio draws it on
-Diagnose (a `.diag-block` with its sticky-index entry) and on Remediate (after
+Diagnose (a `.diag-block` in a folded row of the Assessment) and on Remediate (after
 the plan, where the deploy button lives); the static bundle draws it too (the
 engine rides the import map). Everything a downstream integrates against is
 in `docs/ADAPTER.md` ("Response path": the annotation grammar, the model

@@ -1,68 +1,289 @@
 /* studio/ux-diagnose.css — Diagnose — assessment + compare: screen-specific rules on top of the shared grammar in studio/ux.css. */
 
 /* ============================================================
-   ASSESSMENT (Diagnose → Assessment, compare-view.mjs renderBenchmarkView)
-   Decision header · grouped measures · sticky section index · gaps in
-   priority order · comparison · evidence · requirements · layer scores.
+   ASSESSMENT (Diagnose → Assessment, compare-view.mjs renderBenchmarkView,
+   drawn by assessment-page.mjs): one screen — the verdict · a what-if while
+   one is tried · the checks, one row each · everything else in folded rows
+   (layer scores, comparison, requirement chains, response path, the evidence
+   ledger, how the grade is calculated).
    ============================================================ */
 
 .diag-assess { padding-top: 16px; }
-.diag-assess > .ux-decision { margin-bottom: 16px; }
 
-/* Measures grouped by meaning: Overall assessment · Why · Evidence. */
-.diag-measure-groups {
+/* The verdict: the grade, the score on the scale, and coverage, trust and the
+   live read in a number each. One band; the page's answer. */
+.diag-verdict {
+  background: var(--ux-bg);
+  border: 1px solid var(--ux-line);
+  border-left: 4px solid var(--ux-tone, var(--ux-info));
+  border-radius: 8px;
+  padding: 14px 20px 16px;
+  margin: 0 0 12px;
+  color: var(--ux-ink);
+  font-family: var(--sans);
+}
+.diag-verdict:focus { outline: none; }
+.diag-verdict:focus-visible { outline: 2px solid var(--ux-accent); outline-offset: 3px; }
+.diag-verdict .ux-ctx { margin-bottom: 10px; font-size: 13px; }
+.diag-verdict-main {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 16px 0 0;
+  grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.9fr) minmax(0, 1.5fr);
+  gap: 16px 28px;
+  align-items: center;
 }
-.diag-measure-group {
-  border: 1px solid var(--ux-line);
-  border-radius: 8px;
-  padding: 10px 12px 12px;
-  min-width: 0;
+.diag-verdict-id { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.diag-verdict-letter {
+  flex: 0 0 auto; min-width: 60px; height: 60px; padding: 0 8px; box-sizing: border-box;
+  display: grid; place-items: center;
+  border-radius: 8px; border: 2px solid var(--ux-tone); background: var(--ux-tone-bg); color: var(--ux-tone);
+  font: 700 30px/1 var(--sans);
 }
-.diag-measure-group-title {
-  margin: 0 0 8px;
-  font: 600 14px/1.3 var(--sans);
-  color: var(--ux-ink-2);
+.diag-verdict-words { display: flex; flex-direction: column; min-width: 0; }
+.diag-verdict-words .ux-eyebrow { margin-bottom: 2px; }
+.diag-verdict-name { margin: 0; font: 600 20px/1.25 var(--sans); color: var(--ux-ink); }
+.diag-verdict-sentence { margin: 2px 0 0; font-size: 14px; line-height: 1.45; color: var(--ux-ink-2); }
+.diag-verdict-score { min-width: 0; }
+.diag-verdict-pct { margin: 0 0 6px; display: flex; align-items: baseline; flex-wrap: wrap; }
+.diag-verdict-num { font: 700 30px/1 var(--sans); color: var(--ux-ink); font-variant-numeric: tabular-nums; }
+.diag-verdict-unit { font: 600 18px/1 var(--sans); color: var(--ux-ink-2); margin: 0 8px 0 2px; }
+.diag-verdict-on { font-size: 13px; color: var(--ux-ink-2); }
+.diag-verdict-gap { margin: 6px 0 0; font-size: 13px; line-height: 1.4; color: var(--ux-ink-3); }
+.diag-verdict-facts {
+  margin: 0; min-width: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px;
 }
-.diag-measure-group .ux-measures {
-  margin: 0;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
+.diag-fact { padding: 8px 12px; border-radius: 8px; background: var(--ux-bg-2); min-width: 0; }
+.diag-fact dt { font-size: 12px; font-weight: 500; color: var(--ux-ink-3); }
+.diag-fact dd { margin: 2px 0 0; display: flex; flex-direction: column; }
+.diag-fact-val { font: 700 18px/1.25 var(--sans); color: var(--ux-tone, var(--ux-ink)); overflow-wrap: anywhere; }
+.diag-fact.ux-tone-neutral .diag-fact-val { color: var(--ux-ink); }
+.diag-fact-note { font-size: 12px; line-height: 1.35; color: var(--ux-ink-2); }
+.diag-verdict-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.diag-verdict-actions .ux-secondary-btn { min-height: 34px; padding: 6px 14px; font-size: 14px; }
+@media (max-width: 1100px) {
+  .diag-verdict-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .diag-verdict-facts { grid-column: 1 / -1; }
 }
-.diag-measure-group .ux-measure-val { font-size: 17px; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .diag-verdict-main { grid-template-columns: minmax(0, 1fr); }
+}
 
-/* A service's grade criteria (grade-criteria-ui.mjs): what the grade is taken
-   over, each criterion left out with why, who and when, and its switch. */
-.diag-criteria {
-  margin: 12px 0 0;
-  border: 1px solid var(--ux-line);
-  border-radius: 8px;
-  padding: 10px 12px 12px;
+/* The grade scale: a segment per grade as wide as its span of the score, its
+   letter under it; the one the score lands on is filled, and a mark stands at
+   the score (on the bar only, so it never covers a letter). */
+.diag-scale { position: relative; display: flex; }
+.diag-scale-seg {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0;
+  color: var(--ux-ink-3); font: 600 11px/1 var(--sans);
 }
-.diag-criteria-lede { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ux-ink); }
-.diag-criteria-off { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-.diag-criteria-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; line-height: 1.4; }
-.diag-criteria-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; color: var(--ux-ink-2); }
-.diag-criteria-by { color: var(--ux-ink-3); font-size: 13px; }
-.diag-criteria-how { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 10px 0 0; font-size: 13px; line-height: 1.45; color: var(--ux-ink-3); }
-.diag-criteria-how > span { flex: 1 1 260px; min-width: 0; }
-.diag-crit-switch { display: block; margin-top: 2px; font-size: 13px; font-weight: 500; text-align: left; }
-.diag-criteria-item .diag-crit-switch { margin-top: 0; }
-/* On a phone the criteria tables are as wide as their words: the switch wraps there rather than widen them. */
-@media (max-width: 640px) { .diag-crit-table .diag-crit-switch { white-space: normal; } }
-.diag-crit-switch[aria-disabled="true"] { color: var(--ux-ink-3); cursor: help; }
-.diag-crit-ask > td { padding-top: 4px; padding-bottom: 12px; }
-.diag-crit-ask-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
-.diag-crit-ask-l { display: flex; flex-direction: column; gap: 4px; flex: 1 1 280px; max-width: 520px; min-width: 0; font-size: 13px; color: var(--ux-ink-2); }
-.diag-crit-ask-l .og-input { width: 100%; min-height: 32px; font-size: 13px; box-sizing: border-box; }
-.diag-crit-ask-l .og-input[aria-invalid="true"] { border-color: var(--ux-fail, #b22222); }
-.diag-crit-ask-row .ux-secondary-btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+.diag-scale-seg::before {
+  content: ""; align-self: stretch; height: 10px; box-sizing: border-box;
+  background: var(--ux-bg-2); border: 1px solid var(--ux-line); border-left-width: 0;
+}
+.diag-scale-seg:first-child::before { border-left-width: 1px; border-radius: 5px 0 0 5px; }
+.diag-scale-seg:nth-last-child(2)::before { border-radius: 0 5px 5px 0; }
+.diag-scale-seg.is-current { color: var(--ux-tone); }
+.diag-scale-seg.is-current::before { background: var(--ux-tone); border-color: var(--ux-tone); }
+.diag-scale-mark {
+  position: absolute; top: -4px; height: 18px; width: 3px; margin-left: -1.5px; border-radius: 2px;
+  background: var(--ux-ink); box-shadow: 0 0 0 2px var(--ux-bg);
+}
 
-/* "How the grade is calculated" — the ladder and the rules, collapsed. */
-.diag-calc-disclosure { margin: 14px 0 0; background: transparent; }
+/* A what-if (assessment-page.mjs): the grade on screen taken without — or
+   with — a criterion, nothing saved. The second voice of the page: its own
+   colour, dashed, pinned under the bars while switches are flipped. */
+.diag-assess { --diag-whatif: var(--obs-purple, var(--ux-accent)); }
+.diag-verdict.is-whatif { border-style: dashed; border-left-style: solid; }
+.diag-verdict.is-whatif .ux-eyebrow { color: var(--diag-whatif); }
+.diag-whatif {
+  position: sticky;
+  top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px));
+  z-index: 30;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  margin: 0 0 12px; padding: 10px 16px;
+  border: 1px dashed var(--diag-whatif); border-radius: 8px;
+  background: var(--ux-bg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  font: 14px/1.45 var(--sans); color: var(--ux-ink-2);
+}
+.diag-whatif-text { margin: 0; flex: 1 1 420px; min-width: 0; }
+.diag-whatif-tag, .diag-check-tag {
+  display: inline-block; padding: 0 7px; border-radius: 999px;
+  border: 1px dashed var(--diag-whatif); color: var(--diag-whatif);
+  font: 600 11px/1.6 var(--sans); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.diag-whatif-tag { margin-right: 6px; }
+.diag-whatif-now { color: var(--ux-ink); font-weight: 700; font-size: 15px; }
+.diag-whatif-saved { color: var(--ux-ink-3); }
+.diag-whatif-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.diag-whatif-actions .ux-secondary-btn,
+.diag-whatif-ask .ux-secondary-btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+.diag-whatif-keep[aria-disabled="true"] { color: var(--ux-ink-3); cursor: help; }
+.diag-whatif-note { font-size: 13px; color: var(--ux-ink-3); }
+.diag-whatif-ask { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.diag-whatif-ask-l { display: flex; flex-direction: column; gap: 4px; flex: 1 1 280px; max-width: 520px; min-width: 0; font-size: 13px; color: var(--ux-ink-2); }
+.diag-whatif-ask-l .og-input { width: 100%; min-height: 32px; font-size: 13px; box-sizing: border-box; }
+.diag-whatif-ask-l .og-input[aria-invalid="true"] { border-color: var(--ux-fail, #b22222); }
+
+/* The checks behind the grade: one row per check — result, what it asks, what
+   was observed, its points, its switch — and the row opens for the why, the
+   fix and where it was read. */
+.diag-checks-block {
+  margin: 0 0 12px;
+  border: 1px solid var(--ux-line); border-radius: 8px;
+  background: var(--ux-bg);
+  overflow: hidden;
+}
+.diag-checks-block:focus { outline: none; }
+.diag-checks-block:focus-visible { outline: 2px solid var(--ux-accent); outline-offset: 3px; }
+.diag-checks-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; padding: 12px 16px 10px; }
+.diag-checks-title { margin: 0; font: 600 18px/1.3 var(--sans); color: var(--ux-ink); }
+.diag-checks-lede { margin: 0; font-size: 13px; line-height: 1.4; color: var(--ux-ink-3); }
+.diag-checks { width: 100%; border-collapse: collapse; font: 14px/1.4 var(--sans); color: var(--ux-ink-2); }
+.diag-checks thead th {
+  padding: 6px 12px; text-align: left;
+  font: 600 12px/1.3 var(--sans); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ux-ink-3);
+  background: var(--ux-bg-2);
+  border-top: 1px solid var(--ux-line); border-bottom: 1px solid var(--ux-line);
+}
+.diag-checks .diag-check > * {
+  padding: 5px 12px; text-align: left; vertical-align: middle; font-weight: 400;
+  border-bottom: 1px solid var(--ux-line);
+}
+.diag-checks tbody tr:last-child > * { border-bottom: 0; }
+.diag-checks .dc-result { width: 1%; white-space: nowrap; padding-left: 16px; }
+.diag-checks .dc-name { width: 34%; min-width: 230px; }
+.diag-checks .dc-obs { overflow-wrap: anywhere; }
+.diag-checks .dc-points { width: 1%; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.diag-checks .dc-switch { width: 1%; white-space: nowrap; text-align: center; padding-right: 16px; }
+.dc-earned { font: 700 15px/1 var(--sans); color: var(--ux-ink); }
+.diag-check.is-pass .dc-earned { color: var(--ux-ok); }
+.diag-check.is-partial .dc-earned { color: var(--ux-warn); }
+.diag-check.is-fail .dc-earned { color: var(--ux-fail); }
+.dc-worth, .dc-none, .dc-by { font-size: 13px; color: var(--ux-ink-3); }
+.diag-check.is-off .dc-obs,
+.diag-check.is-off .diag-check-label { color: var(--ux-ink-3); }
+.diag-check:hover > * { background: var(--ux-bg-2); }
+.diag-check.is-changed > * { box-shadow: inset 0 1px 0 var(--diag-whatif), inset 0 -1px 0 var(--diag-whatif); }
+
+.diag-check-group th {
+  padding: 10px 16px 7px; text-align: left; font-weight: 400;
+  border-bottom: 1px solid var(--ux-line);
+}
+.diag-check-group:not(:first-child) th { border-top: 6px solid var(--ux-bg-2); }
+.diag-check-group-letter {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 8px;
+  border-radius: 4px; border: 1px solid var(--ux-line);
+  font: 600 12px/1 var(--sans); color: var(--ux-ink-2); vertical-align: 1px;
+}
+.diag-check-group-q { margin-right: 10px; font: 600 14px/1.4 var(--sans); color: var(--ux-ink); }
+.diag-check-group-term { margin-right: 10px; font-size: 13px; color: var(--ux-ink-3); }
+.diag-check-group-meta { float: right; font: 600 13px/1.6 var(--sans); color: var(--ux-ink-2); font-variant-numeric: tabular-nums; }
+.diag-check-group-note { display: block; clear: both; margin-top: 2px; font-size: 13px; line-height: 1.4; color: var(--ux-ink-3); }
+
+.diag-check-open {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 2px 0;
+  background: none; border: 0; cursor: pointer; text-align: left; color: inherit; font: inherit;
+}
+.diag-check-caret, .diag-more-caret {
+  flex: 0 0 auto; width: 0; height: 0;
+  border-left: 6px solid var(--ux-ink-3); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform 120ms ease-out;
+}
+.diag-check-open[aria-expanded="true"] .diag-check-caret,
+.diag-more-row[open] > .diag-more-sum .diag-more-caret { transform: rotate(90deg); }
+.diag-check-words { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; min-width: 0; }
+.diag-check-label { font: 600 14px/1.35 var(--sans); color: var(--ux-ink); white-space: nowrap; }
+.diag-check-tag { margin-left: 6px; vertical-align: 1px; }
+.diag-check-ask { font-size: 13px; line-height: 1.35; color: var(--ux-ink-3); }
+
+.diag-check-detail > td { padding: 2px 16px 14px 44px; background: var(--ux-bg-2); border-bottom: 1px solid var(--ux-line); }
+.diag-check-more { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); gap: 12px 24px; padding-top: 10px; }
+.dcm-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dcm-key { font: 600 12px/1.2 var(--sans); text-transform: uppercase; letter-spacing: 0.04em; color: var(--ux-ink-3); }
+.dcm-key-2 { margin-top: 6px; }
+.dcm-col p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.dcm-col .dcm-title { font: 600 15px/1.35 var(--sans); color: var(--ux-ink); }
+.dcm-col .dcm-cost { font: 600 13px/1.3 var(--sans); color: var(--ux-ink-2); }
+.dcm-col .dcm-by { font-size: 13px; color: var(--ux-ink-3); }
+.dcm-col code { font: 13px/1.4 var(--mono); color: var(--ux-ink); }
+.dcm-actions { margin-top: 6px; }
+.dcm-actions .ux-secondary-btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+
+/* A criterion's switch: on is graded. A real switch (role=switch), 40 × 24. */
+.diag-switch {
+  position: relative; display: inline-block; width: 40px; height: 24px; padding: 0; vertical-align: middle;
+  border-radius: 12px; border: 1px solid var(--ux-ink-3); background: var(--ux-bg-2); cursor: pointer;
+  transition: background 120ms ease-out, border-color 120ms ease-out;
+}
+.diag-switch-knob {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--ux-ink-3);
+  transition: transform 120ms ease-out, background 120ms ease-out;
+}
+.diag-switch[aria-checked="true"] { background: var(--ux-accent); border-color: var(--ux-accent); }
+/* The knob takes the panel's colour: dark on the lime track, white on the light theme's green. */
+.diag-switch[aria-checked="true"] .diag-switch-knob { transform: translateX(16px); background: var(--ux-bg); }
+.diag-switch[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .diag-switch, .diag-switch-knob, .diag-check-caret, .diag-more-caret { transition: none; }
+}
+
+/* Everything else, folded: a closed row each, its headline on the row. */
+.diag-more { display: grid; gap: 8px; margin: 0 0 24px; }
+.diag-more-row { min-width: 0; border: 1px solid var(--ux-line); border-radius: 8px; background: var(--ux-bg); }
+.diag-more-row:focus { outline: none; }
+.diag-more-row:focus-visible { outline: 2px solid var(--ux-accent); outline-offset: 3px; }
+.diag-more-sum {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  min-height: 44px; padding: 8px 16px; box-sizing: border-box;
+  cursor: pointer; list-style: none;
+  font: 14px/1.4 var(--sans); color: var(--ux-ink-2);
+}
+.diag-more-sum::-webkit-details-marker { display: none; }
+.diag-more-row[open] > .diag-more-sum { border-bottom: 1px solid var(--ux-line); }
+.diag-more-title { flex: 0 0 auto; min-width: 216px; font: 600 15px/1.3 var(--sans); color: var(--ux-ink); }
+.diag-more-meta { flex: 1 1 300px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; font-size: 13px; color: var(--ux-ink-2); }
+.diag-more-count { margin-left: auto; }
+.diag-more-body { min-width: 0; padding: 14px 16px 16px; overflow-x: auto; }
+.diag-more-body > .diag-block { margin-top: 0; }
+/* The row's own line is the title of a block drawn inside it. */
+.diag-more-body > .diag-block > .diag-block-head > .diag-block-title { display: none; }
+.diag-more-body > .diag-block-lede { margin-bottom: 12px; }
+.diag-layer-minis { display: inline-flex; flex-wrap: wrap; gap: 4px 16px; }
+.diag-layer-mini { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; color: var(--ux-ink-2); }
+.diag-layer-mini-bar {
+  width: 44px; height: 6px; box-sizing: border-box; overflow: hidden;
+  border-radius: 3px; border: 1px solid var(--ux-line); background: var(--ux-bg-2);
+}
+.diag-layer-mini-bar > span { display: block; height: 100%; background: var(--ux-tone); }
+.diag-layer-mini-pct { font-weight: 600; color: var(--ux-ink); font-variant-numeric: tabular-nums; }
+
+/* On a phone the row keeps result, name, points and switch; what was observed is in the opened row. Its column
+   is given no width rather than removed: removed, the rows that span all five columns would keep a fifth. */
+@media (max-width: 640px) {
+  .diag-checks { table-layout: fixed; }
+  .dc-worth { display: none; }
+  .diag-checks thead .dc-obs, .diag-checks .diag-check > .dc-obs { width: 0; padding: 0; overflow: hidden; white-space: nowrap; font-size: 0; }
+  .diag-checks .diag-check > .dc-obs * { font-size: 0; }
+  .diag-checks .dc-result { width: 88px; padding-left: 10px; white-space: normal; }
+  .diag-checks .dc-result .ux-chip { white-space: normal; }
+  .diag-checks .dc-name { width: auto; min-width: 0; }
+  .diag-checks .dc-points { width: 38px; }
+  .diag-checks .dc-switch { width: 58px; padding-right: 10px; }
+  .diag-checks thead th { padding-left: 6px; padding-right: 6px; }
+  .diag-checks .diag-check > * { padding-left: 6px; padding-right: 6px; }
+  .diag-checks .diag-check > .dc-result { padding-left: 10px; }
+  .diag-checks .diag-check > .dc-switch { padding-right: 10px; }
+  .diag-check-label { white-space: normal; }
+  .diag-check-group th { padding-left: 10px; padding-right: 10px; }
+  .diag-check-group-meta { float: none; display: block; }
+  .diag-check-detail > td { padding-left: 12px; padding-right: 12px; }
+  .diag-more-title { min-width: 0; }
+  .diag-verdict { padding: 12px 14px 14px; }
+}
+
+/* "How the grade is calculated" — the ladder and the rules, in its folded row. */
 .diag-calc {
   display: grid;
   grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
@@ -75,41 +296,7 @@
   .diag-calc { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* The persistent strip: grade + both packs named, then the section index. */
-.diag-sticky {
-  position: sticky;
-  top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px));
-  z-index: 30;
-  margin: 0 0 8px;
-  padding: 8px 0 6px;
-  background: var(--obs-bg, var(--paper));
-  border-bottom: 1px solid var(--ux-line);
-}
-.diag-sticky .ux-section-nav {
-  position: static;
-  margin: 6px 0 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-.diag-sticky-ctx {
-  margin: 0;
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px;
-  font: 14px/1.4 var(--sans);
-  color: var(--ux-ink-2);
-}
-.diag-sticky-ctx strong { color: var(--ux-ink); font-weight: 600; overflow-wrap: anywhere; }
-.diag-sticky-grade {
-  display: inline-block;
-  padding: 1px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--ux-tone);
-  background: var(--ux-tone-bg);
-  color: var(--ux-tone);
-  font-weight: 700;
-}
-
-/* Report sections under the index. */
+/* A block drawn inside a folded row (the response path keeps its own). */
 .diag-block { margin: 28px 0 0; }
 .diag-block:focus { outline: none; }
 .diag-block:focus-visible { outline: 2px solid var(--ux-accent); outline-offset: 4px; }
@@ -137,41 +324,8 @@
 }
 .diag-assess .diag-section { margin-top: 18px; }
 
-/* Gaps — what failed → why it matters → fix, in priority order. */
-.diag-blockers { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.diag-blocker {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px 20px;
-  padding: 14px 16px;
-  border: 1px solid var(--ux-line);
-  border-left: 4px solid var(--ux-tone);
-  border-radius: 8px;
-  background: var(--ux-bg);
-}
-.diag-blocker-col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.diag-blocker-key {
-  font: 600 12px/1.2 var(--sans);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ux-ink-3);
-}
-.diag-blocker-title { font: 600 16px/1.35 var(--sans); color: var(--ux-ink); }
-.diag-blocker-num { color: var(--ux-ink-3); }
-.diag-blocker-observed { font-size: 14px; line-height: 1.45; color: var(--ux-ink-2); overflow-wrap: anywhere; }
-.diag-blocker-cost { font: 600 13px/1.3 var(--sans); color: var(--ux-tone); }
-.diag-blocker p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ux-ink-2); }
-.diag-blocker-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 6px; }
-@media (max-width: 900px) {
-  .diag-blocker { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* Checks + evidence ledger: the result column carries a status chip, and
-   prose columns use ordinary UI type (monospace stays for field paths). */
-.diag-assess .diag-crit-table .c-pip,
-.diag-assess .diag-crit-table .c-pip + th { width: 1%; }
-.diag-assess .diag-crit-table .c-pip { white-space: nowrap; text-align: left; padding-right: 12px; font: inherit; }
-.diag-assess .diag-crit-table .c-exp,
+/* The evidence ledger: the result column carries a status chip, and prose
+   columns use ordinary UI type (monospace stays for field paths). */
 .diag-assess .diag-evidence-table .e-exp,
 .diag-assess .diag-evidence-table .e-obs { font-family: var(--sans); font-size: 14px; }
 .diag-assess .diag-evidence-table .e-status { width: 1%; white-space: nowrap; text-align: left; letter-spacing: normal; }
@@ -204,11 +358,11 @@
 
 /* Jump highlight for "View evidence" / section links. */
 .diag-flash { animation: diag-flash 1.8s ease-out; }
-tr.diag-flash > td { animation: diag-flash-bg 1.8s ease-out; }
+tr.diag-flash > td, tr.diag-flash > th { animation: diag-flash-bg 1.8s ease-out; }
 @keyframes diag-flash { from { box-shadow: 0 0 0 3px var(--ux-accent); } to { box-shadow: 0 0 0 3px transparent; } }
 @keyframes diag-flash-bg { from { background: var(--ux-info-bg); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) {
-  .diag-flash, tr.diag-flash > td { animation: none; }
+  .diag-flash, tr.diag-flash > td, tr.diag-flash > th { animation: none; }
 }
 
 .diag-visually-hidden {

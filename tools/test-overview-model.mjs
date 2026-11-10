@@ -35,7 +35,11 @@ import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/ov
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 import { instrumentGradeFor, GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
-import { criteriaScope, criteriaPanelHtml, groupNames, notGradedSentence, switchHtml, askRowHtml, CRITERION_LONG } from '../studio/grade-criteria-ui.mjs';
+import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from '../studio/grade-criteria-ui.mjs';
+import {
+  offSet, toggleOff, whatIfChanges, whatIfWords, gradeScale, gradeScaleHtml, verdictBarHtml, whatIfBarHtml,
+  checksTableHtml, checkDetailHtml, checkSwitchHtml, moreSummaryHtml, layerCoverage, layerMiniHtml, fmtChecks, CHECK_ASKS, CHECK_GROUPS,
+} from '../studio/assessment-page.mjs';
 import { host as studioHost } from '../studio/host.mjs';
 
 // ---------- fixtures ----------
@@ -2385,7 +2389,7 @@ test('loadServiceListFacts: `sources` from GET /api/repository-sources — the s
 
 const FRESH_OFF = { id: 4, name: 'krystaline', gradeOff: [{ key: 'fresh', reason: 'test', by: 'admin', at: '2026-11-10T12:00:00Z' }] };
 
-test("criteriaScope: the criteria of the grade on screen — none for a pack that is no service's own; the switch only where the host saves one, explained to a reader who may not", () => {
+test("criteriaScope: the criteria of the grade on screen — none for a pack that is no service's own; Keep only where the host saves a set, explained to a reader who may not", () => {
   assert.equal(criteriaScope({ service: null, canSwitch: true }), null, 'no service: graded on all seven, nothing to switch');
   assert.equal(criteriaScope({ service: { name: 'no id' }, canSwitch: true }), null);
   assert.deepEqual(criteriaScope({ service: FRESH_OFF, canSwitch: true }), {
@@ -2419,35 +2423,180 @@ test('groupNames: the checks of a group by name — with every criterion graded,
   assert.equal(notGradedSentence([]), '');
 });
 
-test('criteriaPanelHtml: the summary says on how many criteria the grade stands and what is off — why, who, when — with Grade it again; nothing at all with nothing off and no switch', () => {
-  assert.equal(criteriaPanelHtml(null), '');
-  assert.equal(criteriaPanelHtml(criteriaScope({ service: { id: 4, name: 'krystaline', gradeOff: [] } })), '', 'nothing off, no switch: the summary is what it was');
-  assert.equal(criteriaPanelHtml(criteriaScope({ service: FRESH_OFF, canSwitch: true })),
-    '<section class="diag-criteria" aria-labelledby="diag-criteria-title"><h3 class="diag-measure-group-title" id="diag-criteria-title">Criteria graded for krystaline</h3>'
-    + '<p class="diag-criteria-lede">Graded on 6 of 7 criteria: Fresh is not graded for this service.</p>'
-    + '<ul class="diag-criteria-off"><li class="diag-criteria-item"><span class="ux-chip ux-chip-neutral">Off</span><span class="diag-criteria-text">Fresh is not graded for this service: test <span class="diag-criteria-by">admin, 10 Nov</span></span>'
-    + '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-on:fresh" aria-label="Grade Fresh for this service again">Grade it again</button></li></ul>'
-    + '<p class="diag-criteria-how"><span>A criterion that does not apply to krystaline is left out under Evidence: <em>Not for this service…</em> beside it, with a reason.</span><button type="button" class="ux-link-btn" data-ux-action="diag-goto:diag-evidence">Choose the criteria →</button></p></section>');
-  const none = criteriaPanelHtml(criteriaScope({ service: { id: 4, name: 'krystaline', gradeOff: [] }, canSwitch: true }));
-  assert.ok(none.includes('<p class="diag-criteria-lede">Graded on all 7 criteria.</p>') && !none.includes('diag-criteria-off'), 'with a switch and nothing off: where to switch one');
-  const told = criteriaPanelHtml(criteriaScope({ service: FRESH_OFF }));
-  assert.ok(told.includes('Fresh is not graded for this service: test') && !told.includes('<button'), 'no host hook: said, nothing to press');
-  const hostile = criteriaPanelHtml(criteriaScope({ service: { id: 9, name: '<b>x</b>', gradeOff: [{ key: 'fresh', reason: '<img src=x>', by: '"a"' }] }, canSwitch: true }));
-  assert.ok(!hostile.includes('<b>x</b>') && !hostile.includes('<img') && hostile.includes('&lt;img src=x&gt;'), 'every word from the record escaped');
+// ---------- Expert's Assessment as one screen (studio/assessment-page.mjs) ----------
+
+test("the what-if set: offSet keeps the engine's order and drops what names no criterion; toggleOff flips one and refuses the last one graded; whatIfChanges and whatIfWords say what a what-if changes", () => {
+  assert.deepEqual(offSet(['fresh', { key: 'chaos-validated' }, 'nope', null]), ['chaos-validated', 'fresh']);
+  assert.deepEqual(offSet(null), []);
+  assert.deepEqual(toggleOff([], 'fresh'), { off: ['fresh'], refused: false });
+  assert.deepEqual(toggleOff(['fresh'], 'fresh'), { off: [], refused: false });
+  assert.deepEqual(toggleOff(['fresh'], 'calibrated'), { off: ['calibrated', 'fresh'], refused: false }, "in the engine's order");
+  assert.deepEqual(toggleOff(['fresh'], 'nope'), { off: ['fresh'], refused: false }, 'no criterion of that name: nothing changes');
+  const six = GRADE_CRITERION_KEYS.slice(0, 6);
+  assert.deepEqual(toggleOff(six, 'fresh'), { off: six, refused: true }, 'a grade stands on at least one criterion');
+  assert.deepEqual(toggleOff(six, 'multi-modal'), { off: six.slice(1), refused: false }, 'one of the six graded again');
+  assert.deepEqual(whatIfChanges(['fresh'], ['fresh']), { turnedOff: [], turnedOn: [], same: true });
+  assert.deepEqual(whatIfChanges([{ key: 'fresh' }], ['chaos-validated']), { turnedOff: ['chaos-validated'], turnedOn: ['fresh'], same: false });
+  assert.equal(whatIfWords({ turnedOff: ['chaos-validated'] }), 'without Chaos-validated');
+  assert.equal(whatIfWords({ turnedOff: ['calibrated', 'chaos-validated', 'fresh'] }), 'without Calibrated, Chaos-validated and Fresh');
+  assert.equal(whatIfWords({ turnedOn: ['fresh'] }), 'with Fresh graded again');
+  assert.equal(whatIfWords({ turnedOff: ['chaos-validated'], turnedOn: ['fresh'] }), 'without Chaos-validated, and with Fresh graded again');
+  assert.equal(whatIfWords(), '');
 });
 
-test('switchHtml / askRowHtml: Not for this service… asks why in place, Grade it again grades it again; a reader who may not switch gets the same words, explained; the host hook defaults to none', () => {
-  const on = { enabled: true, reason: null };
-  assert.equal(switchHtml(on, 'off', 'chaos-validated', 'Chaos-validated'),
-    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-ask:chaos-validated" aria-label="Stop grading Chaos-validated for this service">Not for this service…</button>');
-  assert.equal(switchHtml(on, 'on', 'fresh'),
-    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-on:fresh" aria-label="Grade Fresh for this service again">Grade it again</button>');
-  assert.equal(switchHtml({ enabled: false, reason: 'operators switch criteria' }, 'off', 'fresh'),
-    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-explain" aria-disabled="true" title="operators switch criteria" aria-label="Stop grading Fresh for this service">Not for this service…</button>');
-  assert.equal(switchHtml(null, 'off', 'fresh'), '');
-  const ask = askRowHtml({ reason: 'no "chaos" <here>' }, 'chaos-validated');
-  assert.ok(ask.startsWith('<tr class="diag-crit-ask"><td colspan="4">'));
-  assert.ok(ask.includes('<span>Why is Chaos-validated not graded for this service?</span><input class="og-input" data-diag-grade-reason="chaos-validated" value="no &quot;chaos&quot; &lt;here&gt;" maxlength="200"'), 'what was typed, kept and escaped');
-  assert.ok(ask.includes('data-ux-action="diag-grade-off:chaos-validated">Stop grading it</button>') && ask.includes('data-ux-action="diag-grade-cancel">Cancel</button>'));
-  assert.equal(studioHost.setGradeCriterion, null, 'a page that embeds Diagnose without the hook offers no switch');
+test('the grade scale: the score-reachable grades lowest first, each as wide as its span of the score; the bar lights the one the score lands on and marks the score', () => {
+  assert.deepEqual(gradeScale().map((s) => [s.letter, s.from, s.to]), [['D', 0, 37.5], ['C', 37.5, 62.5], ['B', 62.5, 75], ['B+', 75, 85], ['A', 85, 95], ['A+', 95, 100]]);
+  const bar = gradeScaleHtml(56.25, 'C');
+  assert.equal((bar.match(/class="diag-scale-seg /g) || []).length, 6);
+  assert.ok(bar.includes('<span class="diag-scale-seg tier-c is-current" style="flex:25 1 0"'), 'C spans 25 points of the score');
+  assert.equal((bar.match(/is-current/g) || []).length, 1);
+  assert.ok(bar.includes('<span class="diag-scale-mark" style="left:56.25%"></span>'));
+  assert.ok(bar.includes('aria-label="Grade scale from D to A+: this pack is at 56%, grade C"'));
+  assert.ok(gradeScaleHtml(140, 'A+').includes('left:100%') && gradeScaleHtml(-3, 'D').includes('left:0%'), 'the mark stays on the bar');
+  assert.ok(!bar.includes('A++'), 'the reference grade no score reaches is not on the scale');
+});
+
+test('verdictBarHtml: one band — the grade, the score on its scale with the distance to grade A, on how many criteria, the facts and the quieter next steps; a what-if is named as one', () => {
+  const input = {
+    contextHtml: '<div class="ux-ctx">ctx</div>', tone: 'warn', letter: 'C', gradeName: 'Field grade', gradeTitle: 'C · Field Grade', sentence: 'The pack does not meet the audit requirement.',
+    scorePct: 56, scoreExact: 56.25, threshold: 85, passes: false, graded: 4, total: 7,
+    facts: [{ labelHtml: '<span class="ux-term">Coverage</span>', value: '67%', note: '2 of 3 checks', tone: 'warn', title: 'signal types' }, null, { label: 'Live <signals>', value: 'Not checked', note: 'n', tone: 'warn' }],
+    actions: [{ label: 'Compare with live', action: 'diag-compare-tab' }],
+  };
+  const bar = verdictBarHtml(input);
+  assert.ok(bar.includes('<section class="diag-verdict ux-tone-warn ux-section-target" id="diag-summary" tabindex="-1" aria-label="Assessment">'));
+  assert.ok(bar.includes('<div class="ux-ctx">ctx</div>'));
+  assert.ok(bar.includes('<span class="diag-verdict-letter" title="C · Field Grade">C</span>'));
+  assert.ok(bar.includes('<span class="ux-eyebrow">Assessment</span>') && bar.includes('<p class="diag-verdict-name">Field grade</p>') && bar.includes('<p class="diag-verdict-sentence">The pack does not meet the audit requirement.</p>'));
+  assert.ok(bar.includes('<span class="diag-verdict-num">56</span><span class="diag-verdict-unit">%</span> <span class="diag-verdict-on">on 4 of 7 criteria</span>'));
+  assert.ok(bar.includes('<p class="diag-verdict-gap">28.8 points below grade A, which begins above 85%</p>'));
+  assert.ok(bar.includes('style="left:56.25%"'), 'the scale is drawn at the exact score');
+  assert.equal((bar.match(/class="diag-fact /g) || []).length, 2, 'a fact that is not there is not drawn');
+  assert.ok(bar.includes('<div class="diag-fact ux-tone-warn" title="signal types">') && bar.includes('<dt><span class="ux-term">Coverage</span></dt>') && bar.includes('<span class="diag-fact-val">67%</span><span class="diag-fact-note">2 of 3 checks</span>'));
+  assert.ok(bar.includes('<dt>Live &lt;signals&gt;</dt>'), 'a plain label is escaped');
+  assert.ok(bar.includes('<div class="diag-verdict-actions"><button type="button" class="ux-secondary-btn" data-ux-action="diag-compare-tab">Compare with live</button></div>'));
+  const all = verdictBarHtml({ ...input, graded: 7, passes: true, scorePct: 90, scoreExact: 90, actions: [] });
+  assert.ok(all.includes('on all 7 criteria') && all.includes('<p class="diag-verdict-gap">Grade A begins above 85%</p>') && !all.includes('diag-verdict-actions'));
+  const tried = verdictBarHtml({ ...input, whatIf: true });
+  assert.ok(tried.includes('class="diag-verdict ux-tone-warn is-whatif ux-section-target"') && tried.includes('aria-label="Assessment, as a what-if"') && tried.includes('<span class="ux-eyebrow">What if</span>'));
+});
+
+test('whatIfBarHtml: what the set on screen gives against what is saved; Keep asks why once for criteria newly left out, is explained to a reader who may not, and is not offered where nothing can be saved', () => {
+  const now = { letter: 'B', pct: 65, graded: 6, total: 7 };
+  const saved = { letter: 'C', pct: 60, graded: 7, total: 7 };
+  const keep = { enabled: true, reason: null, serviceName: 'krystaline', needsReason: true, ask: null };
+  const bar = whatIfBarHtml({ words: 'without Chaos-validated', now, saved, keep });
+  assert.ok(bar.includes('<div class="diag-whatif" role="region" aria-label="What if">'));
+  assert.ok(bar.includes('<span class="diag-whatif-tag">What if</span> <span class="diag-whatif-words">Without Chaos-validated:</span> <strong class="diag-whatif-now">B · 65%</strong> on 6 of 7 criteria. <span class="diag-whatif-saved">Saved for krystaline: C · 60% on all 7 criteria.</span>'));
+  assert.ok(bar.includes('<button type="button" class="ux-secondary-btn diag-whatif-keep" data-ux-action="diag-whatif-keep">Keep for krystaline…</button><button type="button" class="ux-link-btn" data-ux-action="diag-whatif-reset">Reset</button>'));
+  assert.ok(!bar.includes('diag-whatif-ask'));
+  const again = whatIfBarHtml({ words: 'with Fresh graded again', now, saved, keep: { ...keep, needsReason: false } });
+  assert.ok(again.includes('>Keep for krystaline</button>'), 'graded again needs no reason: no ellipsis');
+  const asking = whatIfBarHtml({ words: 'without Chaos-validated and Fresh', now, saved, keep: { ...keep, ask: { reason: 'no "chaos" <here>', count: 2 } } });
+  assert.ok(asking.includes('<span>Why are they not graded for krystaline?</span>') && asking.includes('<input class="og-input" data-diag-keep-reason value="no &quot;chaos&quot; &lt;here&gt;" maxlength="200" autocomplete="off"'), 'what was typed, kept and escaped');
+  assert.ok(asking.includes('data-ux-action="diag-whatif-save">Save</button>') && asking.includes('data-ux-action="diag-whatif-keep-cancel">Cancel</button>') && !asking.includes('data-ux-action="diag-whatif-keep"'), 'the ask replaces Keep');
+  assert.ok(whatIfBarHtml({ words: 'without Fresh', now, saved, keep: { ...keep, ask: { reason: '', count: 1 } } }).includes('<span>Why is it not graded for krystaline?</span>'));
+  const reader = whatIfBarHtml({ words: 'without Fresh', now, saved, keep: { ...keep, enabled: false, reason: 'operators and admins keep criteria' } });
+  assert.ok(reader.includes('data-ux-action="diag-whatif-explain" aria-disabled="true" title="operators and admins keep criteria">Keep for krystaline</button>'), 'the same words, explained when pressed');
+  const nowhere = whatIfBarHtml({ words: 'without Fresh', now, saved, keep: null });
+  assert.ok(nowhere.includes('<span class="diag-whatif-note">Not saved: a what-if only.</span>') && nowhere.includes('As it is graded: C · 60% on all 7 criteria.') && !nowhere.includes('Keep for'), 'no service, or no server: tried, never kept');
+  const hostile = whatIfBarHtml({ words: 'without Fresh', now, saved, keep: { ...keep, serviceName: '<b>x</b>' } });
+  assert.ok(!hostile.includes('<b>x</b>') && hostile.includes('Keep for &lt;b&gt;x&lt;/b&gt;…'));
+});
+
+const CHECK_ROWS = {
+  groups: [
+    { key: 'coverage', passed: 1, total: 2, rows: [
+      { key: 'multi-modal', label: 'Multi-modal', group: 'coverage', state: 'pass', met: true, observed: '3 of 4 signals', expected: 'metrics + logs + traces', field: 'spec.telemetry.backends[].signal', earned: 25, worth: 25, why: 'why it matters' },
+      { key: 'calibrated', label: 'Calibrated', group: 'coverage', state: 'fail', observed: 'no baselines <b>', expected: 'baselines declared', field: 'spec.baselines', earned: 0, worth: 25, title: 'Normal is not defined with numbers', why: 'nobody can tell', fix: 'Measure MTTD and MTTR.', cost: 'Costs 25 points of the score', actionLabel: 'View layer scores', actionId: 'diag-goto:diag-layers' },
+      { key: 'comprehensive', label: 'Comprehensive', group: 'coverage', state: 'off', observed: '48% average observed', earned: 0, worth: 0, saved: { reason: 'stop', by: 'admin, 10 Nov' } },
+    ] },
+    { key: 'trust', passed: 0.25, total: 1, note: 'Nothing live backs this pack.', rows: [
+      { key: 'chaos-validated', label: 'Chaos-validated', group: 'trust', state: 'partial', observed: '5 declared, never run', earned: 6.25, worth: 25, title: 'No chaos experiment has a recorded run', why: 'w', fix: 'Run them.', cost: 'Partial credit — costs 19 points of the score' },
+      { key: 'fresh', label: 'Fresh', group: 'trust', state: 'off', changed: true, observed: 'never verified', earned: 0, worth: 0, saved: null },
+    ] },
+    { key: 'operability', passed: 0, total: 0, rows: [{ key: 'actionable', label: 'Actionable', group: 'operability', state: 'info', met: false, observed: 'no runbooks linked', earned: 0, worth: 0, why: 'shown, never scored' }] },
+  ],
+  also: [{ key: 'live-evidence', label: 'Live evidence is partial', tone: 'warn', observed: '1 of 6 live probes failed', title: 'Live evidence is partial', why: 'differences may be overstated', fix: 'Draft the live pack again.', cost: 'Does not change the grade by itself', actionLabel: 'View the comparison', actionId: 'diag-goto:diag-compare' }],
+  open: ['calibrated'],
+};
+
+test('checksTableHtml: one row per check under the three questions — result, what it asks, what was observed, its points, its switch; a criterion left out says why, who and when; what is found beside the checks is listed, never scored', () => {
+  const html = checksTableHtml(CHECK_ROWS);
+  assert.ok(html.includes('<section class="diag-checks-block ux-section-target" id="diag-evidence" tabindex="-1" aria-labelledby="diag-checks-title">'), 'the jump target the evidence always had');
+  assert.equal((html.match(/<tr class="diag-check is-/g) || []).length, 7, 'six checks and the one found beside them');
+  const metas = [...html.matchAll(/<span class="diag-check-group-meta">([^<]*)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(metas, ['1 of 2 checks · 50%', '0.25 of 1 check · 25%', 'shown, never scored', 'does not change the grade']);
+  assert.ok(html.includes('<span class="diag-check-group-q">Are the right signals in place?</span>') && html.includes('<span class="diag-check-group-q">Can you trust what the signals show?</span>') && html.includes('<span class="diag-check-group-q">Can oncall act on what it sees?</span>'), "the board's questions");
+  assert.ok(html.includes('<span class="diag-check-group-note">Nothing live backs this pack.</span>'));
+  // A row: its chip, its name and what it asks, what was observed, its points.
+  assert.ok(html.includes('<span class="diag-check-label">Multi-modal</span><span class="diag-check-ask">Are metrics, logs and traces all declared?</span>'));
+  assert.ok(html.includes('<td class="dc-obs">3 of 4 signals</td>') && html.includes('<td class="dc-points"><span class="dc-earned">25</span><span class="dc-worth"> / 25</span></td>'));
+  assert.ok(html.includes('<td class="dc-points"><span class="dc-earned">6</span><span class="dc-worth"> / 25</span></td>') && html.includes('title="Partial credit: 25% of this check.">Partial</span>'), 'part credit, rounded');
+  assert.ok(html.includes('<td class="dc-obs">no baselines &lt;b&gt;</td>'), "the engine's words escaped");
+  // Left out: saved (why, who, when), or only in the what-if on screen.
+  assert.ok(html.includes('<tr class="diag-check is-off" data-key="comprehensive">') && html.includes('<td class="dc-obs">Not graded for this service: stop <span class="dc-by">admin, 10 Nov</span></td>'));
+  assert.ok(html.includes('<tr class="diag-check is-off is-changed" data-key="fresh">') && html.includes('<span class="diag-check-label">Fresh <span class="diag-check-tag">what if</span></span>') && html.includes('<td class="dc-obs">Not graded in this what-if.</td>'));
+  assert.equal((html.match(/<span class="dc-none" aria-label="no points">—<\/span>/g) || []).length, 4, 'two left out, the unscored one and the one found beside: no points');
+  // The switches: one per criterion, on = graded; none on what is never scored.
+  assert.equal((html.match(/role="switch"/g) || []).length, 5);
+  assert.ok(html.includes('<button type="button" role="switch" class="diag-switch" aria-checked="true" aria-label="Grade Calibrated" title="Calibrated is graded. Switch it off to see the grade without it." data-ux-action="diag-check-toggle:calibrated"><span class="diag-switch-knob" aria-hidden="true"></span></button>'));
+  assert.ok(html.includes('aria-checked="false" aria-label="Grade Fresh" title="Fresh is not graded. Switch it on to see the grade with it." data-ux-action="diag-check-toggle:fresh"'));
+  assert.ok(!html.includes('aria-disabled="true"'), 'three are graded: any of them may be left out');
+  // Found beside the checks.
+  assert.ok(html.includes('<tr class="diag-check is-also" data-key="live-evidence">') && html.includes('>Caution</span>') && html.includes('<span class="diag-check-words"><span class="diag-check-label">Live evidence is partial</span></span>'));
+  // Open rows: the one named, drawn open.
+  assert.ok(html.includes('data-ux-action="diag-check-open:calibrated" aria-expanded="true" aria-controls="diag-check-detail-calibrated"') && html.includes('<tr class="diag-check-detail" id="diag-check-detail-calibrated">'));
+  assert.ok(html.includes('data-ux-action="diag-check-open:multi-modal" aria-expanded="false"') && html.includes('<tr class="diag-check-detail" id="diag-check-detail-multi-modal" hidden>'));
+  // The last criterion graded stays on; a host that wants no switch gets none.
+  const one = checksTableHtml({ groups: [{ key: 'coverage', passed: 1, total: 1, rows: [CHECK_ROWS.groups[0].rows[0], CHECK_ROWS.groups[0].rows[2]] }] });
+  assert.ok(one.includes('title="A grade stands on at least one criterion." data-ux-action="diag-check-toggle:multi-modal" aria-disabled="true"'));
+  const none = checksTableHtml({ ...CHECK_ROWS, switches: false });
+  assert.ok(!none.includes('role="switch"') && none.includes('<th class="dc-switch" scope="col"></th>') && !none.includes('switch a check off'));
+});
+
+test('checkDetailHtml / checkSwitchHtml: a row opened says what failed, why it matters, the fix with its action, and where it was read; a passing one what it found; one left out why', () => {
+  const [pass, fail, off] = CHECK_ROWS.groups[0].rows;
+  const failed = checkDetailHtml(fail);
+  assert.equal(failed, '<div class="diag-check-more">'
+    + '<div class="dcm-col"><span class="dcm-key">What failed</span><p class="dcm-title">Normal is not defined with numbers</p><p>no baselines &lt;b&gt;</p><p class="dcm-cost">Costs 25 points of the score</p></div>'
+    + '<div class="dcm-col"><span class="dcm-key">Why it matters</span><p>nobody can tell</p></div>'
+    + '<div class="dcm-col"><span class="dcm-key">Fix</span><p>Measure MTTD and MTTR.</p><div class="dcm-actions"><button type="button" class="ux-secondary-btn" data-ux-action="diag-goto:diag-layers">View layer scores</button></div></div>'
+    + '<div class="dcm-col"><span class="dcm-key">Expected</span><p>baselines declared</p><span class="dcm-key dcm-key-2">Read from</span><p><code>spec.baselines</code></p></div>'
+    + '</div>');
+  const passed = checkDetailHtml(pass);
+  assert.ok(passed.includes('<span class="dcm-key">What it found</span><p>3 of 4 signals</p>') && passed.includes('<span class="dcm-key">Why it matters</span>') && !passed.includes('>Fix<'), 'a passing check has nothing to fix');
+  const left = checkDetailHtml(off);
+  assert.ok(left.includes("<span class=\"dcm-key\">Not graded</span><p>Comprehensive is left out of the grade for this service: stop</p><p class=\"dcm-by\">admin, 10 Nov</p><p>What the pack shows: 48% average observed</p>"));
+  assert.ok(checkDetailHtml(CHECK_ROWS.groups[1].rows[1]).includes('<p>Fresh is left out of the grade in this what-if; nothing is saved.</p>'));
+  assert.ok(checkDetailHtml({ ...CHECK_ROWS.also[0], state: 'also' }).includes('data-ux-action="diag-goto:diag-compare">View the comparison</button>'));
+  assert.equal(CHECK_GROUPS.map((g) => g.key).join(','), 'coverage,trust,operability');
+  assert.deepEqual(Object.keys(CHECK_ASKS), [...GRADE_CRITERION_KEYS, 'actionable'], 'every check asks something');
+  assert.ok(checkSwitchHtml(pass).includes('aria-checked="true"') && checkSwitchHtml(off).includes('aria-checked="false"'));
+});
+
+test("the folded rows and the page's wiring: a closed row says its headline and its count; the layers as four small bars; Diagnose draws the page from these and keeps a set only through the host's hook", () => {
+  assert.equal(moreSummaryHtml({ title: 'Layer scores', metaHtml: '<span>19 of 40</span>', count: 3, countTitle: 'thin layers', tone: 'warn' }),
+    '<summary class="diag-more-sum"><span class="diag-more-caret" aria-hidden="true"></span><span class="diag-more-title">Layer scores</span><span class="diag-more-meta"><span>19 of 40</span></span>'
+    + '<span class="ux-section-count diag-more-count ux-tone-warn" title="thin layers">3<span class="diag-visually-hidden"> thin layers</span></span></summary>');
+  assert.ok(!moreSummaryHtml({ title: '<x>', count: 0 }).includes('ux-section-count') && moreSummaryHtml({ title: '<x>' }).includes('&lt;x&gt;'), 'no count, none drawn');
+  const cells = { 'infra:sli': [{}], 'infra:slo': [{}], 'app:sli': [{}], 'app:slo': [{}], 'app:alert': [{}], 'app:dashboard': [{}], 'app:metric': [{}], 'app:log': [{}], 'app:trace': [{}], 'ux:dashboard': [] };
+  const cov = layerCoverage({ cells });
+  assert.deepEqual(cov.layers.map((l) => [l.key, l.observed, l.total, l.pct, l.verdict]), [['infra', 2, 10, 20, 'thin'], ['platform', 0, 10, 0, 'dark'], ['app', 7, 10, 70, 'strong'], ['ux', 0, 10, 0, 'dark']]);
+  assert.deepEqual([cov.observed, cov.total], [9, 40]);
+  assert.deepEqual(layerCoverage(null).observed, 0);
+  const minis = layerMiniHtml(cov);
+  assert.equal((minis.match(/class="diag-layer-mini /g) || []).length, 4);
+  assert.ok(minis.includes('<span class="diag-layer-mini ux-tone-ok" title="Application: 7 of 10 mechanisms observed"><span class="diag-layer-mini-name">Application</span><span class="diag-layer-mini-bar" aria-hidden="true"><span style="width:70%"></span></span><span class="diag-layer-mini-pct">70%</span></span>'));
+  assert.equal(fmtChecks(2), '2');
+  assert.equal(fmtChecks(0.25), '0.25');
+  assert.equal(fmtChecks(2.5), '2.5');
+  // The view: the page is these builders', the checks are said once, and a set is kept through the host's optional hook.
+  const view = readFileSync(new URL('../studio/compare-view.mjs', import.meta.url), 'utf8');
+  assert.ok(view.includes('report.insertAdjacentHTML(\'beforeend\', checksTableHtml(assessmentChecks(decision, diagnostic, scope, whatIf)));'));
+  assert.ok(view.includes('blockers, gapCount, qualityGaps, checks,'), 'the decision carries every check as a row reads it');
+  assert.ok(!view.includes('diag-crit-table') && !view.includes('assessmentGapsHtml') && !view.includes('sectionNavHtml'), 'no second table of the checks, no gaps block, no section index');
+  assert.ok(view.includes("canSwitch: typeof appHost.setGradeCriteria === 'function' && !isStatic(),"), 'Keep only where the host saves a set, never in a static bundle');
+  assert.equal(studioHost.setGradeCriteria, null, 'a page that embeds Diagnose without the hook: its switches are a what-if only');
+  assert.ok(!('setGradeCriterion' in studioHost), "0.8.23's one-criterion hook is replaced");
 });

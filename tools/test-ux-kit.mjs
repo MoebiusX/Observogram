@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   STATUS_PROPERTIES, statusFromLegacy, statusRecord, statusChipHtml, legacyStatusChipHtml,
-  GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, layerSpecTip, decisionHeaderHtml, emptyStateHtml, sectionNavHtml,
+  GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, layerSpecTip, decisionHeaderHtml, contextLineHtml, emptyStateHtml, sectionNavHtml,
   disclosureHtml, plural, listSentence, personalName,
   parseRecentServices, orderServicesByRecent,
 } from '../studio/ux-kit.mjs';
@@ -80,6 +80,14 @@ test('the decision header renders context, decision, one primary action, causes 
 test('the decision sentence is escaped unless the caller passes HTML on purpose', () => {
   assert.match(decisionHeaderHtml({ decision: '<b>x</b>' }), /&lt;b&gt;x&lt;\/b&gt;/);
   assert.match(decisionHeaderHtml({ decisionHtml: '<b>x</b>' }), /<b>x<\/b>/);
+  // The context line on its own, for a screen with a header of its own (Diagnose's Assessment): the header's, byte for byte.
+  const context = [{ key: 'Service', value: 'checkout' }, null, { key: 'Baseline', value: '' }, { value: 'payment <b>', title: 'Pack A' }];
+  const line = contextLineHtml(context);
+  assert.ok(decisionHeaderHtml({ context, decision: 'd' }).includes(line), 'the decision header draws the same line');
+  assert.equal((line.match(/class="ux-ctx-item"/g) || []).length, 2, 'an item with no value is not drawn');
+  assert.ok(line.startsWith('<div class="ux-ctx">') && line.includes('<span class="ux-ctx-key">Service</span>') && line.includes('title="Pack A"') && line.includes('payment &lt;b&gt;'));
+  assert.equal(contextLineHtml([]), '');
+  assert.equal(contextLineHtml([{ key: 'Service', value: '' }]), '', 'nothing with a value: no line');
 });
 
 test('an empty state says what was checked and offers the next step', () => {
