@@ -79,11 +79,13 @@ function entryUid(L, kind, entry) {
 // product lens into the model so the lattice matches the lensed counts.
 // pack/packB/diff/compareBId are the caller's state slice; catalogEntry
 // is the (optional) catalog row for compareBId — only its label is read.
-export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry = null, passesLens = null } = {}) {
+// gradeOff — the criteria the pack's service is not graded on (keys): the
+// grade leaves them out, as the service's board does.
+export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry = null, passesLens = null, gradeOff = [] } = {}) {
   const haveB = !!packB;
   const posture = computePostureMatrix(pack, packB);
   const resolvedDiff = (diff && !diff.error && diff.layers) ? diff : null;
-  const diagnostic = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff);
+  const diagnostic = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff, { off: gradeOff });
   const mode = compareModeFor(packB, compareBId);
   const bName = catalogEntry?.label
     || packB?.meta?.name || packB?.metadata?.name || packB?.id || 'Pack B';
@@ -217,7 +219,7 @@ export function deploySelectionFromItems(items, selectedUids = null) {
 // the drift criterion is anchored on chain integrity the projection can
 // legitimately be flat — `chainAnchored` lets the view say so.
 export function projectGrade(uids /* Set<string> | null = fix everything */,
-                             { pack, packB, diff, compareBId } = {}) {
+                             { pack, packB, diff, compareBId, gradeOff = [] } = {}) {
   const resolvedDiff = (diff && !diff.error && diff.layers) ? diff : null;
   if (!resolvedDiff) return null;
   const fixAll = !uids;
@@ -249,13 +251,14 @@ export function projectGrade(uids /* Set<string> | null = fix everything */,
   const hypo = { ...resolvedDiff, layers: hypoLayers };
 
   const posture = computePostureMatrix(pack, packB);
-  const before = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff);
-  const after = computeDiagnosticGrade(pack, packB, posture, compareBId, hypo);
+  const before = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff, { off: gradeOff });
+  const after = computeDiagnosticGrade(pack, packB, posture, compareBId, hypo, { off: gradeOff });
   return {
     before, after,
     beforePct: Math.round(before.overall.audit.scorePctExact),
     afterPct: Math.round(after.overall.audit.scorePctExact),
-    chainAnchored: (resolvedDiff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0,
+    // Not when Drift-free — the criterion the chains anchor — is not graded for the service.
+    chainAnchored: (resolvedDiff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0 && !(Array.isArray(gradeOff) && gradeOff.includes('drift-free')),
   };
 }
 
@@ -365,6 +368,8 @@ export function chip(status, text) {
 }
 
 export function criterionChip(c) {
+  // A criterion the service is not graded on: shown, never scored.
+  if (c?.applies === false) return chip('info', 'NOT GRADED');
   const s = criterionScore(c);
   if (c.pass) return chip('pass', 'PASS');
   if (s > 0) return chip('partial', 'PARTIAL');
@@ -426,7 +431,8 @@ export function buildEvidenceRows(diagnostic) {
   const C = (key) => all.find(c => c.key === key);
   const row = (field, exp, key, informational = false) => {
     const c = C(key);
-    return { field, exp, obs: c?.detail || '—', pass: !!c?.pass, score: c?.score, informational };
+    // A criterion the service is not graded on (applies: false) is shown, never scored.
+    return { field, exp, obs: c?.detail || '—', pass: !!c?.pass, score: c?.score, informational: informational || c?.applies === false };
   };
   return [
     row('spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)', 'multi-modal'),

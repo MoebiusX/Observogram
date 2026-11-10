@@ -133,6 +133,219 @@ test('parseTier, parseSlug, parseOwners, parseBindings, parseEndpoints, positive
   }
 });
 
+// The criteria a service is not graded on (studio/diagnostic-grade.mjs,
+// opts.off): a request sends the whole list, [{ key, reason }], and the
+// record keeps, for each, who switched it off and when.
+const { GRADE_CRITERION_KEYS } = await import('../studio/diagnostic-grade.mjs');
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+test('parseGradeOff: the whole list, [{ key, reason }] — every refusal with its text; the reason trimmed; the engine\'s order; an entry the record already has keeps its by and at, a new or reworded one is signed by the actor at `now`; a sent by or at is never taken', () => {
+  const { WAYS } = admin;
+  // The texts name the engine's own keys, in its order.
+  const KEYS = 'multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh';
+  assert.equal(GRADE_CRITERION_KEYS.join(', '), KEYS);
+  assert.equal(WAYS.gradeOff, `gradeOff is the whole list of grade criteria this service is not graded on — [{ key, reason }], [] for none; a key is one of ${KEYS}`);
+  assert.equal(WAYS.gradeOffKey('chaos'), `"chaos" is not a grade criterion — one of ${KEYS}`);
+  assert.equal(WAYS.gradeOffTwice('fresh'), 'fresh is listed twice');
+  assert.equal(WAYS.gradeOffReason('fresh'), 'say why fresh is not graded for this service — a reason of 1–200 characters on one line');
+  assert.equal(WAYS.gradeOffAll, 'a service is graded on at least one criterion — leave one switched on');
+
+  const at = '2026-11-10T09:00:00.000Z';
+  const parse = (value, opts = {}) => admin.parseGradeOff(value, { actor: 'ada', now: at, ...opts });
+  const why = 'no fault injection on this project';
+
+  // Not a list; more than seven entries, whatever they hold (the list rule, before any entry is read).
+  for (const bad of [undefined, null, 'chaos-validated', 7, true, {}, { key: 'fresh', reason: why }]) assert.throws(() => parse(bad), invalid(WAYS.gradeOff), JSON.stringify(bad) ?? 'undefined');
+  assert.throws(() => parse(Array.from({ length: 8 }, () => ({ key: 'fresh', reason: why }))), invalid(WAYS.gradeOff));
+  assert.throws(() => parse([...GRADE_CRITERION_KEYS, 'no-such-criterion'].map((key) => ({ key, reason: why }))), invalid(WAYS.gradeOff));
+  // An entry that is not an object, or that carries a property the rule does not know.
+  for (const bad of ['fresh', null, 7, true, ['fresh', why], [{ key: 'fresh', reason: why }]]) assert.throws(() => parse([bad]), invalid(WAYS.gradeOff), JSON.stringify(bad));
+  for (const extra of [{ note: 'x' }, { off: true }, { label: 'Fresh' }, { Key: 'fresh' }, { applies: false }]) {
+    assert.throws(() => parse([{ key: 'fresh', reason: why, ...extra }]), invalid(WAYS.gradeOff), JSON.stringify(extra));
+  }
+  // A key the engine does not score — another case, padding and the informational criterion included.
+  for (const key of ['chaos', 'Chaos-validated', 'CHAOS-VALIDATED', ' fresh', 'fresh ', 'actionable', '', 7, null, ['fresh']]) {
+    assert.throws(() => parse([{ key, reason: why }]), invalid(WAYS.gradeOffKey(key)), JSON.stringify(key));
+  }
+  assert.throws(() => parse([{ reason: why }]), invalid(`undefined is not a grade criterion — one of ${KEYS}`), 'an entry that names no key');
+  assert.throws(() => parse([{ key: 'no-such-criterion', reason: '' }]), invalid(WAYS.gradeOffKey('no-such-criterion')), 'the key is read before the reason');
+  // A key twice — even with the same reason, and before the second reason is read.
+  assert.throws(() => parse([{ key: 'fresh', reason: why }, { key: 'fresh', reason: why }]), invalid(WAYS.gradeOffTwice('fresh')));
+  assert.throws(() => parse([{ key: 'fresh', reason: why }, { key: 'calibrated', reason: why }, { key: 'fresh', reason: '' }]), invalid(WAYS.gradeOffTwice('fresh')));
+  // The reason: missing, not text, blank, over 200 characters, or not on one line (any control character).
+  for (const reason of [undefined, null, 7, true, {}, [why], '', '   ', '\t\n ', 'x'.repeat(201), 'two\nlines', 'two\r\nlines', 'a\ttab', 'a bell\u0007', 'a delete\u007f', 'a nul\u0000 inside']) {
+    assert.throws(() => parse([{ key: 'chaos-validated', reason }]), invalid(WAYS.gradeOffReason('chaos-validated')), JSON.stringify(reason) ?? 'undefined');
+  }
+  // One line also means none of Unicode's own line breaks: NEL (U+0085), the line separator (U+2028), the paragraph
+  // separator (U+2029) — and, read as written, no bidirectional embedding, override or isolate (U+202A–U+202E,
+  // U+2066–U+2069), which would reorder the who and when drawn after the reason. Each spelled by its code point.
+  const refusedCodePoints = [0x85, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+  for (const [name, ch] of refusedCodePoints.map((c) => [`U+${c.toString(16).toUpperCase().padStart(4, '0')}`, String.fromCharCode(c)])) {
+    assert.equal(ch.length, 1, name);
+    for (const reason of [`two${ch}lines`, `a${ch}`.repeat(3) + 'b', `${ch}x${ch}y`]) {
+      assert.throws(() => parse([{ key: 'chaos-validated', reason }]), invalid(WAYS.gradeOffReason('chaos-validated')), `${name} inside a reason`);
+    }
+    // … whoever else's entry is sound, and whatever the record already holds.
+    assert.throws(() => parse([{ key: 'fresh', reason: why }, { key: 'calibrated', reason: `no${ch}baselines` }], { current: [{ key: 'calibrated', reason: `no${ch}baselines`, by: 'oscar', at }] }),
+      invalid(WAYS.gradeOffReason('calibrated')), `${name}: refused even when the record holds that very text`);
+  }
+  assert.equal(parse([{ key: 'fresh', reason: `caf${String.fromCharCode(0xe9)} ${String.fromCharCode(0x2014)} ok` }])[0].reason, `caf${String.fromCharCode(0xe9)} ${String.fromCharCode(0x2014)} ok`, 'other characters above U+007F are text');
+  assert.throws(() => parse([{ key: 'chaos-validated' }]), invalid(WAYS.gradeOffReason('chaos-validated')), 'no reason at all');
+  assert.throws(() => parse([{ key: 'fresh', reason: why }, { key: 'drift-free', reason: ' ' }]), invalid(WAYS.gradeOffReason('drift-free')), 'the text names the entry at fault');
+  // All seven: a grade is always graded on something. Six stand.
+  assert.throws(() => parse(GRADE_CRITERION_KEYS.map((key) => ({ key, reason: why }))), invalid(WAYS.gradeOffAll));
+  assert.throws(() => parse([...GRADE_CRITERION_KEYS].reverse().map((key) => ({ key, reason: why }))), invalid(WAYS.gradeOffAll));
+  assert.deepEqual(parse(GRADE_CRITERION_KEYS.slice(1).map((key) => ({ key, reason: why }))).map((x) => x.key), GRADE_CRITERION_KEYS.slice(1));
+
+  // What it returns: [] for none; else { key, reason, by, at } in the engine's order, the reason trimmed.
+  assert.deepEqual(parse([]), []);
+  const sent = [{ key: 'fresh', reason: '  read by hand each week  ' }, { key: 'chaos-validated', reason: why }];
+  const fresh = parse(sent);
+  assert.deepEqual(fresh, [
+    { key: 'chaos-validated', reason: why, by: 'ada', at },
+    { key: 'fresh', reason: 'read by hand each week', by: 'ada', at },
+  ]);
+  assert.deepEqual(fresh.map((x) => Object.keys(x)), [['key', 'reason', 'by', 'at'], ['key', 'reason', 'by', 'at']]);
+  assert.deepEqual(sent, [{ key: 'fresh', reason: '  read by hand each week  ' }, { key: 'chaos-validated', reason: why }], 'the list sent is not rewritten');
+  // 200 characters is measured after the trim.
+  assert.equal(parse([{ key: 'fresh', reason: `  ${'x'.repeat(200)}\n` }])[0].reason, 'x'.repeat(200));
+  assert.equal(parse([{ key: 'fresh', reason: 'naïve — “quoted”, 日本語' }])[0].reason, 'naïve — “quoted”, 日本語', 'any text on one line');
+
+  // Against the record: an entry whose key and reason are the record's keeps its by and at;
+  // a reworded one and a new one are signed by this actor now; one left out is back on.
+  const current = [
+    { key: 'calibrated', reason: 'no baselines agreed yet', by: 'oscar', at: '2026-10-03T08:00:00.000Z' },
+    { key: 'chaos-validated', reason: why, by: 'oscar', at: '2026-10-01T08:00:00.000Z' },
+    { key: 'fresh', reason: 'read by hand each week', by: 'olive', at: '2026-10-02T08:00:00.000Z' },
+  ];
+  assert.deepEqual(parse([
+    { key: 'fresh', reason: 'read by hand each month' },
+    { key: 'chaos-validated', reason: `  ${why} ` },
+    { key: 'multi-modal', reason: 'metrics only, by design' },
+  ], { current }), [
+    { key: 'multi-modal', reason: 'metrics only, by design', by: 'ada', at },
+    { key: 'chaos-validated', reason: why, by: 'oscar', at: '2026-10-01T08:00:00.000Z' },
+    { key: 'fresh', reason: 'read by hand each month', by: 'ada', at },
+  ]);
+  assert.deepEqual(parse([{ key: 'chaos-validated', reason: 'No fault injection on this project' }], { current })[0], { key: 'chaos-validated', reason: 'No fault injection on this project', by: 'ada', at },
+    'another case is another reason');
+  // The same list again — bare, in another order, or the record's own entries sent back whole — is the record's: nothing to write.
+  const later = { actor: 'vera', now: '2026-12-01T00:00:00.000Z', current };
+  assert.deepEqual(parse(current.map(({ key, reason }) => ({ key, reason })), later), current);
+  assert.deepEqual(parse([...current].reverse().map(({ key, reason }) => ({ key, reason: ` ${reason} ` })), later), current);
+  assert.deepEqual(parse(current, later), current);
+  // A sent by or at is never taken: a new entry is the actor's, a kept one the record's.
+  const forged = { by: 'mallory', at: '1999-01-01T00:00:00.000Z' };
+  assert.deepEqual(parse([{ key: 'drift-free', reason: 'x', ...forged }]), [{ key: 'drift-free', reason: 'x', by: 'ada', at }]);
+  assert.deepEqual(parse([{ key: 'chaos-validated', reason: why, ...forged }], { current }), [current[1]]);
+  assert.deepEqual(parse([{ key: 'chaos-validated', reason: 'reworded', ...forged }], { current }), [{ key: 'chaos-validated', reason: 'reworded', by: 'ada', at }]);
+  // No record to compare against: every entry is new. No `now`: the clock's.
+  for (const none of [undefined, null, []]) assert.deepEqual(parse([{ key: 'fresh', reason: 'x' }], { current: none }), [{ key: 'fresh', reason: 'x', by: 'ada', at }]);
+  const before = Date.now();
+  const [clocked] = admin.parseGradeOff([{ key: 'fresh', reason: 'x' }], { actor: 'ada' });
+  assert.match(clocked.at, ISO_TIME);
+  assert.ok(Date.parse(clocked.at) >= before && Date.parse(clocked.at) <= Date.now(), clocked.at);
+});
+
+test('updateServiceFromApi { gradeOff }: the whole list replaces the record\'s — changed [\'gradeOff\'], one service.update row naming the keys now off, the view carrying each entry with who and when; the same list again writes nothing; a refusal writes nothing, not even the fields sent beside it; [] switches every criterion back on; another org\'s record is not found', async () => {
+  const { db, close } = await freshStore('grade-off');
+  try {
+    runWithOrg('acme', () => {
+      const svc = admin.createServiceFromApi(db, 'oscar', { name: 'Pay', tier: 'tier-1' });
+      assert.deepEqual(svc.gradeOff, [], 'a new record is graded on every criterion');
+      const viewOf = () => admin.serviceViewOf(db, services.getService(db, svc.id));
+      const updates = () => rows(db, 'acme', 'service.update');
+      const why = 'no fault injection on this project';
+
+      // Switched off by oscar: signed, in the engine's order, the reason trimmed.
+      const t0 = Date.now();
+      const up = admin.updateServiceFromApi(db, 'oscar', svc.id, { gradeOff: [{ key: 'fresh', reason: ' read by hand each week ' }, { key: 'chaos-validated', reason: why }] });
+      assert.deepEqual(up.changed, ['gradeOff']);
+      const [chaos] = up.service.gradeOff;
+      assert.deepEqual(up.service.gradeOff, [
+        { key: 'chaos-validated', reason: why, by: 'oscar', at: chaos.at },
+        { key: 'fresh', reason: 'read by hand each week', by: 'oscar', at: chaos.at },
+      ], 'one time for the whole request');
+      assert.match(chaos.at, ISO_TIME);
+      assert.ok(Date.parse(chaos.at) >= t0 && Date.parse(chaos.at) <= Date.now(), chaos.at);
+      assert.deepEqual(viewOf().gradeOff, up.service.gradeOff, 'the view carries the entries as the record holds them');
+      assert.deepEqual(admin.listServiceViews(db).map((v) => v.gradeOff), [up.service.gradeOff], 'and so does the listing');
+      assert.deepEqual(updates(), [['service.update', 'oscar', 'pay', { fields: ['gradeOff'], gradeOff: ['chaos-validated', 'fresh'] }]], 'the row names the keys now off, never a reason');
+
+      // The same list again, by anyone, in any order, bare or as the view gave it: nothing changes, nothing is written.
+      for (const again of [
+        [{ key: 'chaos-validated', reason: why }, { key: 'fresh', reason: 'read by hand each week' }],
+        [{ key: 'fresh', reason: 'read by hand each week  ' }, { key: 'chaos-validated', reason: why }],
+        viewOf().gradeOff,
+      ]) {
+        const same = admin.updateServiceFromApi(db, 'ada', svc.id, { gradeOff: again });
+        assert.deepEqual([same.changed, same.service.gradeOff, same.service.updatedAt], [[], up.service.gradeOff, up.service.updatedAt]);
+      }
+      assert.equal(updates().length, 1, 'no row for an unchanged list');
+      // A patch that says nothing of it leaves it alone.
+      assert.deepEqual(admin.updateServiceFromApi(db, 'ada', svc.id, { tier: 'tier-2' }).service.gradeOff, up.service.gradeOff);
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['tier'] }]);
+
+      // ada rewords one reason and adds a criterion beside another field: hers are signed by her, oscar's stays his.
+      const next = admin.updateServiceFromApi(db, 'ada', svc.id, {
+        name: 'Payments',
+        gradeOff: [{ key: 'chaos-validated', reason: why }, { key: 'fresh', reason: 'read by hand each month' }, { key: 'calibrated', reason: 'no baselines agreed yet' }],
+      });
+      assert.deepEqual(next.changed, ['name', 'gradeOff']);
+      assert.deepEqual(next.service.gradeOff.map((x) => [x.key, x.reason, x.by]), [
+        ['calibrated', 'no baselines agreed yet', 'ada'], ['chaos-validated', why, 'oscar'], ['fresh', 'read by hand each month', 'ada'],
+      ]);
+      assert.equal(next.service.gradeOff[1].at, chaos.at, 'the entry she did not touch keeps its time');
+      assert.ok(next.service.gradeOff[0].at >= chaos.at && next.service.gradeOff[0].at === next.service.gradeOff[2].at);
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['name', 'gradeOff'], gradeOff: ['calibrated', 'chaos-validated', 'fresh'] }]);
+
+      // A refusal writes nothing — not the list, not the field sent beside it, not a row.
+      const count = updates().length;
+      const held = services.getService(db, svc.id);
+      for (const [gradeOff, text] of [
+        [null, admin.WAYS.gradeOff],
+        ['chaos-validated', admin.WAYS.gradeOff],
+        [[{ key: 'fresh', reason: 'x', note: 'y' }], admin.WAYS.gradeOff],
+        [[{ key: 'chaos', reason: 'x' }], admin.WAYS.gradeOffKey('chaos')],
+        [[{ key: 'fresh', reason: 'x' }, { key: 'fresh', reason: 'y' }], admin.WAYS.gradeOffTwice('fresh')],
+        [[{ key: 'drift-free', reason: '' }], admin.WAYS.gradeOffReason('drift-free')],
+        [GRADE_CRITERION_KEYS.map((key) => ({ key, reason: 'x' })), admin.WAYS.gradeOffAll],
+      ]) {
+        assert.throws(() => admin.updateServiceFromApi(db, 'ada', svc.id, { name: 'Never', tier: 'tier-3', gradeOff }), invalid(text), JSON.stringify(gradeOff));
+      }
+      assert.deepEqual(services.getService(db, svc.id), held, 'the record is as it was');
+      assert.equal(updates().length, count, 'and no row was written');
+      assert.throws(() => admin.updateServiceFromApi(db, 'ada', 999999, { gradeOff: [] }), missing('no service 999999'));
+
+      // One switched back on: the others keep who and when. Then [] — every criterion graded again.
+      const fewer = admin.updateServiceFromApi(db, 'oscar', svc.id, { gradeOff: [{ key: 'chaos-validated', reason: why }] });
+      assert.deepEqual([fewer.changed, fewer.service.gradeOff], [['gradeOff'], [{ key: 'chaos-validated', reason: why, by: 'oscar', at: chaos.at }]]);
+      assert.deepEqual(updates().at(-1), ['service.update', 'oscar', 'pay', { fields: ['gradeOff'], gradeOff: ['chaos-validated'] }]);
+      const none = admin.updateServiceFromApi(db, 'ada', svc.id, { gradeOff: [] });
+      assert.deepEqual([none.changed, none.service.gradeOff, viewOf().gradeOff], [['gradeOff'], [], []]);
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['gradeOff'], gradeOff: [] }]);
+      const noneAgain = admin.updateServiceFromApi(db, 'ada', svc.id, { gradeOff: [] });
+      assert.deepEqual([noneAgain.changed, updates().length], [[], count + 2], '[] on a record with none is no change');
+      // Switched off again after being on: a new signature, not the old one.
+      const back = admin.updateServiceFromApi(db, 'ada', svc.id, { gradeOff: [{ key: 'chaos-validated', reason: why }] });
+      assert.deepEqual(back.service.gradeOff.map((x) => [x.key, x.reason, x.by]), [['chaos-validated', why, 'ada']]);
+      assert.ok(back.service.gradeOff[0].at >= chaos.at);
+      // The switches go with the record: a deletion's view shows them as they were.
+      assert.deepEqual(admin.deleteServiceFromApi(db, 'ada', svc.id).service.gradeOff, back.service.gradeOff);
+    });
+    // Another org never reaches the record.
+    const acme = runWithOrg('acme', () => admin.createServiceFromApi(db, 'oscar', { name: 'Ledger' }));
+    runWithOrg('bravo', () => {
+      assert.throws(() => admin.updateServiceFromApi(db, 'bob', acme.id, { gradeOff: [{ key: 'fresh', reason: 'x' }] }), missing(`no service ${acme.id}`));
+      assert.deepEqual(admin.listServiceViews(db), []);
+    });
+    runWithOrg('acme', () => assert.deepEqual(services.getService(db, acme.id).gradeOff, []));
+    assert.deepEqual(rows(db, 'bravo'), [], 'and bravo wrote no row');
+  } finally {
+    close();
+  }
+});
+
 test('services: create with every refusal, the 409, update (changed fields; the slug is fixed; unchanged writes no row), delete with its counts', async () => {
   const { db, close } = await freshStore('services');
   try {
@@ -341,7 +554,8 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
       assert.deepEqual(payView.environments.map((e) => [e.name, e.tier, e.effectiveTier, e.mcpEndpoint]),
         [['prod', 'tier-2', 'tier-2', { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example' }], ['staging', null, 'tier-1', null]]);

@@ -42,7 +42,8 @@ import { resolve, basename, dirname, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
-import { serviceMetadata, catalogEntryOf, livePackKind } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, catalogEntryOf, livePackKind, normalizeServiceKey } from '../tools/lib/service-keys.mjs';
+import { listServicesForPack } from './store/pack-services.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -828,7 +829,7 @@ app.use(identityRoutes({ authorize }));
 // server/routes/services.mjs: the request's org's service records under
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
-app.use(servicesRoutes({ authorize }));
+app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService }));
 
 // The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
 // a reviewer's trusted | suspect | failed record per artefact of a
@@ -1007,6 +1008,8 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
           outcome: lastRun.outcome,
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
+          // The criteria that score left out (the service's switches at that run): [] when all were graded.
+          gradeOff: Array.isArray(lastRun.grade?.off) ? lastRun.grade.off.filter((k) => typeof k === 'string').slice(0, 7) : [],
           breaches: lastRun.gate?.breaches?.length ?? 0,
           // Step 5: the delivery outcome of the last run — status, HTTP
           // status, reason. null when the record carries no notify object
@@ -1211,6 +1214,121 @@ function journeyRunTargets(req, def) {
 // A live Pack B is kept as the journey's live pack (keepLivePackOf): the
 // 200 adds `livePack: { id, label }`. `extra` rides on either answer (a
 // service's Run adds its scan, which the record keeps as packA.scan).
+// The service record a journey checks, in the request's org, found the way
+// the Overview board finds a service's check (studio/overview-model.mjs
+// journeyForService): the journey's `service` as a service key, else the
+// service whose own pack (its primary link) is the journey's Pack A file. A
+// capture saved with no service scope — the demo's, an Expert comparison —
+// is its Pack A's service's. null for neither.
+function serviceOfJourney(def) {
+  const db = currentStore();
+  const slug = typeof def?.service === 'string' && def.service.trim() ? normalizeServiceKey(def.service) : '';
+  const bySlug = slug ? getServiceBySlug(db, slug) : null;
+  if (bySlug) return bySlug;
+  const pack = ownPackOfJourney(def);
+  const link = pack ? listServicesForPack(db, pack.id).find((l) => l.role === 'primary') : null;
+  return link ? getService(db, link.serviceId) : null;
+}
+
+// The registered pack a journey's Pack A file is — that very file in this
+// workspace's packs folder, not one elsewhere that shares its name — or null.
+function ownPackOfJourney(def) {
+  const pack = workspacePackRef(def?.packA);
+  if (!pack) return null;
+  const { root, packs } = workspaceInfo();
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  return same(resolve(join(root, 'journeys'), def.packA.file), resolve(packs, `${pack.id}.pack.yaml`)) ? pack : null;
+}
+
+const gradeOffKeysOf = (service) => (Array.isArray(service?.gradeOff) ? service.gradeOff.map((x) => x.key) : []);
+
+// The grade criteria a journey is not graded on. A journey of a service with
+// a record (serviceOfJourney) is graded on the record's switches
+// (server/service-admin.mjs parseGradeOff) whatever its file says; any other
+// on its own `gradeOff` (validated at load), [] when it has none.
+function gradeOffOfJourney(def) {
+  const service = serviceOfJourney(def);
+  if (service) return gradeOffKeysOf(service);
+  return Array.isArray(def?.gradeOff) ? def.gradeOff : [];
+}
+
+// A definition about to be saved, with its service's switches in it (or
+// without the key when none is off): a run that has no record to ask —
+// `packc journey run`, which is what a schedule runs — then grades as the
+// service does. A journey of no service keeps what it carries.
+function withServiceGradeOff(def, service) {
+  if (!service) return def;
+  const { gradeOff: _was, ...rest } = def;
+  const keys = gradeOffKeysOf(service);
+  return keys.length ? { ...rest, gradeOff: keys } : rest;
+}
+
+// A service's switches, written into every check the studio saved for it
+// (serviceOfJourney): the ones its Run saves (<slug>.<env>), the start's and
+// Expert's captures. A run that has no record to ask — `packc journey run`,
+// which is what a schedule runs — then grades as the service does. Called
+// after a PATCH changed them, in the request's org. Only a file the studio
+// wrote is rewritten (its first comment is the studio's: a Run's "Saved by
+// the service …" or a capture's "Captured from a studio session …"), keeping
+// that comment block and every key; a file written by hand is left as it is
+// — through the server it is graded on the record anyway. Best effort: a
+// check that cannot be read or written is logged and left, and the next Run
+// or switch writes it again.
+const STUDIO_WRITTEN = /^# (?:Saved by the service |Captured from a studio session )/;
+function studioBanner(path) {
+  let text = '';
+  try { text = readFileSync(path, 'utf8'); } catch (_) { return null; }
+  if (!STUDIO_WRITTEN.test(text)) return null;
+  const lines = [];
+  for (const line of text.split(/\r?\n/)) { if (!line.startsWith('#')) break; lines.push(line.replace(/^# ?/, '')); }
+  return lines;
+}
+const serviceCheckBanner = (slug, envName) => [
+  `Saved by the service ${slug}, environment ${envName}, on ${new Date().toISOString()}.`,
+  'Its Run (POST /api/services/:id/run) scans the repository again and rewrites packA;',
+  'Check now (POST /api/journeys/:name/run) checks live against the last scan.',
+];
+function writeGradeOffToServiceChecks(service) {
+  writeGradeOffToChecks(serviceCheckNames(service), service);
+}
+
+// The saved checks that are this service's (serviceOfJourney), by name.
+function serviceCheckNames(service) {
+  const names = [];
+  for (const name of listJourneys()) {
+    let def;
+    try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
+    if (serviceOfJourney(def)?.id === service.id) names.push(name);
+  }
+  return names;
+}
+
+// The checks named, each written by the studio, rewritten with `service`'s
+// switches — its own name, its keys and its comment block kept; one whose
+// list already is the service's is not touched.
+function writeGradeOffToChecks(names, service) {
+  const keys = gradeOffKeysOf(service);
+  for (const name of names) {
+    let def;
+    try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
+    const was = Array.isArray(def.gradeOff) ? def.gradeOff : [];
+    if (was.length === keys.length && was.every((k, i) => k === keys[i])) continue;
+    const banner = studioBanner(def.__source);
+    if (!banner) continue;   // written by hand: left as it is
+    const { __source: _source, ...rest } = def;
+    try { saveJourneyDef(name, withServiceGradeOff(rest, service), { banner }); }
+    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria (${e.message})\n`); }
+  }
+}
+
+// A service about to be deleted: the checks that are its own, found while it
+// still exists, lose its switches once it is gone — they are no longer any
+// service's, and a service made again under the name starts with none.
+function forgetGradeOffOfDeletedService(service) {
+  const names = serviceCheckNames(service);
+  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [] });
+}
+
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
   const t0 = new Date();
   // The row's notify key (only for a journey with `notify`): from the
@@ -1237,6 +1355,8 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       },
       resolveNotify: (n) => notifyTargetOf(n, { url: notifyHook.url, auth: notifyHook.auth }),
       scan: extra.scan || null,
+      // The criteria the journey's service is not graded on (its record's switches).
+      gradeOff: gradeOffOfJourney(def),
     });
     const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({
@@ -1433,13 +1553,8 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   def.packA = workspacePackSource(packId);
   let saved;
   try {
-    saved = saveJourneyDef(name, def, {
-      banner: [
-        `Saved by the service ${service.slug}, environment ${env.name}, on ${new Date().toISOString()}.`,
-        'Its Run (POST /api/services/:id/run) scans the repository again and rewrites packA;',
-        'Check now (POST /api/journeys/:name/run) checks live against the last scan.',
-      ],
-    });
+    // The switches as they are now, read again: a PATCH may have changed them while the repository was read.
+    saved = saveJourneyDef(name, withServiceGradeOff(def, getService(currentStore(), service.id) || service), { banner: serviceCheckBanner(service.slug, env.name) });
   } catch (e) { return res.status(400).json({ ok: false, error: e.message, scan }); }
   auditAfter(req, {
     action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
@@ -1524,7 +1639,8 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
       const refused = captureNotifyRefusal(currentStore(), def.notify, { org: currentOrg() });
       if (refused) throw new Error(refused);
     }
-    saved = saveJourneyDef(name, def, {
+    // A capture of a service's pack (or scoped to a service) carries the service's switches.
+    saved = saveJourneyDef(name, withServiceGradeOff(def, serviceOfJourney(def)), {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
         `Pack A: ${metaA.label || metaA.id} · Pack B: ${metaB.label || metaB.id}`,

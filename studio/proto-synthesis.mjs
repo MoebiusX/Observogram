@@ -46,7 +46,7 @@ import { host as appHost } from './host.mjs';
 // The verdict-ui engines take the state slice explicitly (no global reads);
 // this is the studio's one binding of that contract.
 function verdictInputs() {
-  return { pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId };
+  return { pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId, gradeOff: state.gradeOff };
 }
 
 // Plain words (docs/UX_SCREEN_GRAMMAR.md) for the A-only bucket in gap
@@ -145,7 +145,7 @@ export function renderSynthDiagnose(view) {
   };
 
   const posture = computePostureMatrix(state.pack, state.packB);
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, state.diff);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, state.diff, { off: state.gradeOff });
   const vm = buildVerdictModel({
     ...verdictInputs(),
     catalogEntry: catalogEntryFor(state.compareBId),

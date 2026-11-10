@@ -870,8 +870,20 @@ export function renderLayerFilterChips() {
 
 // ---------- main view ----------
 
+// The grade criteria the pack on screen is not graded on: the switches of the
+// service whose own pack it is (a service record's gradeOff). Expert's
+// screens grade with them (state.gradeOff), so Diagnose's letter is the
+// board's; a pack that is no service's own is graded on all seven.
+function gradeOffInFocus() {
+  const id = state.selectedPackId;
+  if (!id || !Array.isArray(state.services)) return [];
+  const service = state.services.find((s) => Array.isArray(s?.packs) && s.packs.some((p) => p && p.id === id && p.role === 'primary'));
+  return Array.isArray(service?.gradeOff) ? service.gradeOff.map((x) => x.key).filter((k) => typeof k === 'string') : [];
+}
+
 export function renderMainView() {
   const view = $('#layer-view');
+  state.gradeOff = gradeOffInFocus();
   // The audit's filters as typed but not applied survive the repaint.
   const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
   // So does a token typed on the service list and not sent yet (overview-view.mjs readTokenDrafts):
@@ -1939,14 +1951,17 @@ function setupUiModeSwitch() {
 // The posture, the grade and its causes are derived from the layered pack
 // once per pack object: a repaint while a check runs, or after a start
 // error, reuses them (the matrix walks every artefact of the pack).
-let overviewDerived = { layered: null, posture: null, diagnostic: null, diagnosticError: null, decision: null };
-function deriveOverview(f) {
-  if (overviewDerived.layered === f.layered && overviewDerived.layeredError === f.layeredError) return overviewDerived;
-  const d = { layered: f.layered, layeredError: f.layeredError, posture: null, diagnostic: null, diagnosticError: f.layeredError, decision: null };
+// `gradeOff`: the criteria the service is not graded on (its record's
+// switches): the grade is derived again when they change, the posture is not.
+let overviewDerived = { layered: null, off: '', posture: null, diagnostic: null, diagnosticError: null, decision: null };
+function deriveOverview(f, gradeOff = []) {
+  const off = gradeOff.map((x) => x.key).join(',');
+  if (overviewDerived.layered === f.layered && overviewDerived.layeredError === f.layeredError && overviewDerived.off === off) return overviewDerived;
+  const d = { layered: f.layered, layeredError: f.layeredError, off, posture: null, diagnostic: null, diagnosticError: f.layeredError, decision: null };
   if (f.layered && !d.diagnosticError) {
     try {
-      d.posture = computeOverviewPosture(f.layered);
-      d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture);
+      d.posture = overviewDerived.layered === f.layered && overviewDerived.posture ? overviewDerived.posture : computeOverviewPosture(f.layered);
+      d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture, { off: gradeOff });
     } catch (e) { d.diagnosticError = e.message || String(e); }
   }
   if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic }); } catch (_) { d.decision = null; } }
@@ -1954,9 +1969,13 @@ function deriveOverview(f) {
   return d;
 }
 
+// The service on the board, as the model picks it.
+const overviewService = () => pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack }).service || null;
+
 function overviewModel() {
   const f = overviewFacts;
-  const { posture, diagnostic, diagnosticError, decision } = deriveOverview(f);
+  const service = overviewService();
+  const { posture, diagnostic, diagnosticError, decision } = deriveOverview(f, Array.isArray(service?.gradeOff) ? service.gradeOff : []);
   return buildOverviewModel({
     services: state.services, servicesStatus: state.servicesStatus, catalog: state.catalog,
     serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack,
@@ -1966,8 +1985,47 @@ function overviewModel() {
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
-    listable: serviceListAvailable(),
+    listable: serviceListAvailable(), gradeSwitches: true,
   });
+}
+
+// A criterion switched off, or on again, for the service on the board
+// (PATCH /api/services/:id { gradeOff }: the whole list; the record keeps who,
+// when and why). The board grades again at once — from the repository, since
+// the last live check graded on the other set — and a check against live
+// follows where one can run, so the letter is the live one again.
+const CRITERION_WORDS = { 'multi-modal': 'Multi-modal', correlated: 'Correlated', calibrated: 'Calibrated', comprehensive: 'Comprehensive', 'chaos-validated': 'Chaos-validated', 'drift-free': 'Drift-free', fresh: 'Fresh' };
+// One switch at a time, built from the record as the server has it now (not
+// this tab's copy, which may predate a switch made since — here or by someone
+// else). Afterwards only the board of that service checks again; when a check
+// of it is already under way, once that one has ended (recheckAfterRun).
+let gradeSwitchBusy = false;
+let recheckAfterRun = null;
+const onOverviewBoard = () => state.mode === 'overview' && !(overviewScreen === 'list' && serviceListAvailable());
+async function setOverviewGradeCriterion(key, { graded = true, reason = '' } = {}) {
+  const service = overviewService();
+  if (!service || !CRITERION_WORDS[key]) return;
+  if (gradeSwitchBusy) { announce('A switch is being saved: try again once it is done.'); return; }
+  gradeSwitchBusy = true;
+  try {
+    let fresh = null;
+    try { fresh = await loadService(service.id); } catch (_) { fresh = null; }
+    const record = fresh || service;
+    const current = (Array.isArray(record.gradeOff) ? record.gradeOff : []).filter((x) => x.key !== key);
+    const next = graded ? current : [...current, { key, reason }];
+    try { await patchService(service.id, { gradeOff: next.map((x) => ({ key: x.key, reason: x.reason })) }); }
+    catch (e) { toast(`${CRITERION_WORDS[key]} could not be switched ${graded ? 'on' : 'off'}: ${e?.message || e}`, 'error'); return; }
+    await refreshServices();
+  } finally {
+    gradeSwitchBusy = false;
+  }
+  announce(graded ? `${CRITERION_WORDS[key]} is graded for ${service.name} again.` : `${CRITERION_WORDS[key]} is no longer graded for ${service.name}.`);
+  if (state.mode !== 'overview') return;
+  renderMainView();
+  // The person may have moved on while it was saved: another service, the list.
+  if (!onOverviewBoard() || overviewService()?.id !== service.id || !overviewFacts.journey) return;
+  if (overviewFacts.running) { recheckAfterRun = service.id; return; }
+  if (overviewModel().still?.canCheck) await runOverviewCheck();
 }
 
 function renderOverviewHost(view, tokenDrafts = null) {
@@ -2479,8 +2537,9 @@ async function runOverviewCheck() {
   let refused = null;
   try { await runServiceCheck(journey.name); }
   catch (e) { if (e?.status !== 502) refused = e?.message || String(e); }
-  if (gen !== overviewGeneration || state.mode !== 'overview') return;
+  if (gen !== overviewGeneration || state.mode !== 'overview') { recheckAfterRun = null; return; }
   if (refused) {
+    recheckAfterRun = null;
     overviewFacts = { ...overviewFacts, running: false, startError: refused };
     renderMainView();
     announce('The check could not start.');
@@ -2494,9 +2553,16 @@ async function runOverviewCheck() {
   announce('Check finished.');
   // The repaint replaced the button the user pressed: keyboard focus goes
   // back to it (or to the next step's button when there is no Check now).
-  if (state.mode === 'overview') {
+  // Not while a reason is being typed: the next key would press the button.
+  if (state.mode === 'overview' && !document.activeElement?.matches?.('[data-grade-reason]')) {
     const back = document.querySelector('#layer-view .ov-check') || document.querySelector('#layer-view .ov-next__btn');
     back?.focus?.({ preventScroll: true });
+  }
+  // A switch made while this check ran: the board checks again on the criteria it has now.
+  if (recheckAfterRun !== null) {
+    const again = recheckAfterRun;
+    recheckAfterRun = null;
+    if (onOverviewBoard() && overviewService()?.id === again && overviewModel().still?.canCheck) await runOverviewCheck();
   }
 }
 
@@ -2504,6 +2570,7 @@ const overviewActions = {
   selectService: (id) => { enterOverview(Number.isInteger(id) ? id : null, null); },
   selectEnv: (name) => { enterOverview(state.overviewServiceId, typeof name === 'string' ? name : null); },
   checkNow: runOverviewCheck,
+  setGradeCriterion: setOverviewGradeCriterion,
   openDiscover: openOverviewDiscover,
   openDiagnose: openOverviewDiagnose,
   openRemediate: openOverviewRemediate,

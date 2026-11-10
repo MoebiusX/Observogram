@@ -1118,7 +1118,8 @@ function renderDiagnose(view) {
   const posture = computePostureMatrix(state.pack, state.packB);
 
   // THE verdict — diagnostic grade from coverage (2A) + trust / drift (2B).
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {});
+  // `off`: the criteria the pack's service is not graded on (state.gradeOff), as the board grades it.
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe, { ...(isStatic() ? { noLiveHint: staticRemedy('no-live-hint', staticInput()) } : {}), off: state.gradeOff });
 
   // The screen grammar (docs/UX_SCREEN_GRAMMAR.md): context · decision ·
   // next action · explanation first, then the report's sections behind a
@@ -1177,7 +1178,7 @@ function renderDiagnose(view) {
   report.insertAdjacentHTML('beforeend', assessmentStickyHtml(decision, ctx, navSections));
 
   // Gaps — the blockers in priority order: what failed → why → fix.
-  report.insertAdjacentHTML('beforeend', assessmentGapsHtml(decision));
+  report.insertAdjacentHTML('beforeend', assessmentGapsHtml(decision, diagnostic));
 
   // Comparison with the selected baseline (or the invitation to choose one).
   const cmp = diagBlockEl('diag-compare', haveB ? ctx.roles.title : 'Comparison with a baseline',
@@ -1864,6 +1865,30 @@ export function renderPostureNarrative(posture) {
 //   ladderHtml        the instrument-grade ladder, for "How the grade is
 //                     calculated"
 //   failingChecks     scored checks not passing (the section's issue count)
+// The scored checks, counted from the diagnostic: a criterion the service is
+// not graded on (applies: false) is no scored check. With none left out the
+// words are the ones they always were.
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+const countWord = (n) => COUNT_WORDS[n] ?? String(n);
+function scoredChecksOf(diagnostic) {
+  const on = (g) => (g?.criteria || []).filter((c) => c.applies !== false).length;
+  const off = [...(diagnostic?.coverage?.criteria || []), ...(diagnostic?.trust?.criteria || [])].filter((c) => c.applies === false).map((c) => c.label || c.key);
+  return { coverage: on(diagnostic?.coverage), trust: on(diagnostic?.trust), off };
+}
+const notGradedWords = (off) => (off.length ? `${off.join(' and ')} ${off.length === 1 ? 'is' : 'are'} not graded for this service` : '');
+function scoredChecksLede(diagnostic, letter) {
+  const s = scoredChecksOf(diagnostic);
+  const n = s.coverage + s.trust;
+  const head = `${countWord(n).replace(/^./, (c) => c.toUpperCase())} scored check${n === 1 ? '' : 's'} make${n === 1 ? 's' : ''} up the ${escapeHtml(letter)} grade: ${countWord(s.coverage)} for ${diagUx.termHtml('coverage')} and ${countWord(s.trust)} for ${diagUx.termHtml('trust')}`;
+  return `${head}${s.off.length ? `; ${escapeHtml(notGradedWords(s.off))}` : ''}. Operability is shown for context and never scored.`;
+}
+// "seven scored checks (four for coverage, three for trust)", for a sentence of the gaps block.
+function scoredChecksPhrase(diagnostic) {
+  const s = scoredChecksOf(diagnostic);
+  const n = s.coverage + s.trust;
+  return `${countWord(n)} scored check${n === 1 ? '' : 's'} (${countWord(s.coverage)} for coverage, ${countWord(s.trust)} for trust${s.off.length ? `; ${notGradedWords(s.off)}` : ''})`;
+}
+
 function renderDiagnosticGradeVerdict(diagnostic) {
   const cov = diagnostic.coverage;
   const trust = diagnostic.trust;
@@ -1908,9 +1933,9 @@ function renderDiagnosticGradeVerdict(diagnostic) {
       </thead>
       <tbody>
         ${criteria.map(c => `
-          <tr class="diag-crit ${criterionState(c)}" data-key="${escapeHtml(c.key)}">
-            <td class="c-pip">${informational ? infoChip(c) : criterionChip(c)}</td>
-            <td class="c-name">${escapeHtml(c.label)}</td>
+          <tr class="diag-crit ${c.applies === false ? 'is-info' : criterionState(c)}" data-key="${escapeHtml(c.key)}">
+            <td class="c-pip">${informational || c.applies === false ? infoChip(c) : criterionChip(c)}</td>
+            <td class="c-name">${escapeHtml(c.label)}${c.applies === false ? ' (not graded for this service)' : ''}</td>
             <td class="c-obs">${escapeHtml(c.detail)}</td>
             <td class="c-exp">${escapeHtml(c.sub)}</td>
           </tr>
@@ -1933,6 +1958,8 @@ function renderDiagnosticGradeVerdict(diagnostic) {
     obs: C(key)?.detail || '—',
     pass: C(key)?.pass,
     score: C(key)?.score,
+    // A criterion the service is not graded on (applies: false) is shown, never scored.
+    ...(C(key)?.applies === false ? { informational: true } : {}),
     ...extra,
   });
   evidenceRows.push(rowFor('multi-modal', 'spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)'));
@@ -1994,13 +2021,13 @@ function renderDiagnosticGradeVerdict(diagnostic) {
     <p class="grade-ladder-note">Grades derive from the verification score — A starts strictly above the ${audit.threshold}% audit bar, so the letter and the machine PASS/FAIL always agree. Verification evidence, not incident-validation. A++ needs external reference evidence this instrument cannot produce alone.</p>
   `;
 
-  const failingChecks = [...cov.criteria, ...trust.criteria].filter(c => !c.pass).length;
+  const failingChecks = [...cov.criteria, ...trust.criteria].filter(c => c.applies !== false && !c.pass).length;
 
   const evidenceHtml = `
     <section class="diag-block ux-section-target" id="diag-evidence" tabindex="-1" aria-labelledby="diag-evidence-title">
       <header class="diag-block-head">
         <h2 class="diag-block-title" id="diag-evidence-title">Evidence — the checks behind the grade</h2>
-        <p class="diag-block-lede">Seven scored checks make up the ${escapeHtml(ig.letter)} grade: four for ${diagUx.termHtml('coverage')} and three for ${diagUx.termHtml('trust')}. Operability is shown for context and never scored.</p>
+        <p class="diag-block-lede">${scoredChecksLede(diagnostic, ig.letter)}</p>
       </header>
 
       <section class="diag-section">
@@ -3882,7 +3909,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   }
   // 1. Scored checks that fail, most points lost first.
   const prio = (k) => { const i = CRITERION_PRIORITY.indexOf(k); return i < 0 ? 99 : i; };
-  const scored = [...(diagnostic.coverage?.criteria || []), ...(diagnostic.trust?.criteria || [])];
+  const scored = [...(diagnostic.coverage?.criteria || []), ...(diagnostic.trust?.criteria || [])].filter(c => c.applies !== false);
   const failing = scored
     .filter(c => !c.pass)
     .map(c => ({ c, lost: 1 - criterionScore(c) }))
@@ -3935,7 +3962,9 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
       // When it passes (inside its tolerance, or scored from requirement
       // chains these artefacts are not on), they still exist — name them.
       const inLens = digest.useLens ? ` within the ${lensLabel || 'product'} lens` : '';
-      const cost = 'Within the drift-free tolerance, or outside the requirement chains; does not change the grade';
+      const driftOff = (diagnostic.trust?.criteria || []).some((c) => c.key === 'drift-free' && c.applies === false);
+      const cost = driftOff ? 'Drift-free is not graded for this service; does not change the grade'
+        : 'Within the drift-free tolerance, or outside the requirement chains; does not change the grade';
       if (missing > 0) blockers.push({
         key: 'live-missing', scored: false, tone: 'warn',
         title: `${missing} declared ${missing === 1 ? 'artefact is' : 'artefacts are'} not seen live${inLens}`,
@@ -4038,7 +4067,7 @@ function assessmentMeasuresHtml(diagnostic, d) {
   const fmt = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
   const pct = (p, t) => (t ? Math.round((p / t) * 100) : 0);
   const toneFor = (p, t) => (p >= t ? 'ok' : p > 0 ? 'warn' : 'fail');
-  const scored = [...cov.criteria, ...trust.criteria];
+  const scored = [...cov.criteria, ...trust.criteria].filter(c => c.applies !== false);
   const nPass = scored.filter(c => c.pass).length;
   const nPartial = scored.filter(c => !c.pass && criterionScore(c) > 0).length;
   const nFail = scored.length - nPass - nPartial;
@@ -4110,7 +4139,8 @@ function assessmentStickyHtml(d, ctx, navSections) {
 }
 
 // Blockers in priority order: what failed → why it matters → fix / evidence.
-function assessmentGapsHtml(d) {
+function assessmentGapsHtml(d, diagnostic = null) {
+  const checks = diagnostic ? scoredChecksPhrase(diagnostic) : 'seven scored checks (four for coverage, three for trust)';
   const items = d.blockers.map((b, i) => `
       <li class="diag-blocker ux-tone-${escapeHtml(b.tone)}">
         <div class="diag-blocker-col diag-blocker-what">
@@ -4138,9 +4168,9 @@ function assessmentGapsHtml(d) {
       title: 'No gaps: every scored check passes.',
       checked: d.compared
         ? (d.lensed
-          ? `The seven scored checks (four for coverage, three for trust) and the artefacts the selected baseline expects within the ${d.lensLabel || 'selected'} lens — artefacts outside the lens were not checked.`
-          : 'The seven scored checks (four for coverage, three for trust) and the artefacts the selected baseline expects.')
-        : `The seven scored checks (four for coverage, three for trust).${d.haveB ? ' No artefact of the baseline could be compared in this scope, so none was checked.' : ''}`,
+          ? `The ${checks} and the artefacts the selected baseline expects within the ${d.lensLabel || 'selected'} lens — artefacts outside the lens were not checked.`
+          : `The ${checks} and the artefacts the selected baseline expects.`)
+        : `The ${checks}.${d.haveB ? ' No artefact of the baseline could be compared in this scope, so none was checked.' : ''}`,
       tone: 'ok',
     });
   return `

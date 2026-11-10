@@ -22,9 +22,10 @@ export function computeOverviewPosture(layered) {
 // The grade of the pack on its own: no Pack B, no diff — the repository's
 // declaration graded by the same engine Diagnose runs. `posture` is the
 // matrix above when the caller already has it.
-export function computeOverviewDiagnostic(layered, posture = null) {
+// `off`: the criteria the service is not graded on (its record's gradeOff).
+export function computeOverviewDiagnostic(layered, posture = null, { off = [] } = {}) {
   if (!layered) return null;
-  return computeDiagnosticGrade(layered, null, posture || computePostureMatrix(layered, null), null, null);
+  return computeDiagnosticGrade(layered, null, posture || computePostureMatrix(layered, null), null, null, { off });
 }
 
 // loadOverviewFacts({ pack, env, journeyFor, fetchFn }) → the facts the model

@@ -775,6 +775,497 @@ test('the folder rule holds at run time: a folder outside OBSERVOGRAM_REPO_ROOTS
   }
 });
 
+// ---------- the criteria a service is not graded on ----------
+//
+// A service record may switch grade criteria off (PATCH /api/services/:id
+// { gradeOff }; server/test-services-api.mjs has the rule). Every server run
+// of a journey of that service — its Run and a Check now — then grades over
+// the others and says so: the record's grade.off names the keys, and the
+// journeys listing gives them as lastRun.gradeOff. What a record's score
+// should be is asked of the engine itself, over the two packs the record
+// graded, the way tools/lib/journey.mjs grades them.
+
+const { computeDiagnosticGrade, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+const { adapt } = await import('../tools/lib/adapter.mjs');
+const { diffPacks } = await import('../tools/lib/diff.mjs');
+const { comparePackBranches } = await import('../tools/lib/traceability-graph.mjs');
+const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
+
+// The engine's grade of Pack A against Pack B, scoped as the journey is, with
+// `off` left out. A pack is named by its id: a registered pack's workspace
+// copy (a scan; the live pack a run kept — the read its record graded), or a
+// catalogue example's file under examples/.
+const packFileOf = (id) => [join(WORKSPACE, 'packs', `${id}.pack.yaml`), join(ROOT, 'examples', `${id}.pack.yaml`)].find((p) => { try { readFileSync(p); return true; } catch { return false; } });
+function engineGrade({ packA, packB, env, service = null, off = [] }) {
+  const canonical = (id) => parseYaml(readFileSync(packFileOf(id), 'utf8'));
+  const layeredA = adapt(canonical(packA), { environment: env || undefined });
+  const layeredB = adapt(canonical(packB), {});
+  const diff = { ...diffPacks(layeredA, layeredB, { scopeMode: undefined, service: service || undefined }), traceabilityGraph: comparePackBranches(layeredA, layeredB) };
+  return computeDiagnosticGrade(layeredA, layeredB, computePostureMatrix(layeredA, layeredB), null, diff, { off });
+}
+const scoreOf = (grade) => Math.round(grade.overall.audit.scorePctExact);
+const listedRun = async (name) => (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === name)?.lastRun;
+const newestRecord = async (name) => (await call('GET', `/api/journeys/${name}/runs?limit=1`)).json.runs[0];
+
+test('a service with chaos-validated switched off: its Run and its Check now grade over the six others — grade.off names it on the answer and on the saved record, the score is the engine\'s over six, the listing gives lastRun.gradeOff; with nothing off the record carries no grade.off and the score is over seven; switched back on, the next run is over seven again', async () => {
+  const P = `/api/services/${ids.shop}`;
+  const NAME = 'shop-api.prod';
+  const off = ['chaos-validated'];
+  const scope = { env: 'prod', service: 'shop-api' };
+  const listed = async () => { const r = await listedRun(NAME); return [r.gradeScore, r.gradeOff]; };
+
+  // Nothing off: all seven, and no grade.off — on the answer, on the saved record, [] in the listing.
+  assert.deepEqual((await call('GET', P)).json.service.gradeOff, []);
+  const plain = await call('POST', `${P}/run`, {});
+  assert.equal(plain.status, 200, plain.text);
+  const seven = engineGrade({ packA: plain.json.pack.id, packB: plain.json.livePack.id, ...scope });
+  assert.deepEqual([seven.overall.total, 'off' in seven.overall], [7, false]);
+  assert.ok(!('off' in plain.json.record.grade), JSON.stringify(plain.json.record.grade));
+  assert.equal(plain.json.record.grade.score, scoreOf(seven), 'the record\'s score is the engine\'s over all seven');
+  assert.deepEqual((await newestRecord(NAME)).grade, plain.json.record.grade, 'the saved record is the answer\'s: no grade.off');
+  assert.deepEqual(await listed(), [scoreOf(seven), []]);
+
+  // Switched off on the service record.
+  const patched = await call('PATCH', P, { gradeOff: [{ key: 'chaos-validated', reason: 'no fault injection on this project' }] });
+  assert.deepEqual([patched.status, patched.json.changed, patched.json.service.gradeOff.map((x) => x.key)], [200, ['gradeOff'], off]);
+
+  // The Run: the repository scanned again, graded over six.
+  const run = await call('POST', `${P}/run`, {});
+  assert.equal(run.status, 200, run.text);
+  const six = engineGrade({ packA: run.json.pack.id, packB: run.json.livePack.id, ...scope, off });
+  const chaos = six.trust.criteria.find((c) => c.key === 'chaos-validated');
+  assert.deepEqual([six.overall.total, six.overall.off, chaos.applies], [6, off, false], 'the engine, asked the same: six criteria apply');
+  assert.deepEqual(run.json.record.grade.off, off, 'the Run\'s record names the criterion left out');
+  assert.equal(run.json.record.grade.score, scoreOf(six), 'and its score is the engine\'s over the six that apply');
+  assert.notEqual(scoreOf(six), scoreOf(seven), 'which is not the score over seven: the switch moved it');
+  assert.deepEqual([run.json.record.grade.pass, run.json.record.grade.letter, run.json.record.grade.schema], [six.overall.audit.passes, six.overall.instrumentGrade.letter, 4], 'the pass, the letter and the schema are that grade\'s');
+  assert.deepEqual((await newestRecord(NAME)).grade, run.json.record.grade, 'the saved record says the same');
+  assert.deepEqual(await listed(), [scoreOf(six), off], 'the listing names what the last score left out');
+  assert.equal(auditRows('journey.run')[0].gradeScore, scoreOf(six), 'the journey.run row carries that score');
+
+  // Check now (POST /api/journeys/:name/run) on the same scan: a new live read, the same switches.
+  const check = await call('POST', `/api/journeys/${NAME}/run`, {});
+  assert.equal(check.status, 200, check.text);
+  const sixAgain = engineGrade({ packA: run.json.pack.id, packB: check.json.livePack.id, ...scope, off });
+  assert.notEqual(check.json.record.startedAt, run.json.record.startedAt, 'another run');
+  assert.deepEqual(check.json.record.grade.off, off, 'a Check now names it too');
+  assert.equal(check.json.record.grade.score, scoreOf(sixAgain));
+  assert.deepEqual((await newestRecord(NAME)).grade, check.json.record.grade);
+  assert.deepEqual(await listed(), [scoreOf(sixAgain), off]);
+
+  // Switched back on: the next run is over seven again, and says nothing of a criterion left out.
+  const back = await call('PATCH', P, { gradeOff: [] });
+  assert.deepEqual([back.status, back.json.changed, back.json.service.gradeOff], [200, ['gradeOff'], []]);
+  const whole = await call('POST', `/api/journeys/${NAME}/run`, {});
+  assert.equal(whole.status, 200, whole.text);
+  const sevenAgain = engineGrade({ packA: run.json.pack.id, packB: whole.json.livePack.id, ...scope });
+  assert.ok(!('off' in whole.json.record.grade), JSON.stringify(whole.json.record.grade));
+  assert.equal(whole.json.record.grade.score, scoreOf(sevenAgain));
+  assert.deepEqual(await listed(), [scoreOf(sevenAgain), []]);
+  // The records before it keep what they were graded on: the history says when the grade's basis changed.
+  const history = (await call('GET', `/api/journeys/${NAME}/runs?limit=4`)).json.runs.map((r) => r.grade.off ?? null);
+  assert.deepEqual(history, [null, off, off, null], 'newest first: seven, six (Check now), six (Run), seven');
+});
+
+// A check written by hand into the journeys folder (no studio comment on its
+// first line), over two packs by id — a registered pack's workspace copy, or a
+// catalogue example's file. Files only: nothing is read live.
+const CATALOGUE_A = 'target-advanced';
+const CATALOGUE_B = 'production-curated';
+const journeyFileOf = (name) => join(WORKSPACE, 'journeys', `${name}.journey.yaml`);
+const packSourceOf = (id) => (packFileOf(id).startsWith(join(WORKSPACE, 'packs')) ? `../packs/${id}.pack.yaml` : packFileOf(id).replaceAll('\\', '/'));
+function writeCheckByHand(name, { packA, packB, lines = [] }) {
+  writeFileSync(journeyFileOf(name), [`name: ${name}`, `packA: { file: ${packSourceOf(packA)} }`, `packB: { file: ${packSourceOf(packB)} }`, 'env: prod', ...lines, 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+  return readFileSync(journeyFileOf(name), 'utf8');
+}
+const forgetChecks = (names) => { for (const name of names) { rmSync(journeyFileOf(name), { force: true }); rmSync(join(WORKSPACE, 'runs', name), { recursive: true, force: true }); } };
+
+test('which record a journey is graded on, through the server: the one its `service` names — typed in any case or spelling the catalogue keys the same — before any other; else the one whose own pack is its Pack A; a journey that is neither is graded on all seven, and another service on its own switches; the listing reads lastRun.gradeOff from the record alone', async () => {
+  const P = `/api/services/${ids.shop}`;
+  const off = ['chaos-validated', 'fresh'];
+  const names = [];
+  try {
+    const patched = await call('PATCH', P, { gradeOff: [{ key: 'fresh', reason: 'read by hand each week' }, { key: 'chaos-validated', reason: 'no fault injection on this project' }] });
+    assert.deepEqual([patched.status, patched.json.service.gradeOff.map((x) => x.key)], [200, off]);
+    const run = await call('POST', `${P}/run`, {});
+    assert.equal(run.status, 200, run.text);
+    const scan = run.json.pack.id;
+    assert.deepEqual(run.json.record.grade.off, off, 'two left out, in the engine\'s order');
+    assert.equal(run.json.record.grade.score, scoreOf(engineGrade({ packA: scan, packB: run.json.livePack.id, env: 'prod', service: 'shop-api', off })), 'the engine\'s score over five');
+    // Another service with nothing switched off, to tell the two records apart.
+    assert.equal((await call('PATCH', `/api/services/${ids.bare}`, { repository: { kind: 'path', location: REPO } })).status, 200);
+    const other = await call('POST', `/api/services/${ids.bare}/run`, {});
+    assert.equal(other.status, 200, other.text);
+    assert.ok(!('off' in other.json.record.grade), `another service is graded on its own switches — none: ${JSON.stringify(other.json.record.grade)}`);
+    assert.equal(other.json.record.grade.score, scoreOf(engineGrade({ packA: other.json.pack.id, packB: other.json.livePack.id, env: 'prod', service: 'bare' })));
+    assert.deepEqual([(await listedRun('bare.prod')).gradeOff, (await listedRun('shop-api.prod')).gradeOff], [[], off]);
+
+    const calls = fake.calls.length;
+    // What the server's run of a hand-written check records: [grade.off or null, the score, the engine's score for that reading].
+    const graded = async (name, { packA, packB = CATALOGUE_B, lines = [], service = null, expectOff = [] }) => {
+      names.push(name);
+      writeCheckByHand(name, { packA, packB, lines });
+      const r = await call('POST', `/api/journeys/${name}/run`, {});
+      assert.equal(r.status, 200, r.text);
+      assert.equal(r.json.record.grade.score, scoreOf(engineGrade({ packA, packB, env: 'prod', service, off: expectOff })), `${name}: the engine's score over ${7 - expectOff.length}`);
+      return r.json.record.grade.off ?? null;
+    };
+    // The service it names, as a person types it: the slug, the name, another case and separator. Pack A is no service's.
+    for (const [name, typed] of [['grade-by-slug', 'shop-api'], ['grade-by-name', 'Shop API'], ['grade-by-caps', 'SHOP_API']]) {
+      assert.deepEqual(await graded(name, { packA: CATALOGUE_A, lines: [`service: ${typed}`], service: typed, expectOff: off }), off, `service: ${typed} is the record shop-api`);
+    }
+    // No service named: the record whose own pack — its scan — is the check's Pack A.
+    assert.deepEqual(await graded('grade-by-pack', { packA: scan, expectOff: off }), off, 'Pack A is the service\'s own pack');
+    // A service named that has no record: still Pack A's.
+    assert.deepEqual(await graded('grade-by-pack-not-name', { packA: scan, lines: ['service: nobody-home'], service: 'nobody-home', expectOff: off }), off, 'a name that finds no record leaves Pack A to say');
+    // The service named comes first: Pack A is this service's own, the check says it is the other's.
+    assert.equal(await graded('grade-name-first', { packA: scan, lines: ['service: bare'], service: 'bare' }), null, 'the named record — nothing off — not Pack A\'s');
+    assert.deepEqual(await graded('grade-name-first-back', { packA: other.json.pack.id, lines: ['service: shop-api'], service: 'shop-api', expectOff: off }), off, 'and the other way round');
+    // Neither: no record is asked, and the check carries no gradeOff of its own — all seven.
+    assert.equal(await graded('grade-of-none', { packA: CATALOGUE_A }), null, 'a check of no service');
+    assert.equal(await graded('grade-of-stranger', { packA: CATALOGUE_A, lines: ['service: nobody-home'], service: 'nobody-home' }), null, 'a check of a service without a record');
+    assert.equal(fake.calls.length, calls, 'file checks: the live side was not read');
+    assert.deepEqual([(await listedRun('grade-by-pack')).gradeOff, (await listedRun('grade-of-none')).gradeOff], [off, []]);
+
+    // The listing reads the newest record as it is: only strings, seven at most; a record with no grade gives [].
+    const sample = (await call('GET', '/api/journeys/grade-of-none/runs?limit=1')).json.runs[0];
+    const drop = (startedAt, grade) => writeFileSync(join(WORKSPACE, 'runs', 'grade-of-none', `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({ ...sample, startedAt, grade }));
+    drop('2099-01-01T00:00:00.000Z', { ...sample.grade, off: ['fresh', 7, null, { key: 'calibrated' }, 'a', 'b', 'c', 'd', 'e', 'f', 'g'] });
+    assert.deepEqual((await listedRun('grade-of-none')).gradeOff, ['fresh', 'a', 'b', 'c', 'd', 'e', 'f']);
+    drop('2099-01-02T00:00:00.000Z', { ...sample.grade, off: 'chaos-validated' });
+    assert.deepEqual((await listedRun('grade-of-none')).gradeOff, [], 'what is not a list is none');
+    drop('2099-01-03T00:00:00.000Z', undefined);
+    assert.deepEqual([(await listedRun('grade-of-none')).gradeScore, (await listedRun('grade-of-none')).gradeOff], [null, []], 'a record that graded nothing');
+  } finally {
+    forgetChecks(names);
+    await call('PATCH', P, { gradeOff: [] });
+  }
+  assert.deepEqual((await call('GET', P)).json.service.gradeOff, [], 'the service is graded on everything again');
+  assert.deepEqual((await call('GET', '/api/journeys')).json.journeys.map((x) => x.name).filter((n) => n.startsWith('grade-')), [], 'the hand-written checks are gone');
+});
+
+// ---------- the switches in the checks the studio saved ----------
+//
+// A run through the server asks the service record. A run with no record to
+// ask — `packc journey run`, which is what a schedule runs — has only the
+// check's file, so the server writes the record's switches into every check
+// the studio saved for that service: a Run saves <slug>.<env> with them, a
+// capture (POST /api/journeys/capture) of the service's pack, or scoped to
+// the service, is saved with them, and a PATCH that changes them rewrites
+// those files — the keys only (gradeOff: [...]), absent when none is off,
+// under the comment block the file had and with every other key as it was. A
+// file written by hand is never rewritten: through the server it is graded
+// on the record anyway.
+
+const gradedShop = { why: 'no fault injection on this project' };
+
+test('a service\'s switches are written into the checks the studio saved for it: a PATCH before any Run makes no file; a Run with a criterion off saves gradeOff; a capture of the service\'s own pack, or one scoped to it by a name in any case, is saved with it, a capture of a pack that is no service\'s or of a service with nothing off without it; a PATCH that changes the switches rewrites those files — the list, or no key for [] — keeping their comment block, name, packA, packB, env, service, gate and schedule; files written by hand, checks of other services and a check of no service are left byte for byte; a PATCH that changes no key touches no file; a Run with nothing off saves no such key', async () => {
+  const { existsSync, statSync } = await import('node:fs');
+  const { loadJourneyDef } = await import('../tools/lib/journey.mjs');
+  const { why } = gradedShop;
+  const created = await call('POST', '/api/services', { name: 'Graded Shop', repository: { kind: 'path', location: REPO } });
+  assert.equal(created.status, 201, created.text);
+  ids.graded = created.json.service.id;
+  const P = `/api/services/${ids.graded}`;
+  for (const name of ['prod', 'staging']) assert.equal((await call('POST', `${P}/environments`, { name, mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'graded-shop.prod';
+  const textOf = (name = NAME) => readFileSync(journeyFileOf(name), 'utf8');
+  const commentsOf = (name = NAME) => textOf(name).split('\n').filter((l) => l.startsWith('#'));
+  // A saved check as the command line loads it (the loader's own __source aside), and without its gradeOff.
+  const defOf = (name = NAME) => { const { __source: _source, ...def } = runWithOrg('default', () => loadJourneyDef(name)); return def; };
+  const rest = ({ gradeOff: _gradeOff, ...others }) => others;
+  const patchOff = async (list) => { const r = await call('PATCH', P, { gradeOff: list }); assert.equal(r.status, 200, r.text); return r.json; };
+  const capture = async (body) => { const r = await call('POST', '/api/journeys/capture', body); assert.deepEqual([r.status, r.json?.ok, r.json?.name], [200, true, body.name], r.text); return defOf(body.name); };
+  gradedShop.textOf = textOf;
+  gradedShop.defOf = defOf;
+  gradedShop.capture = capture;
+
+  // No check saved yet: the switch is on the record, and no file is made for it.
+  assert.deepEqual((await patchOff([{ key: 'chaos-validated', reason: why }])).changed, ['gradeOff']);
+  assert.deepEqual([existsSync(journeyFileOf(NAME)), existsSync(journeyFileOf('graded-shop.staging'))], [false, false], 'a switch creates no check');
+
+  // The first Run saves the check, and the switches with it.
+  const run = await call('POST', `${P}/run`, { env: 'prod' });
+  assert.equal(run.status, 200, run.text);
+  const scan = run.json.pack.id;
+  const saved = defOf();
+  assert.deepEqual(saved, {
+    name: NAME, packA: { file: `../packs/${scan}.pack.yaml` }, packB: { mcp: { url: saved.packB.mcp.url, endpointId: ids.endpoint } },
+    env: 'prod', service: 'graded-shop', gate: { minAlignmentPct: 85 }, gradeOff: ['chaos-validated'],
+  });
+  assert.match(commentsOf()[0], /^# Saved by the service graded-shop, environment prod, on \d{4}-\d{2}-\d{2}T[\d:.]+Z\.$/);
+  assert.equal(commentsOf().length, 3);
+  assert.ok(!textOf().includes(why) && !/\bby:|\bat:|reason/.test(textOf()), 'the file carries the keys — never a reason, a name or a time');
+  assert.deepEqual(run.json.record.grade.off, ['chaos-validated']);
+  assert.equal(existsSync(journeyFileOf('graded-shop.staging')), false, 'the environment that was not run has no check');
+
+  // By hand on the saved check: a looser gate and a schedule.
+  writeFileSync(journeyFileOf(NAME), `${textOf().replace('minAlignmentPct: 85', 'minAlignmentPct: 40')}schedule:\n  every: 15m\n`);
+  assert.deepEqual([defOf().gate, defOf().schedule, defOf().gradeOff], [{ minAlignmentPct: 40 }, { every: '15m' }, ['chaos-validated']]);
+
+  // Captures from the studio, each saved with the switches of the service it is a check of — or none.
+  const shopScan = (await call('GET', '/api/packs')).json.packs.find((p) => p.label === 'Shop API · prod · repository')?.id;
+  assert.ok(shopScan, 'the other service\'s scan is registered');
+  const ofItsPack = await capture({ name: 'graded-shop-repo-vs-reference', packAId: scan, packBId: CATALOGUE_B, env: 'prod', gate: { minAlignmentPct: 50 }, schedule: { every: '30m' } });
+  assert.deepEqual(ofItsPack, {
+    name: 'graded-shop-repo-vs-reference', packA: { file: `../packs/${scan}.pack.yaml` }, packB: { file: packSourceOf(CATALOGUE_B) },
+    env: 'prod', gate: { minAlignmentPct: 50 }, schedule: { every: '30m' }, gradeOff: ['chaos-validated'],
+  }, 'no service named: Pack A is the service\'s own pack, so its switches are saved with the capture');
+  const byName = await capture({ name: 'graded-shop-scoped', packAId: CATALOGUE_A, packBId: CATALOGUE_B, service: 'Graded_SHOP' });
+  assert.deepEqual([byName.service, byName.gradeOff], ['Graded_SHOP', ['chaos-validated']], 'scoped to the service by a name in another case and spelling');
+  const ofNone = await capture({ name: 'graded-reference-only', packAId: CATALOGUE_A, packBId: CATALOGUE_B, env: 'prod' });
+  assert.ok(!('gradeOff' in ofNone), `a capture of a pack that is no service's carries none: ${JSON.stringify(ofNone)}`);
+  const ofStranger = await capture({ name: 'graded-stranger-scope', packAId: CATALOGUE_A, packBId: CATALOGUE_B, service: 'nobody-home' });
+  assert.ok(!('gradeOff' in ofStranger), 'nor one scoped to a service that has no record');
+  const ofOther = await capture({ name: 'graded-other-service', packAId: shopScan, packBId: CATALOGUE_B, env: 'prod' });
+  assert.ok(!('gradeOff' in ofOther), 'nor one of a service that has nothing switched off');
+  for (const name of ['graded-shop-repo-vs-reference', 'graded-shop-scoped', 'graded-reference-only', 'graded-stranger-scope', 'graded-other-service']) {
+    assert.match(commentsOf(name)[0], /^# Captured from a studio session on \d{4}-/, name);
+    assert.equal(commentsOf(name).length, 5, name);
+  }
+  // Two files written by hand that name the service: one bare, one under a comment of its writer's.
+  const byHand = writeCheckByHand('graded-shop-by-hand', { packA: scan, packB: CATALOGUE_B, lines: ['service: graded-shop', 'gradeOff: [drift-free]'] });
+  writeFileSync(journeyFileOf('graded-shop-annotated'), `# my own check of the shop\n${writeCheckByHand('graded-shop-annotated', { packA: CATALOGUE_A, packB: CATALOGUE_B, lines: ['service: graded-shop'] })}`);
+  const annotated = textOf('graded-shop-annotated');
+
+  const STUDIO = [NAME, 'graded-shop-repo-vs-reference', 'graded-shop-scoped'];
+  const LEFT = ['graded-reference-only', 'graded-stranger-scope', 'graded-other-service', 'graded-shop-by-hand', 'graded-shop-annotated', 'shop-api.prod', 'bare.prod'];
+  const snapshot = (names) => Object.fromEntries(names.map((n) => [n, { text: textOf(n), mtimeMs: statSync(journeyFileOf(n)).mtimeMs }]));
+  const before = Object.fromEntries(STUDIO.map((n) => [n, { def: defOf(n), comments: commentsOf(n) }]));
+  const left = snapshot(LEFT);
+
+  // A PATCH that changes the switches: the three studio-saved checks of this service carry the new list …
+  assert.deepEqual((await patchOff([{ key: 'fresh', reason: 'read by hand each week' }, { key: 'chaos-validated', reason: why }])).changed, ['gradeOff']);
+  for (const name of STUDIO) {
+    const now = defOf(name);
+    assert.deepEqual(now.gradeOff, ['chaos-validated', 'fresh'], `${name}: the keys, in the engine's order`);
+    assert.deepEqual(rest(now), rest(before[name].def), `${name}: every other key as it was`);
+    assert.deepEqual(commentsOf(name), before[name].comments, `${name}: its comment block as it was — the first line still says who saved it and when`);
+    assert.ok(!/read by hand|no fault injection/.test(textOf(name)), `${name}: never a reason`);
+  }
+  assert.deepEqual([defOf().gate, defOf().schedule, defOf().packA, defOf().packB, defOf().env, defOf().service, defOf().name],
+    [{ minAlignmentPct: 40 }, { every: '15m' }, saved.packA, saved.packB, 'prod', 'graded-shop', NAME], 'the service\'s own check keeps the hand-set gate and the schedule');
+  // … and nothing else is touched: not a file written by hand, not a check of another service or of none, and none is created.
+  assert.deepEqual(snapshot(LEFT), left, 'the other files are byte for byte, their times included');
+  assert.deepEqual([textOf('graded-shop-by-hand'), textOf('graded-shop-annotated')], [byHand, annotated]);
+  assert.equal(existsSync(journeyFileOf('graded-shop.staging')), false);
+
+  // A PATCH that changes no key — a reworded reason, another field, the same list — touches no file at all.
+  const settled = snapshot([...STUDIO, ...LEFT]);
+  assert.deepEqual((await patchOff([{ key: 'fresh', reason: 'read by hand each month' }, { key: 'chaos-validated', reason: why }])).changed, ['gradeOff'], 'a reworded reason is a change of the record');
+  assert.deepEqual((await call('PATCH', P, { tier: 'tier-2' })).json.changed, ['tier']);
+  assert.deepEqual((await patchOff([{ key: 'chaos-validated', reason: why }, { key: 'fresh', reason: 'read by hand each month' }])).changed, []);
+  assert.deepEqual(snapshot([...STUDIO, ...LEFT]), settled, 'the keys are the ones the files hold: nothing is rewritten');
+
+  // [] switches everything back on: the key is gone from the three, the rest as it was; the hand-written file still says what its writer typed.
+  assert.deepEqual((await patchOff([])).changed, ['gradeOff']);
+  for (const name of STUDIO) {
+    assert.ok(!('gradeOff' in defOf(name)) && !/gradeOff/.test(textOf(name)), `${name}: no gradeOff key`);
+    assert.deepEqual(defOf(name), rest(before[name].def), `${name}: every other key as it was`);
+    assert.deepEqual(commentsOf(name), before[name].comments, name);
+  }
+  assert.deepEqual(snapshot(LEFT), left);
+  assert.deepEqual(defOf('graded-shop-by-hand').gradeOff, ['drift-free']);
+
+  // A Run with nothing off saves the check without the key — and, as a Run does, with the gate and the schedule it had.
+  const runBare = await call('POST', `${P}/run`, { env: 'prod' });
+  assert.equal(runBare.status, 200, runBare.text);
+  assert.ok(!('off' in runBare.json.record.grade), JSON.stringify(runBare.json.record.grade));
+  assert.deepEqual(defOf(), { ...rest(before[NAME].def), packA: { file: `../packs/${runBare.json.pack.id}.pack.yaml` } }, 'no gradeOff; the new scan as Pack A; the rest kept');
+  // The service and its own check go on to the next test; the captures and the hand-written files end here.
+  forgetChecks(['graded-shop-scoped', 'graded-reference-only', 'graded-stranger-scope', 'graded-other-service', 'graded-shop-annotated', 'graded-shop-repo-vs-reference', 'graded-shop-by-hand']);
+});
+
+test('a check is a service\'s by its Pack A only when that file is the service\'s own pack in this workspace — a pack of the same name elsewhere is not; a rewrite keeps the check\'s own name, edited or not', async () => {
+  const { mkdirSync, copyFileSync } = await import('node:fs');
+  const { why, defOf, capture, textOf } = gradedShop;
+  const P = `/api/services/${ids.graded}`;
+  const scanId = defOf('graded-shop.prod').packA.file.replace(/^.*\//, '').replace(/\.pack\.yaml$/, '');
+  const names = ['graded-lookalike', 'graded-renamed'];
+  try {
+    // A check the studio would have written, whose Pack A carries the scan's file name in another folder.
+    mkdirSync(join(WORKSPACE, 'elsewhere'), { recursive: true });
+    copyFileSync(join(WORKSPACE, 'packs', `${scanId}.pack.yaml`), join(WORKSPACE, 'elsewhere', `${scanId}.pack.yaml`));
+    const hand = writeCheckByHand('graded-lookalike', { packA: scanId, packB: CATALOGUE_B }).replace(`../packs/${scanId}.pack.yaml`, `../elsewhere/${scanId}.pack.yaml`);
+    writeFileSync(journeyFileOf('graded-lookalike'), `# Captured from a studio session on 2026-11-10T00:00:00.000Z.\n${hand}`);
+    const lookalike = textOf('graded-lookalike');
+    // A capture of the service's own pack whose name was edited by hand.
+    await capture({ name: 'graded-renamed', packAId: scanId, packBId: CATALOGUE_B, env: 'prod' });
+    writeFileSync(journeyFileOf('graded-renamed'), textOf('graded-renamed').replace('name: graded-renamed', 'name: graded-renamed-original'));
+
+    assert.deepEqual((await call('PATCH', P, { gradeOff: [{ key: 'fresh', reason: why }] })).json.changed, ['gradeOff']);
+    assert.equal(textOf('graded-lookalike'), lookalike, 'a pack of the same name elsewhere is not the service\'s: the file is not rewritten');
+    const run = await call('POST', '/api/journeys/graded-lookalike/run', {});
+    assert.equal(run.status, 200, run.text);
+    assert.equal(run.json.record.grade.off, undefined, 'and it is graded on all seven, not on the service\'s switches');
+    const renamed = defOf('graded-renamed');
+    assert.deepEqual([renamed.name, renamed.gradeOff], ['graded-renamed-original', ['fresh']], 'the rewrite keeps the name the file gives, and carries the switch');
+    assert.match(textOf('graded-renamed'), /^# Captured from a studio session on /);
+  } finally {
+    await call('PATCH', P, { gradeOff: [] });
+    forgetChecks([...names, 'graded-renamed-original']);
+  }
+});
+
+test('a run with no record to ask is graded as the service is — the saved check run from the command line, in process and as a child process, and a capture of the service\'s pack; through the server the record is asked whatever a file says — a list typed into the saved check, a file written by hand, with the record\'s switches on or all off; a check of no service is graded on its own gradeOff; a mistyped one does not load; once the service is deleted its leftover check is graded on what it carries', async () => {
+  const { spawn } = await import('node:child_process');
+  const { loadJourneyDef, runJourney } = await import('../tools/lib/journey.mjs');
+  const { why, textOf, defOf, capture } = gradedShop;
+  const P = `/api/services/${ids.graded}`;
+  const NAME = 'graded-shop.prod';
+  const off = ['chaos-validated'];
+  const scope = { env: 'prod', service: 'graded-shop' };
+  const serverRun = async (name) => { const r = await call('POST', `/api/journeys/${name}/run`, {}); assert.equal(r.status, 200, r.text); return r.json; };
+  // The command line's own path, in this process: the saved file loaded and run with nothing handed in.
+  const commandLine = (name) => runWithOrg('default', () => runJourney(loadJourneyDef(name)));
+  const names = ['graded-shop-by-hand'];
+  try {
+    assert.deepEqual((await call('PATCH', P, { gradeOff: [{ key: 'chaos-validated', reason: why }] })).json.changed, ['gradeOff']);
+    const run = await call('POST', `${P}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    const scan = run.json.pack.id;
+    const six = scoreOf(engineGrade({ packA: scan, packB: run.json.livePack.id, ...scope, off }));
+    const seven = scoreOf(engineGrade({ packA: scan, packB: run.json.livePack.id, ...scope }));
+    assert.notEqual(six, seven, 'the switch moves this service\'s score');
+    assert.deepEqual([run.json.record.grade.off, run.json.record.grade.score, defOf().gradeOff], [off, six, off], 'the Run: the record, and the check it saved');
+
+    // The command line on the saved check: it reads the live side itself and has no record to ask — the file's list.
+    const calls = fake.calls.length;
+    const cli = await commandLine(NAME);
+    assert.ok(fake.calls.length > calls, 'it read the live side through the URL the check names');
+    assert.deepEqual([cli.grade.off, cli.grade.score, cli.drift], [off, six, run.json.record.drift], 'graded as the service is: grade.off, the engine\'s score over six, on the comparison the Run made');
+    assert.deepEqual((await newestRecord(NAME)).grade, cli.grade, 'the board reads that record');
+    assert.deepEqual([(await listedRun(NAME)).gradeOff, (await listedRun(NAME)).gradeScore], [off, six]);
+    // … and the command line itself, as a schedule runs it: a child process on this workspace.
+    const child = await new Promise((done, failed) => {
+      const proc = spawn(process.execPath, [join(ROOT, 'tools', 'cli.mjs'), 'journey', 'run', NAME, '--json'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: WORKSPACE }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => { proc.kill('SIGKILL'); failed(new Error(`packc journey run did not end in 60 s: ${stderr || stdout}`)); }, 60_000);
+      proc.stdout.on('data', (b) => { stdout += b; });
+      proc.stderr.on('data', (b) => { stderr += b; });
+      proc.on('close', (code) => { clearTimeout(timer); done({ code, stdout, stderr }); });
+    });
+    let printed = null;
+    try { printed = JSON.parse(child.stdout); } catch { /* asserted below */ }
+    assert.ok(printed, `packc journey run --json prints the record: exit ${child.code}, ${child.stderr.slice(0, 400)}`);
+    assert.deepEqual([printed.journey, printed.grade, child.code], [NAME, cli.grade, printed.outcome === 'pass' ? 0 : 1], 'the same grade — grade.off and the score over six — from the command line itself');
+
+    // A capture of the service's own pack, named no service: saved with the switches, and graded on them both ways.
+    const captured = await capture({ name: 'graded-shop-repo-vs-reference', packAId: scan, packBId: CATALOGUE_B, env: 'prod' });
+    names.push('graded-shop-repo-vs-reference');
+    assert.deepEqual([captured.gradeOff, 'service' in captured], [off, false]);
+    const capturedSix = scoreOf(engineGrade({ packA: scan, packB: CATALOGUE_B, env: 'prod', off }));
+    const viaServer = await serverRun('graded-shop-repo-vs-reference');
+    assert.deepEqual([viaServer.record.scope.service, viaServer.record.grade.off, viaServer.record.grade.score], [null, off, capturedSix], 'through the server: the record of its Pack A\'s service');
+    const viaCli = await commandLine('graded-shop-repo-vs-reference');
+    assert.deepEqual([viaCli.grade.off, viaCli.grade.score], [off, capturedSix], 'from the command line: the list the capture was saved with');
+
+    // Through the server the record is asked, whatever the file says.
+    // (1) Another list typed into the service's own check.
+    writeFileSync(journeyFileOf(NAME), textOf().replace('- chaos-validated', '- drift-free'));
+    assert.deepEqual(defOf().gradeOff, ['drift-free']);
+    const check = await serverRun(NAME);
+    assert.deepEqual([check.record.grade.off, check.record.grade.score], [off, scoreOf(engineGrade({ packA: scan, packB: check.livePack.id, ...scope, off }))], 'Check now: the record\'s switch, not the one typed into the file');
+    assert.deepEqual(defOf().gradeOff, ['drift-free'], 'a run does not rewrite the check');
+    assert.deepEqual((await commandLine(NAME)).grade.off, ['drift-free'], 'the command line has only the file');
+    // (2) A file written by hand that names the service and says another list: the record's, and the file stays as written.
+    const handSix = scoreOf(engineGrade({ packA: scan, packB: CATALOGUE_B, ...scope, off }));
+    const handText = writeCheckByHand('graded-shop-by-hand', { packA: scan, packB: CATALOGUE_B, lines: ['service: graded-shop', 'gradeOff: [drift-free]'] });
+    const hand = await serverRun('graded-shop-by-hand');
+    assert.deepEqual([hand.record.grade.off, hand.record.grade.score], [off, handSix], 'the record\'s switch, not drift-free');
+    assert.equal(textOf('graded-shop-by-hand'), handText, 'and the file is as its writer left it');
+    // (3) With every switch back on, the record still decides: all seven, though both files name a criterion.
+    assert.deepEqual((await call('PATCH', P, { gradeOff: [] })).json.changed, ['gradeOff']);
+    assert.ok(!('gradeOff' in defOf()), 'the switch rewrote the service\'s own check: the typed list is gone with the key');
+    assert.equal(textOf('graded-shop-by-hand'), handText, 'and left the file written by hand as it was');
+    const handSeven = await serverRun('graded-shop-by-hand');
+    assert.ok(!('off' in handSeven.record.grade), `nothing is off on the record: ${JSON.stringify(handSeven.record.grade)}`);
+    assert.equal(handSeven.record.grade.score, scoreOf(engineGrade({ packA: scan, packB: CATALOGUE_B, ...scope })));
+    assert.deepEqual((await call('PATCH', P, { gradeOff: [{ key: 'chaos-validated', reason: why }] })).json.changed, ['gradeOff']);
+    assert.deepEqual([defOf().gradeOff, defOf('graded-shop-repo-vs-reference').gradeOff, textOf('graded-shop-by-hand')], [off, off, handText], 'switched off again: back in the two studio-saved checks');
+
+    // A check of no service — Pack A is no service's, and it names none or one without a record — is graded on its own gradeOff.
+    names.push('graded-own-list', 'graded-own-list-stranger', 'graded-typo', 'graded-all-seven');
+    writeCheckByHand('graded-own-list', { packA: CATALOGUE_A, packB: CATALOGUE_B, lines: ['gradeOff: [fresh, chaos-validated]'] });
+    const own = await serverRun('graded-own-list');
+    assert.deepEqual([own.record.grade.off, own.record.grade.score], [['chaos-validated', 'fresh'], scoreOf(engineGrade({ packA: CATALOGUE_A, packB: CATALOGUE_B, env: 'prod', off: ['chaos-validated', 'fresh'] }))], 'its own list, in the engine\'s order');
+    writeCheckByHand('graded-own-list-stranger', { packA: CATALOGUE_A, packB: CATALOGUE_B, lines: ['service: nobody-home', 'gradeOff: [fresh]'] });
+    assert.deepEqual((await serverRun('graded-own-list-stranger')).record.grade.off, ['fresh']);
+    // A mistyped list, or one naming all seven, does not load: the listing says why, and a run is refused with that sentence.
+    const KEYS = 'multi-modal, correlated, calibrated, comprehensive, chaos-validated, drift-free, fresh';
+    for (const [name, line, whyNot] of [['graded-typo', 'gradeOff: [chaos]', '"chaos" is not one'], ['graded-all-seven', `gradeOff: [${KEYS}]`, 'a check is graded on at least one criterion']]) {
+      writeCheckByHand(name, { packA: CATALOGUE_A, packB: CATALOGUE_B, lines: [line] });
+      const sentence = `journey ${name}: gradeOff must be a list of grade criteria (${KEYS}) — ${whyNot}`;
+      const listed = (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === name);
+      assert.deepEqual([listed.loadError, listed.lastRun], [sentence, null], name);
+      const refused = await call('POST', `/api/journeys/${name}/run`, {});
+      assert.deepEqual([refused.status, refused.json], [404, { ok: false, error: sentence }], name);
+    }
+
+    // The service's next Run puts the record's switches in its check again, whatever was typed there.
+    writeFileSync(journeyFileOf(NAME), textOf().replace('- chaos-validated', '- drift-free'));
+    assert.equal((await call('POST', `${P}/run`, { env: 'prod' })).status, 200);
+    assert.deepEqual(defOf().gradeOff, off);
+
+    // The service deleted: its check stays in the workspace without the switches — they were the record's, and
+    // a service made again under the name starts with none — so the server and the command line agree on seven.
+    const deleted = await call('DELETE', P);
+    assert.equal(deleted.status, 200, deleted.text);
+    assert.equal(defOf().gradeOff, undefined, 'the deletion takes the switches out of the check that was the service\'s');
+    assert.ok(/^# Saved by the service /.test(textOf()), 'and keeps the check and its comment block');
+    assert.deepEqual([defOf().service, defOf().env], ['graded-shop', 'prod'], 'and its keys');
+    assert.equal((await serverRun(NAME)).record.grade.off, undefined, 'through the server: all seven');
+    assert.equal((await commandLine(NAME)).grade.off, undefined, 'from the command line: all seven too');
+  } finally {
+    forgetChecks([NAME, ...names]);
+  }
+});
+
+test('a Run saves its check with the switches as they are when it saves: a criterion switched off while the repository is being read is in the saved check and in the run\'s record, not undone', async () => {
+  const { loadJourneyDef } = await import('../tools/lib/journey.mjs');
+  const created = await call('POST', '/api/services', { name: 'Slow Shop', repository: { kind: 'github', location: 'acme/slow-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  // GitHub, stubbed in this process: the repository answers the made-up token below, and holds its one file until released.
+  const MINE = 'ghp_MadeUpTokenForTheSlowRead0123';
+  const RULES = readFileSync(join(REPO, 'prometheus', 'rules.yml'), 'utf8');
+  const realFetch = globalThis.fetch;
+  let reading;
+  let release;
+  const isReading = new Promise((ok) => { reading = ok; });
+  const released = new Promise((ok) => { release = ok; });
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
+    if ((init.headers?.Authorization ?? null) !== `Bearer ${MINE}`) return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    if (u.endsWith('/repos/acme/slow-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
+    if (u.includes('/repos/acme/slow-shop/git/trees/main')) return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] }));
+    if (u.includes('/repos/acme/slow-shop/contents/')) { reading(); await released; return new Response(RULES); }
+    return new Response('', { status: 404 });
+  };
+  try {
+    assert.deepEqual((await call('GET', P)).json.service.gradeOff, [], 'nothing off when the Run starts');
+    const pending = call('POST', `${P}/run`, { repoAuth: MINE });
+    await Promise.race([isReading, pending.then((r) => { throw new Error(`the Run answered before it read the repository: ${r.status} ${r.text}`); })]);
+    // The repository is being read: the switch lands now. No check is saved yet, so the switch itself writes no file.
+    const patched = await call('PATCH', P, { gradeOff: [{ key: 'chaos-validated', reason: 'no fault injection on this project' }] });
+    assert.deepEqual([patched.status, patched.json.changed], [200, ['gradeOff']]);
+    release();
+    const run = await pending;
+    assert.equal(run.status, 200, run.text);
+    const saved = runWithOrg('default', () => loadJourneyDef('slow-shop.prod'));
+    assert.deepEqual(saved.gradeOff, ['chaos-validated'], 'the check is saved with the switch made during the read');
+    assert.deepEqual(run.json.record.grade.off, ['chaos-validated'], 'and the run it then makes is graded on the record as it is');
+  } finally {
+    release();
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks(['slow-shop.prod']);
+  }
+});
+
 // ---------- a repository uploaded from the person's own machine ----------
 //
 // Overview's Upload: the files the browser read from a folder or a .zip are

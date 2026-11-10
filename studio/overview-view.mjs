@@ -53,7 +53,8 @@ function gradeHtml(g) {
         <div class="ov-grade__letter ov-tone-${escapeHtml(g.tone || 'neutral')}"${g.title ? ` title="${escapeHtml(g.title)}"` : ''} aria-label="Grade ${escapeHtml(g.letter)}">${escapeHtml(g.letter)}</div>
         <div class="ov-grade__text">
           <div class="ov-grade__label og-h1">${escapeHtml(g.label)}</div>
-          ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}
+          ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}${g.criteria ? `
+          <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}
           ${g.source ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : ''}
         </div>
       </div>
@@ -65,15 +66,41 @@ function gradeHtml(g) {
 // sentence each, the points line first. Nothing when the model has no list
 // that adds up to the letter. Collapsed in both layouts until the reader
 // opens it; on the board the rows are set larger (`open`).
+// A service may leave a criterion out of its grade. The criteria that are off
+// (the model's `notGraded`) are listed under the reasons in both layouts, each
+// with why, who and when. On the board, where the host wires the switch (the
+// model's `switches`), every reason's row ends with "Not for this service…" —
+// it asks why first, in place — and every criterion off with "Grade it again";
+// a reader who may not switch gets the same words, explaining why when pressed.
+// With nothing off and no switch the list is what it always was, byte for byte.
 const WHY_MARK = { yes: ['ok', 'Yes'], partly: ['warn', 'Partly'], no: ['fail', 'No'] };
-function whyListHtml(g, { open = false } = {}) {
-  if (!Array.isArray(g.why) || !g.why.length) return '';
-  const items = g.why.map((w) => {
+// Which criterion is being switched off, and what has been typed as the reason:
+// the view's own, kept through the board's repaints, dropped with the service.
+let gradeAsk = null;
+const switchHtml = (sw, action, key, words, label) => (sw.enabled
+  ? `<button type="button" class="ov-gw__switch" data-ux-action="${action}" data-key="${escapeHtml(key)}" aria-label="${escapeHtml(label)}">${words}</button>`
+  : `<button type="button" class="ov-gw__switch" data-ux-action="ov-explain" aria-disabled="true" data-reason="${escapeHtml(sw.reason || '')}" title="${escapeHtml(sw.reason || '')}" aria-label="${escapeHtml(label)}">${words}</button>`);
+function whyListHtml(g, { open = false, serviceId = null } = {}) {
+  const lines = Array.isArray(g.why) ? g.why : [];
+  const off = Array.isArray(g.notGraded) ? g.notGraded : [];
+  const sw = open && g.switches ? g.switches : null;
+  // Where the reasons are not offered (they would not add up to the letter), the criteria graded,
+  // by name, so each can still be switched off.
+  const plain = !lines.length && sw && Array.isArray(g.graded) ? g.graded : [];
+  if (!lines.length && !off.length && !plain.length) return '';
+  const ask = sw?.enabled && gradeAsk && gradeAsk.service === serviceId ? gradeAsk : null;
+  const switchOf = (key, name) => (sw && key ? switchHtml(sw, 'ov-grade-ask', key, 'Not for this service…', `Stop grading ${name} for this service`) : '');
+  const askingOf = (key, name) => (ask && ask.key === key ? `<li class="ov-gw ov-gw--ask"><label class="ov-gw__ask"><span class="ov-gw__ask-l">Why is ${escapeHtml(name)} not graded for this service?</span><input class="og-input" data-grade-reason="${escapeHtml(key)}" value="${escapeHtml(ask.reason || '')}" maxlength="200" autocomplete="off" placeholder="e.g. this project runs no fault injection"></label><button type="button" class="og-btn" data-ux-action="ov-grade-off" data-key="${escapeHtml(key)}">Stop grading it</button><button type="button" class="og-btn og-btn--text" data-ux-action="ov-grade-ask-cancel">Cancel</button></li>` : '');
+  const items = lines.map((w) => {
     const [tone, word] = WHY_MARK[w.ok] || ['', w.ok];
-    return `<li class="ov-gw ov-gw--${escapeHtml(w.ok)}"><span class="og-pill${tone ? ` og-pill--${tone}` : ''} ov-gw__pill">${escapeHtml(word)}</span><span class="ov-gw__text">${escapeHtml(w.text)}</span></li>`;
+    const name = w.label || w.key || '';
+    return `<li class="ov-gw ov-gw--${escapeHtml(w.ok)}"><span class="og-pill${tone ? ` og-pill--${tone}` : ''} ov-gw__pill">${escapeHtml(word)}</span><span class="ov-gw__text">${escapeHtml(w.text)}</span>${switchOf(w.key, name)}</li>${askingOf(w.key, name)}`;
   }).join('');
   const points = g.points ? `<p class="ov-grade__points og-muted">${escapeHtml(g.points)}</p>` : '';
-  return `${points}<ul class="ov-gw-list${open ? ' ov-gw-list--open' : ''}">${items}</ul>`;
+  const plainList = plain.length ? `<p class="ov-gw-off__h og-muted">Graded for this service</p><ul class="ov-gw-list ov-gw-list--plain ov-gw-list--open">${plain.map((c) => `<li class="ov-gw ov-gw--plain"><span class="ov-gw__text">${escapeHtml(c.label)}</span>${switchOf(c.key, c.label)}</li>${askingOf(c.key, c.label)}`).join('')}</ul>` : '';
+  const list = lines.length ? `<ul class="ov-gw-list${open ? ' ov-gw-list--open' : ''}">${items}</ul>` : plainList;
+  const offList = off.length ? `<p class="ov-gw-off__h og-muted">Not graded for this service</p><ul class="ov-gw-list ov-gw-list--off${open ? ' ov-gw-list--open' : ''}">${off.map((x) => `<li class="ov-gw ov-gw--off"><span class="og-pill ov-gw__pill">Off</span><span class="ov-gw__text">${escapeHtml(x.text)}${x.by ? ` <span class="ov-gw__by og-muted">${escapeHtml(x.by)}</span>` : ''}</span>${sw ? switchHtml(sw, 'ov-grade-on', x.key, 'Grade it again', `Grade ${x.label || x.key} for this service again`) : ''}</li>`).join('')}</ul>` : '';
+  return `${points}${list}${offList}`;
 }
 function gradeWhyHtml(g) {
   const list = whyListHtml(g);
@@ -289,6 +316,8 @@ function statusStripHtml(g, s, f) {
   if (g?.basis === 'live') parts.push(['source', 'Graded against live']);
   else if (g?.basis === 'recording') parts.push(['source', 'Graded against a recording']);
   else if (g?.basis === 'repository') parts.push(['source', 'Graded from the repository']);
+  // A letter over fewer criteria says so beside its source ("on 6 of 7 criteria").
+  if (g?.criteria) parts.push(['criteria', String(g.criteria).replace(/^Graded /, '')]);
   if (s?.running) parts.push(['when', 'checking now…']);
   else if (s?.ago) parts.push(['when', `checked ${s.ago}`]);
   else if (s?.status === 'never') parts.push(['when', 'never checked against live']);
@@ -355,10 +384,12 @@ function fidelityHtml(f) {
 // Opened, it stays open through the board's repaints (a check finishing),
 // as the Discover layers do.
 let whyOpen = false;
-function boardWhyHtml(g) {
-  const list = whyListHtml(g, { open: true });
+function boardWhyHtml(g, serviceId = null) {
+  const list = whyListHtml(g, { open: true, serviceId });
   if (!list) return '';
-  return disclosureHtml('Why this grade', list, { cls: 'ov-grade__why', open: whyOpen });
+  // No reasons to give, only the criteria to switch: the disclosure says so.
+  const title = Array.isArray(g.why) && g.why.length ? 'Why this grade' : 'The criteria graded';
+  return disclosureHtml(title, list, { cls: 'ov-grade__why', open: whyOpen });
 }
 
 const cardHeadHtml = (badge, id, question, sub) => `
@@ -367,7 +398,7 @@ const cardHeadHtml = (badge, id, question, sub) => `
           <div class="ov-card__titles"><h2 class="ov-card__h" id="${id}">${question}</h2><p class="ov-card__sub">${sub}</p></div>
         </header>`;
 
-function diagnoseColHtml(g, rules, f, s, primary) {
+function diagnoseColHtml(g, rules, f, s, primary, serviceId = null) {
   // The source line under the shield repeats the status strip when the
   // letter is the live one; it stays for the other sources, which it explains.
   const source = g.source && g.basis !== 'live' ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : '';
@@ -380,12 +411,13 @@ function diagnoseColHtml(g, rules, f, s, primary) {
           <div class="ov-shield ov-tone-${escapeHtml(g.tone || 'neutral')}"${g.title ? ` title="${escapeHtml(g.title)}"` : ''} aria-label="Grade ${escapeHtml(g.letter)}"><span class="ov-shield__letter">${escapeHtml(g.letter)}</span></div>
           <div class="ov-result__text">
             <div class="ov-grade__label">${escapeHtml(g.label)}</div>
-            ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}
+            ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}${g.criteria ? `
+            <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}
             ${source}
           </div>
           ${rulesHtml(rules)}
         </div>
-        ${boardWhyHtml(g)}
+        ${boardWhyHtml(g, serviceId)}
       </section>
       <section class="ov-card ov-card--b ov-live og-panel og-panel--pad${toneClass('og-panel', s.tone)}" aria-labelledby="ov-live-eyebrow" aria-live="polite">
         ${cardHeadHtml('B', 'ov-live-eyebrow', 'Can you trust what the signals show?', 'The repository against live')}
@@ -425,7 +457,7 @@ function boardBodyHtml(model) {
     ${stagesHtml()}
     <div class="ov-board">
       ${discoverColHtml(b.layers, b.scan)}
-      ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary)}
+      ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary, model.service?.id ?? null)}
       ${remediateColHtml(b.changes, model.next, model.primary)}
     </div>`;
 }
@@ -516,6 +548,21 @@ function startHtml(sources, start, serviceName = null, ov = {}) {
 
 export function renderOverview(container, model, host = appHost) {
   const ov = host?.overview || {};
+  // A reason being typed belongs to the service it was asked for.
+  if (gradeAsk && gradeAsk.service !== (model.service?.id ?? null)) gradeAsk = null;
+  // …and keeps its focus and caret through a repaint (a check finishing redraws the board).
+  const typing = container.querySelector?.('[data-grade-reason]') || null;
+  const typingFocus = typing && typing.ownerDocument?.activeElement === typing
+    ? { start: typing.selectionStart ?? null, end: typing.selectionEnd ?? null } : null;
+  const redraw = () => renderOverview(container, model, host);
+  // "Stop grading it": the reason is required — an empty one keeps the ask open, marked.
+  function switchOff(key) {
+    const input = container.querySelector?.('[data-grade-reason]') || null;
+    const reason = String(input?.value ?? gradeAsk?.reason ?? '').trim();
+    if (!reason) { input?.setAttribute?.('aria-invalid', 'true'); input?.focus?.({ preventScroll: true }); return; }
+    gradeAsk = null;
+    ov.setGradeCriterion?.(key, { graded: false, reason });
+  }
   let body;
   let board = false;
   if (model.kind === 'empty' && model.start) {
@@ -569,7 +616,27 @@ export function renderOverview(container, model, host = appHost) {
     'ov-start-reset': () => ov.resetStart?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
     'ov-back': () => ov.backToList?.(),
+    // A criterion's switch (the model's `switches`): ask why in place, then the host's setGradeCriterion.
+    'ov-grade-ask': (ev, el) => { gradeAsk = { service: model.service?.id ?? null, key: el.dataset.key, reason: '', focus: true }; whyOpen = true; redraw(); },
+    'ov-grade-ask-cancel': () => { gradeAsk = null; redraw(); },
+    'ov-grade-off': (ev, el) => switchOff(el.dataset.key),
+    'ov-grade-on': (ev, el) => ov.setGradeCriterion?.(el.dataset.key, { graded: true }),
   });
+  // The reason as it is typed stays with the view, so a repaint (a check finishing) keeps it;
+  // Enter switches the criterion off, Escape gives up.
+  const reasonInput = container.querySelector?.('[data-grade-reason]') || null;
+  if (reasonInput) {
+    reasonInput.addEventListener?.('input', () => { if (gradeAsk) gradeAsk.reason = reasonInput.value; });
+    reasonInput.addEventListener?.('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault?.(); switchOff(reasonInput.dataset.gradeReason); }
+      else if (ev.key === 'Escape') { ev.preventDefault?.(); gradeAsk = null; redraw(); }
+    });
+    if (gradeAsk?.focus || typingFocus) {
+      if (gradeAsk) gradeAsk.focus = false;
+      reasonInput.focus?.({ preventScroll: true });
+      if (typingFocus) { try { reasonInput.setSelectionRange?.(typingFocus.start, typingFocus.end); } catch { /* a field that takes no range */ } }
+    }
+  }
   const select = container.querySelector('#ov-service');
   if (select) select.addEventListener('change', () => ov.selectService?.(Number(select.value)));
   const repo = container.querySelector('.ov-repo');

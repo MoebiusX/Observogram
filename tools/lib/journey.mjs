@@ -25,6 +25,10 @@
 //   env: prod              # optional Pack A environment overlay
 //   service: svc           # optional diff service scope
 //   scopeMode: service     # optional diff scope mode
+//   gradeOff: [chaos-validated]   # optional: the grade criteria this check is not graded on
+//                               #   (studio/diagnostic-grade.mjs GRADE_CRITERION_KEYS). A service's
+//                               #   own check carries its record's switches, written by the server;
+//                               #   a run through the server asks the record itself.
 //   gate:                  # all optional; omitted criteria don't gate
 //     requireGradePass: true
 //     minAlignmentPct: 85
@@ -104,7 +108,7 @@ import {
   notifyDecision, buildNotifyPayload, renderNotifyText, redactUrlCredentials,
 } from './journey-notify.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
-import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
+import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD, GRADE_CRITERION_KEYS } from '../../studio/diagnostic-grade.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -205,6 +209,7 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
+  if (def.gradeOff !== undefined) validateGradeOff(def.gradeOff, def.name);
   // Step 5: a typo'd or malformed schedule / stackBudget block is a
   // load-time configuration error (CLI `list` prints it, GET /api/journeys
   // puts it in loadError, capture answers 400) — never a run that silently
@@ -214,6 +219,18 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.notify !== undefined) validateNotify(def.notify, def.name);
   def.__source = source;
   return def;
+}
+
+// gradeOff — the grade criteria a check is not graded on: a list of the
+// engine's criterion keys, each once. A typo is a load-time error, never a
+// run that silently grades on all seven.
+export function validateGradeOff(gradeOff, journeyName = '?') {
+  const bad = !Array.isArray(gradeOff) ? 'it is not a list'
+    // Every index, holes too (a sparse list's hole is no criterion).
+    : Array.from(gradeOff).some((k) => !GRADE_CRITERION_KEYS.includes(k)) ? `${JSON.stringify(Array.from(gradeOff).find((k) => !GRADE_CRITERION_KEYS.includes(k)) ?? null)} is not one`
+      : new Set(gradeOff).size !== gradeOff.length ? 'a criterion is listed twice'
+        : gradeOff.length === GRADE_CRITERION_KEYS.length ? 'a check is graded on at least one criterion' : null;
+  if (bad) throw new Error(`journey ${journeyName}: gradeOff must be a list of grade criteria (${GRADE_CRITERION_KEYS.join(', ')}) — ${bad}`);
 }
 
 // packB.mcp.endpointId — the org's registered MCP endpoint a server-run
@@ -1162,7 +1179,7 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // recorded as packA.scan. A crawl: Pack A carries its own. A run that is
 // not told (Check now on the last scan) keeps the scan of the newest record
 // of the same Pack A file: the file is that scan's.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1225,7 +1242,13 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   };
   const conformance = evaluateConformance(a.canonical);
   const posture = computePostureMatrix(layeredA, layeredB);
-  const grade = computeDiagnosticGrade(layeredA, layeredB, posture, null, diff);
+  // The criteria this run is not graded on: `gradeOff` when the caller hands
+  // it in (the server: the switches on the journey's service record), else
+  // the definition's own `gradeOff` (the command line and a schedule have no
+  // record to ask; a service's own check carries its switches, written by
+  // the server). The record names them as grade.off.
+  const off = Array.isArray(gradeOff) ? gradeOff : (Array.isArray(def.gradeOff) ? def.gradeOff : []);
+  const grade = computeDiagnosticGrade(layeredA, layeredB, posture, null, diff, { off });
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
@@ -1315,6 +1338,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       // integrity (studio parity) when declared commitments exist, else
       // the diff buckets. Explains a score step across a pack change.
       driftConstruct: rollup && rollup.declaredTotal > 0 ? 'requirement-chain' : 'diff-buckets',
+      // The criteria left out of this score (the service's switches when the
+      // run was made): absent when all seven were graded. A step in the score
+      // series beside a change here is a change of what was graded.
+      ...(grade.overall?.off?.length ? { off: grade.overall.off } : {}),
     },
     traceability: rollup ? {
       integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,
@@ -1640,7 +1667,7 @@ export function renderJourneyMarkdown(r) {
     `| Declared (A) | \`${r.packA.name || '?'}@${r.packA.version || '?'}\` — ${r.packA.source} |`,
     `| Live/reference (B) | \`${r.packB.name || '?'}@${r.packB.version || '?'}\` — ${r.packB.source} |`,
     `| Scope | env=${r.scope.env || '-'} service=${r.scope.service || '-'} mode=${r.scope.scopeMode || 'default'} |`,
-    `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%) |`,
+    `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%)${Array.isArray(r.grade.off) && r.grade.off.length ? ` — on ${GRADE_CRITERION_KEYS.length - r.grade.off.length} of ${GRADE_CRITERION_KEYS.length} criteria (not graded: ${r.grade.off.join(', ')})` : ''} |`,
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
     `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.declaredAhead ? `${r.drift.declaredAhead} declared ahead · ` : ''}${r.drift.liveNotDeclared} live-not-declared |`,
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,

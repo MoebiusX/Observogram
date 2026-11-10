@@ -384,13 +384,16 @@ const V2_TABLES = ['audit', 'environments', 'mcp_endpoints', 'memberships', 'org
 // The synthetic steps below sit after every real one.
 const NEXT = SCHEMA_VERSION + 1;
 
-test('migrations from user_version 0: schema v3 exactly, with a store_id and the audit triggers', async () => {
+test('migrations from user_version 0: schema v4 exactly, with a store_id and the audit triggers', async () => {
   const path = join(tempDir(), 'm.db');
   const db = await openStore({ path });
   try {
-    assert.equal(userVersion(db), 3);
+    assert.equal(userVersion(db), 4);
+    assert.equal(SCHEMA_VERSION, 4);
+    assert.deepEqual(STEPS.map((s) => [s.version, s.name]).at(-1), [4, 'service-grade-criteria']);
     assert.deepEqual(tables(db), V2_TABLES);
     assert.ok(pragma(db, 'table_info(services)').some((c) => c.name === 'repository' && c.type === 'TEXT' && c.notnull === 0), 'v3: services.repository, TEXT, nullable');
+    assert.ok(pragma(db, 'table_info(services)').some((c) => c.name === 'grade_off' && c.type === 'TEXT' && c.notnull === 0 && c.dflt_value === null), 'v4: services.grade_off, TEXT, nullable, no default');
     const id = prepare(db, "SELECT value FROM schema_meta WHERE key = 'store_id'").get().value;
     assert.match(id, /^[0-9a-f-]{36}$/);
     const triggers = prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all().map((r) => r.name);
@@ -410,7 +413,7 @@ test('migrations from user_version 0: schema v3 exactly, with a store_id and the
   }
   // A second open applies nothing.
   const raw = await openRaw(path);
-  assert.deepEqual(runMigrations(raw), { from: 3, to: 3, applied: [] });
+  assert.deepEqual(runMigrations(raw), { from: 4, to: 4, applied: [] });
   raw.close();
 });
 
@@ -490,7 +493,7 @@ test('a failing step rolls back, leaves user_version and foreign_keys ON; a step
 // The one-way door GAP batch 2 opened: a v1 file (every pre-batch store)
 // gets the two tables with every row it held intact. Built through openRaw
 // + the first STEP alone: openStore would write a v2 store.
-test('a real v1 file migrates to v3: the verdicts and waivers tables with their foreign keys, the repository column, every pre-existing row intact', async () => {
+test('a real v1 file migrates to v4: the verdicts and waivers tables with their foreign keys, the repository and grade_off columns, every pre-existing row intact', async () => {
   const path = join(tempDir('v1-real'), 'observogram.db');
   const db = await openRaw(path);
   try {
@@ -507,10 +510,11 @@ test('a real v1 file migrates to v3: the verdicts and waivers tables with their 
     const counts = () => Object.fromEntries(['users', 'orgs', 'memberships', 'services', 'packs', 'pack_services', 'audit'].map((t) => [t, prepare(db, `SELECT count(*) AS n FROM ${t}`).get().n]));
     const before = counts();
     pragma(db, 'foreign_keys=ON');
-    assert.deepEqual(runMigrations(db), { from: 1, to: 3, applied: [2, 3] });
+    assert.deepEqual(runMigrations(db), { from: 1, to: 4, applied: [2, 3, 4] });
     assert.deepEqual(tables(db), V2_TABLES);
     assert.deepEqual(counts(), before, 'every pre-existing row is still there');
     assert.equal(prepare(db, 'SELECT repository FROM services WHERE id = 1').get().repository, null, 'v3: a service from before names no repository');
+    assert.equal(prepare(db, 'SELECT grade_off FROM services WHERE id = 1').get().grade_off, null, 'v4: a service from before is graded on every criterion');
     assert.deepEqual(pragma(db, 'foreign_key_check'), []);
     assert.deepEqual(pragma(db, 'foreign_key_list(verdicts)').map((r) => [r.table, r.from, r.to]).sort(), [['packs', 'org_id', 'org_id'], ['packs', 'pack_id', 'id']]);
     assert.deepEqual(pragma(db, 'foreign_key_list(waivers)').map((r) => [r.table, r.from, r.to]).sort(),
@@ -530,6 +534,73 @@ test('a real v1 file migrates to v3: the verdicts and waivers tables with their 
     prepare(db, 'DELETE FROM services WHERE id = 1').run();
     assert.equal(prepare(db, 'SELECT count(*) AS n FROM waivers').get().n, 0, 'a waiver cascades with its service');
     assert.equal(prepare(db, 'SELECT count(*) AS n FROM audit').get().n, before.audit, 'the audit outlives what it names');
+  } finally {
+    db.close();
+  }
+});
+
+// Schema v4 (the criteria a service is not graded on): a v3 file — what the
+// builds before it wrote — gains services.grade_off and nothing else moves.
+// Built through openRaw + the first three STEPS: openStore would write a v4
+// store. Every table is read whole before the step and after it.
+test('a v3 file migrates to v4: services gains grade_off, NULL on every row it held; every other column of every pre-existing row, the indexes and the triggers are as they were; a second run applies nothing', async () => {
+  const path = join(tempDir('v3-real'), 'observogram.db');
+  const db = await openRaw(path);
+  try {
+    assert.deepEqual(runMigrations(db, STEPS.slice(0, 3)), { from: 0, to: 3, applied: [1, 2, 3] });
+    const columns = () => pragma(db, 'table_info(services)').map((c) => c.name);
+    assert.deepEqual(columns(), ['id', 'org_id', 'slug', 'name', 'owners', 'tier', 'description', 'created_at', 'updated_at', 'repository'], 'a v3 store exactly: no grade_off');
+    const at = '2026-10-01T08:00:00.000Z';
+    const later = '2026-10-02T09:30:00.000Z';
+    prepare(db, "INSERT INTO users (kind, login, created_at) VALUES ('local', 'alice', ?), ('local', 'bob', ?)").run(at, at);
+    prepare(db, "INSERT INTO orgs (id, name, root, created_at) VALUES ('default', 'Default', '.', ?), ('acme', 'Acme', 'orgs/acme', ?)").run(at, at);
+    prepare(db, "INSERT INTO memberships (org_id, user_id, role, created_at) VALUES ('default', 1, 'admin', ?), ('acme', 2, 'viewer', ?)").run(at, at);
+    // A record with every v3 field said, one with the defaults, and the same slug in another org.
+    prepare(db, `INSERT INTO services (id, org_id, slug, name, owners, tier, description, created_at, updated_at, repository)
+      VALUES (1, 'acme', 'pay', 'Payments', '["team-pay","sre"]', 'tier-1', 'takes the money', ?, ?, '{"kind":"github","location":"https://github.com/acme/pay","ref":"main"}')`).run(at, later);
+    prepare(db, "INSERT INTO services (id, org_id, slug, name, created_at, updated_at) VALUES (2, 'acme', 'ledger', 'Ledger', ?, ?), (3, 'default', 'pay', 'Default pay', ?, ?)").run(at, at, at, at);
+    prepare(db, "INSERT INTO mcp_endpoints (id, org_id, name, url, created_at) VALUES (1, 'acme', 'prod-mcp', 'https://mcp.acme.example/mcp', ?)").run(at);
+    prepare(db, `INSERT INTO environments (id, service_id, name, tier, bindings, mcp_endpoint_id, created_at, updated_at) VALUES (1, 1, 'prod', 'tier-2', '{"region":"eu"}', 1, ?, ?)`).run(at, at);
+    prepare(db, "INSERT INTO packs (org_id, id, label, source, created_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'Payments', 'upload', ?)").run(at);
+    prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('acme', 'uploaded-pay-0123abcd', 1, 'primary')").run();
+    prepare(db, "INSERT INTO verdicts (org_id, pack_id, artefact_id, artefact_key, status, behavior_hash, actor, set_at) VALUES ('acme', 'uploaded-pay-0123abcd', 'SLI-01', 'k', 'trusted', 'h', 'alice', ?)").run(at);
+    prepare(db, "INSERT INTO waivers (org_id, service_id, rule_id, reason, author, expires_at, created_at) VALUES ('acme', 1, 'L3.MUST.recording_rule_per_slo', 'r', 'alice', ?, ?)").run(later, at);
+    prepare(db, "INSERT INTO audit (at, org_id, actor, action, target_kind, target_id, detail) VALUES (?, 'acme', 'alice', 'service.create', 'service', 'pay', NULL), (?, 'acme', 'alice', 'service.update', 'service', 'pay', ?)")
+      .run(at, later, JSON.stringify({ fields: ['repository'] }));
+    // Each read prepares its own statement (db.prepare, not the cached prepare()): on Node 22.16 a statement
+    // prepared before an ALTER TABLE answers its first all() afterwards with the columns it had. The rows the
+    // driver hands back have no prototype: copied, so a row and its expectation compare as plain objects.
+    const dump = () => Object.fromEntries(V2_TABLES.map((t) => [t, db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all().map((r) => ({ ...r }))]));
+    const schemaObjects = () => db.prepare("SELECT type, name, tbl_name FROM sqlite_schema WHERE type IN ('index', 'trigger') ORDER BY type, name").all().map((r) => `${r.type} ${r.name} on ${r.tbl_name}`);
+    const before = dump();
+    const objectsBefore = schemaObjects();
+    assert.deepEqual(Object.fromEntries(V2_TABLES.map((t) => [t, before[t].length])),
+      { audit: 2, environments: 1, mcp_endpoints: 1, memberships: 2, orgs: 2, pack_services: 1, packs: 1, schema_meta: 1, services: 3, users: 2, verdicts: 1, waivers: 1 }, 'a row in every table before the step');
+    pragma(db, 'foreign_keys=ON');
+    assert.deepEqual(runMigrations(db), { from: 3, to: 4, applied: [4] });
+    assert.equal(userVersion(db), 4);
+    assert.deepEqual(columns(), ['id', 'org_id', 'slug', 'name', 'owners', 'tier', 'description', 'created_at', 'updated_at', 'repository', 'grade_off'], 'one column more, last');
+    assert.deepEqual(pragma(db, 'table_info(services)').filter((c) => c.name === 'grade_off').map((c) => [c.type, c.notnull, c.dflt_value, c.pk]), [['TEXT', 0, null, 0]], 'TEXT, nullable, no default');
+    const after = dump();
+    for (const t of V2_TABLES) {
+      assert.deepEqual(after[t], t === 'services' ? before[t].map((r) => ({ ...r, grade_off: null })) : before[t], `${t}: every row it held, as it was`);
+    }
+    assert.deepEqual(after.services.map((r) => [r.slug, r.repository, r.owners, r.updated_at, r.grade_off]), [
+      ['pay', '{"kind":"github","location":"https://github.com/acme/pay","ref":"main"}', '["team-pay","sre"]', later, null],
+      ['ledger', null, '[]', at, null],
+      ['pay', null, '[]', at, null],
+    ], 'a record from before is graded on every criterion, and keeps its repository and its updated_at');
+    assert.deepEqual(tables(db), V2_TABLES, 'no table more');
+    assert.deepEqual(schemaObjects(), objectsBefore, 'no index or trigger more or less');
+    assert.deepEqual(pragma(db, 'foreign_key_check'), []);
+    assert.equal(pragma(db, 'foreign_keys')[0].foreign_keys, 1, 'foreign keys back ON after the run');
+    // The column takes the list as JSON text, and the service's other rows still hang off it.
+    const off = '[{"key":"chaos-validated","reason":"no fault injection here","by":"alice","at":"2026-11-10T09:00:00.000Z"}]';
+    prepare(db, 'UPDATE services SET grade_off = ? WHERE id = 2').run(off);
+    assert.deepEqual(prepare(db, 'SELECT id, grade_off FROM services ORDER BY id').all().map((r) => [r.id, r.grade_off]), [[1, null], [2, off], [3, null]]);
+    prepare(db, 'DELETE FROM services WHERE id = 1').run();
+    assert.deepEqual(['environments', 'pack_services', 'waivers'].map((t) => prepare(db, `SELECT count(*) AS n FROM ${t}`).get().n), [0, 0, 0], 'the cascades still hold');
+    assert.deepEqual(runMigrations(db), { from: 4, to: 4, applied: [] });
   } finally {
     db.close();
   }
@@ -1362,6 +1433,79 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
       'mcp_endpoint.create', 'service.create', 'service.update', 'environment.create', 'environment.update', 'mcp_endpoint.delete',
       'pack.register', 'pack.link', 'service.create', 'pack.link', 'pack.unlink', 'service.delete', 'pack.remove',
     ]);
+  } finally {
+    close();
+  }
+});
+
+// The criteria a service is not graded on (schema v4, services.grade_off):
+// the repository keeps the list the admin module hands it, whole, as JSON —
+// NULL for none — and its service.update row names the keys now off.
+test('services.gradeOff: [] on a new record (NULL in the row); updateService round-trips the list as written, [] stores NULL and reads back []; the service.update row names the keys now off, only when the patch carries the field; what is not a list of { key, … } is a TypeError and no write; another org changes none of it', async () => {
+  const { db, close } = await freshStore('grade-off');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    const column = (id) => prepare(db, 'SELECT grade_off FROM services WHERE id = ?').get(id).grade_off;
+    const updates = () => auditRepo.listAudit(db, { orgId: 'acme', action: 'service.update', limit: 1000 }).reverse().map((r) => [r.actor, r.targetKind, r.targetId, r.detail]);
+    const off = [
+      { key: 'chaos-validated', reason: 'no fault injection on this project', by: 'alice', at: '2026-11-10T09:00:00.000Z' },
+      { key: 'fresh', reason: 'read by hand each quarter — "as agreed"', by: 'bob', at: '2026-11-10T09:05:00.000Z' },
+    ];
+    const acme = runWithOrg('acme', () => {
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments', tier: 'tier-1' });
+      assert.deepEqual(svc.gradeOff, [], 'a new record is graded on every criterion');
+      assert.equal(column(svc.id), null, 'and its column is NULL');
+      assert.deepEqual(Object.keys(svc), ['id', 'orgId', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'createdAt', 'updatedAt']);
+
+      // The list round-trips as written, through every read.
+      const up = services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      assert.deepEqual(up.gradeOff, off);
+      assert.equal(column(svc.id), JSON.stringify(off), 'the column holds the list as JSON');
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, off);
+      assert.deepEqual(services.getServiceBySlug(db, 'pay').gradeOff, off);
+      assert.deepEqual(services.listServices(db).map((s) => [s.slug, s.gradeOff]), [['pay', off]]);
+      assert.deepEqual([up.slug, up.name, up.owners, up.tier, up.description, up.repository, up.createdAt], ['pay', 'Payments', [], 'tier-1', null, null, svc.createdAt], 'nothing else of the record moved');
+      assert.deepEqual(updates(), [['alice', 'service', 'pay', { fields: ['gradeOff'], gradeOff: ['chaos-validated', 'fresh'] }]], 'the row names the field and the keys now off — never a reason');
+
+      // A patch without the field keeps the list, and its row says nothing of it.
+      const renamed = services.updateService(db, 'alice', svc.id, { name: 'Pay' });
+      assert.deepEqual([renamed.name, renamed.gradeOff], ['Pay', off]);
+      assert.deepEqual(updates().at(-1), ['alice', 'service', 'pay', { fields: ['name'] }]);
+      // With another field: both in `fields`, in the repository's order, and the keys.
+      const both = services.updateService(db, 'bob', svc.id, { gradeOff: off.slice(0, 1), tier: 'tier-2' });
+      assert.deepEqual([both.tier, both.gradeOff], ['tier-2', off.slice(0, 1)]);
+      assert.deepEqual(updates().at(-1), ['bob', 'service', 'pay', { fields: ['tier', 'gradeOff'], gradeOff: ['chaos-validated'] }]);
+
+      // [] switches everything back on: NULL in the row, [] on the record, and the row says none is off.
+      const cleared = services.updateService(db, 'alice', svc.id, { gradeOff: [] });
+      assert.deepEqual(cleared.gradeOff, []);
+      assert.equal(column(svc.id), null, '[] is stored as NULL, not as "[]"');
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, []);
+      assert.deepEqual(updates().at(-1), ['alice', 'service', 'pay', { fields: ['gradeOff'], gradeOff: [] }]);
+
+      // What is not a list of objects with a string key: a TypeError before any write.
+      services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      const rows = updates().length;
+      for (const bad of [null, 'chaos-validated', { key: 'fresh' }, ['fresh'], [null], [[]], [{ reason: 'no key' }], [{ key: 7, reason: 'x' }], [off[0], 'fresh']]) {
+        assert.throws(() => services.updateService(db, 'alice', svc.id, { gradeOff: bad, name: 'Never' }),
+          { name: 'TypeError', message: 'observogram store: gradeOff is an array of { key, reason, by, at }' }, JSON.stringify(bad));
+      }
+      assert.deepEqual([column(svc.id), services.getService(db, svc.id).name, updates().length], [JSON.stringify(off), 'Pay', rows], 'a refused patch wrote nothing — not its other field, not a row');
+      // A column holding JSON null (never written by this build) still reads as none.
+      prepare(db, "UPDATE services SET grade_off = 'null' WHERE id = ?").run(svc.id);
+      assert.deepEqual(services.getService(db, svc.id).gradeOff, []);
+      services.updateService(db, 'alice', svc.id, { gradeOff: off });
+      return svc;
+    });
+    runWithOrg('bravo', () => {
+      assert.throws(() => services.updateService(db, 'bob', acme.id, { gradeOff: [] }), /no service/);
+      const own = services.createService(db, 'bob', { slug: 'pay', name: 'Bravo pay' });
+      assert.deepEqual(own.gradeOff, [], 'the same slug in another org has its own switches');
+      assert.deepEqual(services.listServices(db).map((s) => s.gradeOff), [[]]);
+    });
+    runWithOrg('acme', () => assert.deepEqual(services.getService(db, acme.id).gradeOff, off, 'acme\'s list is as acme left it'));
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create']);
   } finally {
     close();
   }

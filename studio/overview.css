@@ -48,6 +48,19 @@
 .ov-gw { display: flex; align-items: baseline; gap: 10px; }
 .ov-gw__pill { flex: 0 0 auto; min-width: 58px; justify-content: center; }
 .ov-gw__text { min-width: 0; }
+/* A criterion's switch (the board): a quiet text button at the row's end; the ask in place; the criteria off. */
+.ov-gw__switch { flex: 0 0 auto; margin-left: auto; padding: 0 2px; border: 0; background: none; color: var(--og-muted); font: 400 12px/1.4 var(--og-font); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; cursor: pointer; }
+.ov-gw__switch:hover, .ov-gw__switch:focus-visible { color: var(--og-text); }
+.ov-gw__switch[aria-disabled="true"] { cursor: help; }
+.ov-gw--ask { flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 2px 0 4px; padding: 8px 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; background: var(--og-sunken); }
+.ov-gw__ask { display: grid; gap: 4px; flex: 1 1 240px; min-width: 0; }
+.ov-gw__ask-l { font: 600 12px/1.2 var(--og-font); color: var(--og-text); }
+.ov-gw--ask .og-input { min-height: 32px; font-size: 13px; }
+.ov-gw--ask .og-btn { min-height: 32px; padding: 4px 12px; font-size: 12.5px; }
+.ov-gw-off__h { margin: 12px 0 0; font: 600 12px/1.2 var(--og-font); }
+.ov-gw__by::before { content: '— '; }
+.ov-grade__criteria { font: var(--og-label-font); }
+.ov-board .ov-grade__criteria { font: 400 12px/1.3 var(--og-font); }
 
 .ov-live__row, .ov-next__row { display: flex; align-items: center; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
 .ov-live__pill { flex: 0 0 auto; }

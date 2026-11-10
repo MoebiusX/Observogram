@@ -952,7 +952,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
@@ -1204,6 +1204,61 @@ service has one environment) does the whole check:
    and budget) and run, exactly as `POST /api/journeys/:name/run` runs it.
    **Check now** on the board re-checks live against the last scan; **Run**
    reads the repository again too.
+
+#### Criteria a service is not graded on
+
+The grade has seven criteria, and not every one applies to every service: a
+project that runs no fault injection has no use for *Chaos-validated*. A
+service can switch a criterion off, with a reason:
+
+- **On the board.** Under *Why this grade* every line ends with *Not for this
+  service…*: it asks why, in place, and **Stop grading it** saves the switch
+  and checks against live again. Where the reasons are not offered (they would
+  not add up to the letter) the board lists the criteria graded by name, each
+  with the same switch. One switch is saved at a time, built from the record
+  as the server has it, so a switch made meanwhile — here or in another tab —
+  is kept. The criteria that are off are listed under
+  the reasons — what, why, who and when — each with **Grade it again**. A
+  reader below operator sees the same words and is told why they are not
+  theirs to press.
+- **What changes.** The grade is over the criteria that are on: a criterion
+  switched off leaves both the points and the total, so the board reads
+  *Graded on 6 of 7 criteria* and *3.9 of 6 points*. It is never hidden: the
+  status strip, the list row's letter (*… · on 6 of 7 criteria*, and *…
+  graded before this service's criteria changed* until the next check), the
+  journeys views and Expert's Diagnose — which grades the service's pack with
+  the same switches, draws the criterion as shown, not scored, and counts its
+  scored checks accordingly — all say so. A score change between two runs
+  graded on different criteria is not shown as a change of the service.
+- **The record.** `PATCH /api/services/:id { gradeOff: [{ key, reason }] }`
+  sends the whole list; a key is one of `multi-modal`, `correlated`,
+  `calibrated`, `comprehensive`, `chaos-validated`, `drift-free`, `fresh`,
+  a reason is 1–200 characters on one line, and at least one criterion stays
+  on. The service's view carries `gradeOff: [{ key, reason, by, at }]` —
+  `by` the audit actor who switched it off and `at` when, kept while the key
+  and the reason stay as they are. The `service.update` audit row names the
+  criteria now off.
+- **The runs.** A check is the service's when it names the service
+  (`service:`, as a service key) or checks the service's own pack — the rule
+  the board uses to find it. Every run of the service's checks — its **Run**,
+  **Check now**, a schedule — grades with the switches as they are at that moment,
+  and the run record says which criteria its score left out (`grade.off`,
+  absent when all seven were graded; `lastRun.gradeOff` in
+  `GET /api/journeys`). A step in a score series beside a change there is a
+  change of what was graded, not of the service. A run that graded on other
+  criteria than the service's now is not the board's letter: the board grades
+  from the repository alone and says to check again.
+- **The command line and a schedule.** `packc journey run` — which is what a
+  schedule runs — has no service record to ask, so the switches ride in the
+  check's file: every check the studio saved for the service (its Run's
+  `<slug>.<env>`, the start's and Expert's captures) carries
+  `gradeOff: [chaos-validated]` from its save, and a switch changed on the
+  record rewrites them, keeping their other keys and their first comment
+  block. A file written by hand is never rewritten: through the server it is
+  graded on the record anyway, and from the command line on its own
+  `gradeOff` — a key that is no criterion, or all seven, is a load-time
+  error. The report's grade row ends *— on 6 of 7 criteria (not graded:
+  chaos-validated)*, and a notification's `grade` carries `off`.
 
 #### Whose access reads a repository
 
@@ -1521,8 +1576,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.21 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.21
+docker build -t observogram:0.8.22 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.22
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1585,7 +1640,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.21
+  observogram:0.8.22
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1593,7 +1648,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.21
+    image: observogram:0.8.22
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -2640,6 +2695,7 @@ gate:
     rows:
       scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
 keepLivePack: transitions       # snapshot Pack B beside the run: transitions (default) · always · never
+gradeOff: [chaos-validated]     # grade criteria this check is not graded on (a service's own check carries its record's switches)
 schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared, never fired from here
                                 #   also { cron, timezone } or { every: 15m }
 stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
@@ -2957,6 +3013,13 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
    above: a v2 build (0.6.0) refuses a v3 database (`the database is at
    schema v3, but this build knows up to v2`) and a v3 backup, so take a
    `packc store backup` before the upgrade.
+5. **Schema v4** (0.8.22): a store build from this version on migrates a v3
+   database to v4 at its first start — one column, `services.grade_off`
+   (the grade criteria a service is not graded on; `null` on every service
+   it finds, so every one is graded as before); every row a v3 store held is
+   kept. One-way as above: an earlier build refuses a v4 database (`the
+   database is at schema v4, but this build knows up to v3`) and a v4
+   backup, so take a `packc store backup` before the upgrade.
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
@@ -3506,7 +3569,7 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository` (`changed` lists what differed; nothing → no audit row) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on (`changed` lists what differed; nothing → no audit row) |
 | `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |

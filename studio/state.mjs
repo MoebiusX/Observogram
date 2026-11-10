@@ -227,6 +227,7 @@ export const state = {
   uploadedSource: null,        // set when user uploaded a pack instead of using the catalog
   diagnoseSub: 'grade',        // DIAGNOSE sub-tab: 'grade' (verdict report) | 'compare' (A-vs-B side-by-side)
   compareBId: null,            // second pack id for the COMPARE view
+  gradeOff: [],                // the grade criteria the service of the pack on screen is not graded on (keys; app.mjs gradeOffInFocus, set at each repaint)
   compareBEnv: null,
   compareSlice: 'all',         // 'all' | 'onlyA' | 'onlyB' | 'both' | 'a-b' | 'a+b'
   compareSearch: '',           // text filter applied to card id/title

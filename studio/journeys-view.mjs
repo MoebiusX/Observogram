@@ -153,7 +153,9 @@ export const DELIVERY_OUTCOMES = {
 function outcomeLabel(last) {
   const o = checkOutcome(last.outcome);
   if (last.outcome === 'vantage-lost') return `${o.label} · the live source did not answer`;
-  return `${o.label} · alignment ${last.alignmentPct ?? '?'}% · grade ${last.gradeScore ?? '?'}%`;
+  // A score over fewer than the seven criteria (lastRun.gradeOff) says so.
+  const off = Array.isArray(last.gradeOff) ? last.gradeOff.length : 0;
+  return `${o.label} · alignment ${last.alignmentPct ?? '?'}% · grade ${last.gradeScore ?? '?'}%${off && off < 7 ? ` on ${7 - off} of 7 criteria` : ''}`;
 }
 
 // One line for a finished run, for the toast (the #toast live region
@@ -480,7 +482,7 @@ function renderRunsTable(runs) {
       <td><span title="${escapeHtml(om.label)}" aria-hidden="true">${om.icon}</span><span class="sr-text">${escapeHtml(om.label)}</span></td>
       <td>${escapeHtml(new Date(r.startedAt).toLocaleString())}</td>
       <td>${r.drift?.alignmentPct ?? '?'}%</td>
-      <td>${r.grade?.score ?? '?'}%</td>
+      <td>${r.grade?.score ?? '?'}%${Array.isArray(r.grade?.off) && r.grade.off.length && r.grade.off.length < 7 ? ` <span class="og-muted">on ${7 - r.grade.off.length} of 7</span>` : ''}</td>
       <td>${r.outcome === 'vantage-lost' ? escapeHtml(`unable to observe: ${r.error || 'the live source did not answer'}`)
             : r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map(b => b.criterion).join(', ')) : '—'}</td>
       <td>${r.tookMs ?? '?'} ms</td>

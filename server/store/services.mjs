@@ -4,7 +4,9 @@
 // pack's bindings.criticality vocabulary), not a library minTier.
 // repository is where the service's declaration lives (schema v3): an object
 // { kind, location, ref } as server/service-admin.mjs parseRepository
-// normalised it, or null.
+// normalised it, or null. gradeOff is the grade criteria the service is not
+// graded on (schema v4): [{ key, reason, by, at }] as parseGradeOff wrote it,
+// [] while every criterion is graded.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -17,6 +19,7 @@ export function rowToService(r) {
   return {
     id: r.id, orgId: r.org_id, slug: r.slug, name: r.name, owners: fromJson(r.owners, []),
     tier: r.tier, description: r.description, repository: fromJson(r.repository ?? null, null),
+    gradeOff: fromJson(r.grade_off ?? null, []) || [],
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -26,6 +29,14 @@ function repositoryJson(repository) {
   if (repository === null || repository === undefined) return null;
   if (typeof repository !== 'object' || Array.isArray(repository)) throw new TypeError('observogram store: repository is an object or null');
   return JSON.stringify(repository);
+}
+
+// An array of plain objects (the admin module owns their shape); none is NULL.
+function gradeOffJson(gradeOff) {
+  if (!Array.isArray(gradeOff) || gradeOff.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.key !== 'string')) {
+    throw new TypeError('observogram store: gradeOff is an array of { key, reason, by, at }');
+  }
+  return gradeOff.length ? JSON.stringify(gradeOff) : null;
 }
 
 function requireOwners(owners) {
@@ -76,15 +87,18 @@ export function updateService(db, actor, id, patch) {
     tier: patch.tier === undefined ? undefined : optionalText(patch.tier, 'tier'),
     description: patch.description === undefined ? undefined : optionalText(patch.description, 'description', { max: 4000 }),
     repository: patch.repository === undefined ? undefined : repositoryJson(patch.repository),
+    gradeOff: patch.gradeOff === undefined ? undefined : gradeOffJson(patch.gradeOff),
   };
-  const { sql, params, fields } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
+  const { sql, params, fields } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository', gradeOff: 'grade_off' });
+  // The row names the criteria now off, so the audit says what the grade stopped counting.
+  const detailOf = () => ({ fields, ...(patch.gradeOff === undefined ? {} : { gradeOff: patch.gradeOff.map((x) => x.key) }) });
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) throw notFound('service', id);
     if (!sql) return current;
     prepare(db, `UPDATE services SET ${sql}, updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
-    writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail: { fields } });
+    writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail: detailOf() });
     return getService(db, id);
   });
 }
