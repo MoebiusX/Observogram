@@ -1022,8 +1022,8 @@ export function buildOverviewModel(input = {}) {
 // A host that does not opt in (`listable`) never draws it.
 
 export const REPOSITORY_KINDS = Object.freeze([
-  Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one read with your own GitHub token, asked for when you run it.' }),
-  Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: 'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.' }),
+  Object.freeze({ kind: 'github', label: 'GitHub', placeholder: 'https://github.com/owner/repo', hint: 'A public repository, or a private one read with your own GitHub token.' }),
+  Object.freeze({ kind: 'ado', label: 'Azure DevOps', placeholder: 'https://dev.azure.com/org/project/_git/repo', hint: 'Read with your own Azure DevOps token (Code (Read)).' }),
   Object.freeze({ kind: 'path', label: 'Folder', placeholder: 'C:\\src\\my-service  or  /srv/src/my-service', hint: 'A folder the server can read: its full path on the server.' }),
   // Offered only by a host that wires it (formModel's `uploads`): the files come from the person's own machine.
   Object.freeze({ kind: 'upload', label: 'Upload', placeholder: '', hint: 'A folder or a .zip from your machine. Its files are kept for this service and each Run scans them again; upload again when they change.' }),
@@ -1100,8 +1100,12 @@ export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 //             passes it draws Sign in to … and Sign out of … (hooks signInRepoHost, signOutRepoHost);
 //             one that passes none draws neither
 // → { kind: 'loading' | 'error' | 'list', error, rows, hidden, canWrite, reason, empty, tokens, accounts }
-//   a row's `auth` asks for the person's token: { kind, label, refused, text }, and `signIn`
-//   ({ kind, label }) when the host offers sign-in here
+//   a row's `auth` is where the person gives their own token: { kind, label, refused, text },
+//   and `signIn` ({ kind, label }) when the host offers sign-in here. It is there from the
+//   start (`offered: true`) on every row a Run of which may need one — a GitHub or Azure
+//   DevOps repository, no token of that host held in this tab, the person not signed in to
+//   the host — so nobody has to fail a Run to be asked; after a refusal it says what the
+//   host answered (authAsk)
 //   accounts  the hosts the person is signed in to: { kind, host, account, text }
 export function serviceListModel(input = {}) {
   const {
@@ -1113,6 +1117,7 @@ export function serviceListModel(input = {}) {
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
   const tokens = (Array.isArray(heldTokens) ? heldTokens : []).filter((k) => HOST_LABEL[k]).map((k) => ({ kind: k, label: `${HOST_LABEL[k]} token`, text: `Your ${HOST_LABEL[k]} token is sent with this tab's Runs of ${HOST_LABEL[k]} repositories; it is never kept on the server.` }));
   const signIn = repoSignIn && typeof repoSignIn === 'object' ? repoSignIn : null;
+  const held = (Array.isArray(heldTokens) ? heldTokens : []).filter((k) => HOST_LABEL[k]);
   const accounts = signIn ? Object.keys(HOST_LABEL).filter((k) => signIn[k]?.signedIn === true).map((k) => {
     const account = typeof signIn[k].account === 'string' && signIn[k].account ? signIn[k].account : null;
     return { kind: k, host: HOST_LABEL[k], account, text: `Signed in to ${HOST_LABEL[k]}${account ? ` as ${account}` : ''}: your Runs of ${HOST_LABEL[k]} repositories read as that account in this browser.` };
@@ -1154,7 +1159,8 @@ export function serviceListModel(input = {}) {
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
-        auth: authAsk(results[key]?.repoAuth, canWrite, signIn),
+        // What the host answered the last Run, else the offer a row that can run starts with.
+        auth: authAsk(results[key]?.repoAuth, canWrite, signIn) || (!why && !busy ? authOffer(s.repository, { canWrite, repoSignIn: signIn, held }) : null),
         complete: !!(env && repository && live),
       });
     }
@@ -1191,18 +1197,74 @@ function authAsk(need, canWrite, repoSignIn = null) {
   return { kind: need.kind, label: `${host} token`, refused: need.refused === true, text, ...(signIn ? { signIn } : {}) };
 }
 
+// The person's own token, offered on the row before any Run: a repository on
+// GitHub or Azure DevOps that this tab holds no token for and that no sign-in
+// to the host reads. A Run that would need one no longer has to fail first,
+// and a page read again (the tab's memory is all that holds a token) shows
+// the field where the token goes, not an error. A public GitHub repository
+// needs none, and the note says so: Run reads it as before, the field empty.
+// The Azure DevOps sign-in reads Azure DevOps Services only, so a repository
+// on another host is offered the token alone.
+const ADO_SERVICES = /^https:\/\/(?:dev\.azure\.com|[a-z0-9-]+\.visualstudio\.com)(?:[/:?#]|$)/i;
+function authOffer(repository, { canWrite = true, repoSignIn = null, held = [] } = {}) {
+  const kind = repository?.kind;
+  if (!canWrite || !HOST_LABEL[kind] || held.includes(kind)) return null;
+  const s = repoSignIn ? repoSignIn[kind] : null;
+  if (s?.signedIn === true) return null;   // read as that account: nothing to give
+  const host = HOST_LABEL[kind];
+  const takesSignIn = kind !== 'ado' || ADO_SERVICES.test(String(repository.location ?? ''));
+  const signIn = s?.available === true && takesSignIn ? { kind, label: `Sign in to ${host}` } : null;
+  const kept = 'sent with this tab\'s Runs only and never kept on the server';
+  let text;
+  if (kind === 'ado') {
+    text = signIn
+      ? `Azure DevOps reads this repository as you: sign in to Azure DevOps, or give your own token (Code (Read)) — ${kept}.`
+      : `Azure DevOps reads this repository with your own token (Code (Read)) — ${kept}.`;
+  } else {
+    text = signIn
+      ? `A private repository reads as you: sign in to GitHub, or give your own token — ${kept}. A public one needs neither.`
+      : `A private repository reads with your own GitHub token — ${kept}. A public one needs none.`;
+  }
+  return { kind, label: `${host} token`, refused: false, offered: true, text, ...(signIn ? { signIn } : {}) };
+}
+
 // A repository kind's hint on this server: a host that offers sign-in (and
 // the person signed in to this studio, which is when the page passes
 // `repoSignIn`) is named with it — the hint never mentions only a token where
-// Sign in is the first way offered.
+// Sign in is the first way offered. Signing in is on the service's row (it
+// opens the host's own page, and a blocked window would take the form's
+// answers with it); the token is given there too, or in the form (formAuth).
 function repositoryHint(kind, repoSignIn) {
   const host = HOST_LABEL[kind.kind];
   const s = host && repoSignIn && typeof repoSignIn === 'object' ? repoSignIn[kind.kind] : null;
   if (!s || s.available !== true) return kind.hint;
-  const who = s.signedIn && s.account ? ` (you are signed in to ${host} as ${s.account})` : '';
+  if (s.signedIn) {
+    const who = s.account ? ` (you are signed in to ${host} as ${s.account})` : '';
+    return kind.kind === 'github'
+      ? `A public repository, or a private one read as you${who}: sign in to GitHub, or give your own GitHub token, on its row.`
+      : `Read as you${who}: sign in to Azure DevOps, or give your own token (Code (Read)), on its row.`;
+  }
   return kind.kind === 'github'
-    ? `A public repository, or a private one read as you${who}: sign in to GitHub, or give your own GitHub token, when you run it.`
-    : `Read as you${who}: sign in to Azure DevOps, or give your own token (Code (Read)), when you run it.`;
+    ? 'A public repository, or a private one read as you: sign in to GitHub on its row, or give your own GitHub token.'
+    : 'Read as you: sign in to Azure DevOps on its row, or give your own token (Code (Read)).';
+}
+
+// The person's own token, in the form: the field a row would offer
+// (authOffer) is in the form too, so the first Save and run of a private
+// repository reads it and no Run has to fail to be asked. Opt-in: only a host
+// that passes `heldTokens` — it keeps the person's tokens, and its
+// saveService takes what the field holds (`repoAuth`) — draws it. Never where
+// a row would offer none: a folder, an upload, a source switched off, a token
+// of that host already held in the tab, the person signed in to the host, a
+// reader who cannot save. GitHub's is marked optional: a public repository
+// needs none.
+function formAuth(v, { canWrite = true, repoSignIn = null, heldTokens = null, sources = null } = {}) {
+  if (!Array.isArray(heldTokens) || sourceOff(sources, v.kind)) return null;
+  const offer = authOffer({ kind: v.kind, location: v.location }, { canWrite, repoSignIn: repoSignIn && typeof repoSignIn === 'object' ? repoSignIn : null, held: heldTokens });
+  if (!offer) return null;
+  const kept = 'Sent with this tab\'s Runs only and never kept on the server.';
+  const optional = offer.kind === 'github';
+  return { kind: offer.kind, label: offer.label, optional, text: optional ? `For a private repository. ${kept}` : kept };
 }
 
 // ---------- the Add a service form ----------
@@ -1210,6 +1272,8 @@ function repositoryHint(kind, repoSignIn) {
 // The form's state is the host's: { open, mode: 'add' | 'edit', serviceId, envFixed, values, saving,
 // error }. `values` = { name, env, kind, location, ref, endpointId, epName, epUrl, epToken };
 // endpointId is an endpoint's id, NEW_ENDPOINT for one registered with the form, or ''.
+// The person's own token is never one of them: its field is the view's, read when Save is
+// pressed and handed to saveService, so nothing typed there is written into the markup.
 
 export const FORM_CLOSED = Object.freeze({ open: false });
 
@@ -1303,7 +1367,11 @@ export function formProblemsNote(problems = {}) {
 //             offers sign-in to says so in its hint — a private repository is read as you
 //   sources   the org's repository sources (as serviceListModel takes it): a source switched
 //             off is not offered, but for the form's own kind, kept and marked off
-export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, now = Date.now() } = {}) {
+//   heldTokens  the hosts whose token the person gave in this tab (as serviceListModel takes
+//             it; [] when none). A host that passes it draws the person's own token field in
+//             the form (`auth`: { kind, label, optional, text }, or null — formAuth) and takes
+//             what it holds in saveService({ run, repoAuth }); one that passes none draws no field
+export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, heldTokens = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
@@ -1326,6 +1394,7 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     kinds: offered.map((k) => ({ ...k, selected: k.kind === v.kind })),
     kind: offered.find((k) => k.kind === v.kind) || offered[0],
     sourcesNote: switchedOff.length ? `Switched off in Settings → Repository sources: ${switchedOff.join(', ')}.` : null,
+    auth: formAuth(v, { canWrite, repoSignIn, heldTokens, sources }),
     browse: browseModel(form, v, folders, canWrite),
     upload: uploadModel(form, v, { uploads, canWrite, now }),
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),

@@ -349,7 +349,7 @@ the board or the list is on screen) is the host's:
 
 ```js
 import { serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT } from './overview-model.mjs';
-import { renderServiceList } from './overview-view.mjs';
+import { renderServiceList, readTokenDrafts } from './overview-view.mjs';
 import { loadServiceListFacts } from './overview-api.mjs';           // GET /api/journeys, /api/mcp-endpoints, /api/repository-folders, /api/repository-sources; failures as sentences
 import { createServiceRecord, patchService, runServiceRecord } from './services-api.mjs';
 
@@ -360,20 +360,22 @@ let form = FORM_CLOSED;
 const list = serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack,
   journeys: facts.journeys, journeysError: facts.journeysError, endpoints: facts.endpoints,
   access, now: Date.now(), running, results, showAll, heldTokens, repoSignIn, sources: facts.sources });  // running / results: { [rowKey(serviceId, env)]: true | { error, repoAuth } }; heldTokens: ['github' | 'ado']; repoSignIn: /auth/me's
+const drafts = readTokenDrafts(container);      // before a repaint that clears the container: a token typed and not sent yet (below)
 renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints, register: facts.register, access, folders: facts.folders,
-  uploads: facts.sources?.upload !== false, sources: facts.sources }), host);
+  uploads: facts.sources?.upload !== false, sources: facts.sources, heldTokens }), host, { drafts });
 
 host.overview = {
   ...host.overview,
   addService() { form = { ...formOpened(services, { endpoints: facts.endpoints, sources: facts.sources }), focus: 'name' }; repaint(); },
   editService(serviceId, env) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints, sources: facts.sources }), focus: 'location' }; repaint(); },
   formInput(field, value, { redraw } = {}) { form = formInput(form, field, value); if (redraw) repaint(); },
-  async saveService({ run }) {                  // formProblems(form.values, { sources: facts.sources, original: form.original, uploadStaged: !!form.upload?.staged })
+  async saveService({ run, repoAuth }) {        // formProblems(form.values, { sources: facts.sources, original: form.original, uploadStaged: !!form.upload?.staged })
                                                 // first, its note formProblemsNote(problems); then the plan, call by call:
     const plan = savePlan(form.values, { services, keyOf: normalizeServiceKey, serviceId: form.serviceId });
     // plan.endpoint.create → POST /api/mcp-endpoints; plan.service.create → POST /api/services (createServiceRecord),
     // plan.service.patch → PATCH /api/services/:id; plan.env.create → POST /api/services/:id/environments,
     // plan.env.bind → PATCH /api/environments/:id { mcpEndpointId }. Then re-read, and Run when asked.
+    // repoAuth: the form's token field, when it holds one — once the save went through, keep it as runService's (below).
   },
   closeForm() { form = FORM_CLOSED; repaint(); },
   runService(key, { repoAuth } = {}) { /* POST /api/services/:id/run { env, repoAuth } (runServiceRecord(id, env, { repoAuth })), then re-read the list's facts */ },
@@ -457,6 +459,23 @@ memory only — never in storage — send it with that host's next Runs, drop it
 when a Run says it was `refused`, and pass the hosts you hold as
 `heldTokens`: the list names each with *Forget it* (`forgetRepoToken`). The
 studio's wiring is `repoTokens` and `runListRow` in `studio/app.mjs`.
+
+No Run has to fail to be asked: a row whose repository is on GitHub or Azure
+DevOps draws the field from the start, unless `heldTokens` names its host or
+`repoSignIn` says the person is signed in to it, and the row's own *Run*
+calls `runService(key, { repoAuth })` when the field holds something. The
+form draws the same field under the repository's address when you pass
+`heldTokens` to `formModel` — an array, `[]` when you hold none; without it
+the form has no field, as before — and *Save and run* and *Save* then call
+`saveService({ run, repoAuth })`: keep `repoAuth` for that host once the
+save went through (never when it was refused), and the Run that follows
+sends it. What a person types is in the field alone, never in a model or the
+markup; so a repaint that clears the container first reads
+`readTokenDrafts(container)` and hands the answer back as
+`renderServiceList(…, { drafts })`, which puts each value in the field drawn
+in its place (a row's by its key, the form's by its host) and drops the
+rest. Hold `drafts` in a local only. The studio's wiring is `saveListForm`
+and `renderMainView` in `studio/app.mjs`.
 
 **Signing in to the host instead.** Where the server is set up for it
 (README, *Signing in to GitHub or Azure DevOps*), pass `/auth/me`'s

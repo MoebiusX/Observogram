@@ -409,7 +409,11 @@ Belongs here:
   **Save** or **Cancel**. A name that keys an existing record completes it,
   never a second one;
 - the Repository answer's kinds: GitHub or Azure DevOps with an optional
-  branch; **Folder**, its full path on the server, typed or picked with
+  branch and, under the address, *Your GitHub token* (*optional*: a public
+  repository needs none) or *Your Azure DevOps token* — the person's own,
+  sent with the Run that **Save and run** starts and kept for the tab by
+  **Save**, not drawn where this tab already holds that host's token or the
+  person is signed in to the host; **Folder**, its full path on the server, typed or picked with
   **Browse…** (the server's folders by name — *Up*, each repository marked,
   *Use this folder*, *Close* — drawn only where the server would take a folder
   from this reader); **Upload**, *Choose a folder*, *Choose a .zip* or a drop,
@@ -422,8 +426,8 @@ Belongs here:
   row, in the server's words;
 - for a rank that cannot write (a viewer), **Add a service** and **Run**
   drawn unavailable, each saying why when pressed, the form's **Save and
-  run** and **Save** disabled, and no **Browse…**, upload buttons or token
-  ask: drawn, never removed;
+  run** and **Save** disabled, and no **Browse…**, upload buttons, token
+  field or token ask: drawn, never removed;
 - the services a live draft saw with no repository yet, counted under the
   list (*3 more services were seen live with no repository yet. Show them*);
 - *Already have the packs? Upload one or compare two instead* — Expert's home.
@@ -439,8 +443,12 @@ Does not belong here:
 
 ### Overview: repository access
 
-Where a host would not show the repository without the person's own access,
-the row that ran asks, and runs again once answered.
+A row whose repository is on GitHub or Azure DevOps has the place for the
+person's own access on it from the start, unless this tab already holds
+their token for that host or they are signed in to it: no Run has to fail
+to be asked. The form that adds or changes a service has the token's field
+too, so a new private repository's first **Save and run** reads it. After a
+refusal the row says what the host answered, and runs again once answered.
 
 Belongs here:
 
@@ -451,7 +459,17 @@ Belongs here:
   Azure DevOps Server repository still takes a personal access token);
 - or *Your GitHub token* (*Your Azure DevOps token*) and **Run with it**,
   sent with this tab's Runs of that host's repositories and never kept on
-  the server; a token the host refuses is dropped, and the row says so;
+  the server; the row's own **Run** sends what the field holds too, and
+  with it empty reads a public repository as before; a token the host
+  refuses is dropped, and the row says so;
+- the same field in the form, under the repository's address: **Save and
+  run** sends it with the Run that follows, **Save** keeps it for the tab's
+  next Run of that host, and neither keeps it when the save is refused;
+  signing in stays on the row;
+- a token typed and not sent yet staying in its field while the list is
+  drawn again (a Run that ends, a select in the form), the caret where it
+  was — and going with its field: a row that starts to run, another kind
+  chosen, the form closed;
 - above the list, under its heading, each token the tab holds with **Forget
   it**, and each host the person is signed in to (*Signed in to GitHub as …*)
   with **Sign out of GitHub**;
@@ -827,8 +845,10 @@ The path a person takes today, end to end:
    loopback; **Browse…** shows only what the server would take. Press **Save
    and run**. For a row already listed, press **Run**, or **Change** to say
    where it is.
-3. If the row asks, **Sign in to GitHub** (or Azure DevOps), or give your own
-   token and press **Run with it**.
+3. For a private repository, give your own token first: in the form's
+   field before **Save and run**, or in the row's before **Run** — both are
+   there from the start. Or **Sign in to GitHub** (or Azure DevOps) on the
+   row.
 4. Read the toast: the files read, of how many, from where, what was left
    out, the grade and how much matches live.
 5. Press **Open →**. On the board, read what the scan left out under

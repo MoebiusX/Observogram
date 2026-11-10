@@ -122,7 +122,7 @@ import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMod
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, scanLossText } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
-import { renderOverview, renderServiceList } from './overview-view.mjs';
+import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -874,6 +874,9 @@ export function renderMainView() {
   const view = $('#layer-view');
   // The audit's filters as typed but not applied survive the repaint.
   const auditDrafts = state.mode === 'settings' ? readAuditDrafts(view) : null;
+  // So does a token typed on the service list and not sent yet (overview-view.mjs readTokenDrafts):
+  // read from the fields, handed to the next draw, kept nowhere else.
+  const tokenDrafts = state.mode === 'overview' ? readTokenDrafts(view) : null;
   view.innerHTML = '';
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
@@ -890,7 +893,7 @@ export function renderMainView() {
   // Settings (STORE_PLAN §6 item 3, slice 6b): the org's environments and MCP endpoints.
   // Overview (the simplified front door): one service, three answers, read
   // from the engines; Expert — every screen below — is one switch away.
-  if (state.mode === 'overview') { renderOverviewHost(view); return; }
+  if (state.mode === 'overview') { renderOverviewHost(view, tokenDrafts); return; }
   if (state.mode === 'settings') { renderSettingsHost(view, auditDrafts); return; }
   // The service page (STORE_PLAN §6, slice 6a): one record, its environments as tabs.
   if (state.mode === 'service') { renderServicePageHost(view); return; }
@@ -1965,9 +1968,9 @@ function overviewModel() {
   });
 }
 
-function renderOverviewHost(view) {
+function renderOverviewHost(view, tokenDrafts = null) {
   if (overviewScreen === 'list' && serviceListAvailable()) {
-    renderServiceList(view, serviceListModelNow(), serviceFormModelNow(), overviewHost);
+    renderServiceList(view, serviceListModelNow(), serviceFormModelNow(), overviewHost, { drafts: tokenDrafts });
     // The focus hint is for the draw that follows the event, never a later repaint.
     if (listForm.open && listForm.focus) listForm = { ...listForm, focus: null };
     return;
@@ -2009,6 +2012,8 @@ function serviceFormModelNow() {
     endpoints: listFacts.endpoints, register: listFacts.register, access: state.access, folders: listFacts.folders, now: Date.now(),
     uploads: listFacts.sources?.upload !== false, sources: listFacts.sources,
     repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null,
+    // The form has the person's own token field too (saveListForm takes what it holds).
+    heldTokens: [...repoTokens.keys()],
   });
 }
 
@@ -2162,8 +2167,13 @@ function listFormInput(field, value, { redraw = false } = {}) {
 // The save plan, call by call. A step that succeeded is written back into
 // the form (the new endpoint's id), so a retry after a refusal further on
 // does not register it twice; the server's sentence is the form's error.
-async function saveListForm({ run = false } = {}) {
+// `repoAuth`: the person's own token, when the form's field holds one — kept
+// for the tab once the save went through, as a row's is (repoTokens, below),
+// so the Run that follows sends it and so does a later one.
+async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (!listForm.open || listForm.saving) return;
+  const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
+  const token = tokenHost ? String(repoAuth ?? '').trim() : '';
   const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
   if (Object.keys(problems).length) {
     listForm = { ...listForm, error: formProblemsNote(problems), focus: Object.keys(problems)[0] };
@@ -2200,6 +2210,7 @@ async function saveListForm({ run = false } = {}) {
   }
   await refreshServices();
   listForm = FORM_CLOSED;
+  if (token) repoTokens.set(tokenHost, token);
   await refreshListFacts();
   announce(`${plan.name} · ${plan.envName} saved.`);
   if (run) await runListRow(rowKey(serviceId, plan.envName));
@@ -2210,8 +2221,8 @@ async function saveListForm({ run = false } = {}) {
 // (POST /api/services/:id/run), then the list read again — the new pack, the
 // new last check. A 502 has kept a record when the live side was lost; the
 // re-read shows it, and the row says what happened.
-// The person's own GitHub and Azure DevOps tokens, given on a row whose host
-// asked for one: kept in this tab's memory only (never in storage, never on
+// The person's own GitHub and Azure DevOps tokens, given on a service's row
+// or in the form: kept in this tab's memory only (never in storage, never on
 // the server), sent with each Run of that host's repositories, dropped when
 // the host refuses it, when the person forgets it, or when the tab closes.
 const repoTokens = new Map();
