@@ -439,8 +439,11 @@ Does not belong here:
 
 ### Overview: repository access
 
-Where a host would not show the repository without the person's own access,
-the row that ran asks, and runs again once answered.
+A row whose repository is on GitHub or Azure DevOps has the place for the
+person's own access on it from the start, unless this tab already holds
+their token for that host or they are signed in to it: no Run has to fail
+to be asked. After a refusal the row says what the host answered, and runs
+again once answered.
 
 Belongs here:
 
@@ -451,7 +454,9 @@ Belongs here:
   Azure DevOps Server repository still takes a personal access token);
 - or *Your GitHub token* (*Your Azure DevOps token*) and **Run with it**,
   sent with this tab's Runs of that host's repositories and never kept on
-  the server; a token the host refuses is dropped, and the row says so;
+  the server; the row's own **Run** sends what the field holds too, and
+  with it empty reads a public repository as before; a token the host
+  refuses is dropped, and the row says so;
 - above the list, under its heading, each token the tab holds with **Forget
   it**, and each host the person is signed in to (*Signed in to GitHub as …*)
   with **Sign out of GitHub**;
@@ -827,8 +832,9 @@ The path a person takes today, end to end:
    loopback; **Browse…** shows only what the server would take. Press **Save
    and run**. For a row already listed, press **Run**, or **Change** to say
    where it is.
-3. If the row asks, **Sign in to GitHub** (or Azure DevOps), or give your own
-   token and press **Run with it**.
+3. For a private repository, **Sign in to GitHub** (or Azure DevOps) on the
+   row, or give your own token in its field, before you press **Run** — the
+   field is there from the start.
 4. Read the toast: the files read, of how many, from where, what was left
    out, the grade and how much matches live.
 5. Press **Open →**. On the board, read what the scan left out under

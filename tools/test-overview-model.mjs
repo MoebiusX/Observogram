@@ -1697,28 +1697,91 @@ test('a Run its host would not read without the person\'s own token asks for it 
   const refused = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: 'x', repoAuth: { ...ask, refused: true } } } });
   assert.equal(refused.rows[0].auth.text, 'That GitHub token was refused, or cannot read this repository. Give one that can.');
   assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, access: { canWrite: false }, results: { '1:prod': { error: 'x', repoAuth: ask } } }).rows[0].auth, null);
-  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: 'x' } } }).rows[0].auth, null, 'an error that is no access question asks nothing');
+  assert.equal(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, results: { '1:prod': { error: 'x' } } }).rows[0].auth?.offered, true, 'an error that is no access question asks nothing: the row keeps the offer it starts with');
   const held = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['ado', 'nope'] });
   assert.deepEqual(held.tokens, [{ kind: 'ado', label: 'Azure DevOps token', text: 'Your Azure DevOps token is sent with this tab\'s Runs of Azure DevOps repositories; it is never kept on the server.' }]);
   assert.deepEqual(serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).tokens, []);
   assert.deepEqual(REPOSITORY_KINDS.slice(0, 2).map((k) => k.hint), [
-    'A public repository, or a private one read with your own GitHub token, asked for when you run it.',
-    'Read with your own Azure DevOps token (Code (Read)), asked for when you run it.',
+    'A public repository, or a private one read with your own GitHub token, given on its row.',
+    'Read with your own Azure DevOps token (Code (Read)), given on its row.',
   ], 'no hint says the server reads with its own token');
   // A server that offers Sign in to GitHub says so where the repository is typed.
   const hintFor = (kind, repoSignIn) => formModel({ ...formOpened([], { endpoints: [EP] }), values: { ...formOpened([], { endpoints: [EP] }).values, kind } }, { endpoints: [EP], repoSignIn }).kind.hint;
   assert.equal(hintFor('github', null), REPOSITORY_KINDS[0].hint, 'no sign-in offered (or no one signed in to the studio): the token hint, as before');
   assert.equal(hintFor('github', { github: { available: false }, ado: { available: true } }), REPOSITORY_KINDS[0].hint);
   assert.equal(hintFor('github', { github: { available: true, signedIn: false, account: null } }),
-    'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token, when you run it.');
+    'A public repository, or a private one read as you: sign in to GitHub, or give your own GitHub token, on its row.');
   assert.equal(hintFor('github', { github: { available: true, signedIn: true, account: 'octo' } }),
-    'A public repository, or a private one read as you (you are signed in to GitHub as octo): sign in to GitHub, or give your own GitHub token, when you run it.');
-  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), when you run it.');
+    'A public repository, or a private one read as you (you are signed in to GitHub as octo): sign in to GitHub, or give your own GitHub token, on its row.');
+  assert.equal(hintFor('ado', { ado: { available: true } }), 'Read as you: sign in to Azure DevOps, or give your own token (Code (Read)), on its row.');
   assert.equal(hintFor('path', { github: { available: true } }), REPOSITORY_KINDS[2].hint, 'a folder has no sign-in');
   const opened = formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP], repoSignIn: { github: { available: true } } });
   assert.equal(opened.kind.kind, 'github', 'a new service opens on GitHub');
   assert.equal(opened.kinds.find((k) => k.kind === 'github').hint, opened.kind.hint, 'the kind buttons carry the same hint');
   assert.match(opened.kind.hint, /sign in to GitHub/);
+});
+
+test('the token is offered on the row from the start: a GitHub or Azure DevOps repository with no token held in the tab and no sign-in to its host — never on a row that cannot run, is running, reads a folder, or whose host already has the person\'s token or sign-in; what the host answered the last Run wins', () => {
+  const base = { servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW };
+  const authOf = (over = {}, service = svcRow()) => serviceListModel({ ...base, services: [service], ...over }).rows[0].auth;
+  const KEPT = 'sent with this tab\'s Runs only and never kept on the server';
+  // Nothing run yet: the field is there, and says a public repository needs no token.
+  assert.deepEqual(authOf(), { kind: 'github', label: 'GitHub token', refused: false, offered: true, text: `A private repository reads with your own GitHub token — ${KEPT}. A public one needs none.` });
+  // The host offers sign-in here: Sign in first, then the token.
+  assert.deepEqual(authOf({ repoSignIn: { github: { available: true, signedIn: false, account: null } } }),
+    { kind: 'github', label: 'GitHub token', refused: false, offered: true, text: `A private repository reads as you: sign in to GitHub, or give your own token — ${KEPT}. A public one needs neither.`, signIn: { kind: 'github', label: 'Sign in to GitHub' } });
+  // Already able to read as the person: nothing to give.
+  assert.equal(authOf({ heldTokens: ['github'] }), null, 'the tab holds a token of that host');
+  assert.equal(authOf({ repoSignIn: { github: { available: true, signedIn: true, account: 'ada-gh' } } }), null, 'signed in to the host');
+  assert.equal(authOf({ heldTokens: ['ado'] })?.offered, true, 'another host\'s token is no help');
+  // Azure DevOps: always the person's access; its sign-in reads Azure DevOps Services only.
+  const ado = (location) => svcRow({ repository: { kind: 'ado', location, ref: null } });
+  assert.deepEqual(authOf({}, ado('https://dev.azure.com/acme/Shop/_git/checkout')),
+    { kind: 'ado', label: 'Azure DevOps token', refused: false, offered: true, text: `Azure DevOps reads this repository with your own token (Code (Read)) — ${KEPT}.` });
+  const adoSignIn = { ado: { available: true, signedIn: false, account: null } };
+  assert.deepEqual(authOf({ repoSignIn: adoSignIn }, ado('https://dev.azure.com/acme/Shop/_git/checkout')).signIn, { kind: 'ado', label: 'Sign in to Azure DevOps' });
+  assert.deepEqual(authOf({ repoSignIn: adoSignIn }, ado('https://acme.visualstudio.com/Shop/_git/checkout')).signIn, { kind: 'ado', label: 'Sign in to Azure DevOps' });
+  const server = authOf({ repoSignIn: adoSignIn }, ado('https://tfs.corp.example/DefaultCollection/Shop/_git/checkout'));
+  assert.deepEqual([server.signIn, server.text], [undefined, `Azure DevOps reads this repository with your own token (Code (Read)) — ${KEPT}.`], 'an Azure DevOps Server repository: the token alone');
+  assert.equal(authOf({ repoSignIn: adoSignIn }, ado('https://dev.azure.com.evil.example/a/b/_git/c')).signIn, undefined, 'a host that only starts like dev.azure.com is not it');
+  // Not where it could not be used.
+  assert.equal(authOf({ access: { canWrite: false } }), null, 'a reader who cannot run');
+  assert.equal(authOf({ running: { '1:prod': true } }), null, 'while its Run is under way');
+  assert.equal(authOf({}, svcRow({ environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: null }] })), null, 'no live endpoint yet: nothing to run');
+  assert.equal(authOf({}, svcRow({ repository: { kind: 'path', location: '/srv/src/checkout', ref: null } })), null, 'a folder is read by the server');
+  assert.equal(authOf({}, uploadRow()), null, 'an upload came from the person\'s machine');
+  assert.equal(authOf({ sources: { github: false } }), null, 'a source switched off does not run');
+  // What the host answered wins over the offer: the refusal's own words, no `offered`.
+  const refused = authOf({ results: { '1:prod': { error: 'x', repoAuth: { kind: 'github', label: 'GitHub token', refused: true } } } });
+  assert.deepEqual([refused.refused, refused.offered, refused.text], [true, undefined, 'That GitHub token was refused, or cannot read this repository. Give one that can.']);
+});
+
+test('renderServiceList: the offered field is on the row before any Run, and Run sends what it holds — nothing when it is empty', () => {
+  const list = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const calls = [];
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { runService: (...args) => calls.push(args) } });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<div class="ov-svc__auth ov-svc__auth--offered" role="group" aria-label="Your GitHub token for Checkout">'), 'the field, marked as the offer');
+  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" autocomplete="off" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
+  assert.ok(html.includes('A private repository reads with your own GitHub token — sent with this tab&#39;s Runs only and never kept on the server. A public one needs none.'));
+  assert.ok(!html.includes('ov-svc__error'), 'and no error beside it: nothing has failed');
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Add a service');
+  // The shim's container has no field to read: Run goes as it always did, with no token.
+  c.click('ov-svc-run', { key: '1:prod' });
+  assert.deepEqual(calls, [['1:prod']], 'an empty field: Run reads the repository with none');
+  // A field that holds a token: the row's own Run sends it, trimmed, as Run with it does.
+  const filled = overviewContainer();
+  filled.querySelector = (sel) => (sel === '[data-auth-input="1:prod"]' ? { value: '  made-up-token  ' } : null);
+  const sent = [];
+  renderServiceList(filled, list, formModel(FORM_CLOSED), { overview: { runService: (...args) => sent.push(args) } });
+  filled.click('ov-svc-run', { key: '1:prod' });
+  filled.click('ov-svc-auth-run', { key: '1:prod' });
+  assert.deepEqual(sent, [['1:prod', { repoAuth: 'made-up-token' }], ['1:prod', { repoAuth: 'made-up-token' }]], 'Run and Run with it send the same');
+  // A held token: the row has no field, the line above the list names it.
+  const held = overviewContainer();
+  renderServiceList(held, serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, heldTokens: ['github'] }), formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(!held.innerHTML.includes('ov-svc__auth') && held.innerHTML.includes('data-ux-action="ov-svc-forget-token" data-kind="github">Forget it</button>'));
 });
 
 test('renderServiceList: the row\'s token field (a password input, Run with it) and the held-token line with Forget it; both proxied to host.overview; nothing typed is kept in the markup', () => {

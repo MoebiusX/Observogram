@@ -1212,10 +1212,14 @@ read as the person who runs it (`server/repo-auth.mjs`):
 
 - **Their own token** — `repoAuth` on the Run (or on `POST /api/crawl-github`):
   used for that one read, never stored, never logged, never sent back (an
-  error that quotes it is masked). Overview asks for it on the row when the
-  host would not show the repository without it, and keeps it in the tab's
-  memory for that host's next Runs until the tab closes or the person
-  forgets it; Expert's GitHub scan has a field for it.
+  error that quotes it is masked). Overview has a field for it on the row
+  from the start — every GitHub or Azure DevOps row whose host has neither
+  the person's token in this tab nor their sign-in — so a Run never has to
+  fail to be asked; Run sends what the field holds, and a public GitHub
+  repository runs with it empty. The tab keeps the token in memory for that
+  host's next Runs until it closes, the page is read again or the person
+  forgets it; after a refusal the row says what the host answered. Expert's
+  GitHub scan has a field for it.
 - **Their sign-in to the host** — where the server is set up for it
   ([below](#signing-in-to-github-or-azure-devops)), *Sign in to GitHub* or
   *Sign in to Azure DevOps* on the row that asks (and beside Expert's scan
@@ -1504,8 +1508,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.19 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.19
+docker build -t observogram:0.8.20 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.20
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1568,7 +1572,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.19
+  observogram:0.8.20
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1576,7 +1580,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.19
+    image: observogram:0.8.20
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

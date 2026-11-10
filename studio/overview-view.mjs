@@ -632,17 +632,19 @@ function svcLastCell(r) {
   return `${letter}<span class="ov-svc__last-text"><b>${escapeHtml(l.word)}</b>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>`;
 }
 
-// The person's own token for a repository its host would not show without it:
+// The person's own token for a repository its host may not show without it:
 // one field and Run with it, sent with this Run (the host keeps it in memory
 // for the tab's next Runs of that host) — after Sign in to …, when the host
 // offers sign-in here (the Run starts again once the person is signed in).
+// Drawn from the start on a row that may need it (`auth.offered`), so no Run
+// has to fail to be asked; the row's own Run sends what the field holds too.
 function svcAuthHtml(r) {
   const id = `ov-auth-${String(r.key).replace(/[^A-Za-z0-9_-]/g, '-')}`;
   const signIn = r.auth.signIn ? `
           <button type="button" class="og-btn" data-ux-action="ov-svc-sign-in" data-kind="${attr(r.auth.signIn.kind)}" data-key="${attr(r.key)}">${escapeHtml(r.auth.signIn.label)}</button>
           <span class="ov-svc__auth-or og-muted">or</span>` : '';
   return `
-        <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">${signIn}
+        <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}${r.auth.offered ? ' ov-svc__auth--offered' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">${signIn}
           <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="off" spellcheck="false" aria-describedby="${id}"></label>
           <button type="button" class="og-btn" data-ux-action="ov-svc-auth-run" data-key="${attr(r.key)}">Run with it</button>
           <span class="ov-svc__auth-note og-muted" id="${id}">${escapeHtml(r.auth.text)}</span>
@@ -849,7 +851,8 @@ export function renderServiceList(container, list, form, host = appHost) {
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
     'ov-svc-edit': (ev, el) => ov.editService?.(Number(el.dataset.service), svcEnv(el)),
-    'ov-svc-run': (ev, el) => ov.runService?.(el.dataset.key),
+    // Run sends the token the row's field holds, when it holds one: the field is there to be used.
+    'ov-svc-run': (ev, el) => { const repoAuth = authValue(el.dataset.key); return repoAuth ? ov.runService?.(el.dataset.key, { repoAuth }) : ov.runService?.(el.dataset.key); },
     'ov-svc-auth-run': (ev, el) => ov.runService?.(el.dataset.key, { repoAuth: authValue(el.dataset.key) }),
     'ov-svc-forget-token': (ev, el) => ov.forgetRepoToken?.(el.dataset.kind),
     'ov-svc-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, el.dataset.key || null),

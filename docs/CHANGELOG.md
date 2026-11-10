@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.20 — 2026-11-10
+
+**A service's row has the place for the person's token from the start.** The token field appeared only after a Run had failed: a private repository answered *404 … Not Found*, the row drew the error, and only then asked. A tab keeps a token in memory, so every page read again started with that failed Run.
+
+### Changed
+- **The row offers the token before any Run** (`studio/overview-model.mjs` `serviceListModel`, `authOffer`). Every row that can run and whose repository is on GitHub or Azure DevOps carries its `auth` from the start (`offered: true`) — the field, **Run with it**, and **Sign in to …** first where the server offers that host's sign-in — unless this tab already holds the person's token for that host or they are signed in to it. The note says what it is for: *A private repository reads with your own GitHub token — sent with this tab's Runs only and never kept on the server. A public one needs none.*; for Azure DevOps, *Azure DevOps reads this repository with your own token (Code (Read)) — …*. An Azure DevOps repository off Azure DevOps Services is offered the token alone, as its Run already answered. A row that cannot run, a Run under way, a folder, an upload, a source switched off and a reader who cannot run are offered nothing.
+- **Run sends what the field holds** (`studio/overview-view.mjs`). The row's own **Run** reads the field as **Run with it** does; with it empty it runs as before, so a public repository needs nothing typed. After a refusal the row says what the host answered, as before (`authAsk`), in place of the offer.
+- The form's hints say where the token goes: *…read with your own GitHub token, given on its row.* (they said *asked for when you run it*).
+- Nothing changes on the server: what a Run takes, where a token is kept (this tab's memory, never storage, never the server) and when it is dropped are as they were.
+- **Docs.** `README.md` "Whose access reads a repository" and `docs/USER_JOURNEY.md` (*Overview: repository access*, the Run's steps).
+
+### Tests
+- `tools/test-overview-model.mjs` +2: the offer by case — GitHub with and without the host's sign-in, Azure DevOps on Services and on another host, a host that only starts like `dev.azure.com`; nothing where the tab holds the token, the person is signed in, the row cannot run, is running, reads a folder or an upload, its source is switched off, or the reader cannot run; the refusal's words over the offer — and the row drawn with the field and no error, Run sending what the field holds and nothing when it is empty.
+- Cut as 0.8.20: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1795 → 1797.
+
 ## 0.8.19 — 2026-11-10
 
 **A scan and its live side stop differing where the studio could not see.** A Run of a service whose repository and production agree read 76%: 286 match, 57 run differently, 32 not running live, 3 live only. A review of the two packs found 61 of those 92 differences were the studio's: labels a rule listing never showed, a second rule of one name dropped on the live side, and a file the 200-file cap cut while it read a client's components. Replayed with this release the same two sides read 347 match, none running differently, 31 not running live, none live only — 92%, and the 31 are real.
