@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.24 — 2026-11-10
+
 **Expert's Assessment is one screen, and a criterion's switch is an instant what-if.** The Assessment said the seven checks five times — the header's causes, the measures, the gaps, two tables and a ledger — down six screens (5,672 px at 1440 wide for a pack read on its own; 1,366 px now), and switching a criterion meant typing a reason and saving before the grade moved. A check is now said once, in its row; everything else is folded into closed rows; and a switch regrades the page at once, with nothing saved until **Keep**.
 
 ### Changed
@@ -25,6 +27,7 @@
 - `tools/test-overview-model.mjs` +5 (two of 0.8.23's go with the panel, seven come): the what-if set (`offSet`, `toggleOff` refusing the last one graded, `whatIfChanges`, `whatIfWords`); the grade scale; `verdictBarHtml`; `whatIfBarHtml` (Keep with and without a reason to ask, the ask, a reader who may not, nowhere to save); `checksTableHtml` (rows, points, a criterion left out saved and in a what-if, the switches, *Also found*, open rows, the last one graded, a host that wants no switch); `checkDetailHtml` byte for byte; the folded rows' line, the layers' bars and the view's wiring to the host's hook.
 - `tools/test-ux-kit.mjs`: `contextLineHtml` is the header's line. `tools/test-static-remedies.mjs` S5: the grade's hint is passed for both grades a what-if takes. `tools/test-remediation-flow-view.mjs`: the response path's block is in its folded row. `tools/test-studio-layout.mjs`: the what-if bar is the pinned strip that clears both bars. `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling 6,400,000 → 6,500,000 (the studio's own code reached 6,435,231 with `studio/assessment-page.mjs`; it stood 227 bytes under the last ceiling; no dependency).
 - `tools/test-bundle-compare.mjs` C8 (the browser check, run only where Playwright is installed): its steps open the folded row or the check they read.
+- Cut as 0.8.24: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1824 → 1829.
 
 ## 0.8.23 — 2026-11-10
