@@ -295,8 +295,19 @@ time. Where `gradeWhy` offers no lines, the model's `grade.graded` lists the
 criteria graded by name and the board draws each with its switch. Without
 `gradeSwitches` the board lists what is off and offers no switch. Expert's verdict takes the same keys:
 `buildVerdictModel({ …, gradeOff })` and `projectGrade(uids, { …, gradeOff })`.
-The studio's wiring is `setOverviewGradeCriterion` and `gradeOffInFocus` in
+The studio's wiring is `setOverviewGradeCriterion` and `gradeServiceInFocus` in
 `studio/app.mjs`.
+
+Expert's Diagnose (`compare-view.mjs`, with the pure `grade-criteria-ui.mjs`)
+grades with `state.gradeOff` (the keys) and says what is off from
+`state.gradeService` — the record whose primary pack is on screen
+(`{ id, name, gradeOff: [{ key, reason, by, at }] }`), or `null`. Its
+switches are drawn only when the host fills the optional
+`host.setGradeCriterion(serviceId, key, { graded, reason })`: save the whole
+list as above, read the services again, repaint, and resolve `true` (`false`
+when nothing was saved). Without the hook, or in a static bundle, Diagnose
+still says on how many criteria the grade stands and lists what is off, with
+no button; with nothing off and no hook its markup is what it was.
 
 A hook a host does not supply is a no-op (the view calls them optionally).
 
@@ -591,6 +602,8 @@ initHost({ loadPackB, openDeployModal, renderMainView, renderTabs });
 Views import the live object as `import { host as appHost } from './host.mjs'`
 (see docs/UI_CONVENTIONS.md for the naming rule). A TypeScript host writes a
 ~10-line adapter object with its own implementations of those four hooks.
+One more is optional: `setGradeCriterion`, Diagnose's switch for a service's
+grade criteria (above); left out, Diagnose offers no switch.
 (The synthesis view also reuses production renderers from `compare-view.mjs`
 — those are Observogram-specific; port them or swap in your own panels.)
 

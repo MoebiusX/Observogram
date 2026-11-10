@@ -34,6 +34,33 @@
 }
 .diag-measure-group .ux-measure-val { font-size: 17px; overflow-wrap: anywhere; }
 
+/* A service's grade criteria (grade-criteria-ui.mjs): what the grade is taken
+   over, each criterion left out with why, who and when, and its switch. */
+.diag-criteria {
+  margin: 12px 0 0;
+  border: 1px solid var(--ux-line);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+}
+.diag-criteria-lede { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ux-ink); }
+.diag-criteria-off { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.diag-criteria-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; line-height: 1.4; }
+.diag-criteria-text { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; color: var(--ux-ink-2); }
+.diag-criteria-by { color: var(--ux-ink-3); font-size: 13px; }
+.diag-criteria-how { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 10px 0 0; font-size: 13px; line-height: 1.45; color: var(--ux-ink-3); }
+.diag-criteria-how > span { flex: 1 1 260px; min-width: 0; }
+.diag-crit-switch { display: block; margin-top: 2px; font-size: 13px; font-weight: 500; text-align: left; }
+.diag-criteria-item .diag-crit-switch { margin-top: 0; }
+/* On a phone the criteria tables are as wide as their words: the switch wraps there rather than widen them. */
+@media (max-width: 640px) { .diag-crit-table .diag-crit-switch { white-space: normal; } }
+.diag-crit-switch[aria-disabled="true"] { color: var(--ux-ink-3); cursor: help; }
+.diag-crit-ask > td { padding-top: 4px; padding-bottom: 12px; }
+.diag-crit-ask-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.diag-crit-ask-l { display: flex; flex-direction: column; gap: 4px; flex: 1 1 280px; max-width: 520px; min-width: 0; font-size: 13px; color: var(--ux-ink-2); }
+.diag-crit-ask-l .og-input { width: 100%; min-height: 32px; font-size: 13px; box-sizing: border-box; }
+.diag-crit-ask-l .og-input[aria-invalid="true"] { border-color: var(--ux-fail, #b22222); }
+.diag-crit-ask-row .ux-secondary-btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
+
 /* "How the grade is calculated" — the ladder and the rules, collapsed. */
 .diag-calc-disclosure { margin: 14px 0 0; background: transparent; }
 .diag-calc {

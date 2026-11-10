@@ -1221,14 +1221,22 @@ service can switch a criterion off, with a reason:
   the reasons — what, why, who and when — each with **Grade it again**. A
   reader below operator sees the same words and is told why they are not
   theirs to press.
+- **In Expert's Diagnose.** The summary says it first — *Graded on 6 of 7
+  criteria: Fresh is not graded for this service.* — and *Criteria graded for*
+  and the service's name, under the measures, lists each criterion off with why, who and
+  when, and **Grade it again**. Each row of the coverage and trust tables
+  under Evidence carries *Not for this service…*, which asks why in a row
+  under it, then **Stop grading it**. It is the board's switch, on the same
+  record; Diagnose grades the packs on screen again at once.
 - **What changes.** The grade is over the criteria that are on: a criterion
   switched off leaves both the points and the total, so the board reads
   *Graded on 6 of 7 criteria* and *3.9 of 6 points*. It is never hidden: the
   status strip, the list row's letter (*… · on 6 of 7 criteria*, and *…
   graded before this service's criteria changed* until the next check), the
   journeys views and Expert's Diagnose — which grades the service's pack with
-  the same switches, draws the criterion as shown, not scored, and counts its
-  scored checks accordingly — all say so. A score change between two runs
+  the same switches, draws the criterion as shown, not scored, and counts and
+  names its scored checks accordingly (*Trust 1.2 of 2 checks: recovery tested,
+  matches live · recently verified not graded for this service*) — all say so. A score change between two runs
   graded on different criteria is not shown as a change of the service.
 - **The record.** `PATCH /api/services/:id { gradeOff: [{ key, reason }] }`
   sends the whole list; a key is one of `multi-modal`, `correlated`,

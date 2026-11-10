@@ -35,6 +35,8 @@ import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/ov
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 import { instrumentGradeFor, GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
+import { criteriaScope, criteriaPanelHtml, groupNames, notGradedSentence, switchHtml, askRowHtml, CRITERION_LONG } from '../studio/grade-criteria-ui.mjs';
+import { host as studioHost } from '../studio/host.mjs';
 
 // ---------- fixtures ----------
 
@@ -2377,4 +2379,75 @@ test('loadServiceListFacts: `sources` from GET /api/repository-sources — the s
   assert.deepEqual((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ok: true, sources: { github: false, ado: true, path: true, upload: true } })) })).sources, { github: false, ado: true, path: true, upload: true });
   assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => { throw new Error('404: no answer'); }) })).sources, null, 'an older server');
   assert.equal((await loadServiceListFacts({ fetchFn: fetchWith(() => ({ ok: true })) })).sources, null, 'a body with no switches');
+});
+
+// ---------- Expert's Diagnose: the service's criteria (studio/grade-criteria-ui.mjs) ----------
+
+const FRESH_OFF = { id: 4, name: 'krystaline', gradeOff: [{ key: 'fresh', reason: 'test', by: 'admin', at: '2026-11-10T12:00:00Z' }] };
+
+test("criteriaScope: the criteria of the grade on screen — none for a pack that is no service's own; the switch only where the host saves one, explained to a reader who may not", () => {
+  assert.equal(criteriaScope({ service: null, canSwitch: true }), null, 'no service: graded on all seven, nothing to switch');
+  assert.equal(criteriaScope({ service: { name: 'no id' }, canSwitch: true }), null);
+  assert.deepEqual(criteriaScope({ service: FRESH_OFF, canSwitch: true }), {
+    serviceId: 4, serviceName: 'krystaline', total: 7, graded: 6, offKeys: ['fresh'],
+    notGraded: [{ key: 'fresh', label: 'Fresh', text: 'Fresh is not graded for this service: test', by: 'admin, 10 Nov' }],
+    switches: { enabled: true, reason: null },
+  });
+  assert.equal(criteriaScope({ service: FRESH_OFF }).switches, null, 'no host hook: what is off is said, no switch offered');
+  assert.deepEqual(criteriaScope({ service: FRESH_OFF, canSwitch: true, canWrite: false, writeReason: 'operators and admins switch criteria' }).switches,
+    { enabled: false, reason: 'operators and admins switch criteria' });
+  assert.deepEqual(criteriaScope({ service: FRESH_OFF, canSwitch: true, canWrite: false }).switches, { enabled: false, reason: 'Not available for your role here.' });
+  const all = criteriaScope({ service: { id: 1, name: 'x', gradeOff: GRADE_CRITERION_KEYS.map((key) => ({ key, reason: 'r' })) } });
+  assert.deepEqual([all.graded, all.offKeys, all.notGraded], [7, [], []], 'a list naming all seven is ignored, as the engine ignores it');
+  assert.equal(criteriaScope({ service: { id: 2, slug: 'ledger', gradeOff: null } }).serviceName, 'ledger');
+});
+
+test('groupNames: the checks of a group by name — with every criterion graded, the words Diagnose always used; one left out is named apart', () => {
+  const cov = { criteria: ['multi-modal', 'correlated', 'calibrated', 'comprehensive'].map((key) => ({ key })) };
+  const trust = { criteria: ['chaos-validated', 'drift-free', 'fresh'].map((key) => ({ key })) };
+  assert.deepEqual(groupNames(cov), { graded: 'signal types, correlation, calibration, breadth', off: '', count: 4 });
+  assert.deepEqual(groupNames(trust), { graded: 'recovery tested, matches live, recently verified', off: '', count: 3 });
+  assert.equal(groupNames(cov, CRITERION_LONG).graded, 'signal types, correlation, calibration, breadth across layers');
+  assert.equal(groupNames(trust, CRITERION_LONG).graded, 'recovery tested by chaos, declarations matching live, verified within 24 hours');
+  const off = { criteria: [{ key: 'fresh', applies: false }, { key: 'chaos-validated', applies: false }, { key: 'drift-free' }] };
+  assert.deepEqual(groupNames(off), { graded: 'matches live', off: 'recovery tested and recently verified', count: 1 }, "in the engine's order");
+  assert.deepEqual(groupNames({ criteria: trust.criteria.map((c) => ({ ...c, applies: false })) }), { graded: '', off: 'recovery tested, matches live and recently verified', count: 0 });
+  assert.deepEqual(groupNames(null), { graded: '', off: '', count: 0 });
+  assert.equal(notGradedSentence(['Fresh']), 'Fresh is not graded for this service');
+  assert.equal(notGradedSentence(['Chaos-validated', 'Fresh']), 'Chaos-validated and Fresh are not graded for this service');
+  assert.equal(notGradedSentence(['Calibrated', 'Chaos-validated', 'Fresh']), 'Calibrated, Chaos-validated and Fresh are not graded for this service');
+  assert.equal(notGradedSentence([]), '');
+});
+
+test('criteriaPanelHtml: the summary says on how many criteria the grade stands and what is off — why, who, when — with Grade it again; nothing at all with nothing off and no switch', () => {
+  assert.equal(criteriaPanelHtml(null), '');
+  assert.equal(criteriaPanelHtml(criteriaScope({ service: { id: 4, name: 'krystaline', gradeOff: [] } })), '', 'nothing off, no switch: the summary is what it was');
+  assert.equal(criteriaPanelHtml(criteriaScope({ service: FRESH_OFF, canSwitch: true })),
+    '<section class="diag-criteria" aria-labelledby="diag-criteria-title"><h3 class="diag-measure-group-title" id="diag-criteria-title">Criteria graded for krystaline</h3>'
+    + '<p class="diag-criteria-lede">Graded on 6 of 7 criteria: Fresh is not graded for this service.</p>'
+    + '<ul class="diag-criteria-off"><li class="diag-criteria-item"><span class="ux-chip ux-chip-neutral">Off</span><span class="diag-criteria-text">Fresh is not graded for this service: test <span class="diag-criteria-by">admin, 10 Nov</span></span>'
+    + '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-on:fresh" aria-label="Grade Fresh for this service again">Grade it again</button></li></ul>'
+    + '<p class="diag-criteria-how"><span>A criterion that does not apply to krystaline is left out under Evidence: <em>Not for this service…</em> beside it, with a reason.</span><button type="button" class="ux-link-btn" data-ux-action="diag-goto:diag-evidence">Choose the criteria →</button></p></section>');
+  const none = criteriaPanelHtml(criteriaScope({ service: { id: 4, name: 'krystaline', gradeOff: [] }, canSwitch: true }));
+  assert.ok(none.includes('<p class="diag-criteria-lede">Graded on all 7 criteria.</p>') && !none.includes('diag-criteria-off'), 'with a switch and nothing off: where to switch one');
+  const told = criteriaPanelHtml(criteriaScope({ service: FRESH_OFF }));
+  assert.ok(told.includes('Fresh is not graded for this service: test') && !told.includes('<button'), 'no host hook: said, nothing to press');
+  const hostile = criteriaPanelHtml(criteriaScope({ service: { id: 9, name: '<b>x</b>', gradeOff: [{ key: 'fresh', reason: '<img src=x>', by: '"a"' }] }, canSwitch: true }));
+  assert.ok(!hostile.includes('<b>x</b>') && !hostile.includes('<img') && hostile.includes('&lt;img src=x&gt;'), 'every word from the record escaped');
+});
+
+test('switchHtml / askRowHtml: Not for this service… asks why in place, Grade it again grades it again; a reader who may not switch gets the same words, explained; the host hook defaults to none', () => {
+  const on = { enabled: true, reason: null };
+  assert.equal(switchHtml(on, 'off', 'chaos-validated', 'Chaos-validated'),
+    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-ask:chaos-validated" aria-label="Stop grading Chaos-validated for this service">Not for this service…</button>');
+  assert.equal(switchHtml(on, 'on', 'fresh'),
+    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-on:fresh" aria-label="Grade Fresh for this service again">Grade it again</button>');
+  assert.equal(switchHtml({ enabled: false, reason: 'operators switch criteria' }, 'off', 'fresh'),
+    '<button type="button" class="ux-link-btn diag-crit-switch" data-ux-action="diag-grade-explain" aria-disabled="true" title="operators switch criteria" aria-label="Stop grading Fresh for this service">Not for this service…</button>');
+  assert.equal(switchHtml(null, 'off', 'fresh'), '');
+  const ask = askRowHtml({ reason: 'no "chaos" <here>' }, 'chaos-validated');
+  assert.ok(ask.startsWith('<tr class="diag-crit-ask"><td colspan="4">'));
+  assert.ok(ask.includes('<span>Why is Chaos-validated not graded for this service?</span><input class="og-input" data-diag-grade-reason="chaos-validated" value="no &quot;chaos&quot; &lt;here&gt;" maxlength="200"'), 'what was typed, kept and escaped');
+  assert.ok(ask.includes('data-ux-action="diag-grade-off:chaos-validated">Stop grading it</button>') && ask.includes('data-ux-action="diag-grade-cancel">Cancel</button>'));
+  assert.equal(studioHost.setGradeCriterion, null, 'a page that embeds Diagnose without the hook offers no switch');
 });

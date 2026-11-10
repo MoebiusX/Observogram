@@ -376,7 +376,7 @@ function pointsText(points, letter, of) {
 // reasons: the criterion, why (the reason on the record), who switched it off
 // and when. `off` is the service record's gradeOff ([{ key, reason, by, at }]);
 // bare keys are listed without a reason.
-function notGradedLines(off) {
+export function notGradedLines(off) {
   const entries = new Map((Array.isArray(off) ? off : []).filter((x) => x && typeof x === 'object').map((x) => [x.key, x]));
   return gradeOffKeys(off).map((key) => {
     const e = entries.get(key) || {};
