@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.28 — 2026-11-11
+
+**Every CHANGELOG entry says what it means for a downstream copy, and one command prints what a refresh has to act on.** A downstream that runs the whole repository refreshes across hundreds of commits at once, and nothing marked which of them asked something of it. Each entry now ends with a `Downstream:` bullet naming its kinds, and `tools/downstream-digest.mjs` prints those bullets for a refresh, by kind, beside the export, setting and golden changes.
+
 ### Added
 - **The `Downstream:` bullet** (`docs/DOWNSTREAM_REFRESH.md`, step 1). Every `###` entry under `## Unreleased`, and under every release from 0.8.28 on, ends with one bullet, `- **Downstream:** <kinds> — <one sentence>.`, which says what the entry means for a downstream copy. The kinds are `none`, `config` (a setting added, renamed or removed), `api` (a listed module's exports, a route or a response shape), `behaviour` (what a comparison, grade or screen shows) and `one-way` (an upgrade with no way back, such as a store schema move); an entry can name several, separated by commas, and `none` stands alone. The releases before 0.8.28 stay as they were written.
 - **The digest** (`tools/downstream-digest.mjs`, new; a command in `tools/`, not a listed module). `node tools/downstream-digest.mjs --since <commit> [--to <ref>] [--json]`, run in upstream's checkout, prints for one refresh:
@@ -17,6 +21,7 @@
 ### Tests
 - `tools/test-changelog-downstream.mjs` (new): the CHANGELOG's entries from 0.8.28 on end with one `Downstream:` bullet of known kinds, the releases before are left as written, each way an entry can break the rule, and the runbook's step 1 documents it.
 - `tools/test-downstream-digest.mjs` (new): over a small repository built with git, the entries classified, already held and unclassified; the exports, the settings (a legacy spelling, a per-org name, test files and fixtures left out) and the goldens (a rename); the command's text, `--json` and refusals.
+- Cut as 0.8.28: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1880 → 1889.
 - **Downstream:** none — tests only.
 
