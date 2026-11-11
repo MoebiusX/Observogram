@@ -210,7 +210,7 @@ actions:
 | (actions) | **Run** (scan the repository again and check it against live), *Open →* (the board), *Change* | `POST /api/services/:id/run` |
 
 **Add a service** (the one primary button; with the form open, **Save and
-run**) is four numbered answers: *1 Service*, *2 Environment* (prod by
+run**) is five numbered answers: *1 Service*, *2 Environment* (prod by
 default), *3 Repository — where it is declared* (GitHub · Azure DevOps ·
 Folder, the address, an optional branch; a folder typed or picked with
 *Browse…*, a panel under the answer that lists the server's folders by name —
@@ -220,7 +220,10 @@ whose reason replaces the hint where it would not; or *Upload*, a folder or a
 `.zip` from the person's own machine — *Choose a folder*, *Choose a .zip* or
 a drop — staged with what was not read, sent with Save and shown on the row as
 *uploaded 2 days ago · 12 files*), *4 Live — where it runs*
-(the org's endpoints, or a new one when this reader may register it). A missing answer
+(the org's endpoints, or a new one when this reader may register it), *5
+Targets — how fast an incident is detected and resolved* (a dropdown of the
+four MTTD / MTTR profiles, the recommended *Lab default* chosen for a new
+service, *Custom* minutes, or *Not set*). A missing answer
 is marked where it goes once a save was tried; the server's refusal is shown
 as its sentence; a name that keys an existing record completes it. Services a
 live draft discovered, with no repository and no pack of their own, are

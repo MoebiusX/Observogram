@@ -25,7 +25,7 @@ import {
   shortGradeLabel, verdictWordFor, runGradedPack, runGradesBoard, differenceCount, vantageShrank,
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
-  chainModel, chainDifferences,
+  chainModel, chainDifferences, controlRoomMttx, targetsFormOpened, targetsOnlyPlan,
   START_IDLE, startChoose, startAdopted,
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, sourceOffText, ALL_SOURCES_OFF,
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
@@ -1095,7 +1095,30 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<div class="ov-clink ov-clink--warn" role="listitem" title="15 alerts — what fires">') && html.includes('<span class="ov-clink__n">15</span>') && html.includes('<span class="ov-clink__parts og-muted">7 alert rules · 8 burn-rate alerts</span>'), 'the alerts, rules and burn-rate together');
   assert.ok(html.includes('<div class="ov-clink ov-clink--ok" role="listitem" title="4 dashboards — what people open">') && html.includes('<span class="ov-clink__n">4</span>'), 'the dashboards, without their panels');
   assert.ok(html.includes('<ul class="ov-chain__notes"><li class="ov-chain__note ov-chain__note--warn">10 of 18 objectives have no burn-rate alert.</li></ul>'), 'the warning under the row');
-  assert.ok(html.includes('<div class="ov-mttx ov-mttx--fail" title="A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.">') && html.includes('<span class="ov-mttx__val">Not declared</span>') && html.includes('<span class="ov-mttx__note">The repository states no MTTD / MTTR targets.</span>'), 'placeholder targets are not declared ones');
+  assert.ok(html.includes('<div class="ov-mttx ov-mttx--fail" title="Until they are set, the recommendation is what to aim for.">') && html.includes('<span class="ov-mttx__val">Not declared</span>') && html.includes('<span class="ov-mttx__note">No MTTD / MTTR targets are set for this service.</span>'), 'placeholder targets are not declared ones');
+  assert.ok(!html.includes('pack.yaml') && !html.includes('spec.baselines'), 'never sent to a file to set them');
+  assert.ok(html.includes('<span class="ov-mttx__rec">Recommended: <b>MTTD ≤ 1 min · MTTR ≤ 5 min</b> <span class="og-muted">(lab default: a service crash, a dependency outage, a failed deployment)</span></span>'), 'with none, the recommendation');
+  assert.ok(html.includes('<summary>Other profiles</summary>') && html.includes('<li><span class="ov-mttx__pname">Noncritical service</span> <b>MTTD ≤ 15 min · MTTR ≤ 4 hours</b> <span class="og-muted">— internal dashboards or delayed reporting</span></li>'), 'and the other profiles behind a fold');
+  assert.ok(!html.includes('ov-mttx-set'), 'a host that draws no service list: no way to set them from here');
+  // Where the host draws the service list: Set targets… on the tile, to the host's setTargets; a rank that may not change the service sees none.
+  const settable = overviewContainer();
+  const targetCalls = [];
+  renderOverview(settable, board({ diagnostic: diagnosticFull, listable: true }), { overview: { setTargets: (from) => targetCalls.push(from) } });
+  assert.ok(settable.innerHTML.includes('<button type="button" class="og-btn og-btn--text ov-mttx__set" data-ux-action="ov-mttx-set">Set targets…</button>'), 'Set targets… where the gap shows');
+  settable.click('ov-mttx-set');
+  assert.deepEqual(targetCalls, ['board'], 'from the board: the focus comes back to it');
+  const viewer = overviewContainer();
+  renderOverview(viewer, board({ diagnostic: diagnosticFull, listable: true, access: { canWrite: false, reason: 'Not available for your role here.' } }), host);
+  assert.ok(!viewer.innerHTML.includes('ov-mttx-set'), 'a rank that may not change the service: no button');
+  assert.ok(html.includes('<p class="ov-card__sub">Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them</p>'), 'the column, the repository\'s');
+  // Targets set in the studio: the tile and the column say so.
+  const set = overviewContainer();
+  renderOverview(set, board({ diagnostic: diagnosticFull, services: services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s)) }), host);
+  assert.ok(set.innerHTML.includes('<span class="ov-mttx__note">Set in the studio (lab default), not in the repository. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.</span>') && !set.innerHTML.includes('ov-mttx__rec'), 'the studio\'s, no recommendation');
+  assert.ok(set.innerHTML.includes('<p class="ov-card__sub">Exporters, alerts and dashboards as the repository declares them; MTTD / MTTR set in the studio</p>'), 'the column says where each comes from');
+  const change = overviewContainer();
+  renderOverview(change, board({ diagnostic: diagnosticFull, listable: true, services: services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s)) }), host);
+  assert.ok(change.innerHTML.includes('data-ux-action="ov-mttx-set">Change targets…</button>'), 'the studio\'s: Change targets…');
   assert.ok(html.includes('<p class="ov-detail"><span class="ov-detail__h">Under it</span> 18 indicators · 18 objectives · 204 metrics · 1 chaos test</p>'), 'the detail in one line');
   assert.ok(!html.includes('<dl class="ov-stats">') && !html.includes('>600<'), 'no big number of everything');
   // The machinery and the stack behind one disclosure, closed.
@@ -1261,17 +1284,84 @@ test('chainModel: the chain the repository declares — three links, the objecti
     ['alerts', 'Alerts', 15, 'alerts', '7 alert rules · 8 burn-rate alerts', '10 of 18 objectives have no burn-rate alert.', 'warn'],
     ['dashboards', 'Dashboards', 4, 'dashboards', '', '', 'ok'],
   ]);
-  assert.deepEqual(C.mttx, { declared: false, targets: '', measured: '', note: 'The repository states no MTTD / MTTR targets.', hint: 'A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.', tone: 'fail' }, 'the scan\'s placeholder targets are not declared ones');
+  assert.deepEqual(C.mttx, {
+    declared: false, origin: null, targets: '', measured: '', note: 'No MTTD / MTTR targets are set for this service.',
+    hint: 'Until they are set, the recommendation is what to aim for.', tone: 'fail', action: null,
+    recommended: {
+      name: 'Lab default', words: 'MTTD ≤ 1 min · MTTR ≤ 5 min', conditions: 'A service crash, a dependency outage, a failed deployment',
+      profiles: [
+        { name: 'Critical financial service', words: 'MTTD ≤ 1 min · MTTR ≤ 15 min', conditions: 'Order processing unavailable, a price feed stale, wallet operations blocked' },
+        { name: 'Significant degradation', words: 'MTTD ≤ 5 min · MTTR ≤ 60 min', conditions: 'Elevated latency, partial failures, a growing queue backlog' },
+        { name: 'Noncritical service', words: 'MTTD ≤ 15 min · MTTR ≤ 4 hours', conditions: 'Internal dashboards or delayed reporting' },
+      ],
+    },
+  }, 'the scan\'s placeholder targets are not declared ones: the recommendation instead');
+  // The same repository, with targets set in the studio: they stand, said as the studio's; the repository's own would win.
+  const studioSet = chainModel({ layered: layeredStub, targets: { profile: 'financial', mttd: '1m', mttr: '15m', by: 'ada', at: '2026-11-11T10:00:00Z' } }).mttx;
+  assert.deepEqual([studioSet.declared, studioSet.origin, studioSet.targets, studioSet.note, studioSet.tone, studioSet.recommended], [true, 'studio', 'MTTD ≤ 1 min · MTTR ≤ 15 min', 'Set in the studio (critical financial service), not in the repository. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.', 'warn', null]);
+  const custom = chainModel({ layered: layeredStub, targets: { profile: 'custom', mttd: '3m', mttr: '90m' } }).mttx;
+  assert.deepEqual([custom.targets, custom.note.startsWith('Set in the studio, not in the repository.')], ['MTTD ≤ 3 min · MTTR ≤ 1 h 30 min', true]);
   assert.deepEqual(C.detail, { count: 241, line: '18 indicators · 18 objectives · 204 metrics · 1 chaos test' });
   assert.deepEqual(C.machinery, { count: 317, line: '317 panels' });
   const own = (L5) => keep(chainModel({ layered: { layers: { ...layeredStub.layers, L5 } } })).mttx;
   const declared = own([{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }]);
   assert.deepEqual([declared.declared, declared.targets, declared.measured, declared.note, declared.tone], [true, 'MTTD 5m · MTTR 2h', '', 'Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.', 'warn']);
   const measured = own([{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }, { id: 'CHAOS-01', spec: { id: 'kill-pod', last_result: { at: '2026-11-01T10:00:00Z', outcome: 'pass', observed_mttd: '3m' } } }]);
-  assert.deepEqual([measured.measured, measured.note, measured.tone], ['MTTD 3m in a chaos test on 1 Nov', '', 'ok']);
+  assert.deepEqual([measured.measured, measured.note, measured.tone], ['MTTD 3m in a chaos test on 1 Nov (the run names no environment: no verdict)', '', 'warn'], 'a run that names no environment gives no verdict: never green');
+  // This environment's newest chaos run beside the target, as the control room picks it: over the target amber,
+  // within it green; another environment's run is not this one's; a failed or an aborted run said as such.
+  const repoBase = { id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } };
+  const chaosRun = (last) => ({ id: 'CHAOS-01', spec: { id: 'kill-pod', last_result: { at: '2026-11-01T10:00:00Z', ...last } } });
+  const inProd = (L5, targets = null) => keep(chainModel({ layered: { layers: { ...layeredStub.layers, L5 } }, env: 'prod', targets })).mttx;
+  const over = inProd([repoBase, chaosRun({ outcome: 'pass', observed_mttd: '7m', environment: 'prod' })]);
+  assert.deepEqual([over.measured, over.tone], ['MTTD 7m in a chaos test on 1 Nov, over the 5m target', 'warn'], 'over the target: never green');
+  const within = inProd([repoBase, chaosRun({ outcome: 'pass', observed_mttd: '4m30s', environment: 'prod' })]);
+  assert.deepEqual([within.measured, within.tone], ['MTTD 4m30s in a chaos test on 1 Nov, within the 5m target', 'ok']);
+  const elsewhere = inProd([repoBase, chaosRun({ outcome: 'pass', observed_mttd: '4m', environment: 'staging' })]);
+  assert.deepEqual([elsewhere.measured, elsewhere.note, elsewhere.tone], ['', 'Not measured in prod: a chaos test in staging measured MTTD 4m on 1 Nov.', 'warn'], "another environment's run is named, never this one's");
+  // Unplaced and far over the target, the repository's or the studio's: no verdict, so never green.
+  const unplacedOver = inProd([repoBase, chaosRun({ outcome: 'pass', observed_mttd: '40m' })]);
+  assert.deepEqual([unplacedOver.measured, unplacedOver.tone], ['MTTD 40m in a chaos test on 1 Nov (the run names no environment: no verdict)', 'warn']);
+  assert.equal(inProd([chaosRun({ outcome: 'pass', observed_mttd: '40m' })], { profile: 'lab', mttd: '1m', mttr: '5m' }).tone, 'warn');
+  const failed = inProd([repoBase, chaosRun({ outcome: 'fail', observed_mttd: '2m', environment: 'prod' })]);
+  assert.deepEqual([failed.measured, failed.tone], ['The last chaos test, on 1 Nov, failed: an alert it expected never fired.', 'warn'], 'a failed run is no figure');
+  assert.equal(inProd([repoBase, chaosRun({ outcome: 'aborted', environment: 'prod' })]).measured, 'The last chaos test, on 1 Nov, was aborted: nothing measured.');
+  // Set in the studio and measured over them: still the studio's, the measurement in its note.
+  const studioOver = inProd([chaosRun({ outcome: 'pass', observed_mttd: '90s', environment: 'prod' })], { profile: 'lab', mttd: '1m', mttr: '5m' });
+  assert.deepEqual([studioOver.origin, studioOver.note, studioOver.tone], ['studio', 'Set in the studio (lab default), not in the repository. MTTD 90s in a chaos test on 1 Nov, over the 1 min target.', 'warn']);
+  // A pack that states one target alone is not the repository's targets: the studio's stand.
+  const half = inProd([{ id: 'BASE-01', spec: { mttd_target_p50: '5m' } }], { profile: 'lab', mttd: '1m', mttr: '5m' });
+  assert.deepEqual([half.origin, half.targets], ['studio', 'MTTD ≤ 1 min · MTTR ≤ 5 min']);
+  // The way to set them, where the host can open the service's form (`settable`): Set targets… with none,
+  // Change targets… for the studio's, none for the repository's (they come first: a studio's would change nothing).
+  assert.deepEqual([C.mttx.action, chainModel({ layered: layeredStub, settable: true }).mttx.action], [null, 'Set targets…']);
+  assert.equal(chainModel({ layered: layeredStub, settable: true, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } }).mttx.action, 'Change targets…');
+  assert.equal(chainModel({ layered: { layers: { ...layeredStub.layers, L5: [repoBase] } }, settable: true, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } }).mttx.action, null);
   const none = keep(chainModel({ layered: { layers: { L1: [{ id: 'SLI-1' }] } } }));
   assert.deepEqual(none.links.map((l) => [l.count, l.note, l.tone]), [[0, 'No scrape job found in the repository.', 'fail'], [0, 'No alert found in the repository.', 'fail'], [0, 'No dashboard found in the repository.', 'fail']]);
   assert.equal(chainModel({ layered: null }), null);
+});
+
+test('controlRoomMttx: the control room\'s targets — unread while the pack is not, the repository\'s when it states both, else the studio\'s with their words, else the recommendation; every recorded chaos run beside them', () => {
+  assert.deepEqual(controlRoomMttx(), { unread: true });
+  assert.deepEqual(controlRoomMttx({ loaded: false, layered: layeredStub }), { unread: true }, 'still loading');
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub, layeredError: '502: the saved check could not be read' }), { unread: true }, 'failed');
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: null }), { unread: true }, 'never run');
+  const lab = { profile: 'lab', mttd: '1m', mttr: '5m' };
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub }), { declared: false, runs: [], recommended: { name: 'Lab default', mttd: '1m', mttr: '5m', mttdWords: '≤ 1 min', mttrWords: '≤ 5 min' }, action: null }, 'the scan\'s placeholder targets: the recommendation');
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub, targets: { profile: 'noncritical', mttd: '15m', mttr: '240m' } }),
+    { declared: true, origin: 'studio', mttdTarget: '15m', mttrTarget: '240m', mttdWords: '≤ 15 min', mttrWords: '≤ 4 hours', runs: [], action: null });
+  // Where the host can open the service's form: the same way to set them as on the board.
+  assert.equal(controlRoomMttx({ loaded: true, layered: layeredStub, settable: true }).action, 'Set targets…');
+  assert.equal(controlRoomMttx({ loaded: true, layered: layeredStub, settable: true, targets: lab }).action, 'Change targets…');
+  assert.equal(controlRoomMttx({ loaded: false, layered: layeredStub, settable: true }).action, undefined, 'unread: nothing to offer yet');
+  const run = { id: 'CHAOS-01', spec: { id: 'kill-pod', environment: 'prod', last_result: { at: '2026-11-01T10:00:00Z', outcome: 'pass', observed_mttd: '40s' } } };
+  const repo = { layers: { ...layeredStub.layers, L5: [{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }, run] } };
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: repo, targets: lab }),
+    { declared: true, origin: 'repository', mttdTarget: '5m', mttrTarget: '2h', runs: [{ experiment: 'kill-pod', at: '2026-11-01T10:00:00Z', outcome: 'pass', environment: 'prod', mttd: '40s' }], action: null }, 'the repository\'s win over the studio\'s');
+  assert.equal(controlRoomMttx({ loaded: true, layered: repo, targets: lab, settable: true }).action, null, 'the repository\'s: none to change here');
+  const half = { layers: { ...layeredStub.layers, L5: [{ id: 'BASE-01', spec: { mttr_target_p50: '2h' } }] } };
+  assert.equal(controlRoomMttx({ loaded: true, layered: half, targets: lab }).origin, 'studio', 'one target alone is not the repository\'s');
 });
 
 test('the chain against live: a run that counts by tier draws the links and their alignment, counts the chain alone to change, and says the details beyond it in one line', () => {
@@ -1710,7 +1800,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   const services = [svcRow()];
   // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
   const blank = formOpened(services, { endpoints: [EP] });
-  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '' }]);
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '' }], 'a new service starts on the recommended targets');
   assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
   assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
   // Opened on a row: its service and environment, the environment fixed.
@@ -1736,7 +1826,27 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   assert.deepEqual(formModel(FORM_CLOSED), { open: false });
   // The save plan: a new service, an endpoint by id, its environment created.
   const fresh = savePlan({ ...blank.values, name: 'Basket', location: 'acme/basket', ref: 'main' }, { services });
-  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' } } }, env: { create: { name: 'prod' } }, upload: null, envName: 'prod', name: 'Basket' });
+  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' }, targets: { profile: 'lab' } } }, env: { create: { name: 'prod' } }, upload: null, envName: 'prod', name: 'Basket' });
+  // The targets: the dropdown, custom minutes and their problems, a change patched alone, none sent as null.
+  const tm = formModel(blank, { endpoints: [{ id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' }] }).targets;
+  assert.deepEqual([tm.options.map((o) => [o.value, o.selected]), tm.custom], [[['lab', true], ['financial', false], ['degradation', false], ['noncritical', false], ['custom', false], ['', false]], false]);
+  assert.equal(tm.options[0].label, 'Lab default — MTTD ≤ 1 min · MTTR ≤ 5 min (recommended)');
+  const customForm = formInput(formInput(blank, 'targetProfile', 'custom'), 'targetMttd', '2');
+  assert.deepEqual(formProblems(customForm.values), { name: 'Name the service.', location: "Give the repository's address.", targetMttr: 'Minutes, a whole number from 1 to 10080.' });
+  assert.equal(formModel(customForm, {}).targets.custom, true);
+  const customPlan = savePlan({ ...customForm.values, name: 'Basket', location: 'acme/basket', targetMttr: '45' }, { services });
+  assert.deepEqual(customPlan.service.create.targets, { profile: 'custom', mttd: '2m', mttr: '45m' });
+  const retarget = savePlan({ ...edit.values, targetProfile: 'noncritical' }, { services, serviceId: 1 });
+  assert.deepEqual(retarget.service, { id: 1, patch: { targets: { profile: 'noncritical' } } }, 'only the targets differ: only they are patched');
+  const unset = savePlan({ ...edit.values, targetProfile: '' }, { services: services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s)), serviceId: 1 });
+  assert.deepEqual(unset.service, { id: 1, patch: { targets: null } }, 'Not set clears them');
+  // Add a service under the name of a record that has targets: the form's own start never replaces them; an answer does.
+  // A record with none yet: the targets the form showed chosen are the ones it gets.
+  assert.deepEqual(savePlan({ ...blank.values, name: 'Checkout', location: 'https://github.com/acme/checkout' }, { services }).service.patch, { targets: { profile: 'lab' } }, 'the shown default, kept');
+  const targeted = services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'financial', mttd: '1m', mttr: '15m' } } : s));
+  assert.ok(!blank.targetsTouched && formInput(blank, 'targetProfile', 'lab').targetsTouched === true && formInput(blank, 'targetMttd', '3').targetsTouched === true && !formInput(blank, 'name', 'B').targetsTouched, 'answered: only by a target field');
+  assert.deepEqual(savePlan({ ...edit.values, targetProfile: 'lab' }, { services: targeted }).service, { id: 1, patch: null }, 'the targets the record has stand');
+  assert.deepEqual(savePlan({ ...edit.values, targetProfile: 'lab' }, { services: targeted, targetsTouched: true }).service, { id: 1, patch: { targets: { profile: 'lab' } } }, 'answered: they change');
   // A name that keys an existing record completes it: the repository patched when it differs, the environment bound when it does not point there yet.
   const same = savePlan({ ...edit.values }, { services, serviceId: 1 });
   assert.deepEqual([same.service, same.env], [{ id: 1, patch: null }, { id: 11, bind: false }], 'nothing differs: no patch, no bind');
@@ -1764,6 +1874,7 @@ test('renderServiceList: the rows, one primary button (Add a service, or Save an
   assert.ok(html.includes('data-ux-action="ov-svc-run" data-key="1:prod"'));
   assert.ok(html.includes('data-ux-action="ov-explain" aria-disabled="true" data-reason="Add an environment to Ledger first."'), 'a row that cannot run explains why');
   assert.ok(html.includes('Upload one or compare two instead'), 'the host offers packs in hand');
+  assert.ok(html.includes('aria-label="Change Ledger: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>'), 'Change says it holds the targets too');
   c.click('ov-svc-run', { key: '1:prod' });
   c.click('ov-svc-add');
   c.click('ov-svc-edit', { service: '4', env: '' });
@@ -1999,7 +2110,7 @@ test('Upload\'s steps: a change of kind swaps the location (an upload\'s is its 
   for (const step of [(f) => uploadReading(f, 'x'), (f) => uploadStaged(f, READ), (f) => uploadFailed(f, 'x')]) assert.equal(step(FORM_CLOSED), FORM_CLOSED);
 
   const plan = savePlan(staged.values, { services: [svcRow()], upload: staged.upload.staged });
-  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop' } }, { name: 'shop-main', files: READ.files, skipped: READ.skipped }], 'created with no repository; the upload points it at its copy, and names what was not read');
+  assert.deepEqual([plan.service, plan.upload], [{ create: { name: 'Shop', targets: { profile: 'lab' } } }, { name: 'shop-main', files: READ.files, skipped: READ.skipped }], 'created with no repository; the upload points it at its copy, and names what was not read');
   const kept = formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] });
   const keptPlan = savePlan(kept.values, { services: [uploadRow()], serviceId: 5 });
   assert.deepEqual([keptPlan.service, keptPlan.upload], [{ id: 5, patch: null }, null], 'nothing new chosen: nothing patched, nothing sent');
@@ -2149,7 +2260,7 @@ test('the form offers the person\'s own token where a row would — GitHub (opti
   assert.equal(authOf('github', { heldTokens: undefined }), null, 'a host that passes no heldTokens takes no token from the form: no field');
   assert.equal(formModel(open('github'), { endpoints: [EP] }).auth, null);
   // The form's values never hold it: nothing typed there is drawn back.
-  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken']);
+  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr']);
   const opened = open('github');
   assert.equal(formInput(opened, 'repoAuth', 'made-up-token'), opened, 'and typing never reaches them: the field is no form value');
 });
@@ -2279,9 +2390,9 @@ test('the form offers Sign in to … before the token where the host offers it, 
   let form = formOpened(services, { endpoints: [EP] });
   for (const [field, value] of Object.entries({ name: 'Basket', env: 'staging', kind: 'ado', location: 'https://dev.azure.com/acme/Shop/_git/basket', ref: 'develop' })) form = formInput(form, field, value);
   const draft = formDraft(form, { now: NOW });
-  assert.deepEqual(draft, { v: 1, at: NOW, serviceId: null, env: null, values: form.values });
+  assert.deepEqual(draft, { v: 1, at: NOW, serviceId: null, env: null, values: form.values, targetsTouched: false });
   assert.notEqual(draft.values, form.values, 'a copy');
-  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken'], 'the form holds no token, so the draft cannot');
+  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr'], 'the form holds no token, so the draft cannot');
   assert.equal(formDraft(FORM_CLOSED), null);
   const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], now: NOW + 60_000 });
   assert.deepEqual([back.open, back.mode, back.serviceId, back.saving, back.error, back.values], [true, 'add', null, false, null, form.values]);
@@ -2291,6 +2402,15 @@ test('the form offers Sign in to … before the token where the host offers it, 
   assert.deepEqual([editDraft.serviceId, editDraft.env], [1, 'prod']);
   const editBack = formRestored(services, editDraft, { endpoints: [EP], now: NOW });
   assert.deepEqual([editBack.mode, editBack.serviceId, editBack.envFixed, editBack.values.ref, editBack.original], ['edit', 1, true, 'release-2', edit.original]);
+  // The targets come back only when they had been answered (an untouched draft opens on the form's own start), and
+  // never a profile this build does not know.
+  const answeredDraft = formDraft(formInput(form, 'targetProfile', 'noncritical'), { now: NOW });
+  assert.equal(answeredDraft.targetsTouched, true);
+  const answeredBack = formRestored(services, answeredDraft, { endpoints: [EP], now: NOW });
+  assert.deepEqual([answeredBack.values.targetProfile, answeredBack.targetsTouched], ['noncritical', true]);
+  const untouched = formRestored(services, { ...draft, values: { ...draft.values, targetProfile: 'noncritical' } }, { endpoints: [EP], now: NOW });
+  assert.deepEqual([untouched.values.targetProfile, !!untouched.targetsTouched], ['lab', false]);
+  assert.equal(formRestored(services, { ...answeredDraft, values: { ...answeredDraft.values, targetProfile: 'gold' } }, { endpoints: [EP], now: NOW }).values.targetProfile, 'lab', 'an unknown profile');
   // Nothing from a draft past its time, from the future, of a service that is gone, or that is no draft.
   assert.equal(formRestored(services, { ...draft, at: NOW - FORM_DRAFT_TTL_MS - 1 }, { now: NOW }), null);
   assert.ok(formRestored(services, { ...draft, at: NOW - FORM_DRAFT_TTL_MS }, { now: NOW }), 'at the limit it still is one');
@@ -2305,6 +2425,35 @@ test('the form offers Sign in to … before the token where the host offers it, 
   // An upload's files left with the page: a fresh form, nothing of the draft.
   const up = formRestored(services, { v: 1, at: NOW, serviceId: null, env: null, values: { ...form.values, kind: 'upload', location: 'shop.zip' } }, { endpoints: [EP], now: NOW });
   assert.deepEqual([up.values.kind, up.values.location, up.values.name, up.upload], ['github', '', '', null]);
+});
+
+test('Set targets… / Change targets…: the targets-only form — the service\'s own, at its Targets answer, the recommended profile chosen when it has none; its Save checks and patches the targets alone, so a service with no repository or no endpoint yet still gets them; drawn as the Targets answer alone, Save its submit, never a Run', () => {
+  // A service a pack registered: no repository, its environment with no endpoint.
+  const bare = [svcRow({ id: 4, slug: 'ledger', name: 'Ledger', repository: null, environments: [{ id: 41, serviceId: 4, name: 'prod', mcpEndpoint: null }] })];
+  const form = targetsFormOpened(bare, { serviceId: 4, env: 'prod', endpoints: [] });
+  assert.deepEqual([form.targetsOnly, form.focus, form.scroll, form.mode, form.values.targetProfile, form.targetsTouched], [true, 'targetProfile', true, 'edit', 'lab', true], 'the recommended profile, chosen');
+  assert.ok(Object.keys(formProblems(form.values)).length > 0, 'the whole form would refuse it…');
+  const plan = targetsOnlyPlan(form.values, { services: bare, serviceId: 4 });
+  assert.deepEqual(plan, { problems: {}, serviceId: 4, patch: { targets: { profile: 'lab' } }, name: 'Ledger', envName: 'prod' }, '…the targets-only one sends the targets alone');
+  // The studio's already: kept as the form opened them; the same again patches nothing; custom minutes checked.
+  const held = bare.map((s) => ({ ...s, targets: { profile: 'financial', mttd: '1m', mttr: '15m' } }));
+  const change = targetsFormOpened(held, { serviceId: 4, env: 'prod' });
+  assert.deepEqual([change.values.targetProfile, !!change.targetsTouched], ['financial', false]);
+  assert.equal(targetsOnlyPlan(change.values, { services: held, serviceId: 4 }).patch, null, 'nothing changed: nothing sent');
+  assert.deepEqual(targetsOnlyPlan({ ...change.values, targetProfile: 'custom', targetMttd: '2', targetMttr: '' }, { services: held, serviceId: 4 }).problems, { targetMttr: 'Minutes, a whole number from 1 to 10080.' });
+  assert.deepEqual(targetsOnlyPlan({ ...change.values, targetProfile: '' }, { services: held, serviceId: 4 }).patch, { targets: null }, 'Not set clears them');
+  assert.equal(targetsFormOpened(held, { serviceId: 99 }), null, 'not a record: no form');
+  assert.deepEqual(targetsOnlyPlan(change.values, { services: [], serviceId: 4 }).problems, { targetProfile: 'This service is no longer listed: close the form and open it again.' });
+  // Drawn: the Targets answer alone, its title, Save the submit and primary, Cancel, nothing else of the record.
+  const list = serviceListModel({ services: bare, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [], now: NOW });
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(form, { endpoints: [] }), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<form class="ov-form ov-form--targets og-panel" aria-labelledby="ov-form-h" novalidate data-targets-only="1">') && html.includes('<h2 class="ov-card__h" id="ov-form-h">MTTD / MTTR targets · Ledger · prod</h2>'));
+  assert.ok(html.includes('<button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-save">Save</button>') && html.includes('data-ux-action="ov-form-close"'), 'Save is the submit: Enter saves');
+  assert.ok(!html.includes('ov-form-run') && !html.includes('data-field="name"') && !html.includes('data-field="location"') && !html.includes('data-field="endpointId"') && !html.includes('class="ov-form__n"'), 'no Run, nothing else of the record, no step number');
+  assert.ok(html.includes('<select class="og-input" data-field="targetProfile" aria-labelledby="ov-form-targets-l" aria-describedby="ov-form-targets-hint">') && html.includes('<option value="lab" selected>'), 'the Targets answer, the recommended one chosen');
+  assert.equal(countOf(html, 'id="ov-form-targets-l"'), 1, 'its label once');
 });
 
 test('every input of the studio that takes a token for another host is a password field marked autocomplete="one-time-code": measured in Chrome, "off" let its own store offer to keep what was typed and fill a saved sign-in into the field; "new-password" still offered to keep', () => {
@@ -2414,8 +2563,9 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './constants.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './constants.mjs'],
   'studio/artefact-tiers.mjs': [],
+  'studio/mttx-targets.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
   'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],

@@ -316,8 +316,22 @@ function chainHtml(C) {
         ${iconHtml('mttx', 'ov-mttx__ic')}
         <span class="ov-mttx__name">MTTD / MTTR</span>
         <span class="ov-mttx__val">${escapeHtml(m.targets || 'Not declared')}</span>
-        <span class="ov-mttx__note">${escapeHtml(m.measured || m.note)}</span>
+        <span class="ov-mttx__note">${escapeHtml(m.origin === 'studio' ? m.note : (m.measured || m.note))}</span>${m.recommended ? mttxRecommendedHtml(m.recommended) : ''}${m.action ? `
+        <button type="button" class="og-btn og-btn--text ov-mttx__set" data-ux-action="ov-mttx-set">${escapeHtml(m.action)}</button>` : ''}
       </div>`;
+}
+
+// No targets anywhere: what to aim for — the recommended profile in words, the others behind a fold
+// with the incidents each one fits. Set targets… (the tile's button) chooses one.
+function mttxRecommendedHtml(r) {
+  return `
+        <span class="ov-mttx__rec">Recommended: <b>${escapeHtml(r.words)}</b> <span class="og-muted">(${escapeHtml(r.name.toLowerCase())}: ${escapeHtml(r.conditions.toLowerCase())})</span></span>
+        <details class="ov-mttx__more">
+          <summary>Other profiles</summary>
+          <ul class="ov-mttx__profiles">${r.profiles.map((p) => `
+            <li><span class="ov-mttx__pname">${escapeHtml(p.name)}</span> <b>${escapeHtml(p.words)}</b> <span class="og-muted">— ${escapeHtml(p.conditions.toLowerCase())}</span></li>`).join('')}
+          </ul>
+        </details>`;
 }
 
 // Under the chain, the detail in one line; the machinery and the layers
@@ -355,7 +369,10 @@ function discoverColHtml(L, S = null, C = null) {
       ${scanHtml(S)}`
       : reading('the repository');
   const [title, sub] = C
-    ? ['The chain', 'Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them']
+    // Targets set in the studio are not the repository's: the subtitle says where each part comes from.
+    ? ['The chain', C.mttx?.origin === 'studio'
+      ? 'Exporters, alerts and dashboards as the repository declares them; MTTD / MTTR set in the studio'
+      : 'Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them']
     : ['Layers', 'The stack, top down, as the repository declares it'];
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
@@ -696,6 +713,8 @@ export function renderOverview(container, model, host = appHost) {
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
     'ov-control-room': () => ov.toggleControlRoom?.(),
     'ov-back': () => ov.backToList?.(),
+    // The MTTD / MTTR tile's Set targets… / Change targets…: the service's form at its Targets answer.
+    'ov-mttx-set': () => ov.setTargets?.('board'),
     // A criterion's switch (the model's `switches`): ask why in place, then the host's setGradeCriterion.
     'ov-grade-ask': (ev, el) => { gradeAsk = { service: model.service?.id ?? null, key: el.dataset.key, reason: '', focus: true }; whyOpen = true; redraw(); },
     'ov-grade-ask-cancel': () => { gradeAsk = null; redraw(); },
@@ -808,7 +827,7 @@ function svcRowHtml(r) {
     : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}">Run</button>`;
   const openBtn = r.open.enabled && r.env
     ? `<button type="button" class="og-btn og-btn--text ov-link ov-svc__open" data-ux-action="ov-svc-open" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Open <span class="ov-link__arrow" aria-hidden="true">→</span></button>` : '';
-  const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change where ${attr(r.name)}${r.env ? ` · ${attr(r.env)}` : ''} is">Change</button>`;
+  const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)}${r.env ? ` · ${attr(r.env)}` : ''}: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>`;
   return `
       <li class="ov-svc${r.complete ? '' : ' ov-svc--incomplete'}">
         <div class="ov-svc__who">
@@ -882,7 +901,48 @@ function folderPanelHtml(p) {
             </div>`;
 }
 
+// The Targets answer: the dropdown, the custom minutes when chosen, what they mean. `n` is its
+// number in the whole form; the board's Set targets… form has it alone, unnumbered.
+function targetsStepHtml(f, v, shown, n = '') {
+  return `
+        <li class="ov-form__step ov-form__step--targets">${n ? `
+          <span class="ov-form__n">${n}</span>` : ''}
+          <div class="ov-form__f">
+            <span class="ov-form__l" id="ov-form-targets-l">Targets — how fast an incident is detected and resolved</span>
+            <select class="og-input" data-field="targetProfile" aria-labelledby="ov-form-targets-l" aria-describedby="ov-form-targets-hint">
+              ${f.targets.options.map((o) => `<option value="${attr(o.value)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+            </select>${f.targets.custom ? `
+            <div class="ov-form__sub ov-form__mins">
+              <label class="ov-form__f"><span class="ov-form__l">MTTD, minutes</span><input class="og-input" data-field="targetMttd" value="${attr(v.targetMttd)}" inputmode="numeric" placeholder="1" autocomplete="off">${fieldErr(f, 'targetMttd', shown)}</label>
+              <label class="ov-form__f"><span class="ov-form__l">MTTR, minutes</span><input class="og-input" data-field="targetMttr" value="${attr(v.targetMttr)}" inputmode="numeric" placeholder="5" autocomplete="off">${fieldErr(f, 'targetMttr', shown)}</label>
+            </div>` : ''}${fieldErr(f, 'targetProfile', shown)}
+            <span class="ov-form__hint og-muted" id="ov-form-targets-hint">${escapeHtml(f.targets.hint)}</span>
+          </div>
+        </li>`;
+}
+
+// The board's Set targets… / Change targets…: the Targets answer alone, Save (Enter too) and Cancel —
+// never a Run, and nothing else of the record to answer.
+function targetsFormHtml(f) {
+  const off = !f.canWrite;
+  return `
+    <form class="ov-form ov-form--targets og-panel" aria-labelledby="ov-form-h" novalidate data-targets-only="1">
+      <header class="ov-form__head">
+        <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
+        <p class="ov-card__sub">How fast an incident on this service should be detected and resolved. Save brings the board back with them.</p>
+      </header>
+      <ol class="ov-form__steps">${targetsStepHtml(f, f.values, !!f.error)}
+      </ol>${f.error ? `
+      <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
+      <div class="ov-form__acts">
+        <button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-save"${f.saving || off ? ' disabled' : ''}${off ? ` title="${attr(f.reason)}"` : ''}>${f.saving ? 'Saving…' : 'Save'}</button>
+        <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
+      </div>
+    </form>`;
+}
+
 function svcFormHtml(f) {
+  if (f.targetsOnly) return targetsFormHtml(f);
   const v = f.values;
   const shown = !!f.error;   // the field notes appear once a save was tried
   const kinds = f.kinds.map((k) => `<button type="button" class="og-btn ov-form__kind" data-ux-action="ov-form-kind" data-kind="${attr(k.kind)}" aria-pressed="${k.selected ? 'true' : 'false'}">${svcIcon(k.kind)}${escapeHtml(k.label)}${k.off ? '<span class="og-muted"> · off</span>' : ''}</button>`).join('');
@@ -913,7 +973,7 @@ function svcFormHtml(f) {
     <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
       <header class="ov-form__head">
         <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
-        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared or where it runs. Each Run reads both again.' : 'Four answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
+        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
       </header>
       <ol class="ov-form__steps">
         <li class="ov-form__step">
@@ -946,7 +1006,7 @@ function svcFormHtml(f) {
             </select>${f.newEndpoint.allowed ? '' : `
             <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}
           </div>
-        </li>
+        </li>${f.targets ? targetsStepHtml(f, v, shown, 5) : ''}
       </ol>${f.error ? `
       <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
       <div class="ov-form__acts">
@@ -1069,7 +1129,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-svc-compare': () => ov.compare?.(),
     'ov-form-kind': (ev, el) => ov.formInput?.('kind', el.dataset.kind, { redraw: true }),
     'ov-form-run': (ev) => { ev?.preventDefault?.(); ov.saveService?.(saveWith(true)); },
-    'ov-form-save': () => ov.saveService?.(saveWith(false)),
+    // Save: on the targets-only form it is the submit button, so the click's own submit is not a second save.
+    'ov-form-save': (ev) => { ev?.preventDefault?.(); ov.saveService?.(saveWith(false)); },
     'ov-form-close': () => ov.closeForm?.(),
     // No row to run again afterwards (null), and the host keeps the form's answers while the sign-in is under way.
     'ov-form-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, null, { fromForm: true }),
@@ -1092,7 +1153,9 @@ export function renderServiceList(container, list, form, host = appHost, { draft
   });
   const formEl = container.querySelector('.ov-form');
   if (formEl) {
-    formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.(saveWith(true)); });
+    // Enter submits: Save and run on the whole form; Save alone on the board's targets-only one.
+    const targetsOnly = !!form?.targetsOnly;
+    formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.(saveWith(!targetsOnly)); });
     formEl.querySelectorAll('[data-field]').forEach((input) => {
       // The select re-draws the form (the new-endpoint fields); typing keeps the host's copy in step.
       const event = input.tagName === 'SELECT' ? 'change' : 'input';
@@ -1122,6 +1185,11 @@ export function renderServiceList(container, list, form, host = appHost, { draft
       : (form?.focus === 'upload' || (form?.focus === 'location' && uploading))
         ? (form.focus === 'upload' ? formEl.querySelector('[data-field-focus="upload"]') : null) || formEl.querySelector('.ov-form__upload button:not([disabled])')
         : form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
-    if (want) { want.focus({ preventScroll: true }); if (want.value && typeof want.select === 'function') want.select(); }
+    if (want) {
+      want.focus({ preventScroll: true });
+      if (want.value && typeof want.select === 'function') want.select();
+      // Asked for by the host (Set targets… opens on the Targets answer, Custom shows its minutes): into view.
+      if (form.scroll) want.scrollIntoView?.({ block: 'nearest' });
+    }
   }
 }

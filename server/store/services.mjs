@@ -20,6 +20,11 @@
 // (studio/set-asides.mjs): [{ key, side, layer, label, kind, note, until, by,
 // at }] as parseSetAside wrote it, [] for none. Kept the same way, under
 // set_aside:<orgId>:<serviceId>.
+//
+// targets is the MTTD / MTTR targets given the service in the studio, for a
+// repository that states none (studio/mttx-targets.mjs): { profile, mttd,
+// mttr, by, at } as parseTargets wrote it, or null. Kept the same way, under
+// mttx_targets:<orgId>:<serviceId>.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -30,6 +35,7 @@ const REPO = 'services';
 
 export const gradeOffKey = (orgId, serviceId) => `grade_off:${orgId}:${serviceId}`;
 export const setAsideKey = (orgId, serviceId) => `set_aside:${orgId}:${serviceId}`;
+export const targetsKey = (orgId, serviceId) => `mttx_targets:${orgId}:${serviceId}`;
 
 export function rowToService(r) {
   if (!r) return null;
@@ -61,11 +67,25 @@ function storedSetAside(db, orgId, serviceId) {
   return value;
 }
 
-// The service as the callers read it: the row, and its switches and set-asides beside it.
+// The stored targets, or null when there are none; damage is named, as above.
+function storedTargets(db, orgId, serviceId) {
+  const key = targetsKey(orgId, serviceId);
+  const value = getMetaJson(db, key, null);
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.profile !== 'string' || typeof value.mttd !== 'string' || typeof value.mttr !== 'string') {
+    throw new Error(`observogram store: schema_meta ${key} is not a service's targets`);
+  }
+  return value;
+}
+
+// The service as the callers read it: the row, and its switches, set-asides and targets beside it.
 function withGradeOff(db, service) {
   if (!service) return null;
   const { createdAt, updatedAt, ...rest } = service;
-  return { ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id), createdAt, updatedAt };
+  return {
+    ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id),
+    targets: storedTargets(db, service.orgId, service.id), createdAt, updatedAt,
+  };
 }
 
 // An array of plain objects (the admin module owns their shape); none is no key.
@@ -82,6 +102,15 @@ function setAsideJson(setAside) {
     throw new TypeError('observogram store: setAside is an array of { key, side, layer, label, kind, note, until, by, at }');
   }
   return setAside.length ? JSON.stringify(setAside) : null;
+}
+
+// null (no key), or a plain object with a profile and two durations (the admin module owns its shape).
+function targetsJson(targets) {
+  if (targets === null || targets === undefined) return null;
+  if (typeof targets !== 'object' || Array.isArray(targets) || typeof targets.profile !== 'string' || typeof targets.mttd !== 'string' || typeof targets.mttr !== 'string') {
+    throw new TypeError('observogram store: targets is { profile, mttd, mttr, by, at } or null');
+  }
+  return JSON.stringify(targets);
 }
 
 // null, or a plain object (the admin module owns its shape).
@@ -121,7 +150,7 @@ export function listServices(db) {
 
 // detail extends the service.create row ({ via: 'pack', pack } when a
 // register or the import created it).
-export function createService(db, actor, { slug, name, owners = [], tier = null, description = null, repository = null }, { detail = null } = {}) {
+export function createService(db, actor, { slug, name, owners = [], tier = null, description = null, repository = null, targets = null }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(slug, 'slug');
   requireText(name, 'name');
@@ -135,7 +164,9 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     // outlived its service (one deleted other than by deleteService) is no switch of this one.
     putMeta(db, gradeOffKey(org, row.id), null);
     putMeta(db, setAsideKey(org, row.id), null);
-    writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail });
+    putMeta(db, targetsKey(org, row.id), targetsJson(targets));
+    // The targets as they start, the same shape an update's row names: the profile and the two durations.
+    writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail: targets ? { ...(detail || {}), targets: { profile: targets.profile, mttd: targets.mttd, mttr: targets.mttr } } : detail });
     return withGradeOff(db, rowToService(row));
   });
 }
@@ -152,8 +183,9 @@ export function updateService(db, actor, id, patch) {
   };
   const gradeOff = patch.gradeOff === undefined ? undefined : gradeOffJson(patch.gradeOff);
   const setAside = patch.setAside === undefined ? undefined : setAsideJson(patch.setAside);
+  const targets = patch.targets === undefined ? undefined : targetsJson(patch.targets);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside'])];
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets'])];
   // The row names the criteria now off, so the audit says what the grade stopped counting,
   // and how many differences are set aside on each side (the list itself can be long).
   const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
@@ -161,6 +193,8 @@ export function updateService(db, actor, id, patch) {
     fields,
     ...(patch.gradeOff === undefined ? {} : { gradeOff: patch.gradeOff.map((x) => x.key) }),
     ...(patch.setAside === undefined ? {} : { setAside: { declared: sideCount('declared'), live: sideCount('live') } }),
+    // The targets as they now are: the profile and the two durations (none: null).
+    ...(patch.targets === undefined ? {} : { targets: patch.targets ? { profile: patch.targets.profile, mttd: patch.targets.mttd, mttr: patch.targets.mttr } : null }),
   };
   return atomic(db, () => {
     const current = rowOf(db, org, id);
@@ -168,6 +202,7 @@ export function updateService(db, actor, id, patch) {
     if (!fields.length) return getService(db, id);
     if (gradeOff !== undefined) putMeta(db, gradeOffKey(org, id), gradeOff);
     if (setAside !== undefined) putMeta(db, setAsideKey(org, id), setAside);
+    if (targets !== undefined) putMeta(db, targetsKey(org, id), targets);
     prepare(db, `UPDATE services SET ${sql ? `${sql}, ` : ''}updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
     writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail });
@@ -185,10 +220,11 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     if (!row) throw notFound('service', id);
     // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [] }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
     putMeta(db, setAsideKey(org, id), null);
+    putMeta(db, targetsKey(org, id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });

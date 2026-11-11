@@ -349,7 +349,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // studio/assessment-page.mjs — it stood at 6,399,773, 227 bytes under the last ceiling; no dependency).
   // 6,650,000 since the chain tiers (2026-11-10: the studio's own code reached 6,549,988 with
   // studio/artefact-tiers.mjs, the chain on the board and the machinery folded in Expert; no dependency).
-  assert.ok(built.bytes < 6_650_000, `the two-pack bundle is under 6,650,000 bytes (${built.bytes})`);
+  // 6,800,000 since the MTTD / MTTR targets (2026-11-11: the studio's own code reached 6,671,718 with
+  // studio/mttx-targets.mjs, the form's fifth answer and the tile's recommendation, on top of the
+  // control room's three modules; no dependency).
+  assert.ok(built.bytes < 6_800_000, `the two-pack bundle is under 6,800,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

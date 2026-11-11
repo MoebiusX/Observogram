@@ -64,17 +64,24 @@ environment, with its repository (GitHub, Azure DevOps, a folder or an
 upload), its live
 endpoint and its last check — the grade letter and how much matches live.
 **Run** scans the repository and checks it against live, **Open** draws the
-service's board and **Change** edits where it is. Services a live draft has
+service's board and **Change** edits where it is declared, where it runs and its MTTD / MTTR targets. Services a live draft has
 seen with no repository yet are counted under the list.
 
 ![Overview's service list: two services, each with its GitHub repository, its live MCP endpoint and its last check](docs/img/overview-services.png)
 
-**2. Add a service.** Four numbered answers — the service, the environment,
-the repository and the live endpoint (one of the org's, or a new one) — then
+**2. Add a service.** Five numbered answers — the service, the environment,
+the repository, the live endpoint (one of the org's, or a new one) and its
+**targets**, how fast an incident should be detected and resolved — then
 **Save and run**: the repository is scanned and checked against live, now and
-whenever the row is run again ([A Service's Run](#a-services-run)).
+whenever the row is run again ([A Service's Run](#a-services-run)). The
+targets are a dropdown of four profiles — *Lab default* (MTTD ≤ 1 min, MTTR
+≤ 5 min, recommended and chosen for a new service), *Critical financial
+service* (≤ 1 min, ≤ 15 min), *Significant degradation* (≤ 5 min, ≤ 60 min),
+*Noncritical service* (≤ 15 min, ≤ 4 hours) — *Custom* (minutes of your own)
+or *Not set*; **Change** on a row sets them for a service already there. They
+stand while the repository states none: its own `spec.baselines` win.
 
-![Add a service: the four numbered answers filled in, above the service list](docs/img/overview-add-service.png)
+![Add a service: the five numbered answers filled in, the targets on the recommended lab default](docs/img/overview-add-service.png)
 
 **3. The board.** One service at a time, the machine drawn as three numbered
 stages — *1 Discover · 2 Diagnose · 3 Remediate*, the words Expert uses — over
@@ -84,8 +91,16 @@ three columns, every number the engine's own —
   it: the **exporters** scraped, the **alerts** that fire (alert rules and
   burn-rate alerts, with *10 of 18 objectives have no burn-rate alert* under
   them when that is so), the **dashboards** people open — each a count — and
-  the **MTTD / MTTR** targets the repository states, or *Not declared*, with
-  the MTTD a chaos test measured when one recorded it. Under them the detail
+  the **MTTD / MTTR** targets the repository states, or those set in the
+  studio (said so: *Set in the studio (lab default), not in the
+  repository*), or *Not declared* with what to aim for — *Recommended: MTTD
+  ≤ 1 min · MTTR ≤ 5 min (lab default)* and the other profiles behind a fold
+  — with the MTTD a chaos test measured when one recorded it. **Set
+  targets…** on the tile (**Change targets…** once the studio holds some)
+  opens a form with the *Targets* answer alone, the recommended profile
+  chosen; Save brings the board back with them, and a service with no
+  repository or live endpoint yet still gets them. A chaos run that names no
+  environment gives no verdict, so the tile stays amber. Under them the detail
   in one line (*18 indicators · 18 objectives · 208 metrics · …*); the
   machinery (*324 panels · 39 recording rules · …*) and the stack — user
   experience, application, platform, infrastructure, ten kinds of signal
@@ -128,7 +143,10 @@ record's own counts), and a check's report has a *The chain* line.
 
 A repository states the MTTD / MTTR it holds itself to in its own pack, and
 the scan takes them as declared instead of the placeholder it writes
-otherwise (*15m / 1d*, never counted as Calibrated):
+otherwise (*15m / 1d*, never counted as Calibrated). Without them, the
+targets set in the studio for the service (*Add a service*, *Change*) are
+what the board and the control room measure against, said as the studio's;
+they stay on the service record and do not enter the pack or its grade:
 
 ```yaml
 # .observability/pack.yaml
@@ -160,7 +178,11 @@ declared exporters are the service's own.
   - *MTTR* is the median time an incident took to clear over the last 30
     days, with the count it rests on and the p95 (*4 min · over 72 incidents
     in the last 22 days · 95 in 100 cleared within 3 h 34 min*), against the
-    target the repository states.
+    target the repository states — else the one set in the studio, said so
+    (*Target 5 min · set in the studio*); with neither, the recommended one,
+    with no verdict (*Recommended ≤ 5 min (lab default); none declared*).
+    *Set targets…* / *Change targets…* under the two figures opens the
+    same *Targets* form, and Save or Cancel brings the board back.
   - It is rebuilt from the rule evaluator's own firing history (the `ALERTS`
     series that Prometheus, vmalert or a ruler writes), one incident per
     alert name, in 2-minute steps; an alert that pauses for 5 minutes or
@@ -1084,9 +1106,9 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | Method | Path | Who | Body | What it does |
 |---|---|---|---|---|
 | `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; a slug in use is 409 naming its id |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside` | `changed` lists the fields that differed (none: no audit row); `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets` | `changed` lists the fields that differed (none: no audit row); `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ alerts, scrape, timing, families, absent, calls, readAt, cached }`, each part with its outcome (`data`, `empty`, `failed`, `not-attempted`); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
@@ -1275,8 +1297,8 @@ A service is checked in two places: its **repository**, where what it should
 have is declared, and, for each environment, the **MCP endpoint** that reads
 what it has. The service record holds the first (`repository`), the
 environment the second (`mcpEndpointId`); Overview's front door is the list
-of both with **Add a service** (four answers: the name, the environment, the
-repository, the live endpoint) and **Run** on every row.
+of both with **Add a service** (five answers: the name, the environment, the
+repository, the live endpoint, the MTTD / MTTR targets) and **Run** on every row.
 
 `repository` is `{ kind, location, ref? }`:
 
@@ -1781,8 +1803,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.28 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.28
+docker build -t observogram:0.8.29 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.29
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1845,7 +1867,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.28
+  observogram:0.8.29
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1853,7 +1875,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.28
+    image: observogram:0.8.29
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -3773,9 +3795,9 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
 | `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }` |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository?, targets? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile }`, `{ profile: custom, mttd, mttr }` or `null` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — and `setAside` — the differences with live its grade leaves out (`changed` lists what differed; nothing → no audit row) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — and `targets` — the MTTD / MTTR targets the studio keeps for it (`changed` lists what differed; nothing → no audit row) |
 | `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
 | `POST` | `/api/services/:id/control-room` | Overview's control room, `{ env? }`: the environment's live endpoint read now → alerts, targets, MTTR from the alert history, the known metric families |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
