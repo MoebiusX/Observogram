@@ -320,7 +320,7 @@ p.ov-scan__sum { cursor: default; }
 .ov-status--warn .ov-status__dot { background: var(--og-warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--og-warn) 22%, transparent); }
 .ov-status--fail .ov-status__dot { background: var(--og-fail); box-shadow: 0 0 0 3px color-mix(in srgb, var(--og-fail) 22%, transparent); }
 .ov-status__sep { color: var(--og-muted); margin: 0 2px; }
-.ov-result { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 14px; align-items: center; margin-top: 12px; }
+.ov-result { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 14px; align-items: center; margin-top: 12px; }
 .ov-shield { width: 72px; height: 72px; display: grid; place-items: center; color: var(--og-text); border: 2px solid currentColor; border-radius: 16px; background: color-mix(in srgb, currentColor 12%, transparent); }
 .ov-shield.ov-tone-ok { color: var(--og-accent); }
 .ov-shield.ov-tone-warn { color: var(--og-warn); }
@@ -331,14 +331,12 @@ p.ov-scan__sum { cursor: default; }
 .ov-board .ov-grade__label { font: 600 18px/1.2 var(--og-font); letter-spacing: -0.01em; color: var(--og-text); }
 .ov-board .ov-grade__word { font: 500 13px/1.3 var(--og-font); color: var(--og-text-2); }
 .ov-board .ov-grade__src { font: 400 12px/1.3 var(--og-font); }
-.ov-rules { display: grid; gap: 4px; min-width: 124px; justify-items: end; text-align: right; }
-.ov-rules__n { font: 650 22px/1 var(--og-font); letter-spacing: -0.02em; color: var(--og-text); }
-.ov-rules__of { font: 500 12px/1 var(--og-font); color: var(--og-muted); margin-left: 3px; }
-.ov-rules__bar { width: 124px; height: 5px; border-radius: 3px; background: var(--og-sunken); border: 1px solid var(--og-line); overflow: hidden; }
-.ov-rules__bar > span { display: block; height: 100%; background: var(--og-accent); }
-.ov-rules--warn .ov-rules__bar > span { background: var(--og-warn); }
-.ov-rules--fail .ov-rules__bar > span { background: var(--og-fail); }
-.ov-rules__text { font: 400 11.5px/1.3 var(--og-font); color: var(--og-muted); }
+/* Remediate's rules: what the specification requires and the pack does not declare. */
+.ov-rules { display: grid; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--og-line); }
+.ov-rules__h { margin: 0; font: 650 13px/1.3 var(--og-font); color: var(--og-text); }
+.ov-rules__list { margin: 0; padding-left: 18px; display: grid; gap: 2px; font: 400 12.5px/1.4 var(--og-font); color: var(--og-text); }
+.ov-rules__more { list-style: none; margin-left: -18px; }
+.ov-rules__link { justify-self: start; }
 .ov-board .ov-grade__points { margin-top: 10px; font-size: 12.5px; }
 .ov-grade__why { margin-top: 12px; }
 .ov-gw-list--open { margin-top: 6px; gap: 4px; font-size: 13.5px; line-height: 1.4; }

@@ -33,8 +33,8 @@ export function computeOverviewDiagnostic(layered, posture = null, { off = [] } 
 //   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, runError }
 // `journeyFor(journeys)` picks this service's journey (the model's rule), so
 // the run is read for the right one. The conformance (the pack against the
-// specification's clauses for its tier) is the board's "required rules" line;
-// a failure there costs that line and nothing else.
+// specification's clauses for its tier) is Remediate's "Required by the
+// specification" block; a failure there costs that block and nothing else.
 export async function loadOverviewFacts({ pack = null, env = null, journeyFor = () => null, fetchFn = requestJson } = {}) {
   const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null };
   const reads = [];

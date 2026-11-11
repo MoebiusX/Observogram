@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.8.34 — 2026-11-11
+
+**The grade card shows the grade alone; the specification's required rules move to Remediate.** Beside the letter, the board drew *14 / 25 required rules met · tier 1* with a bar of its own — a second verdict on the same card, which the grade does not count, so a B+ and a 56% seemed to disagree. The rules are things to add to the pack, so they are now listed where the changes are.
+
+### Changed
+- **The grade card** (`studio/overview-view.mjs`, `studio/overview.css`): the shield, its ladder name, the verdict word and *Why this grade* — nothing else beside the letter.
+- **Remediate — Required by the specification** (`studio/overview-model.mjs` `rulesModel`, `studio/overview-view.mjs`, `studio/app.mjs`): under the three tiles, *3 of the 15 rules the specification requires of a tier 2 service are not met.*, the first three as what to do (*Add a recording rule for each SLO*: Expert's Conformance's own fix for the rule, else the clause's description, never its id), *and N more*, and **See the rules in Expert**, which opens Expert's Conformance on the service's pack (`host.overview.openRules(compare)`, new). A waived rule is left out of the list and counted (*(1 of them waived)*); all met reads *All 15 rules the specification requires of a tier 2 service are met.*; a failed read says the rules could not be read, with nothing to open. `rulesModel` gains `unmet`, `missing` (what to do) and `waived`; its sentence changes. The rules' words move from `studio/conformance-view.mjs` to a new zero-import `studio/clause-fixes.mjs` (`CLAUSE_FIX`, re-exported where it was), which joins the board's copyable closure; its one fix that read as a fragment without its reason (*Point it at … ref:*) now stands alone (*Point each extended surface at a declared backend or an explicit ref: reference*).
+- **The next step** (`studio/overview-model.mjs` `nextActionModel`, `rulesLeft`): with live in agreement and rules still to add, it says *Live matches what the repository declares; the 4 rules the specification requires, above, are what is left to add.*, never *Nothing to do right now*.
+- **Docs.** `README.md` (Diagnose, Remediate, the board's picture taken again: `docs/img/overview-board.png`), `docs/USER_JOURNEY.md` (the board's map, Diagnose, Remediate), `docs/UX_SCREEN_GRAMMAR.md`, `docs/OVERVIEW_DEMO.md`, `docs/VENDORING.md` (`openRules`, `clause-fixes.mjs`, the board's nine files).
+- **Downstream:** api, behaviour — `rulesModel` returns `unmet`, `missing` and `waived` and words its sentence as the rules not met; the board's closure gains `studio/clause-fixes.mjs` (copy the nine together); the board calls a new `host.overview.openRules(compare)` (a host without it draws the link, which does nothing); the grade card no longer shows the required rules, Remediate does.
+
+### Tests
+- `tools/test-overview-model.mjs`: `rulesModel` (the rules not met as what to do, a rule the table does not know by its description, all met, one and many, a waived rule, the tier from the body's object, an unread body), the grade card without the rules, Remediate's block and its place before the next step, *See the rules in Expert* reaching `host.overview.openRules` with the comparison; the board's closure with `clause-fixes.mjs`; every rule's fix standing on its own; the next step with rules left to add.
+- Cut as 0.8.34: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1918 → 1918.
+- **Downstream:** none — tests only.
+
 ## 0.8.33 — 2026-11-11
 
 **Multi-modal and Comprehensive earn points by how far they get, not all or nothing.** Comprehensive gave the whole point at 50 in 100 observed and nothing at 48, so krystaline's 48 cost it 14 points of a hundred — B+ at 84.7% against A+ two points of coverage away. Multi-modal had the same cliff at three kinds of signal. Both now earn what they reach, as Drift-free already did: the average observed is the points (0.48 of a point at 48 in 100), the kinds of four are the points (0.75 at three). Each is still met at its bar, so the Pass and Fail marks are unchanged; the points are what move.

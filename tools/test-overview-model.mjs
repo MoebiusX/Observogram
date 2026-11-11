@@ -37,6 +37,7 @@ import {
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
+import { CLAUSE_FIX } from '../studio/clause-fixes.mjs';
 import { instrumentGradeFor, GRADE_CRITERION_KEYS, GRADE_SCHEMA } from '../studio/diagnostic-grade.mjs';
 import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from '../studio/grade-criteria-ui.mjs';
 import {
@@ -551,6 +552,9 @@ test('nextActionModel: Changed → fix the things that differ, the why in plural
   // Unchanged: nothing to do; the still-true panel's Check again is the primary instead.
   const n2 = keep(nextActionModel({ still: still({ run: unchangedRun }), grade: liveGrade, decision, run: unchangedRun, journey }));
   assert.deepEqual(n2, { sentence: 'Nothing to do right now: live matches what the repository declares.', button: null, why: [], primary: false });
+  // With the specification's rules still to add (Remediate lists them above the next step): never "nothing to do".
+  assert.equal(keep(nextActionModel({ still: still({ run: unchangedRun }), grade: liveGrade, decision, run: unchangedRun, journey, rulesLeft: 4 })).sentence, 'Live matches what the repository declares; the 4 rules the specification requires, above, are what is left to add.');
+  assert.equal(keep(nextActionModel({ still: still({ run: unchangedRun }), grade: liveGrade, decision, run: unchangedRun, journey, rulesLeft: 1 })).sentence, 'Live matches what the repository declares; the rule the specification requires, above, is what is left to add.');
   assert.equal(still({ run: unchangedRun }).checkPrimary, true);
   // Unreachable: a live journey is checked again; a recording is a matter for Expert mode.
   const lost = keep(nextActionModel({ still: still({ run: lostRun }), grade: packGrade, decision, run: lostRun, journey }));
@@ -1012,9 +1016,20 @@ test('layersModel adds up: Declared is the plates plus Unplaced, each artefact o
 });
 
 test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the promises that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
-  assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, sentence: '12 of 15 required rules met for a tier 2 service.', tone: 'warn' });
+  // The rules not met, as things to add (Remediate's): the count and each as the thing to do — Expert's Conformance's
+  // own words (studio/clause-fixes.mjs) — never its id; a rule the table does not know reads its clause's description.
+  assert.deepEqual(rulesModel({ must: { passed: 0, total: 1 }, clauses: [{ id: 'L9.MUST.new_rule', applies: true, severity: 'MUST', pass: false, description: 'A rule from a newer rubric.' }] }).missing, ['A rule from a newer rubric.']);
+  assert.deepEqual(keep(rulesModel(conformance)), { passed: 12, total: 15, pct: 80, tier: '2', met: false, unknown: false, unmet: 3, missing: ['Add a recording rule for each SLO', 'Add a multi-window burn-rate alert for each SLO', 'Schedule a monthly (or more frequent) chaos experiment in staging'], waived: 0, sentence: '3 of the 15 rules the specification requires of a tier 2 service are not met.', tone: 'warn' });
   assert.deepEqual([rulesModel(null), rulesModel({ must: { passed: 0, total: 0 } })], [null, null]);
-  assert.deepEqual([rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1' }).tone, rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone], ['ok', '1 of 4 required rules met.', 'fail']);
+  // Every rule's fix stands on its own on the board (no layer code, no "it" without its reason, no dangling colon).
+  for (const [id, { action }] of Object.entries(CLAUSE_FIX)) assert.ok(action && !/\bL[1-5]X?\b/.test(action) && !/^\w+ it\b/i.test(action) && !/:$/.test(action), `${id}: "${action}"`);
+  const allMet = rulesModel({ must: { passed: 3, total: 3 }, conformant: true, declaredTier: 'tier-1', clauses: [] });
+  assert.deepEqual([allMet.tone, allMet.unmet, allMet.sentence], ['ok', 0, 'All 3 rules the specification requires of a tier 1 service are met.']);
+  assert.deepEqual([rulesModel({ must: { passed: 1, total: 4 } }).sentence, rulesModel({ must: { passed: 1, total: 4 } }).tone, rulesModel({ must: { passed: 2, total: 3 } }).sentence], ['3 of the 4 rules the specification requires are not met.', 'fail', '1 of the 3 rules the specification requires is not met.']);
+  // A waived rule is no thing to add: left out of the list, counted beside the sentence.
+  const firstUnmet = conformance.clauses.find((c) => c.applies && c.severity === 'MUST' && c.pass === false).id;
+  const waivedOne = rulesModel({ ...conformance, waivers: { clauses: { [firstUnmet]: { status: 'waived' }, other: { status: 'partial' } } } });
+  assert.deepEqual([waivedOne.missing.length, waivedOne.waived, waivedOne.sentence], [2, 1, '3 of the 15 rules the specification requires of a tier 2 service are not met (1 of them waived).']);
   // The fixture's run is dated; pin the clock or the freshness note appends itself once the run is a day old.
   const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
@@ -1071,10 +1086,10 @@ test('buildOverviewModel: the board from the same facts — layers, rules, fidel
   assert.equal(keep(buildOverviewModel({ services, servicesStatus: { kind: 'ok', error: null }, catalog: packs })).layout, 'board', 'the board is the default');
 });
 
-test('renderOverview: the board — three numbered stages over three columns; the stack with its plates, labelled cells and counts; one status strip; the shield, the rules and the seven rows open; the ring, four counts and the promises bar; the three tiles to change; one primary; the column links reach host.overview; the simple layout on request, without a pack of its own, and as the fallback when the board cannot be drawn', () => {
+test('renderOverview: the board — three numbered stages over three columns; the stack with its plates, labelled cells and counts; one status strip; the shield and the seven rows open; the ring, four counts and the promises bar; the three tiles to change; one primary; the column links reach host.overview; the simple layout on request, without a pack of its own, and as the fallback when the board cannot be drawn', () => {
   const c = overviewContainer();
   const calls = [];
-  const host = { overview: { openDiscover: () => calls.push('discover'), openDiagnose: () => calls.push('diagnose'), openRemediate: () => calls.push('remediate'), openNeuron: () => calls.push('neuron'), checkNow: () => calls.push('check') } };
+  const host = { overview: { openDiscover: () => calls.push('discover'), openDiagnose: () => calls.push('diagnose'), openRemediate: () => calls.push('remediate'), openRules: () => calls.push('rules'), openNeuron: () => calls.push('neuron'), checkNow: () => calls.push('check') } };
   renderOverview(c, board({ diagnostic: diagnosticFull }), host);
   const html = c.innerHTML;
   assert.ok(html.startsWith('<div class="ov-page ov-page--board">'), 'the zone, the board');
@@ -1156,7 +1171,9 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.equal(countOf(html, 'Graded against live, 2 hours ago.'), 0, 'the live source line is not repeated under the shield');
   assert.ok(html.includes('<div class="ov-shield ov-tone-warn" title="B · Industrial Grade — Suitable for production, maintenance, process control, and routine professional use." aria-label="Grade B"><span class="ov-shield__letter">B</span></div>'));
   assert.ok(html.includes('<div class="ov-grade__label">Industrial grade</div>') && html.includes('<div class="ov-grade__word">Almost diagnostic-grade</div>'));
-  assert.ok(html.includes('<div class="ov-rules ov-rules--warn" title="12 of 15 required rules met for a tier 2 service."><div class="ov-rules__n"><b>12</b><span class="ov-rules__of">/ 15</span></div><div class="ov-rules__bar" role="img" aria-label="12 of 15 required rules met"><span style="width:80%"></span></div><span class="ov-rules__text">required rules met · tier 2</span></div>'));
+  // The grade card holds the grade alone: the specification's rules are Remediate's, below.
+  const gradeCard = html.slice(html.indexOf('ov-card--a'), html.indexOf('ov-card--b'));
+  assert.ok(!gradeCard.includes('ov-rules') && !gradeCard.includes('required rules'), 'no second figure beside the letter');
   // The seven rows are behind Why this grade, closed, whatever room the screen has: the reader opens them.
   assert.ok(html.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.9 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'the seven rows behind a closed disclosure');
   assert.ok(!html.includes('<details class="ux-disclosure ov-grade__why" open>') && !html.includes('ov-grade__why--open'), 'never opened for the reader');
@@ -1166,27 +1183,31 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<span class="ov-chains__seg ov-chains__seg--ok" style="flex-grow:5"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--warn" style="flex-grow:1"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--fail" style="flex-grow:12"></span>'));
   assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold in every link, 1 in part, 12 broken.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
   assert.ok(html.includes('<span class="og-pill og-pill--warn ov-live__pill">Changed</span>') && html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — 43 things differ from what the repository declares.</p>') && html.includes('<button type="button" class="og-btn ov-check" data-ux-action="ov-check">Check again</button>'));
+  // Remediate: the specification's rules not met, as things to add, with the way to all of them in Expert.
+  const remediate = html.slice(html.indexOf('ov-col--remediate'));
+  assert.ok(remediate.includes('<div class="ov-rules ov-rules--warn"><h3 class="ov-rules__h">Required by the specification</h3><p class="ov-col__note">3 of the 15 rules the specification requires of a tier 2 service are not met.</p><ul class="ov-rules__list"><li>Add a recording rule for each SLO</li><li>Add a multi-window burn-rate alert for each SLO</li><li>Schedule a monthly (or more frequent) chaos experiment in staging</li></ul><button type="button" class="og-btn og-btn--text ov-link ov-rules__link" data-ux-action="ov-open-rules">See the rules in Expert <span class="ov-link__arrow" aria-hidden="true">→</span></button></div>'), 'the rules in Remediate');
+  assert.ok(remediate.indexOf('ov-rules') < remediate.indexOf('ov-next'), 'before the next step');
   // Remediate: three tiles with their icons, then the one next step.
   assert.ok(html.includes('<div class="ov-change ov-change--fail" title="declared in the repository, not running live"><svg class="ov-ic ov-change__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false">') && html.includes('<span class="ov-change__l">to add</span><span class="ov-change__n">38</span><span class="ov-change__note og-muted">declared, not live</span></div>'));
   assert.ok(html.includes('<span class="ov-change__l">to update</span><span class="ov-change__n">5</span><span class="ov-change__note og-muted">live, not as declared</span>') && html.includes('<span class="ov-change__l">to review</span><span class="ov-change__n">30</span><span class="ov-change__note og-muted">live, not declared</span>'), 'to review, never to remove');
   assert.ok(html.includes('<p class="ov-next__sentence">Fix the 43 things the live side does differently.</p>') && html.includes('<button type="button" class="og-btn og-btn--primary ov-next__btn" data-ux-action="ov-next-neuron">See the differences</button>'));
   assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary on the board');
   for (const [action, label] of [['ov-open-discover', 'Open in Discover'], ['ov-next-diagnose', 'Open in Diagnose'], ['ov-open-remediate', 'Open in Remediate']]) assert.ok(html.includes(`<button type="button" class="og-btn og-btn--text ov-link" data-ux-action="${action}">${label} <span class="ov-link__arrow" aria-hidden="true">→</span></button>`), label);
-  c.click('ov-open-discover'); c.click('ov-next-diagnose'); c.click('ov-open-remediate'); c.click('ov-next-neuron'); c.click('ov-check');
-  assert.deepEqual(calls, ['discover', 'diagnose', 'remediate', 'neuron', 'check']);
+  c.click('ov-open-discover'); c.click('ov-next-diagnose'); c.click('ov-open-remediate'); c.click('ov-open-rules'); c.click('ov-next-neuron'); c.click('ov-check');
+  assert.deepEqual(calls, ['discover', 'diagnose', 'remediate', 'rules', 'neuron', 'check']);
   // The column links carry the comparison the board graded: the live pack its run read, null without one.
   const carried = [];
-  const opens = { overview: { openDiscover: (x) => carried.push(['discover', x]), openDiagnose: (x) => carried.push(['diagnose', x]), openRemediate: (x) => carried.push(['remediate', x]) } };
+  const opens = { overview: { openDiscover: (x) => carried.push(['discover', x]), openDiagnose: (x) => carried.push(['diagnose', x]), openRemediate: (x) => carried.push(['remediate', x]), openRules: (x) => carried.push(['rules', x]) } };
   const withLive = board({ diagnostic: diagnosticFull, journeys: [keptJourney], catalog: [...packs, LIVE_ENTRY] });
   assert.ok(withLive.compare, 'the model carries the comparison');
   const lc = overviewContainer();
   renderOverview(lc, withLive, opens);
   assert.ok(!lc.innerHTML.includes(LIVE_ENTRY.id) && !lc.innerHTML.includes('uploaded-'), 'the pack id rides on the click, never on the page');
-  lc.click('ov-open-discover'); lc.click('ov-next-diagnose'); lc.click('ov-open-remediate');
+  lc.click('ov-open-discover'); lc.click('ov-next-diagnose'); lc.click('ov-open-remediate'); lc.click('ov-open-rules');
   const nc = overviewContainer();
   renderOverview(nc, board({ diagnostic: diagnosticFull }), opens);
   nc.click('ov-next-diagnose');
-  assert.deepEqual(carried, [['discover', withLive.compare], ['diagnose', withLive.compare], ['remediate', withLive.compare], ['diagnose', null]]);
+  assert.deepEqual(carried, [['discover', withLive.compare], ['diagnose', withLive.compare], ['remediate', withLive.compare], ['rules', withLive.compare], ['diagnose', null]]);
   assert.ok(!/<(img|script)\b/.test(html), 'no raw markup');
   assert.equal((html.match(/%<\//g) || []).length, 1, 'one percent sign reaches the page: the ring\'s');
   // Never checked: the strip says so, the ring is empty, the counts withheld with their reason; the next step is the one primary.
@@ -1241,12 +1262,12 @@ test('the board agrees with the engine: a cell lit by live evidence alone is pre
   const engineAverage = (...covered) => Math.round(covered.reduce((n, c) => n + c / 10, 0) / 4 * 100);
   for (const combo of [[1, 1, 1, 2], [3, 3, 3, 0], [9, 7, 1, 1], [5, 5, 5, 6]]) assert.equal(layersModel({ cells: cells(...combo) }).coveragePct, engineAverage(...combo), combo.join('/'));
   // The rules: the body's `tier` is an object; a read failure is said, not shown as "no rules".
-  assert.equal(rulesModel({ must: { passed: 1, total: 2 }, tier: { graded: 'tier-3' } }).sentence, '1 of 2 required rules met for a tier 3 service.');
-  assert.deepEqual(keep(rulesModel(null, { error: '500: boom' })), { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, sentence: 'The required rules could not be read.', tone: 'neutral' });
+  assert.equal(rulesModel({ must: { passed: 1, total: 2 }, tier: { graded: 'tier-3' } }).sentence, '1 of the 2 rules the specification requires of a tier 3 service is not met.');
+  assert.deepEqual(keep(rulesModel(null, { error: '500: boom' })), { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, unmet: 0, missing: [], waived: 0, sentence: 'The rules the specification requires could not be read.', tone: 'neutral' });
   assert.equal(rulesModel(null, { error: null }), null, 'no body and no error: nothing to say');
   const unread = overviewContainer();
   renderOverview(unread, board({ conformance: null, conformanceError: '500: boom' }), { overview: {} });
-  assert.ok(unread.innerHTML.includes('<div class="ov-rules ov-rules--unknown"><span class="ov-rules__text og-muted">The required rules could not be read.</span></div>') && !unread.innerHTML.includes('ov-rules__bar'));
+  assert.ok(unread.innerHTML.includes('<div class="ov-rules ov-rules--unknown"><h3 class="ov-rules__h">Required by the specification</h3><p class="ov-col__note og-muted">The rules the specification requires could not be read.</p></div>') && !unread.innerHTML.includes('ov-open-rules'), 'unread: said, with nothing to open');
   // Stale: the counts are shown, with the caveat the engine applies.
   const stale = keep(fidelityModel({ run, journey, pack: krystalinePack, now: STALE_NOW }));
   assert.deepEqual([stale.known, stale.note], [true, 'The live side answered only in part: its dashboards could not be read. Counted 1 day ago; readings older than a day are not trusted.']);
@@ -2720,8 +2741,9 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './chaos-runs.mjs', './constants.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
   'studio/artefact-tiers.mjs': [],
+  'studio/clause-fixes.mjs': [],
   'studio/mttx-targets.mjs': [],
   'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],

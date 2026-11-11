@@ -111,9 +111,10 @@ The Run
 Open: the board              1 Discover · 2 Diagnose · 3 Remediate
   |-- Layers: what the repository declares, layer by layer,
   |   and what the scan read and left out
-  |-- A: the grade, Why this grade, the required rules
+  |-- A: the grade, Why this grade
   |-- B: the alignment, four counts, the promises; Check again
-  |-- Changes to apply: to add · to update · to review; the next step
+  |-- Changes to apply: to add · to update · to review; the required
+  |   rules not met; the next step
   v
 Open in Discover / Open in Diagnose / Open in Remediate
   |   Expert, bound to the service, with the live pack the board graded as Pack B
@@ -617,8 +618,8 @@ Belongs here:
     click*);
   - **A — Are the right signals in place?** (*The repository against what
     good looks like*): the grade letter in a shield, its ladder name in plain
-    words (*Field grade*), the verdict word, the required rules (*11 / 15
-    required rules met · tier 2*) and *Why this grade*, closed until the
+    words (*Field grade*), the verdict word and *Why this grade* — the grade
+    alone, no second figure beside it — closed until the
     reader opens it — where a criterion that does not apply to this service
     is switched off (*Not for this service…*, a reason required) and back on
     (*Grade it again*), and *Graded on 6 of 7 criteria* under the verdict
@@ -643,7 +644,12 @@ Belongs here:
   details differ: 31 metrics. 4 more run live, not declared.*); a link live
   could not read said so, never "matches" (*Nothing to change in the
   exporters and alerts: they match live. Not read live, so not compared: the 7
-  dashboards.*); the next step, one sentence and one button, in the chain's
+  dashboards.*); under them, *Required by the specification*: the rules the
+  specification requires of the service's tier that the pack does not meet
+  (*3 of the 15 rules the specification requires of a tier 2 service are not
+  met.*), the first three as what to do, in Expert's Conformance's words
+  (*Add a recording rule for each SLO*), a waived one left out and counted,
+  and *See the rules in Expert* (Conformance); the next step, one sentence and one button, in the chain's
   words (*Fix the 1 exporter and 2 alerts the live side does differently.*,
   *Exporters and alerts match live, the 7 dashboards could not be read; look
   at the 32 details beyond the chain.*, or *The chain matches live; look at
@@ -653,7 +659,9 @@ Belongs here:
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
   when the check reads a recording; with nothing to change, the sentence
   alone (*Nothing to do right now: live matches what the repository
-  declares.*); **Open in Remediate**;
+  declares.*, or, with the specification's rules still to add, *Live matches
+  what the repository declares; the 3 rules the specification requires,
+  above, are what is left to add.*); **Open in Remediate**;
 - where there is no Services list (the static bundle), or for a service with
   a check but no pack yet, the drift check started here in three steps —
   *Scan a repo* (Pack A: **Scan a repository** or **Upload a pack**),
