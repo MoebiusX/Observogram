@@ -30,7 +30,7 @@ components:
 
 images:
   - name: observogram
-    newTag: 0.8.30
+    newTag: 0.8.31
 
 labels:
   - pairs:

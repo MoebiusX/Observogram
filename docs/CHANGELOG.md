@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.31 — 2026-11-11
+
 **The control room reads the service's own, and Remediate speaks the chain's words.** Every service on one MCP endpoint saw the same control room — the endpoint's every alert, incident, target and metric — so a service pointed at a shared Prometheus showed another product's alerts and MTTR as its own. It now reads what the service's repository declares: its alert rules by name and its scrape jobs. And Remediate's tiles said *declared, not live* about "things" right after the board had spoken of exporters, alerts and dashboards; they now count by link, and no sentence says a link matches live when live did not read it.
 
 ### Changed
@@ -19,6 +21,7 @@
 - `server/test-control-room.mjs` +2: `scopeOfPack` (a scan's jobs and rules, and the alert names its annotation lists) and `declaredScopeOf` on a real saved check (its burn-rate alert by name, read as its own; a saved check that cannot be read and an environment never run said apart, neither asking the endpoint); with the scope seam, every query pinned to its scoped text, none reading another service's alerts, targets or metrics; two services that declare the same share the history, another reads its own.
 - `tools/test-control-room-panel.mjs` +1: the scope line (the service's own with what it cannot tell apart, a cut beside the declared number, jobs alone, alerts alone, nothing declared, never run, an older server's), *Not read* for a part skipped on purpose, the history and families of its own.
 - `tools/test-overview-model.mjs`: Remediate's tiles by link, the sentences with dashboards not read, with nothing read, with a link read in part, set aside or declaring none, and with everything read; the next step, what runs live undeclared and its Why; Diagnose's line; `chainDifferences`' fields; no "thing" in any of them. `tools/test-crawl-alerting-rules.mjs`: every alert name annotated, burn-rate ones and a repository's with no recording rules included.
+- Cut as 0.8.31: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1908 → 1914.
 - **Downstream:** none — tests only.
 
