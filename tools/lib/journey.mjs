@@ -552,6 +552,17 @@ export function validateGateStack(stack, journeyName = '?') {
 
 // scope: the studio run's crawl scope (below) — a file: source in another
 // org's part of the workspace is refused, as a crawl: root there is (A-24).
+// readJourneyPackA(def, { crawlScope }) → the canonical pack a saved check's
+// Pack A file holds, or null (a crawl source, no file, or one that cannot be
+// read). Read inside the crawl scope, as a run reads it; never a walk.
+// Overview's control room reads the scrape jobs the repository declares from it.
+export function readJourneyPackA(def, { crawlScope = null, baseDir = undefined } = {}) {
+  if (!def?.packA?.file) return null;
+  // Relative to the check file itself, as a run reads it (runJourney's __baseDir).
+  const base = baseDir ?? (def.__source ? dirname(def.__source) : '.');
+  try { return loadPackFile(def.packA.file, base, crawlScope).canonical; } catch { return null; }
+}
+
 function loadPackFile(path, baseDir, scope = null) {
   const p = resolve(baseDir || '.', path);
   refuseOutOfScope(p, scope, 'pack file');

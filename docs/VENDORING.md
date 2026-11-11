@@ -165,6 +165,9 @@ this pack", which is true. `boardGroupsHtml(layerId, entries, { annotations })`
 without the third argument it says "None in this pack" as before.
 | [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `set-asides.mjs` (zero-import), `artefact-tiers.mjs` (zero-import), `constants.mjs` — copy the six together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `chainModel`, `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/set-asides.mjs`](../studio/set-asides.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | a service's set-asides — differences with live its grade leaves out (under development, not this service's): `applySetAsides(diff, list, { now })` returns the comparison without them (its summary and requirement chains scored again, the engine's beside), `setAsideCandidates`, `setAsideFingerprint`, `setAsideState`, `reviewDate`; the server's runs and Expert's Diagnose read the same rules |
+| [`studio/control-room-model.mjs`](../studio/control-room-model.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | the control room's model, pure: the panel's state from one read to the next (`controlRoomOpened`, `controlRoomReading`, `controlRoomAnswered`, `controlRoomFailed`, `controlRoomDue` — a minute; 1, 2, then 4 minutes after consecutive failures; none hidden, none after a final refusal) and `buildControlRoomModel({ state, serviceName, envName, mttx, now })`, the server's answer in words and numbers (MTTR and MTTD first, never a figure the read did not support; the endpoint's scope said; `mttx: { unread: true }` while the repository's pack is not read) |
+| [`studio/control-room-view.mjs`](../studio/control-room-view.mjs) | imports `util.mjs` (escapeHtml), `host.mjs`, `ux-kit-pure.mjs` — as `overview-view.mjs` (CI-asserted) | `renderControlRoom(container, model, host)`: the panel into its own host element (never inside the board, which repaints) — two children, the panel and a live region kept across repaints; a repaint of the same service environment redraws only the pieces whose words changed — `host.overview.closeControlRoom` and `refreshControlRoom`; `placeControlRoom(head)`; `formatValue`, `boundWords` |
+| [`studio/control-room-api.mjs`](../studio/control-room-api.mjs) | imports `services-api.mjs` (requestJson) and `control-room-model.mjs` (CI-asserted) | `loadControlRoom(serviceId, env)` (`POST /api/services/:id/control-room`) and `createControlRoomDriver({ load, onChange, timers, visibility })`: one read at a time while the panel is open, paused while the page is hidden |
 | [`studio/artefact-tiers.mjs`](../studio/artefact-tiers.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | what people know and what they do not: every artefact family's tier — 1 the chain (exporters, alerts, dashboards, MTTD / MTTR), 2 the detail, 3 the machinery — `declaredByTier(layered)` (what a pack declares by tier, the objectives no burn-rate alert covers, the MTTD / MTTR targets), `comparisonByTier(diff)` (a comparison by link and tier: what each run records as `drift.tiers`), `CHAIN_LINKS`, `tierOfFamily`, `familyOfArtefact`; its id prefixes mirror `tools/lib/artefact-classify.mjs` (CI-asserted: `tools/test-artefact-tiers.mjs`) |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
 | [`studio/overview-api.mjs`](../studio/overview-api.mjs) | `services-api.mjs` → `api.mjs` (the default fetcher only); `diagnostic-grade.mjs` | the loaders (`services-api.mjs` adds `uploadServiceRepository(id, { name, files })` for Upload): `loadOverviewFacts({ pack, env, journeyFor, fetchFn })`, `runServiceCheck(name, { fetchFn })`, `loadServiceListFacts({ fetchFn })`, `loadRepositoryFolders(path, { fetchFn })`, `computeOverviewPosture`, `computeOverviewDiagnostic` — pass your own `fetchFn` and the stub never runs |
@@ -269,8 +272,36 @@ host.overview = {
   explain(reason),                              // a start card the reader's rank cannot use, activated
   backToList(),                                 // ← Services, with `listable` (the service list: below)
   setGradeCriterion(key, { graded, reason }),   // with `gradeSwitches`: a criterion off (graded: false, a reason) or on again for the service on the board
+  toggleControlRoom(),                          // with `controlRoom`: the board's Control room button
+  closeControlRoom(), refreshControlRoom(),     // the panel's Close (and Escape) and Refresh (control-room-view.mjs)
 };
 ```
+
+**The control room** is opt-in: `buildOverviewModel({ controlRoom: true,
+controlRoomOpen })` adds `model.controlRoom = { offered, open, reason }` and
+the board draws its button (unavailable, with the reason, when the picked
+environment names no live endpoint or `access.canWrite` is false; the same
+rule is `controlRoomOffer(picked, access, open)`, for closing an open panel
+when the board moves to an environment it is not offered for). The panel
+is yours to place: give it its own element (not the board's container, which
+repaints), drive it with `createControlRoomDriver` (control-room-api.mjs), and
+draw `buildControlRoomModel(...)` with `renderControlRoom`. Its `mttx` is
+`{ declared, mttdTarget, mttrTarget, runs: [{ experiment, at, outcome,
+environment, mttd }] }` (the targets the repository states, as spec
+durations, and every chaos run recorded there; the studio takes them from
+`declaredByTier(layered).mttx`, whose new `runs` key lists them newest
+first), or `{ unread: true }` while the service's pack is not read; the
+model picks the run of the panel's environment. Place it with
+`placeControlRoom(head)` (control-room-view.mjs) after the board is drawn,
+`head` the board's `.ov-head`: it sets `--ov-cr-head` on the document so the
+panel starts below the context bar and its door stays in sight (the panel's
+top is `12px + --ov-cr-head`; the studio's chrome adds its own bars in
+`ux.css`). While it is open, put `ov-cr-open` on an ancestor of the board
+(the studio puts it on `<body>`): from 2040 px the board then makes room
+for the panel. Its data is the
+server's `POST /api/services/:id/control-room`; a server of your own adds
+families with `OBSERVOGRAM_CONTROL_ROOM_FAMILIES` (README, *The control
+room*), and the panel draws any family the answer carries, by its id and title.
 
 **Criteria a service is not graded on.** A service record may carry
 `gradeOff: [{ key, reason, by, at }]` (README, *Criteria a service is not

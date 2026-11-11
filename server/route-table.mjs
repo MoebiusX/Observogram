@@ -225,6 +225,8 @@ export const ROUTES = Object.freeze({
   // environment's MCP endpoint — the live MCP API's posture, as every
   // server-side MCP request.
   'POST /api/services/:id/run': { class: 'operator', ...LIVE, csrf: 'always', audit: [...PACK_REGISTER, 'journey.capture', 'journey.run'] },
+  // Overview's control room: a read of the environment's live endpoint by id (no audit row, as a ping by id).
+  'POST /api/services/:id/control-room': { class: 'operator', ...LIVE, csrf: 'always', audit: [] },
   'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
   'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
   'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },

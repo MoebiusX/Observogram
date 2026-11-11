@@ -47,6 +47,7 @@ const CLEARS = [
   '.ux-section-nav',
   '.diag-whatif',          // the Assessment's what-if bar (shown only while one is tried)
   '.compare-cols-head',    // Compare's pinned Pack A | Pack B heads
+  '.ov-cr',                // Overview's control room (the board's live panel)
 ];
 
 // Pinned, but not under the bars.

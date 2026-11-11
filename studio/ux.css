@@ -500,3 +500,9 @@ body[data-mode="overview"] #layer-view { padding: 0; background: var(--og-bg); }
 .observa-ui-mode .og-btn[aria-pressed="true"] { background: var(--og-accent-solid, var(--obs-emerald)); color: var(--og-on-accent, #172312); }
 .observa-ui-mode .og-btn:focus-visible { outline: 2px solid var(--og-accent); outline-offset: -2px; }
 /* The .ov-* zone itself is studio/overview.css (vendorable: docs/VENDORING.md, "The Overview board"). */
+
+/* Overview's control room (studio/overview.css .ov-cr): under the chrome, the context bar and the board's own head. */
+body.chrome-observa .ov-cr { top: calc(var(--observa-chrome-h, 102px) + var(--ux-context-h, 0px) + var(--ov-cr-head, 0px) + 12px); }
+@media (max-width: 720px) {
+  body.chrome-observa .ov-cr { top: calc(var(--observa-chrome-h, 102px) + var(--ux-context-h, 0px)); }
+}

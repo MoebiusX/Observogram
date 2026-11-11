@@ -236,6 +236,17 @@ export const CAPABILITIES = Object.freeze({
     responseShape: 'instant-vector',
     candidates: [{ tool: 'metrics_query' }],
   },
+  // Overview's control room (tools/lib/control-room.mjs): what is firing
+  // now, the targets up, how long incidents took to clear (the rule
+  // evaluator's ALERTS history, read as a subquery matrix through the same
+  // instant tool) and the known metric families' tiles. Point-in-time
+  // evidence for people to read; never a Verified stamp, a verdict or a
+  // grade change.
+  control_room_query: {
+    kind: 'evidence',
+    responseShape: 'instant-vector',
+    candidates: [{ tool: 'metrics_query' }],
+  },
   alertmanager_status: {
     kind: 'evidence',
     responseShape: 'status-object',

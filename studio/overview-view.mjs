@@ -39,8 +39,20 @@ function headHtml(model) {
       ${back}
       <label class="og-eyebrow ov-head__label" for="ov-service">Service</label>
       <select class="og-input ov-service" id="ov-service" aria-label="Service">${options}</select>
-      ${envs}
+      ${envs}${model.controlRoom ? `
+      ${controlRoomButtonHtml(model.controlRoom)}` : ''}
     </div>`;
+}
+
+// The control room's door, at the end of the context bar: a secondary
+// button (the board keeps its one primary). Unavailable, it says why.
+function controlRoomButtonHtml(cr) {
+  if (!cr) return '';
+  const icon = '<svg class="ov-ic ov-head__live-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"></path></svg>';
+  if (!cr.offered) {
+    return `<button type="button" class="og-btn ov-head__live" aria-disabled="true" data-ux-action="ov-explain" data-reason="${escapeHtml(cr.reason || '')}" title="${escapeHtml(cr.reason || '')}">${icon}Control room</button>`;
+  }
+  return `<button type="button" class="og-btn ov-head__live" data-ux-action="ov-control-room" aria-expanded="${cr.open ? 'true' : 'false'}" aria-controls="ov-cr">${icon}Control room</button>`;
 }
 
 // ---------- the simple layout ----------
@@ -682,6 +694,7 @@ export function renderOverview(container, model, host = appHost) {
     'ov-upload-b': () => ov.upload?.('b'),
     'ov-start-reset': () => ov.resetStart?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
+    'ov-control-room': () => ov.toggleControlRoom?.(),
     'ov-back': () => ov.backToList?.(),
     // A criterion's switch (the model's `switches`): ask why in place, then the host's setGradeCriterion.
     'ov-grade-ask': (ev, el) => { gradeAsk = { service: model.service?.id ?? null, key: el.dataset.key, reason: '', focus: true }; whyOpen = true; redraw(); },

@@ -615,6 +615,34 @@ Belongs here:
   should the server refuse to save it, the comparison opens in Expert's
   Diagnose and the toast says why); under it, *Already have packs?* **Open
   Expert mode**. On a server, a new service starts with **Add a service**;
+- **Control room** at the end of the context bar (a secondary button,
+  unavailable with its reason when the environment names no live endpoint or
+  the person may not read live): a panel at the right of the board, not a
+  modal, starting below the context bar so its button stays in sight — it
+  lies over the board's right (from 2040 px the board makes room for it), on
+  a phone the whole screen —
+  - *Control room* and the service · environment, **Refresh**, **Close**
+    (and Escape); one line saying the endpoint, the time read and the next
+    read (every minute while open; 1, 2, then 4 minutes after failures;
+    *reads stopped* after a refusal; *cut at its time limit* when a slow
+    endpoint left parts unread); one line saying the figures are the
+    endpoint's, everything it reads, not only this service;
+  - the status word (*Critical · Warning · Firing · Quiet · Not known*), its
+    sentence and the firing counts by severity — *Not known* when nothing
+    fires and the store shows no alert history at all;
+  - **MTTR** and **MTTD** side by side: the median time an incident took to
+    clear over the last 30 days with its incident count and p95, against the
+    target the repository states; *too few to say* below five; the history's
+    own read time when it is older than the rest; MTTD measured by this
+    environment's newest chaos run recorded in the repository (a failed or
+    aborted one said as such, with no figure; another environment's named
+    beside), or *Not measured in prod: an alert knows when it fired, not when
+    the fault began*; each with *How it is measured*;
+  - what it found (a critical incident, a flapping alert, an alert still
+    open, never an info heartbeat), the exporters up (and the declared ones),
+    the active alerts, and one closed row per known metric family with its
+    numbers (the worst first, *red* or *amber* in a word) and a 6-hour line;
+  - the families the endpoint does not expose, named once;
 - the simple layout, the three sentences alone, as the fallback
   (`&layout=simple`), drawn by the renderer itself should the board fail, and
   for a service without a pack of its own (one only a live draft has seen),

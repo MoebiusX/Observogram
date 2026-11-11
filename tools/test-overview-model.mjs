@@ -1213,6 +1213,27 @@ test('the board agrees with the engine: a cell lit by live evidence alone is pre
   assert.ok(dot.innerHTML.includes('<span class="ov-cell ov-cell--on" title="metrics seen live">•</span>'));
 });
 
+// ---------- the control room's door ----------
+
+test('the control room\'s door: offered when the host wires it and the environment names a live endpoint; unavailable, with the reason, otherwise; absent without the opt-in', () => {
+  const withEndpoint = services.map((s) => (s.id === 1 ? { ...s, environments: s.environments.map((e) => ({ ...e, mcpEndpoint: { id: 7, name: 'prod-mcp', origin: 'https://example.test' } })) } : s));
+  assert.ok(!('controlRoom' in keep(board({}))), 'no opt-in: the model is what it was');
+  assert.deepEqual(keep(board({ controlRoom: true, services: withEndpoint })).controlRoom, { offered: true, open: false, reason: null });
+  assert.deepEqual(keep(board({ controlRoom: true, controlRoomOpen: true, services: withEndpoint })).controlRoom, { offered: true, open: true, reason: null });
+  assert.deepEqual(keep(board({ controlRoom: true })).controlRoom, { offered: false, open: false, reason: 'prod has no live endpoint yet: Change on the service list chooses one.' });
+  assert.deepEqual(keep(board({ controlRoom: true, services: withEndpoint, access: { canWrite: false, reason: 'Reading live is not open to your role here.' } })).controlRoom, { offered: false, open: false, reason: 'Reading live is not open to your role here.' });
+  const c = overviewContainer();
+  const calls = [];
+  renderOverview(c, board({ controlRoom: true, services: withEndpoint, diagnostic: diagnosticFull }), { overview: { toggleControlRoom: () => calls.push('toggle'), explain: (r) => calls.push(r) } });
+  assert.ok(c.innerHTML.includes('data-ux-action="ov-control-room" aria-expanded="false" aria-controls="ov-cr">') && c.innerHTML.includes('Control room</button>'), 'a secondary button at the end of the context bar');
+  assert.equal(countOf(c.innerHTML, 'og-btn--primary'), 1, 'the board keeps its one primary');
+  c.click('ov-control-room');
+  assert.deepEqual(calls, ['toggle']);
+  const off = overviewContainer();
+  renderOverview(off, board({ controlRoom: true, diagnostic: diagnosticFull }), {});
+  assert.ok(off.innerHTML.includes('aria-disabled="true" data-ux-action="ov-explain" data-reason="prod has no live endpoint yet: Change on the service list chooses one."'), 'unavailable, it says why when pressed');
+});
+
 // ---------- the chain ----------
 //
 // A run written since the records count by tier (tools/lib/journey.mjs drift.tiers): krystaline as its
@@ -2398,6 +2419,9 @@ const VENDORABLE_OVERVIEW = {
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
   'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],
+  'studio/control-room-model.mjs': [],
+  'studio/control-room-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
+  'studio/control-room-api.mjs': ['./services-api.mjs', './control-room-model.mjs'],
   'studio/ux-kit-pure.mjs': ['./util.mjs'],
   'studio/services-model.mjs': [],
   'studio/services-api.mjs': ['./api.mjs'],
@@ -2408,7 +2432,7 @@ test('the Overview board\'s import closure is exactly the one docs/VENDORING.md 
     const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     const imports = [...src.matchAll(/^import\s[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
     assert.deepEqual(imports, allowed, `${file} imports`);
-    assert.ok(!/\b(document|window|localStorage|sessionStorage)\b\s*[.[]/.test(src.replace(/\/\/.*$/gm, '').replace(/typeof (window|document)/g, '')) || !['studio/overview-model.mjs', 'studio/ux-kit-pure.mjs', 'studio/services-model.mjs'].includes(file), `${file} (the model, the pure kit) touches no DOM`);
+    assert.ok(!/\b(document|window|localStorage|sessionStorage)\b\s*[.[]/.test(src.replace(/\/\/.*$/gm, '').replace(/typeof (window|document)/g, '')) || !['studio/overview-model.mjs', 'studio/ux-kit-pure.mjs', 'studio/services-model.mjs', 'studio/control-room-model.mjs', 'studio/control-room-api.mjs'].includes(file), `${file} (the model, the pure kit) touches no DOM`);
   }
   const css = readFileSync(new URL('../studio/overview.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const refs = [...new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]))];

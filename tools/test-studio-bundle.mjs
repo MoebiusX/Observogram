@@ -996,6 +996,7 @@ test('T6 denial: the server-only routes answer 501 Not Implemented, denied no-ba
   await expectDenied('/api/mcp-endpoints/3', { method: 'DELETE' }, 'Settings');
   await expectDenied('/api/audit?limit=100', undefined, 'Settings');
   await expectDenied('/api/services/1/environments', { method: 'POST' }, 'Services');
+  await expectDenied('/api/services/1/control-room', { method: 'POST' }, 'Services');
   await expectDenied('/api/admin/users', undefined, 'Administration');
   await expectDenied('/api/journeys', undefined, 'Journeys');
   await expectDenied('/api/library', undefined, 'Build');

@@ -1035,6 +1035,7 @@ const EXPECTED_CLASS = Object.freeze({
   'PUT /api/services/:id/repository-upload': 'operator',
   'POST /api/services/:id/environments': 'operator',
   'POST /api/services/:id/run': 'operator',
+  'POST /api/services/:id/control-room': 'operator',
   'PATCH /api/environments/:id': 'operator',
   'DELETE /api/environments/:id': 'operator',
   'PUT /api/packs/:id/verdicts/:artefact': 'operator',
@@ -1088,7 +1089,7 @@ const EXPECTED_AUDIT_API = Object.freeze(['GET /api/audit']);
 // server-side MCP request — and a service's Run, which checks live.
 const EXPECTED_LIVE_MCP = Object.freeze([
   'POST /api/mcp/ping', 'GET /api/mcp/jobs', 'POST /api/mcp/jobs', 'GET /api/mcp/jobs/:jobId', 'POST /api/mcp/jobs/:jobId/cancel',
-  'POST /api/draft-from-mcp', 'POST /api/refresh-live', 'POST /api/services/:id/run',
+  'POST /api/draft-from-mcp', 'POST /api/refresh-live', 'POST /api/services/:id/run', 'POST /api/services/:id/control-room',
 ]);
 // The MCP server-settings API (rebadge batch 4, the opt-in pass-through):
 // a server-side request carrying an admin's secret — admin by class, direct
@@ -1553,6 +1554,7 @@ const PROBES = Object.freeze({
   'PUT /api/services/:id/repository-upload': ['PUT', '/api/services/999999/repository-upload'],
   'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
   'POST /api/services/:id/run': ['POST', '/api/services/999999/run'],
+  'POST /api/services/:id/control-room': ['POST', '/api/services/999999/control-room'],
   'PATCH /api/environments/:id': ['PATCH', '/api/environments/999999'],
   'DELETE /api/environments/:id': ['DELETE', '/api/environments/999999'],
   // The MCP endpoints: the list, an empty body (400), an unknown id (404).
