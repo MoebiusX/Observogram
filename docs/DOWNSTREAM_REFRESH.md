@@ -82,19 +82,65 @@ Windows).
 
 ```bash
 git -C ../observogram-upstream fetch --tags origin
+git -C ../observogram-upstream checkout -q --detach origin/develop   # the newest digest and export tools
 TARGET=v0.6.2                 # a release tag, or a develop commit when a fix you need is not released yet
 FROM=$(sed -n 2p vendor/UPSTREAM)
-git -C ../observogram-upstream log --oneline "$FROM..$TARGET" | wc -l
+node ../observogram-upstream/tools/downstream-digest.mjs --since "$FROM" --to "$TARGET" > ../digest-$TARGET.txt
 git -C ../observogram-upstream show "$TARGET:docs/CHANGELOG.md" > ../CHANGELOG-$TARGET.md
 ```
 
-Read every section of that CHANGELOG above the version you are on, and note:
+**The digest** (`tools/downstream-digest.mjs`) reads upstream's clone, the
+one it sits in, and prints for the range from the commit the copy holds to
+the target:
 
-- **One-way upgrades.** A store schema move is one. 0.6.2 moves the store to
-  schema v3, and 0.6.0 then refuses the database.
-- **Settings** renamed, removed or added. Step 5 checks the ones you set.
-- **Declared changes for the browser suites:** what your own browser tests
-  will see differently, on purpose.
+- the number of commits;
+- the `Downstream:` bullet of every CHANGELOG entry added in the range,
+  grouped by kind, the hardest to undo first (`one-way`, `config`, `api`,
+  `behaviour`, `none`), and, under *unclassified*, the headings of the entries
+  written before the bullet existed;
+- the export diff of `VENDOR-MANIFEST.json`: modules new, no longer listed,
+  and exports added or removed;
+- the settings that appear or disappear in `server/`, `tools/` and `studio/`
+  (test files and fixtures left out), compared by the part after
+  `OBSERVOGRAM_` as step 5 compares them;
+- the golden files that moved under `tools/fixtures/golden/`, which say
+  where upstream's own output changed on purpose.
+
+`--json` prints the same as one object. Run it in upstream's clone, never in
+the copy: a copy has no `.git`, and the digest refuses to read the
+downstream's history in its place.
+
+**Every CHANGELOG entry from 0.8.28 on ends with one bullet** that says what
+it means for a copy:
+
+```markdown
+- **Downstream:** <kinds> — <one sentence>.
+```
+
+| Kind | Means |
+| --- | --- |
+| `none` | nothing for a downstream to do |
+| `config` | a setting added, renamed or removed |
+| `api` | a listed module's exports, a route or a response shape |
+| `behaviour` | what a comparison, grade or screen shows |
+| `one-way` | an upgrade with no way back, such as a store schema move |
+
+An entry can name several kinds, separated by commas (`config, api`), and
+`none` stands alone. Upstream's build fails on an entry without the bullet
+(`tools/test-changelog-downstream.mjs`). The entries of releases before 0.8.28
+carry none, and the digest lists them as *unclassified*: read those in the
+CHANGELOG.
+
+From the digest and those entries, note:
+
+- **One-way upgrades** (`one-way`). A store schema move is one. 0.6.2 moves
+  the store to schema v3, and 0.6.0 then refuses the database.
+- **Settings** renamed, removed or added (`config`, and the digest's
+  settings). Step 5 checks the ones you set.
+- **Exports and routes** your plugin layer calls (`api`, and the digest's
+  export diff).
+- **Declared changes for the browser suites** (`behaviour`): what your own
+  browser tests will see differently, on purpose.
 - **The Node floor:** `engines` in the target's `package.json` (22.23.4 for 0.6.2).
 
 ### 2. Back up the store
@@ -255,8 +301,9 @@ version running again.
   documents the product ships.
 - **No build step.** The exported files run as they are, after `npm ci`.
 - **Releases are the bump points.** Each release section of the CHANGELOG
-  says what changed for a copy. A `develop` commit works too, but its changes
-  are only in `## Unreleased`.
+  says what changed for a copy, and from 0.8.28 on each entry says it in its
+  `Downstream:` bullet. A `develop` commit works too: the digest reads its
+  `## Unreleased` entries with the rest.
 
 ## Which side is which
 

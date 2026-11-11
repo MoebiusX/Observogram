@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+- **The `Downstream:` bullet** (`docs/DOWNSTREAM_REFRESH.md`, step 1). Every `###` entry under `## Unreleased`, and under every release from 0.8.28 on, ends with one bullet, `- **Downstream:** <kinds> — <one sentence>.`, which says what the entry means for a downstream copy. The kinds are `none`, `config` (a setting added, renamed or removed), `api` (a listed module's exports, a route or a response shape), `behaviour` (what a comparison, grade or screen shows) and `one-way` (an upgrade with no way back, such as a store schema move); an entry can name several, separated by commas, and `none` stands alone. The releases before 0.8.28 stay as they were written.
+- **The digest** (`tools/downstream-digest.mjs`, new; a command in `tools/`, not a listed module). `node tools/downstream-digest.mjs --since <commit> [--to <ref>] [--json]`, run in upstream's checkout, prints for one refresh:
+  - the commits in the range;
+  - the `Downstream:` bullets of the CHANGELOG entries added in it, grouped by kind (`one-way`, `config`, `api`, `behaviour`, `none`), and the headings of the entries that carry none under *unclassified*; an entry the copy already held in its `## Unreleased` is not added again;
+  - the export diff of `VENDOR-MANIFEST.json` between the two commits;
+  - the settings that appear or disappear in `server/`, `tools/` and `studio/` (test files and fixtures left out), literal or read through `brandEnv`, compared by the part after `OBSERVOGRAM_` as the runbook's step 5 compares them;
+  - the golden files that moved under `tools/fixtures/golden/`.
+
+  `--json` prints the same as one object. A folder that is not the top of a git checkout, as an export copy is not, is refused with a sentence.
+- **Downstream:** none — the copy runs as before; the runbook's step 1 now runs the digest, and its entries from 0.8.28 on say what each means for a copy.
+
+### Tests
+- `tools/test-changelog-downstream.mjs` (new): the CHANGELOG's entries from 0.8.28 on end with one `Downstream:` bullet of known kinds, the releases before are left as written, each way an entry can break the rule, and the runbook's step 1 documents it.
+- `tools/test-downstream-digest.mjs` (new): over a small repository built with git, the entries classified, already held and unclassified; the exports, the settings (a legacy spelling, a per-org name, test files and fixtures left out) and the goldens (a rename); the command's text, `--json` and refusals.
+- Suite total 1880 → 1889.
+- **Downstream:** none — tests only.
+
 ## 0.8.27 — 2026-11-11
 
 **Overview's control room: what a service's live side shows now, with MTTR and MTTD first.** A panel beside the board, opened from its context bar, reads the environment's live endpoint every minute while open. Its headline is the figure people ask for and rarely see — how long incidents take to clear — measured, over what, on how many incidents, or why there is no figure.
