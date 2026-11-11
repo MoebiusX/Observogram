@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.29 — 2026-11-11
+
 **MTTD / MTTR targets: chosen when a service is added, and recommended where none is stated.** The board's *MTTD / MTTR* tile read *Not declared* for every repository that states no `spec.baselines`, with nothing to aim for. A service now gets its targets in the studio — *Add a service*'s fifth answer, a dropdown of four profiles, custom minutes or none, and *Set targets…* / *Change targets…* on the tile and in the control room for a service already there — and where neither the repository nor the studio states any, the tile recommends one. No screen sends anyone to a file to set them.
 
 ### Added
@@ -24,6 +26,7 @@
 - `server/test-service-admin.mjs` +1: targets set on a create and a patch, signed, the create row naming them as an update's does, the same again writing nothing, each refusal writing nothing (values that are not text among them), null clearing them, a deletion taking them and a reused id starting with none; the view carries them.
 - `tools/test-overview-model.mjs` +2 (`controlRoomMttx`: unread, the repository's, the studio's with their words, the recommendation, one target alone): the tile with the recommendation, with the studio's targets, custom; this environment's chaos run over and within the target, another environment's, failed, aborted, the studio's measured over them, one target alone; the column's subtitle; the form's fifth answer, its problems, its save plan (a create carries them, a change alone is patched, *Not set* clears them, an *Add* under an existing name leaves them unless answered, and gives a record with none the shown default); the draft brings them back only when answered; the closure gains the module; *Set targets…* / *Change targets…* on the tile (to `setTargets('board')`), none without the service list, for a rank that may not write or for the repository's, the tile never pointing at a file, and *Change*'s label; a run with no environment never green, another environment's named; the targets-only form (`targetsFormOpened`, `targetsOnlyPlan`: a service with no repository or endpoint gets its targets, the same again sends nothing, *Not set* clears them, custom minutes checked; drawn as the Targets answer alone, Save its submit, never a Run). `tools/test-control-room-panel.mjs`: the studio's target and its verdict, in the studio's words; the recommendation with none; a pack not read; the panel's *Set targets…* (only the two words, never while the pack is unread) under the two figures, to `setTargets`.
 - `server/test-store.mjs`, `server/test-services-api.mjs`: the record and its view carry `targets` (null until set). `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling 6,650,000 → 6,800,000 bytes, dated (the studio's own code reached 6,671,718; no dependency).
+- Cut as 0.8.29: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1889 → 1898.
 - **Downstream:** none — tests only.
 

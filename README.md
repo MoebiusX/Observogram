@@ -1803,8 +1803,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.28 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.28
+docker build -t observogram:0.8.29 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.29
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1867,7 +1867,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.28
+  observogram:0.8.29
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1875,7 +1875,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.28
+    image: observogram:0.8.29
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
