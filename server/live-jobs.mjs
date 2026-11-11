@@ -8,7 +8,7 @@
 // fetch dies with the process and registers nothing, a poll then answers 404
 // `gone`, and a pack registered before the restart stays in the catalogue.
 //
-// The rules (docs/DOWNSTREAM.md §15.2):
+// The rules (docs/LIVE_FETCH.md §15.2):
 //   id         randomBytes(16) base64url — 22 characters, unguessable, no
 //              credential in it
 //   scope      keyed by the org and the principal (session:<userId>,

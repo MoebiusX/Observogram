@@ -153,7 +153,7 @@ jobs:
           retention-days: 7
           overwrite: true
 
-  # Windows (README "Platforms", docs/DOWNSTREAM.md §13): the suites on
+  # Windows (README "Platforms", docs/PLATFORMS.md): the suites on
   # windows-latest, on the Node floor and the latest 22. No fetch-validators
   # (test-backend-validate prints SKIPPED, as on node-floor), no docker, no
   # Playwright (the browser tests skip, as on every leg). The TAP goes to
@@ -183,7 +183,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The report command docs/DOWNSTREAM.md §13 gives a Windows user, run
+      # The report command docs/PLATFORMS.md gives a Windows user, run
       # as written from Windows PowerShell on one suite: it must capture TAP.
       - name: The documented report command captures TAP
         shell: powershell

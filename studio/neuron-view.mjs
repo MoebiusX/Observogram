@@ -529,7 +529,7 @@ export function notifyHintHtml(org) {
 // before any — and, whatever the newest record says, the server's refusal
 // when a server run would refuse the journey as it stands (GET
 // /api/journeys' notify.problem): a journey that notified before the rule,
-// or through the CronJob's CLI, is flagged too (DOWNSTREAM §17.2 step 1).
+// or through the CronJob's CLI, is flagged too (docs/NOTIFY_HOOKS.md §17.2 step 1).
 // Exported for tools/test-neuron-model.mjs.
 export function deliveryLine(d, c) {
   const ds = c.delivery;

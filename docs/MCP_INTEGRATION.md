@@ -57,7 +57,7 @@ npm run fetch-live
 
 ### Who may name the target, and where a credential may go
 
-Rebadge batch 3, C0 (docs/DOWNSTREAM.md §15.1 has the migration). A typed
+Rebadge batch 3, C0 (docs/LIVE_FETCH.md §15.1 has the migration). A typed
 `mcpUrl` — in the ping, the live jobs, the draft, the refresh, the deploy
 routes and a journey's raw Pack B URL — is an admin's (`TYPED_MCP_URL_ROLE`,
 `server/mcp-target-policy.mjs`); everyone else names a registered endpoint
@@ -130,7 +130,7 @@ crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
 The draft (`mode: 'draft'`, the default) is the fetch as it was, byte for
 byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
 202 with an id, `GET /api/mcp/jobs/:jobId?since=<seq>` is the gate log —
-in memory, so a restart loses them (docs/DOWNSTREAM.md §15.2 has the shapes
+in memory, so a restart loses them (docs/LIVE_FETCH.md §15.2 has the shapes
 and the stage table). The configured scope is
 `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID`,
 `_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
@@ -385,7 +385,7 @@ its own requests; a browser-direct request is not one, so only the
 pass-through applies it.
 
 **The settings policy** (`OBSERVOGRAM_MCP_SETTINGS_POLICY`, docs/DOWNSTREAM.md
-§9 and §16) adds friction only: a rule whose pattern matches a field's value
+§9 and docs/MCP_SERVER_SETTINGS.md) adds friction only: a rule whose pattern matches a field's value
 (a URL as its normalised form; a rule never reads a secret) shows its warning
 and, with `require.ack`, blocks the send until its acknowledgement is ticked;
 a rule whose field the form does not have cannot run, says so, and still
@@ -1596,7 +1596,7 @@ texts that quote a value read `Headers.append: "<redacted>" is an invalid
 header value.` and `Request cannot be constructed from a URL that includes
 credentials: <redacted>`, and a failed lookup or connection reads
 `getaddrinfo ENOTFOUND <redacted>` or `connect ECONNREFUSED <redacted>`.
-docs/DOWNSTREAM.md §17 has the rule's every sentence and the migration of a
+docs/NOTIFY_HOOKS.md has the rule's every sentence and the migration of a
 journey that names another variable.
 
 The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):

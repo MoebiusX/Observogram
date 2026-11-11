@@ -33,7 +33,7 @@ prose contracts that follow.
 | --- | --- | --- |
 | [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), a snapshot's `observogram.scope.<kind>` parked as *not checked*, and — only on a pair one side of which was shown a field in part — `unobserved: [{ field, side, keys }]` on the `inBoth` entry |
 | [`tools/lib/identity-modes.mjs`](../tools/lib/identity-modes.mjs) | imports `artefact-model.mjs`, `artefact-classify.mjs`; no Node APIs | comparison identity modes (rebadge batch 3, R3) — `IDENTITY_MODES` (`behaviour` = `identityKeyOf`, `name`, `id`), `DEFAULT_IDENTITY_MODE`, `identityMode`, `nameOf`, `idOf`, `nameKeyOf` / `idKeyOf` (`(artefact, { side })`), `pairingOf`, `identityFamilies`; the studio's Compare loads the same file |
-| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/DOWNSTREAM.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
+| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
 | [`tools/lib/mcp-server-settings.mjs`](../tools/lib/mcp-server-settings.mjs) | imports `artefact-classify.mjs`, `mcp-url-safety.mjs` — copy the three together; no Node APIs | the MCP server-settings contract (rebadge batch 4) — the descriptor v1 an MCP server serves at `<root>/admin/schema` (`SETTINGS_DESCRIPTOR_VERSION`, `SETTINGS_DESCRIPTOR_PATH`, `SETTINGS_LIMITS`, `FIELD_TYPES`, `parseSettingsDescriptor`), the root and path rule (`settingsRoot`, `resolveSettingsPath`, `normaliseUrlValue`), the generic form (`genericDescriptor`, `GENERIC_NAMES`), the request (`settingsRequest`), the outcome and its redaction (`outcomeOf`, `redactEchoes`, `redactSecretKeys`) and the settings policy (`compileSettingsPolicy`, `policyFindings`); an MCP server author vendors it to validate a descriptor or policy file, and the studio's Server settings modal loads the same file |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`); a field shown only in part — `PARTIAL_ANNOTATION_PREFIX` (`observogram.partial.`), `partialAnnotation`, `parsePartialAnnotation`, `unobservedOf`; `adapter.mjs` now imports the first and third, so the adapter's closure gains this file and `promql-canon.mjs` |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1, v2 or v3 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), the v3 tool labels `toolLabels` (`TOOL_LABEL_LIMITS`; `adapter.mjs` imports it to rename `tool`), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
@@ -797,7 +797,7 @@ OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
   runs after `METRIC_PREFIXES`.
 - `RULE_GROUPS` is a comma list, compared exactly, so a name may hold spaces.
 - These values describe one team, service and environment. Keep them in the deployment's
-  variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code (§15.2).
+  variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code ([`LIVE_FETCH.md`](LIVE_FETCH.md) §15.2).
 - The two variables your patch read inside `fetchMcp` do not exist upstream.
 - After the first snapshot, read the gate log. It says whether the folder scope was pushed
   down or the rules were read whole.
@@ -810,7 +810,7 @@ OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
 ### Exporter manifests
 
 Detection is by file name, so a YAML file with your keys is never read. Use
-`metrics-manifest.json` (§18.1): `static_metrics` becomes `metrics`, or comes from
+`metrics-manifest.json` ([`EXPORTER_METRICS.md`](EXPORTER_METRICS.md) §18.1): `static_metrics` becomes `metrics`, or comes from
 `packc emit --exporter`, and `dynamic_families` becomes `dynamicFamilies`.
 
 - A pattern must be anchored and open with a literal prefix of at least three characters

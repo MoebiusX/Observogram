@@ -438,7 +438,7 @@ test('U7 notifyHooksOf and notifyBootReport: the org\'s set hooks sorted, tokenE
       // what it does — each set hook variable the pair shadows — never that it names the pair.
       assert.deepEqual(notifyBootReport(tie.db, {}), []);
       const flatText = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8').replace(/^[ \t]*\/\/ ?/gm, '').replace(/\s+/g, ' ');
-      for (const rel of ['docs/DOWNSTREAM.md', 'docs/CHANGELOG.md', 'server/identity-admin.mjs']) {
+      for (const rel of ['docs/NOTIFY_HOOKS.md', 'docs/CHANGELOG.md', 'server/identity-admin.mjs']) {
         const said = [...flatText(rel).matchAll(/orgs-file import is not\b[^.]*\./g)].map((m) => m[0]);
         assert.ok(said.length > 0, `${rel} says the orgs-file import is not guarded`);
         for (const s of said) assert.match(s, /the start's [^.]*? names? each set hook variable such a pair shadows\.$/, `${rel}: ${s}`);
@@ -702,9 +702,9 @@ function plant(ws, org, name, { packA = `{ file: ${PAY_FILE} }`, packB = `{ file
   ].join('\n') + '\n');
 }
 const hasRecord = (ws, org, name) => existsSync(join(orgRoot(ws, org), 'runs', name));
-// docs/DOWNSTREAM.md §17.2's step n, its lines joined: the migration a downstream follows literally.
+// docs/NOTIFY_HOOKS.md §17.2's step n, its lines joined: the migration a downstream follows literally.
 const migrationStep = (n) => {
-  const steps = readFileSync(new URL('../docs/DOWNSTREAM.md', import.meta.url), 'utf8').match(/^### 17\.2 [^\n]*\n([\s\S]*?)^### /m)[1];
+  const steps = readFileSync(new URL('../docs/NOTIFY_HOOKS.md', import.meta.url), 'utf8').match(/^## 17\.2 [^\n]*\n([\s\S]*?)^## /m)[1];
   return steps.match(new RegExp(`^${n}\\. ([\\s\\S]*?)(?=^\\d+\\. |(?![\\s\\S]))`, 'm'))[1].replace(/\s+/g, ' ').trim();
 };
 // capture's own shape check first (journey-notify's validateNotify), then the hook rule.
@@ -1011,7 +1011,7 @@ test('H9 the server never reads packB.mcp.authEnv: a journey whose Pack B names 
     assert.ok(fake.authHeaders.length > 0, 'the MCP was asked');
     assert.deepEqual([...new Set(fake.authHeaders)], [null], 'never an Authorization');
     SEEN.mcpAuth.push(...fake.authHeaders);
-    // DOWNSTREAM §17.2 step 1's grep, run over this file, lists its packB line: the step says that name is Pack B's
+    // docs/NOTIFY_HOOKS.md §17.2 step 1's grep, run over this file, lists its packB line: the step says that name is Pack B's
     // own, which a server run never reads — never that it needs a hook (steps 4–8) or a rotation (step 2).
     const step1 = migrationStep(1);
     const grep = new RegExp(step1.match(/`grep -nE '([^']+)'/)[1]);
@@ -1069,7 +1069,7 @@ test('H11 without sign-in a journey that notifies runs only from a direct loopba
   }]);
   assert.equal(B.rx.oncall.hits.length, 0);
   assert.equal(hasRecord(B.ws, 'default', 'h11-direct'), false);
-  // DOWNSTREAM §17.2 step 9, the migration's check, names this answer too — not only the verdict or the 400.
+  // docs/NOTIFY_HOOKS.md §17.2 step 9, the migration's check, names this answer too — not only the verdict or the 400.
   assert.match(migrationStep(9), new RegExp(`\\b${r.status} \`${r.json.denied}\``), migrationStep(9));
   r = await run(B, 'h11-direct');
   assert.equal(r.status, 200, r.text);

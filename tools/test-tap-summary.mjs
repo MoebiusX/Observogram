@@ -1087,11 +1087,11 @@ test('S10 the workflow wires it: a Windows matrix on the floor and the latest 22
     '  if ($LASTEXITCODE) { Get-Content test.tap -Tail 40; exit $LASTEXITCODE }',
     '  node tools/tap-summary.mjs test.tap --win32-skips 0',
     '  $code = $LASTEXITCODE; Remove-Item test.tap; exit $code'));
-  // …documented as tap-summary names it: docs/DOWNSTREAM.md §13 from cmd or PowerShell, and from Git Bash.
-  const downstream = readFileSync(join(ROOT, 'docs', 'DOWNSTREAM.md'), 'utf8');
+  // …documented as tap-summary names it: docs/PLATFORMS.md from cmd or PowerShell, and from Git Bash.
+  const platforms = readFileSync(join(ROOT, 'docs', 'PLATFORMS.md'), 'utf8');
   for (const [fence, onWindows] of [['```', true], ['```sh', false]]) {
     const block = `\n${fence}\n${reportCommand('test.tap', onWindows)}\nnode tools/tap-summary.mjs test.tap --win32-skips readme\n\`\`\`\n`;
-    assert.ok(downstream.includes(block), `docs/DOWNSTREAM.md gives the report command tap-summary names:${block}`);
+    assert.ok(platforms.includes(block), `docs/PLATFORMS.md gives the report command tap-summary names:${block}`);
   }
   const wTest = stepNamed(w, /id: test\n/);
   assert.equal(wTest.length, 1);

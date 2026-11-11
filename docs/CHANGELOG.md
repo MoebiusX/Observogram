@@ -14,7 +14,7 @@
 - **The board's MTTD / MTTR tile** (`studio/overview-model.mjs` `chainModel({ layered, targets, env })`, `studio/overview-view.mjs`, `studio/overview.css`): the repository's own targets first when its pack states both (one alone no longer counts); then the studio's, said so (*Set in the studio (lab default), not in the repository.*), the column's subtitle saying *MTTD / MTTR set in the studio*; with neither, *Not declared* with *Recommended: MTTD ≤ 1 min · MTTR ≤ 5 min (lab default: a service crash, a dependency outage, a failed deployment)* and the other profiles, with where to set them, behind a fold. The measured MTTD is this environment's newest chaos run, picked as the control room picks it, beside the target: *MTTD 7m in a chaos test on 1 Nov, over the 5m target* turns the tile amber, never green; a failed or an aborted run is said as such; another environment's is not this one's. `mttx` gains `origin` (`repository`, `studio` or null) and `recommended`.
 - **The control room** (`studio/app.mjs`, `studio/control-room-model.mjs`, `controlRoomMttx` in `studio/overview-model.mjs`, new): a target set in the studio is measured against, its line saying so in the form's words (*Target 4 hours · set in the studio*); with none, the line recommends (*Recommended ≤ 5 min (lab default); none declared*) and gives no verdict.
 - The studio's targets stay on the service record: the scan, the pack and the grade are unchanged, and a repository's own `spec.baselines` win wherever both are.
-- **Docs.** `README.md` (*Add a service* and its image `docs/img/overview-add-service.png` retaken, the board's tile, the baselines, the two API rows), `docs/USER_JOURNEY.md`, `docs/VENDORING.md` (the new module, the fifth answer, `chainModel`'s `targets`).
+- **Docs.** `README.md` (*Add a service* and its image `docs/img/overview-add-service.png` retaken, the board's tile, the baselines, the control room's target, the API rows), `docs/USER_JOURNEY.md` (the flow, the tile, the control room), `docs/UX_SCREEN_GRAMMAR.md` (five answers), `docs/VENDORING.md` (the new module, the fifth answer, `chainModel`'s `targets` and `env`, `controlRoomMttx`).
 - **Downstream:** api, behaviour — `chainModel` takes `env`, `controlRoomMttx` is new and the control room's `mttx` gains `origin`, the studio's words and `recommended`; where the repository states no targets the tile and the control room now show the studio's or the recommendation, never only *Not declared*.
 
 ### Tests
@@ -23,6 +23,42 @@
 - `tools/test-overview-model.mjs` +1 (`controlRoomMttx`: unread, the repository's, the studio's with their words, the recommendation, one target alone): the tile with the recommendation, with the studio's targets, custom; this environment's chaos run over and within the target, another environment's, failed, aborted, the studio's measured over them, one target alone; the column's subtitle; the form's fifth answer, its problems, its save plan (a create carries them, a change alone is patched, *Not set* clears them, an *Add* under an existing name leaves them unless answered); the draft brings them back only when answered; the closure gains the module. `tools/test-control-room-panel.mjs`: the studio's target and its verdict, in the studio's words; the recommendation with none; a pack not read.
 - `server/test-store.mjs`, `server/test-services-api.mjs`: the record and its view carry `targets` (null until set). `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling 6,650,000 → 6,800,000 bytes, dated (the studio's own code reached 6,671,718; no dependency).
 - Suite total 1880 → 1887.
+- **Downstream:** none — tests only.
+
+## 0.8.28 — 2026-11-11
+
+**Every CHANGELOG entry says what it means for a downstream copy, and one command prints what a refresh has to act on.** A downstream that runs the whole repository refreshes across hundreds of commits at once, and nothing marked which of them asked something of it. Each entry now ends with a `Downstream:` bullet naming its kinds, and `tools/downstream-digest.mjs` prints those bullets for a refresh, by kind, beside the export, setting and golden changes. It also releases `docs/DOWNSTREAM.md`'s feature references, §11–§18, moved to pages of their own.
+
+### Added
+- **The `Downstream:` bullet** (`docs/DOWNSTREAM_REFRESH.md`, step 1). Every `###` entry under `## Unreleased`, and under every release from 0.8.28 on, ends with one bullet, `- **Downstream:** <kinds> — <one sentence>.`, which says what the entry means for a downstream copy. The kinds are `none`, `config` (a setting added, renamed or removed), `api` (a listed module's exports, a route or a response shape), `behaviour` (what a comparison, grade or screen shows) and `one-way` (an upgrade with no way back, such as a store schema move); an entry can name several, separated by commas, and `none` stands alone. The releases before 0.8.28 stay as they were written.
+- **The digest** (`tools/downstream-digest.mjs`, new; a command in `tools/`, not a listed module). `node tools/downstream-digest.mjs --since <commit> [--to <ref>] [--json]`, run in upstream's checkout, prints for one refresh:
+  - the commits in the range;
+  - the `Downstream:` bullets of the CHANGELOG entries added in it, grouped by kind (`one-way`, `config`, `api`, `behaviour`, `none`), and the headings of the entries that carry none under *unclassified*; an entry the copy already held in its `## Unreleased` is not added again;
+  - the export diff of `VENDOR-MANIFEST.json` between the two commits;
+  - the settings that appear or disappear in `server/`, `tools/` and `studio/` (test files and fixtures left out), literal or read through `brandEnv`, compared by the part after `OBSERVOGRAM_` as the runbook's step 5 compares them;
+  - the golden files that moved under `tools/fixtures/golden/`.
+
+  `--json` prints the same as one object. A folder that is not the top of a git checkout, as an export copy is not, is refused with a sentence.
+- **Downstream:** none — the copy runs as before; the runbook's step 1 now runs the digest, and its entries from 0.8.28 on say what each means for a copy.
+
+### Tests
+- `tools/test-changelog-downstream.mjs` (new): the CHANGELOG's entries from 0.8.28 on end with one `Downstream:` bullet of known kinds, the releases before are left as written, each way an entry can break the rule, and the runbook's step 1 documents it.
+- `tools/test-downstream-digest.mjs` (new): over a small repository built with git, the entries classified, already held and unclassified; the exports, the settings (a legacy spelling, a per-org name, test files and fixtures left out) and the goldens (a rename); the command's text, `--json` and refusals.
+- Cut as 0.8.28: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1880 → 1889.
+- **Downstream:** none — tests only.
+
+### Changed: DOWNSTREAM.md's feature references move to pages of their own
+`docs/DOWNSTREAM.md` keeps the downstream contract, §1–§10: the manifest workflow, the seams and embedding the studio. Its feature references, §11–§18, were 1,500 of its 2,057 lines, and a downstream refreshing its copy had to read past them. They move, text unchanged, each to a page of its own that keeps its section numbers.
+- **The pages:** `docs/PACK_CONFORMANCE.md` (§11), `docs/CANONICAL_PACKS.md` (§12), `docs/PLATFORMS.md` (§13), `docs/RELIABILITY_WORKFLOW.md` (§14), `docs/LIVE_FETCH.md` (§15), `docs/MCP_SERVER_SETTINGS.md` (§16), `docs/NOTIFY_HOOKS.md` (§17) and `docs/EXPORTER_METRICS.md` (§18). A chapter's title is its page's, its `###` sections are `##`, and a reference to another chapter is a link to that page. Nothing else in the text changed.
+- **The index:** where §11–§18 were, DOWNSTREAM.md lists them, one line each with its page, so an old section number still leads to its text.
+- **The references:** README (and its *Key Docs*, which lists the eight pages), `docs/`, `server/`, `studio/neuron-view.mjs`, `tools/crawl-repo.mjs`'s usage, the CI workflow, the journeys CronJob, `deploy/k8s/README.md`, `examples/legacy/README.md` and `.env.example` point at the page.
+- **Kept as written:** the `tools/lib` modules, whose comments and texts still say `docs/DOWNSTREAM.md §…` (among them the journey schedule's refusals, `§17.2`), so no listed module's hash changes and `VENDOR-MANIFEST.json` is as it was; the index leads those numbers to the page. The CHANGELOG's released entries, the `docs/DELIVERY-*.md` reports and `docs/archive/` keep the references they were written with.
+- **Downstream:** none — doc pages only; DOWNSTREAM.md's §11–§18 are eight pages under `docs/` now, and its index leads each old section number to its page.
+
+### Tests
+- `tools/test-live-snapshot.mjs` (the live stage table), `tools/test-tap-summary.mjs` (the Windows report command) and `server/test-notify-target-policy.mjs` (the migration's steps, the orgs-file sentence) read the page their text moved to, with the same assertions.
+- Suite total unchanged (1880): no test added.
 - **Downstream:** none — tests only.
 
 ## 0.8.27 — 2026-11-11
