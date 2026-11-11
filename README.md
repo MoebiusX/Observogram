@@ -102,7 +102,7 @@ three columns, every number the engine's own —
   sentence from the service's saved journey: *Checked 2 hours ago against
   live — the chain matches what live showed: its dashboards could not be
   read. 31 details differ beyond it.* **Check again** runs the journey against
-  the live platform while you watch. A check recorded before 0.8.26 has no
+  the live platform while you watch. A check recorded before 0.8.27 has no
   count by link: the board then counts everything together, as before (*252
   match · 5 run differently · 38 not running live · 30 live only*).
 - **Remediate — What to change.** The chain's exporters, alerts and
@@ -1781,8 +1781,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.26 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.26
+docker build -t observogram:0.8.27 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.27
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1845,7 +1845,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.26
+  observogram:0.8.27
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1853,7 +1853,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.26
+    image: observogram:0.8.27
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

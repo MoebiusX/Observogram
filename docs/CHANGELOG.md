@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.27 — 2026-11-11
+
 **Overview's control room: what a service's live side shows now, with MTTR and MTTD first.** A panel beside the board, opened from its context bar, reads the environment's live endpoint every minute while open. Its headline is the figure people ask for and rarely see — how long incidents take to clear — measured, over what, on how many incidents, or why there is no figure.
 
 ### Added
@@ -33,6 +35,7 @@
 - `tools/test-control-room-panel.mjs` (new): the panel's state and its next read, the words, every figure's honest cases (no alert history, a window not known, hours below a day, a stale history, an evaluator restart, a severity not known, targets not read, a pack not read, a tile the budget left), the units and the bounds' words, the panel drawn (escaped, labelled, the scope, the strip, no primary, Close, Refresh while reading, Escape, focus, the live region said once), the driver with fake timers (a late answer for another service dropped); the pieces redrawn only when changed, and a body redrawn keeping its rows opened, the focus and the scroll (a small DOM); `placeControlRoom`; heartbeat notices, a re-fired alert's age, the last firing in days, a cut read, a failed history's "Last tried at", no targets at all, the server's clock, a busy server.
 - `server/test-control-room.mjs` (new): the refusals before any call, the operator's read key by key (the read token, no request data in a query, nothing secret, nothing written), the cache, single flight and fresh reads, the kept history reconciled with the alerts, a failed one kept 2 minutes, a repointed endpoint and another token, the per-org cap, a read cut at its deadline answering what it read, a transport that ignores the cut (through a test transport hook) answered at the grace and counted until it ends, one history for two services on one endpoint, the reconcile rules, a tool not offered, an endpoint gone, a downstream's families file and its warning at mount. `tools/test-control-room.mjs` also drives `openControlRoom` through a transport `fetchImpl`: an answer past its cap, each session's DELETE once, after a cut too, none opened after the end, and the session of a failed tools/list ended; and the reader over a 21-day store, ages by name when the join fails, the lanes, a hook fault stopping the pool.
 - `tools/test-overview-model.mjs` +1 (the door), the closure gains the three files. `server/test-authz.mjs`, `server/test-tenancy.mjs`, `tools/test-contract-guard.mjs`, `tools/test-vendor-manifest.mjs`, `tools/test-studio-layout.mjs` (`.ov-cr` clears both bars), `tools/test-studio-bundle.mjs` (the static bundle refuses the route) name the new route and files.
+- Cut as 0.8.27: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1850 → 1880.
 
 ## 0.8.26 — 2026-11-10
