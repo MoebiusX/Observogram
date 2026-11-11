@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.32 — 2026-11-11
+
 **The MTTD / MTTR targets set in the studio count for Calibrated.** A service's targets chosen in the studio (*Add a service*, *Set targets…*, *Change*) were measured against on the board and in the control room, but the grade read only a repository's own `spec.baselines`, so Calibrated still said *the detection and repair baselines are defaults the scan wrote, not measurements* for a service with its targets set. Where the repository states none, the grade now counts the studio's — a person chose them, signed and dated, which the scan's placeholder never was — and says so every time. An objective has to be a number someone set too: the SLOs the scan invents from an alert name no longer count, so the studio's targets cannot pass a repository that states no number at all.
 
 ### Changed
@@ -18,6 +20,7 @@
 - `tools/test-journey.mjs`: a run handed the targets, the repository's own baselines winning (the record then names none), the same pack with the scan's placeholder lifted by them as the engine says, the record naming them, none with Calibrated switched off, the check file's own `mttxTargets`, handed null as none, and six files that do not load, each saying why.
 - `server/test-services-api.mjs` +2: a service's run counts its targets, the record and the listing name them, the studio's saved check is rewritten with them and loses them when they are cleared; a service made with targets writes them into a check left under its name, a check saved without them is graded on them through the server, left as it was by a Check now and given them at the next start, and deleting a service with only targets set takes them out.
 - `tools/test-overview-model.mjs` +1: the board's letter and Expert's comparison on the same targets only, compared only where the grade counts them (and, with no grade to ask, not with Calibrated switched off), the three regraded source lines, the service-list row (flagged when the run counted targets the service no longer has), the Why's Calibrated lines (a profile, custom minutes, the scan's invented objectives); the tile's note with and without *counts*; Expert's cause, ledger and Baselines row (from the source). `tools/test-static-remedies.mjs`: the pinned `criterionBlocker` call passes `serviceTargets`.
+- Cut as 0.8.32: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1914 → 1917.
 - **Downstream:** none — tests only.
 
