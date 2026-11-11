@@ -617,20 +617,26 @@ Belongs here:
     not read live –*, *Alerts 1 not as declared 66/66*), the chain's alignment
     as the ring; the promises (*5 of 18 promises hold in every link, 1 in part, 12
     broken.*), then the status word, one sentence with a time — the chain
-    first (*… — 3 in the chain differ from what the repository declares, and
-    31 details beyond it.*) — and **Check again**. A check recorded before
+    first, in its words (*… — 1 exporter and 2 alerts differ from what the
+    repository declares, and 31 details beyond the chain.*; never "the chain
+    matches" over a link live did not read) — and **Check again**. A check recorded before
     the runs counted by tier draws the alignment and four counts of
     everything — *match · run differently · not running live · live only* —
     as before;
   - **Open in Diagnose**;
 - **Remediate — Changes to apply** (*Between the repository and live*): *to
   add · to update · to review*, each with its note (*review* never reads as
-  removal) — the chain's exporters, alerts and dashboards alone, the details
-  in one line under them (*Beyond the chain, 31 details differ: 31 metrics. 4
-  more run live, not declared.*); the next step, one sentence and one button — the
-  chain first (*Fix the 3 things in the chain the live side does
-  differently.*, or *The chain matches live; look at the 31 details beyond
-  it.*) — **See the
+  removal) and its count by link (*Exporters 0 · Alerts 2 · Dashboards –*,
+  the dash a link live did not read) — the chain's exporters, alerts and
+  dashboards alone, the details in one line under them (*Beyond the chain, 31
+  details differ: 31 metrics. 4 more run live, not declared.*); a link live
+  could not read said so, never "matches" (*Nothing to change in the
+  exporters and alerts: they match live. Not read live, so not compared: the 7
+  dashboards.*); the next step, one sentence and one button, in the chain's
+  words (*Fix the 1 exporter and 2 alerts the live side does differently.*,
+  *Exporters and alerts match live, the 7 dashboards could not be read; look
+  at the 32 details beyond the chain.*, or *The chain matches live; look at
+  the 31 details beyond it.*) — **See the
   differences** (Neuron, on the run whose numbers the board showed), **See
   what to fix** (Expert's Diagnose, with the assessment's first three causes
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
@@ -657,10 +663,14 @@ Belongs here:
     read (every minute while open; 1, 2, then 4 minutes after failures;
     *reads stopped* after a refusal; *cut at its time limit* when a slow
     endpoint left parts unread); one line saying the figures are the
-    endpoint's, everything it reads, not only this service;
+    service's own (*Only Krystaline's own: the alert rules its repository
+    names and its 21 scrape jobs, read through prod-mcp. A service that
+    shares one of these jobs (an exporter or a collector they all use) is
+    counted on it too.*) — or, before its first Run there, that nothing is
+    read until it has been run;
   - the status word (*Critical · Warning · Firing · Quiet · Not known*), its
     sentence and the firing counts by severity — *Not known* when nothing
-    fires and the store shows no alert history at all;
+    of the service's fires and the store holds no history of its alerts;
   - **MTTR** and **MTTD** side by side: the median time an incident took to
     clear over the last 30 days with its incident count and p95, against the
     target the repository states, else the studio's (*· set in the studio*),

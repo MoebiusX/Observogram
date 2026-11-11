@@ -524,20 +524,42 @@ export function differenceCount(run) {
 // The same, split at the chain (a record with drift.tiers; else null): what
 // differs in the exporters, alerts and dashboards, what differs beyond them,
 // and the links live could not read.
-//   → { chain, beyond, links: [{ key, many, one, missing, drifted }], unread: ['dashboards'] } | null
+//   → { chain, beyond, beyondLiveOnly, links: [{ key, name, many, one, missing, drifted, aligned, notRead, liveOnly }],
+//       unread: ['dashboards'] } | null
 export function chainDifferences(run) {
   const tiers = run?.drift?.tiers;
   if (!tiers || typeof tiers !== 'object' || !CHAIN_LINKS.every((l) => tiers[l.key] && typeof tiers[l.key] === 'object')) return null;
   const n = (v) => Number(v) || 0;
-  const links = CHAIN_LINKS.map((l) => ({ key: l.key, many: l.many, one: l.one, missing: n(tiers[l.key].declaredNotLive), drifted: n(tiers[l.key].drifted) }));
+  const links = CHAIN_LINKS.map((l) => {
+    const c = tiers[l.key];
+    return { key: l.key, name: l.name, many: l.many, one: l.one, missing: n(c.declaredNotLive), drifted: n(c.drifted), aligned: n(c.aligned), notRead: n(c.notRead), liveOnly: n(c.liveNotDeclared) };
+  });
   const beyondOf = (t) => n(t?.declaredNotLive) + n(t?.drifted);
   return {
     chain: links.reduce((k, l) => k + l.missing + l.drifted, 0),
     beyond: beyondOf(tiers.detail) + beyondOf(tiers.machinery),
+    beyondLiveOnly: n(tiers.detail?.liveNotDeclared) + n(tiers.machinery?.liveNotDeclared),
     links,
     unread: CHAIN_LINKS.filter((l) => n(tiers[l.key].notRead)).map((l) => l.many),
   };
 }
+
+// The chain in words, from chainDifferences — what every sentence about a check says, so none of
+// them falls back to "things":
+//   differ    "2 alerts and 1 dashboard" (declared, not live or not as declared), or ''
+//   matched   "exporters and alerts": the links declared, compared and alike
+//   unread    "the 7 dashboards": the links live could not read (never "match")
+//   liveOnly  "1 alert": what runs live in the chain that the repository does not declare, or ''
+const countWords = (k, l) => `${k} ${k === 1 ? l.one : l.many}`;
+export function chainWords(split) {
+  if (!split) return null;
+  const differ = listWords(split.links.filter((l) => l.missing + l.drifted).map((l) => countWords(l.missing + l.drifted, l)));
+  const matched = listWords(split.links.filter((l) => !l.missing && !l.drifted && !l.notRead && l.aligned).map((l) => l.many));
+  const unread = listWords(split.links.filter((l) => l.notRead).map((l) => `the ${countWords(l.notRead, l)}`));
+  const liveOnly = listWords(split.links.filter((l) => l.liveOnly).map((l) => countWords(l.liveOnly, l)));
+  return { differ, matched, unread, liveOnly };
+}
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // stillTrueModel({ journey, run, now, running, startError, journeysError })
 //   journey   the GET /api/journeys entry for this service (or null)
@@ -602,6 +624,19 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
       sentence: `Checked ${ago} ${against} — the live side showed less than the check before: its ${listWords(shrank.map(familyWord))} could not be read, so what differs cannot be told yet.`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
   }
+  // A record that counts the chain says it in the chain's words: exporters, alerts, dashboards.
+  const split = chainDifferences(run);
+  const cw = chainWords(split);
+  if (k === 0 && cw) {
+    const said = cw.unread
+      ? `${cw.matched ? `its ${cw.matched} match live; ` : ''}not read live, so not compared: ${cw.unread}.`
+      : `it matches: ${cw.matched ? `its ${cw.matched}` : 'everything the repository declares'} ${cw.matched ? 'are' : 'is'} running live as declared.`;
+    const liveOnly = [cw.liveOnly, split.beyondLiveOnly ? `${split.beyondLiveOnly} ${split.beyondLiveOnly === 1 ? 'detail' : 'details'}` : ''].filter(Boolean);
+    const more = liveOnly.length ? ` Also running live, not declared: ${listWords(liveOnly)}.` : '';
+    return { ...base, status: 'unchanged', pill: OVERVIEW_STATUS.unchanged, tone: stale || cw.unread ? 'warn' : 'ok', stale,
+      sentence: `Checked ${ago} ${against} — ${said}${more}${asideSays}${since}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: live && !stale && !extra };
+  }
   if (k === 0) {
     // Live-only things are not a difference from what the repository
     // declares, but they are not hidden either: the sentence names them.
@@ -610,14 +645,17 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
       sentence: `Checked ${ago} ${against} — it matches: everything the repository declares is running live.${more}${asideSays}${since}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: live && !stale && !extra };
   }
-  // A record that counts the chain says the chain first, and the rest beyond it.
-  const split = chainDifferences(run);
+  // A record that counts the chain says the chain first, in its own words, and the rest beyond it.
   let what = `${things(k)} ${k === 1 ? 'differs' : 'differ'} from what the repository declares.`;
+  const beyondWords = split?.beyond ? `${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'}` : '';
+  const unreadSays = cw?.unread ? ` ${cap(cw.unread)} could not be read live.` : '';
   if (split && split.chain) {
-    what = `${split.chain} in the chain ${split.chain === 1 ? 'differs' : 'differ'} from what the repository declares${split.beyond ? `, and ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it` : ''}.`;
+    what = `${cw.differ} ${split.chain === 1 ? 'differs' : 'differ'} from what the repository declares${beyondWords ? `, and ${beyondWords} beyond the chain` : ''}.${unreadSays}`;
   } else if (split) {
-    const unread = split.unread.length ? `: its ${listWords(split.unread)} could not be read` : '';
-    what = `the chain matches what live showed${unread}. ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'} beyond it.`;
+    // Nothing compared (every link not read) is never "nothing differs".
+    const head = cw.matched ? `its ${cw.matched} match live${cw.unread ? `, and ${cw.unread} could not be read` : ''}`
+      : cw.unread ? `nothing in the chain could be compared: ${cw.unread} could not be read` : 'nothing in the chain differs';
+    what = `${head}. ${beyondWords} ${split.beyond === 1 ? 'differs' : 'differ'} beyond the chain.`;
   }
   return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
     sentence: `Checked ${ago} ${against} — ${what}${asideSays}${since}`,
@@ -684,6 +722,18 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
   if (still.status === 'unchanged') {
     // The still-true panel's Check again is the primary when there is one.
     const extra = Number(run?.drift?.liveNotDeclared) || 0;
+    const split0 = chainDifferences(run);
+    const cw = chainWords(split0);
+    if (cw && (extra || cw.unread)) {
+      // In the chain's words: what runs live undeclared (to review) — in the chain and beyond it, as the
+      // line above says — and what could not be read (never "matches").
+      const beyondLive = split0.beyondLiveOnly ? `${split0.beyondLiveOnly} ${split0.beyondLiveOnly === 1 ? 'detail' : 'details'} beyond the chain` : '';
+      const liveOnly = [cw.liveOnly, beyondLive].filter(Boolean);
+      const review = liveOnly.length ? `Running live, not in the repository yet: ${listWords(liveOnly)}.` : '';
+      const unread = cw.unread ? `Not read live, so not compared: ${cw.unread}.${cw.matched ? ` Its ${cw.matched} match.` : ''}` : '';
+      const sentence = [cw.unread ? unread : 'Nothing is missing live.', review].filter(Boolean).join(' ');
+      return { sentence, button: review || extra ? { label: 'See the differences', action: 'ov-next-neuron' } : null, why: [], primary: !!(review || extra) };
+    }
     if (extra) {
       return { sentence: `Nothing is missing live. ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that the repository does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: [], primary: true };
     }
@@ -699,11 +749,18 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
       if (l.missing) why.push(`${l.missing} declared ${l.missing === 1 ? `${l.one} is` : `${l.many} are`} not running live.`);
       if (l.drifted) why.push(`${l.drifted} ${l.drifted === 1 ? `${l.one} runs` : `${l.many} run`} differently live than declared.`);
     }
-    if (split.beyond) why.push(`Beyond the chain, ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'}.`);
+    const cw = chainWords(split);
+    // What was not read, in one line; the line beyond the chain is never cut by it.
+    if (cw.unread) why.push(`Not read live, so not compared: ${cw.unread}.`);
+    const beyondWhy = split.beyond ? `Beyond the chain, ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'}.` : '';
+    // In the chain's words: never "things", never "the chain matches" over a link live did not read.
     const sentence = split.chain
-      ? `Fix the ${split.chain} ${split.chain === 1 ? 'thing' : 'things'} in the chain the live side does differently.`
-      : `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
-    return { sentence, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
+      ? `Fix the ${cw.differ} the live side does differently.`
+      : cw.unread
+        ? `${cw.matched ? `${cap(cw.matched)} match live, ${cw.unread} could not be read` : `Nothing in the chain could be compared: ${cw.unread} could not be read`}; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond the chain.`
+        : `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
+    const shown = beyondWhy ? [...why.slice(0, 2), beyondWhy] : why.slice(0, 3);
+    return { sentence, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: shown, primary: true };
   }
   const d = run?.drift || {};
   const why = [];
@@ -1194,16 +1251,39 @@ export function changesModel({ fidelity = null } = {}) {
   if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.', beyond: '' };
   const chain = fidelity.chain;
   if (chain) {
-    const sum = (k) => chain.links.reduce((n, l) => n + (Number(l.counts?.[k]) || 0), 0);
+    const num = (l, k) => Number(l.counts?.[k]) || 0;
+    const sum = (k) => chain.links.reduce((n, l) => n + num(l, k), 0);
+    // Compared at all: a link live read in part counts what it read; one it read none of is "not read".
+    const compared = (l) => num(l, 'aligned') + num(l, 'drifted') + num(l, 'declaredNotLive') + num(l, 'liveNotDeclared') > 0;
+    const blind = (l) => num(l, 'notRead') > 0 && !compared(l);
+    // Each tile says its count by link, in the chain's words: Exporters 0 · Alerts 2 · Dashboards –.
+    const partsOf = (k) => chain.links.map((l) => ({ key: l.key, name: l.name, value: num(l, k), unread: blind(l) && !num(l, k) }));
+    // Nothing of the chain was read: no count is known, so none is drawn as 0.
+    const nothingRead = chain.links.every((l) => !compared(l)) && chain.links.some(blind);
     const items = [
-      { key: 'add', value: sum('declaredNotLive'), label: 'to add', note: 'exporters, alerts or dashboards declared in the repository, not running live', tone: 'fail' },
-      { key: 'update', value: sum('drifted'), label: 'to update', note: 'exporters, alerts or dashboards running live, but not as declared', tone: 'warn' },
-      { key: 'review', value: sum('liveNotDeclared'), label: 'to review', note: 'exporters, alerts or dashboards running live, not in the repository', tone: 'info' },
-    ];
-    const total = items.reduce((n, i) => n + i.value, 0);
+      { key: 'add', value: sum('declaredNotLive'), label: 'to add', note: 'exporters, alerts or dashboards declared in the repository, not running live', tone: 'fail', parts: partsOf('declaredNotLive') },
+      { key: 'update', value: sum('drifted'), label: 'to update', note: 'exporters, alerts or dashboards running live, but not as declared', tone: 'warn', parts: partsOf('drifted') },
+      { key: 'review', value: sum('liveNotDeclared'), label: 'to review', note: 'exporters, alerts or dashboards running live, not in the repository', tone: 'info', parts: partsOf('liveNotDeclared') },
+    ].map((i) => (nothingRead ? { ...i, value: null, unread: true } : i));
+    const total = items.reduce((n, i) => n + (i.value || 0), 0);
+    // Nothing to change: the links that match, named; a link live did not read is said so, never "matches".
+    // The links' words are plural ("exporters", "dashboards"): they match, they are.
+    const alike = chain.links.filter((l) => l.of && !num(l, 'declaredNotLive') && !num(l, 'drifted') && !num(l, 'liveNotDeclared') && !num(l, 'notRead')).map((l) => l.name.toLowerCase());
+    const unread = chain.links.filter((l) => num(l, 'notRead')).map((l) => `the ${num(l, 'notRead')} ${num(l, 'notRead') === 1 ? CHAIN_LINKS.find((c) => c.key === l.key)?.one : l.name.toLowerCase()}`);
+    // None declared: nothing compared, none not read, none set aside (a link whose declared ones are all set aside is no gap).
+    const none = chain.links.filter((l) => !l.of && !num(l, 'notRead') && !num(l, 'liveNotDeclared') && !num(l, 'setAside')).map((l) => l.name.toLowerCase());
+    const orWords = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
+    const sentence = total ? (unread.length ? `Not read live, so not counted here: ${listWords(unread)}.` : '')
+      : [
+        alike.length ? `Nothing to change in the ${listWords(alike)}: they match live.`
+          : nothingRead ? 'Nothing in the chain could be compared.'
+            : (unread.length ? '' : 'Nothing to change: live matches what the repository declares.'),
+        unread.length ? `Not read live, so not compared: ${listWords(unread)}.` : '',
+        none.length ? `No ${orWords(none)} are declared.` : '',
+      ].filter(Boolean).join(' ');
     return {
       known: true, items, total,
-      sentence: total ? '' : (chain.beyond.count || chain.beyond.liveOnly ? 'Nothing to change in the chain: its exporters, alerts and dashboards match live.' : 'Nothing to change: live matches what the repository declares.'),
+      sentence,
       beyond: chain.beyond.count || chain.beyond.liveOnly ? chain.beyond.line : '',
     };
   }

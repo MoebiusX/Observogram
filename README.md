@@ -115,15 +115,19 @@ three columns, every number the engine's own —
   ring, the promises that hold end to end, and one of four
   words — *Never checked · Unchanged · Changed · Unreachable* — with a timed
   sentence from the service's saved journey: *Checked 2 hours ago against
-  live — the chain matches what live showed: its dashboards could not be
-  read. 31 details differ beyond it.* **Check again** runs the journey against
+  live — its exporters and alerts match live, and the 7 dashboards could not
+  be read. 31 details differ beyond the chain.* **Check again** runs the journey against
   the live platform while you watch. A check recorded before 0.8.27 has no
   count by link: the board then counts everything together, as before (*252
   match · 5 run differently · 38 not running live · 30 live only*).
 - **Remediate — What to change.** The chain's exporters, alerts and
-  dashboards *to add · to update · to review*, the details beyond them in one
-  line (*Beyond the chain, 31 details differ: 31 metrics.* — live-only things
-  said apart), and one next step with one button.
+  dashboards *to add · to update · to review*, each tile counting by link
+  (*Exporters 0 · Alerts 2 · Dashboards –*, the dash a link live did not
+  read), the details beyond them in one line (*Beyond the chain, 31 details
+  differ: 31 metrics.* — what runs live undeclared said apart), and one next
+  step with one button, in the same words (*Fix the 1 exporter and 2 alerts
+  the live side does differently.*). A link live could not read is said so,
+  never "matches" (*Not read live, so not compared: the 7 dashboards.*).
 
 ![The Overview board for one service: the chain it declares, its grade and its chain against live, and the changes to apply](docs/img/overview-board.png)
 
@@ -168,9 +172,21 @@ the reason, and the placeholder stays.
 **4. The control room.** *Control room*, at the end of the board's
 context bar, opens a panel beside the board: what the service's live side
 shows now, read through its environment's MCP endpoint and refreshed every
-minute while open. Its figures are the endpoint's — everything it reads,
-not only this service — and the panel says so under its title; only the
-declared exporters are the service's own.
+minute while open. Its figures are the service's own: what its repository
+declares, read on the live side — the alerts its rules name and any alert
+on its scrape jobs, the targets of those jobs, and the metrics of their
+series. Another service on the same endpoint (one Prometheus for many) is
+not counted, and the panel says so under its title (*Only Krystaline's own:
+the alert rules its repository names and its 21 scrape jobs, read
+through prod-mcp.*). The names are every alert rule the scan read — the
+burn-rate ones too — and a named alert counts on one of the service's jobs
+or with no job at all, never another service's of the same name on its own
+job. What a job name cannot tell apart is said: a service that shares one of
+these jobs (an exporter or a collector they all use) is counted on it too. A
+service never Run in that environment has nothing known to be its own yet:
+the panel reads nothing and says *Run it first* (a saved check that cannot
+be read says *Run it again*). An alert that no rule of the repository names
+and that carries none of its jobs is not counted, however often it fires.
 
 ![The control room beside the Overview board: the status, MTTR as the median over 71 incidents in the last 22 days, MTTD not measured in prod, what it found, the exporters and the active alerts](docs/img/control-room.png)
 
@@ -212,8 +228,8 @@ declared exporters are the service's own.
   notice that fires for ever by design (a heartbeat such as *Watchdog*).
 - **The status word** from the alerts firing now (*Critical · Warning ·
   Firing · Quiet · Not known*), the counts by severity, and each active
-  alert with how long it has held. *Quiet* only where the store shows an
-  alert history at all: with no alert fired or pending in 30 days, quiet
+  alert with how long it has held. *Quiet* only where the store shows a
+  history of the service's alerts at all: with none of them fired or pending in 30 days, quiet
   cannot be told from unwatched, and it says *Not known*. *Quiet* says when
   an alert last fired, in days, from a day ago on (an evaluator that stopped
   writing reads as a long quiet, said). A severity it does not
@@ -232,8 +248,9 @@ declared exporters are the service's own.
 
 The panel is an operator's, like a Run (a viewer is told why). One read
 serves everyone looking for 30 seconds (per endpoint address and
-credential); the 30-day history is the endpoint's, kept 10 minutes for
-every service that reads that endpoint (its open alerts checked against
+credential, and the service's scope); the 30-day history is kept 10 minutes per
+endpoint and scope — two services share it only when they declare the same
+jobs and alert names — (its open alerts checked against
 every fresh read; an alert firing that it does not hold has it read again),
 one that failed or was cut 2 minutes; at most 8 reads run at once in a
 studio and 4 in one org. The status, the targets and the history are asked
@@ -1112,7 +1129,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets` | `changed` lists the fields that differed (none: no audit row); `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
-| `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ alerts, scrape, timing, families, absent, calls, readAt, cached }`, each part with its outcome (`data`, `empty`, `failed`, `not-attempted`); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
+| `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, alerts, scrape, timing, families, absent, calls, readAt, cached }`, each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
 | `GET` | `/api/repository-folders` | operator | `?path=` (a folder's full path; left out: the top) | the folders a `path` repository can be picked from (Overview's **Browse…**): `{ allowed, why, bounded, path, up, repository, folders, truncated, limit }` — `folders` the folders inside `path` by name (`{ name, path, repository }`, `repository` when it holds `.git`; never a file, `.git` or `node_modules`; at most `limit`, 500, then `truncated`), `up` the folder above (`{ path }`, `path` `null` for the top) or `null`. The rule is the save's: with `OBSERVOGRAM_REPO_ROOTS` listed (`bounded`) the top is those folders, `path` `null`, and nothing outside them is listed or opened, a link that leads out included; with none, the top is the home folder of a server answering a direct request on loopback without sign-in, and any other reader gets `allowed: false` with the rule's sentence in `why`. A refused folder is 400 with the save's sentence; one that is not there, 404 |
@@ -1842,8 +1859,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.30 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.30
+docker build -t observogram:0.8.31 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.31
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1906,7 +1923,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.30
+  observogram:0.8.31
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1914,7 +1931,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.30
+    image: observogram:0.8.31
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -3838,7 +3855,7 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
 | `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — and `targets` — the MTTD / MTTR targets the studio keeps for it (`changed` lists what differed; nothing → no audit row) |
 | `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
-| `POST` | `/api/services/:id/control-room` | Overview's control room, `{ env? }`: the environment's live endpoint read now → alerts, targets, MTTR from the alert history, the known metric families |
+| `POST` | `/api/services/:id/control-room` | Overview's control room, `{ env? }`: the environment's live endpoint read now, scoped to what the service's repository declares → its alerts, its targets, MTTR from its alerts' history, the known metric families of its scrape jobs |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
 | `GET` | `/api/services/:id/environments` | The service's environments |
 | `GET` | `/api/services/:id/waivers` | The service's waivers of conformance findings (GAP batch 2), newest first, history included: `{ ok, service: { id, slug }, waivers[], counts: { active, expired, revoked } }` — each `{ id, serviceId, ruleId, artefactId, reason, expiresAt, author, createdAt, state, expiresInDays, revokedAt, revokedBy, revokeReason }`; the `author` is the audit actor, visible to every member — see [Waive A Conformance Finding](#waive-a-conformance-finding) |

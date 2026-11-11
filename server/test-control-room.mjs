@@ -29,7 +29,7 @@ delete process.env.OBSERVOGRAM_CONTROL_ROOM_FAMILIES;
 
 const { test, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { mkdtempSync, rmSync, readdirSync, existsSync, writeFileSync } = await import('node:fs');
+const { mkdtempSync, mkdirSync, rmSync, readdirSync, existsSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { join } = await import('node:path');
 
@@ -71,9 +71,20 @@ const { currentStore, closeStore } = await import('./store/db.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const { startFakeMcp, registerMcpEndpoint } = await import('./fixtures/fake-mcp.mjs');
 const { capabilityTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
-const { setControlRoomSeams, resetControlRoom, controlRoomRoutes, reconcileTiming, CONTROL_ROOM_TTL_MS, CONTROL_ROOM_MAX_IN_FLIGHT_PER_ORG } = await import('./routes/control-room.mjs');
+const { setControlRoomSeams, resetControlRoom, controlRoomRoutes, reconcileTiming, scopeOfPack, declaredScopeOf, CONTROL_ROOM_TTL_MS, CONTROL_ROOM_MAX_IN_FLIGHT_PER_ORG } = await import('./routes/control-room.mjs');
 
 const QUERY = capabilityTool('control_room_query');
+// What each service's repository declares — the route's scope seam (its own path, a saved check's Pack A,
+// is scopeOfPack's, tested on a pack below): Shop and Cart the same, Ledger its own; any other never run.
+const SCOPES = { Shop: { jobs: ['shop'], alerts: ['ShopDown'] }, Cart: { jobs: ['shop'], alerts: ['ShopDown'] }, Ledger: { jobs: ['ledger'], alerts: ['LedgerLag'] }, Bare: { jobs: ['shop'], alerts: ['ShopDown'] }, Gone: { jobs: ['shop'], alerts: ['ShopDown'] } };
+// Real, Unreadable and Unrun go the route's own way: a saved check's Pack A in the org's workspace.
+const REAL = new Set(['Real', 'Unreadable', 'Unrun']);
+const scopeSeam = (service, env) => (REAL.has(service.name) ? declaredScopeOf(service, env) : Object.hasOwn(SCOPES, service.name) ? SCOPES[service.name] : null);
+const resetRoom = () => { resetControlRoom(); setControlRoomSeams({ scopeOf: scopeSeam }); };
+resetRoom();
+// A query pinned exactly: the engine's text, never a pattern a request could steer.
+const exact = (q) => new RegExp(`^${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+const SHOP_ALERTS = '(ALERTS{alertname=~"ShopDown", job=""} or ALERTS{job=~"shop"})';
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const BASE = `http://127.0.0.1:${srv.address().port}`;
 const db = currentStore();
@@ -109,14 +120,17 @@ let shopDownFiring = true;
 let historyFails = false;
 let statesFail = false;
 const ANSWERS = [
-  [/^count by \(__name__\)/, () => vec([{ __name__: 'http_requests_total' }, 1], [{ __name__: 'http_request_duration_seconds_bucket' }, 1], [{ __name__: 'example_queue_depth' }, 1])],
-  [/^count by \(alertname, severity, alertstate\) \(ALERTS\)$/, () => (statesFail ? { __isError: 'HTTP 503: Service Temporarily Unavailable' } : shopDownFiring ? vec([{ alertname: 'ShopDown', severity: 'critical', alertstate: 'firing' }, 1]) : vec())],
-  [/^min by \(alertname, alertstate\) \(ALERTS_FOR_STATE \* ignoring\(alertstate\) group_left\(alertstate\) ALERTS\)$/, () => (shopDownFiring ? vec([{ alertname: 'ShopDown', alertstate: 'firing' }, NOW - 300]) : vec())],
-  [/^count\(last_over_time\(ALERTS\[30d\]\)\)$/, () => vec([{}, 1])],
-  [/^count\(up\)$/, () => vec([{}, 4])], [/^sum\(up\)$/, () => vec([{}, 3])], [/^count by \(job\) \(up == 0\)$/, () => vec([{ job: 'shop' }, 1])],
-  [/^max by \(alertname, severity\) \(ALERTS\{alertstate="firing"\}\)\[30d:2m\]$/, () => (historyFails ? { __isError: 'HTTP 422: Unprocessable Entity' } : { resultType: 'matrix', result: [{ metric: { alertname: 'ShopDown', severity: 'critical' }, values: [[NOW - 240, '1'], [NOW - 120, '1']] }] })],
-  [/^sum\(rate\(http_requests_total\[5m\]\)\)$/, () => vec([{}, 7.5])],
-  [/^max\(example_queue_depth\)$/, () => vec([{}, 42])],
+  // Shop's own, scoped to what its repository declares (ShopDown by name, the shop job).
+  [/^count by \(__name__\) \(\{__name__=~"[^"]*", job=~"shop"\}\)$/, () => vec([{ __name__: 'http_requests_total' }, 1], [{ __name__: 'http_request_duration_seconds_bucket' }, 1], [{ __name__: 'example_queue_depth' }, 1])],
+  [exact(`count by (alertname, severity, alertstate) (${SHOP_ALERTS})`), () => (statesFail ? { __isError: 'HTTP 503: Service Temporarily Unavailable' } : shopDownFiring ? vec([{ alertname: 'ShopDown', severity: 'critical', alertstate: 'firing' }, 1]) : vec())],
+  [exact(`min by (alertname, alertstate) ((ALERTS_FOR_STATE{alertname=~"ShopDown", job=""} or ALERTS_FOR_STATE{job=~"shop"}) * ignoring(alertstate) group_left(alertstate) ${SHOP_ALERTS})`), () => (shopDownFiring ? vec([{ alertname: 'ShopDown', alertstate: 'firing' }, NOW - 300]) : vec())],
+  [exact('count(last_over_time(ALERTS{alertname=~"ShopDown", job=""}[30d]) or last_over_time(ALERTS{job=~"shop"}[30d]))'), () => vec([{}, 1])],
+  [exact('count(up{job=~"shop"})'), () => vec([{}, 4])], [exact('sum(up{job=~"shop"})'), () => vec([{}, 3])], [exact('count by (job) (up{job=~"shop"} == 0)'), () => vec([{ job: 'shop' }, 1])],
+  [exact('max by (alertname, severity) ((ALERTS{alertstate="firing", alertname=~"ShopDown", job=""} or ALERTS{alertstate="firing", job=~"shop"}))[30d:2m]'), () => (historyFails ? { __isError: 'HTTP 422: Unprocessable Entity' } : { resultType: 'matrix', result: [{ metric: { alertname: 'ShopDown', severity: 'critical' }, values: [[NOW - 240, '1'], [NOW - 120, '1']] }] })],
+  [exact('sum(rate(http_requests_total{job=~"shop"}[5m]))'), () => vec([{}, 7.5])],
+  [exact('max(example_queue_depth{job=~"shop"})'), () => vec([{}, 42])],
+  // Ledger's own: nothing fires, an empty history.
+  [/job=~"ledger"|alertname=~"LedgerLag"/, () => vec()],
 ];
 const handler = (name, args) => {
   if (name !== QUERY) return { error: 'unexpected tool' };
@@ -152,13 +166,13 @@ test('refusals come before any call to the live side: no service, no environment
 });
 
 test('an operator\'s read: the answer key by key, through the endpoint\'s read token, the engine\'s queries only, nothing secret in it, nothing written', async () => {
-  resetControlRoom();
+  resetRoom();
   const auditBefore = listAudit(db, { orgId: 'acme', limit: 1000 }).length;
   const before = live.calls.length;
   const r = await room('oscar', ids.shop, { env: 'prod', query: 'up{job="mine"}', jobs: ['x'] });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(Object.keys(r.json), ['ok', 'readAt', 'service', 'env', 'endpoint', 'scope', 'tookMs', 'cached', 'calls', 'alerts', 'scrape', 'timing', 'families', 'absent']);
-  assert.deepEqual([r.json.service.name, r.json.env.name, r.json.endpoint.name, r.json.cached, r.json.scope], ['Shop', 'prod', 'acme-live', false, { kind: 'endpoint', declaredJobs: 0 }]);
+  assert.deepEqual([r.json.service.name, r.json.env.name, r.json.endpoint.name, r.json.cached, r.json.scope], ['Shop', 'prod', 'acme-live', false, { kind: 'service', jobs: 1, alerts: 1, cut: { jobs: 0, alerts: 0 } }]);
   assert.deepEqual(r.json.alerts.bySeverity, { critical: 1, warning: 0, info: 0, other: 0 });
   assert.deepEqual(r.json.alerts.active.map((a) => [a.name, a.state]), [['ShopDown', 'firing']]);
   assert.ok(r.json.alerts.active[0].seconds >= 300 && r.json.alerts.active[0].seconds < 330, 'active for the 300 s since its activeAt');
@@ -168,6 +182,9 @@ test('an operator\'s read: the answer key by key, through the endpoint\'s read t
   const calls = live.calls.slice(before);
   assert.ok(calls.length > 5 && calls.every((c) => c.name === QUERY), 'every call the query capability\'s tool');
   assert.ok(calls.every((c) => !c.arguments.query.includes('mine') && !c.arguments.query.includes('"x"')), 'nothing of the request body reaches a query');
+  // Every ALERTS and up read is Shop's own; only the history's start probe (the store's age) reads the endpoint's up.
+  const unscoped = calls.map((c) => c.arguments.query).filter((q) => /\b(ALERTS|ALERTS_FOR_STATE|up)\b(?!\{)/.test(q.replace(/timestamp\(up\)/g, '')));
+  assert.deepEqual(unscoped, [], 'no read of another service\'s alerts, targets or metrics');
   assert.ok(live.authHeaders.slice(-calls.length).every((h) => h === `Bearer ${READ_TOKEN}`), 'the endpoint\'s read token rides every call');
   for (const secret of [READ_TOKEN, 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN', 'count by (', live.url]) assert.ok(!r.text.includes(secret), `the answer holds no ${secret}`);
   assert.equal(listAudit(db, { orgId: 'acme', limit: 1000 }).length, auditBefore, 'a read writes no audit row');
@@ -175,7 +192,7 @@ test('an operator\'s read: the answer key by key, through the endpoint\'s read t
 });
 
 test('one read serves every viewer for 30 s and while it runs; a fresh read at most every 5 s', async () => {
-  resetControlRoom();
+  resetRoom();
   let clock = Date.now();
   setControlRoomSeams({ now: () => clock });
   const before = live.calls.length;
@@ -207,11 +224,11 @@ test('one read serves every viewer for 30 s and while it runs; a fresh read at m
     assert.deepEqual([cleared.json.cached, cleared.json.alerts.outcome, cleared.json.alerts.evidence], [false, 'empty', true]);
     assert.deepEqual([cleared.json.timing.open, cleared.json.timing.closedSince], [[], 1], 'not firing now: not said as open');
   } finally { shopDownFiring = true; }
-  resetControlRoom();
+  resetRoom();
 });
 
 test('a repointed endpoint, or the same one under another token, is read anew; at most four reads at once in one org; a read cut at its deadline keeps what it read', async () => {
-  resetControlRoom();
+  resetRoom();
   const first = await room('oscar', ids.shop);
   assert.equal(first.status, 200);
   const other = await startFakeMcp([QUERY], handler);
@@ -224,7 +241,7 @@ test('a repointed endpoint, or the same one under another token, is read anew; a
     assert.equal((await call('ada', 'PATCH', `/api/mcp-endpoints/${reg.id}`, { url: live.url })).status, 200);
   }
   // The same address under another token: another backend for the cache, never the first token's answer.
-  resetControlRoom();
+  resetRoom();
   assert.equal((await room('oscar', ids.shop)).status, 200);
   assert.equal((await room('oscar', ids.shop)).json.cached, true);
   assert.equal((await call('ada', 'PATCH', `/api/mcp-endpoints/${reg.id}`, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER_TOKEN' })).status, 200);
@@ -236,7 +253,7 @@ test('a repointed endpoint, or the same one under another token, is read anew; a
     assert.equal((await call('ada', 'PATCH', `/api/mcp-endpoints/${reg.id}`, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' })).status, 200);
   }
   // Four environments of one service, each its own read, all held at the endpoint: the fifth is refused.
-  resetControlRoom();
+  resetRoom();
   for (const name of ['e1', 'e2', 'e3', 'e4', 'e5']) assert.equal((await call('ada', 'POST', `/api/services/${ids.shop}/environments`, { name, mcpEndpointId: reg.id })).status, 201);
   const gate = live.hold(QUERY);
   const held = ['e1', 'e2', 'e3', 'e4'].map((env) => room('oscar', ids.shop, { env }));
@@ -249,9 +266,9 @@ test('a repointed endpoint, or the same one under another token, is read anew; a
   assert.equal((await room('oscar', ids.shop, { env: 'e5' })).status, 200, 'the slots are free again');
   // Cut at the deadline with the alerts and targets read, the history and the families slowed past it:
   // what was read is answered, the rest said as out of time.
-  resetControlRoom();
+  resetRoom();
   setControlRoomSeams({ deadlineMs: 700 });
-  hook.slow = (body) => /\[30d:2m\]|http_requests_total\[5m\]|example_queue_depth|\[6h:10m\]/.test(body);
+  hook.slow = (body) => /\[30d:2m\]|http_requests_total\{|example_queue_depth|\[6h:10m\]/.test(body);
   hook.slowMs = 1500;
   try {
     const cut = await room('oscar', ids.shop);
@@ -259,11 +276,11 @@ test('a repointed endpoint, or the same one under another token, is read anew; a
     assert.equal(cut.json.calls.outOfTime, true);
     assert.deepEqual([cut.json.alerts.outcome, cut.json.scrape.outcome], ['data', 'data'], 'read before the cut: answered');
     assert.deepEqual([cut.json.timing.outcome, cut.json.timing.reason], ['not-attempted', 'the read ran out of time']);
-  } finally { hook.slow = null; resetControlRoom(); }
+  } finally { hook.slow = null; resetRoom(); }
 });
 
-test('the firing history is the endpoint\'s: two services reading one endpoint read it once; a kept one is read again when an alert fires that it does not hold', async () => {
-  resetControlRoom();
+test('the firing history is the endpoint\'s and the scope\'s: two services that declare the same read it once, another reads its own; a service never run reads nothing; a kept one is read again when an alert fires that it does not hold', async () => {
+  resetRoom();
   const cart = await call('ada', 'POST', '/api/services', { name: 'Cart' });
   assert.equal(cart.status, 201, cart.text);
   assert.equal((await call('ada', 'POST', `/api/services/${cart.json.service.id}/environments`, { name: 'prod', mcpEndpointId: reg.id })).status, 201);
@@ -271,7 +288,19 @@ test('the firing history is the endpoint\'s: two services reading one endpoint r
   const before = historyCalls();
   assert.equal((await room('oscar', ids.shop)).status, 200);
   const other = await room('oscar', cart.json.service.id);
-  assert.deepEqual([other.status, other.json.timing.outcome, historyCalls() - before], [200, 'data', 1], 'one history for the endpoint');
+  assert.deepEqual([other.status, other.json.timing.outcome, historyCalls() - before], [200, 'data', 1], 'one history for the endpoint and scope: Cart declares what Shop does');
+  // Another scope on the same endpoint reads its own history and none of Shop's.
+  const ledger = await call('ada', 'POST', '/api/services', { name: 'Ledger' });
+  assert.equal((await call('ada', 'POST', `/api/services/${ledger.json.service.id}/environments`, { name: 'prod', mcpEndpointId: reg.id })).status, 201);
+  const own = await room('oscar', ledger.json.service.id);
+  assert.deepEqual([own.status, historyCalls() - before, own.json.alerts.outcome, own.json.alerts.active, own.json.scope], [200, 2, 'empty', [], { kind: 'service', jobs: 1, alerts: 1, cut: { jobs: 0, alerts: 0 } }], "Ledger's own: ShopDown is not its alert");
+  // A service never run: nothing is known to be its own, the endpoint is not asked.
+  const bare = await call('ada', 'POST', '/api/services', { name: 'Fresh' });
+  assert.equal((await call('ada', 'POST', `/api/services/${bare.json.service.id}/environments`, { name: 'prod', mcpEndpointId: reg.id })).status, 201);
+  const callsBefore = live.calls.length;
+  const never = await room('oscar', bare.json.service.id);
+  assert.deepEqual([never.status, never.json.scope, never.json.alerts.outcome, never.json.alerts.reason, never.json.families.outcome, live.calls.length - callsBefore],
+    [200, { kind: 'service', jobs: 0, alerts: 0, neverRun: true }, 'not-attempted', 'Fresh has never been run in prod, so nothing live is known to be its own yet — Run it first', 'not-attempted', 0]);
   // The unit rules: an empty kept history beside alerts firing (even past the listed twelve) is outdated;
   // an alert firing that the kept history does not hold open makes it outdated; one it holds that is
   // not firing now is closed since.
@@ -282,11 +311,11 @@ test('the firing history is the endpoint\'s: two services reading one endpoint r
   assert.equal(reconcileTiming(held, { outcome: 'data', bySeverity: { warning: 2 }, active: [{ name: 'A', state: 'firing' }, { name: 'B', state: 'firing' }], more: 0 }), held, 'nothing changed: the same');
   assert.equal(reconcileTiming(held, { outcome: 'failed' }), held, 'alerts not read: nothing said about it');
   assert.equal(reconcileTiming(held, { outcome: 'data', bySeverity: { warning: 20 }, active: [{ name: 'C', state: 'firing' }], more: 13 }).outdated, true, 'past the listed twelve: an alert firing it does not hold still makes it outdated');
-  resetControlRoom();
+  resetRoom();
 });
 
 test('a cut read: a history cut is kept 2 minutes; nothing read is a 502 quoting what the endpoint did answer; the sessions end after the cut', async () => {
-  resetControlRoom();
+  resetRoom();
   let clock = Date.now();
   setControlRoomSeams({ now: () => clock, deadlineMs: 700 });
   hook.slow = (body) => /\[30d:2m\]/.test(body);
@@ -307,17 +336,17 @@ test('a cut read: a history cut is kept 2 minutes; nothing read is a 502 quoting
     const later = await room('oscar', ids.shop);
     assert.deepEqual([later.json.timing.outcome, historyCalls() - before], ['data', 1], 'after 2 minutes it is read again');
     // Nothing read before the cut: the 502 says what the endpoint did answer.
-    resetControlRoom();
+    resetRoom();
     setControlRoomSeams({ deadlineMs: 700 });
     statesFail = true;
-    hook.slow = (body) => /\[30d:2m\]|timestamp\(up\)|"count\(up\)"|sum\(up\)|up == 0|__name__/.test(body);
+    hook.slow = (body) => /\[30d:2m\]|timestamp\(up\)|count\(up\{|sum\(up\{|\} == 0|__name__/.test(body);
     const none = await room('oscar', ids.shop);
     assert.deepEqual([none.status, none.json.error], [502, 'The live endpoint did not answer: no answer within 1 s (before that: HTTP 503: Service Temporarily Unavailable)']);
-  } finally { hook.slow = null; statesFail = false; resetControlRoom(); }
+  } finally { hook.slow = null; statesFail = false; resetRoom(); }
 });
 
 test('a transport that ignores the cut is answered at the grace, its slot freed and counted until it ends; a failed history is kept 2 minutes; the families file is read when the route is mounted', async () => {
-  resetControlRoom();
+  resetRoom();
   setControlRoomSeams({ deadlineMs: 200, graceMs: 200 });
   hook.held = [];
   hook.hold = (body) => body.includes('"tools/call"');
@@ -334,7 +363,7 @@ test('a transport that ignores the cut is answered at the grace, its slot freed 
   for (let i = 0; i < 100; i += 1) { back = await room('oscar', ids.shop, { env: 'e5' }); if (back.status !== 429) break; await new Promise((r) => setTimeout(r, 20)); }
   assert.equal(back.status, 200, 'once they ended, the org reads again');
   // A history that failed is kept 2 minutes, not asked again on every read.
-  resetControlRoom();
+  resetRoom();
   let clock = Date.now();
   setControlRoomSeams({ now: () => clock });
   historyFails = true;
@@ -349,7 +378,7 @@ test('a transport that ignores the cut is answered at the grace, its slot freed 
     clock += 2 * 60_000;
     await room('oscar', ids.shop);
     assert.equal(historyCalls() - before, 2, 'after 2 minutes it is asked again');
-  } finally { historyFails = false; resetControlRoom(); }
+  } finally { historyFails = false; resetRoom(); }
   // The families file: read, and its warning said, when the route is mounted.
   const file = join(WORKSPACE, 'families-bad.json');
   writeFileSync(file, JSON.stringify({ families: [{ id: 'Broken' }] }));
@@ -358,18 +387,18 @@ test('a transport that ignores the cut is answered at the grace, its slot freed 
   const write = process.stderr.write;
   process.stderr.write = (chunk, ...rest) => { said.push(String(chunk)); return write.call(process.stderr, chunk, ...rest); };
   try {
-    resetControlRoom();
+    resetRoom();
     controlRoomRoutes({ authorize: () => (req, res, next) => next() });
   } finally {
     process.stderr.write = write;
     delete process.env.OBSERVOGRAM_CONTROL_ROOM_FAMILIES;
-    resetControlRoom();
+    resetRoom();
   }
   assert.ok(said.some((l) => /^\[control-room\] family Broken: .*; dropped\.\n$/.test(l)), 'the warning at mount');
 });
 
 test('a tool not offered: every part not attempted, said; an endpoint that does not answer, and one past the deadline: 502 with the reason, no figure', async () => {
-  resetControlRoom();
+  resetRoom();
   const bare = await startFakeMcp(['some_other_tool'], () => ({ ok: true }));
   fakes.push(bare);
   const other = await registerMcpEndpoint(BASE, { name: 'acme-bare', url: bare.url, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN' }, { headers: headersOf('ada') });
@@ -388,7 +417,7 @@ test('a tool not offered: every part not attempted, said; an endpoint that does 
   assert.match(down.json.error, /^The live endpoint did not answer: /);
   assert.ok(!down.text.includes(READ_TOKEN));
   // Past the deadline.
-  resetControlRoom();
+  resetRoom();
   setControlRoomSeams({ deadlineMs: 1000 });
   const gate = live.hold(QUERY);
   const slow = room('oscar', ids.shop);
@@ -396,7 +425,7 @@ test('a tool not offered: every part not attempted, said; an endpoint that does 
   const late = await slow;
   gate.release();
   assert.deepEqual([late.status, late.json.error], [502, 'The live endpoint did not answer: no answer within 1 s']);
-  resetControlRoom();
+  resetRoom();
 });
 
 test('a downstream\'s families file adds its own family, read when the endpoint exposes it', async () => {
@@ -406,7 +435,7 @@ test('a downstream\'s families file adds its own family, read when the endpoint 
     variants: [{ requires: ['example_queue_depth'], tiles: [{ id: 'depth', label: 'Deepest queue', unit: 'count', expr: 'max(example_queue_depth)', judge: { kind: 'ceiling', bound: 100, from: 'stated' } }], chart: null }],
   }, { id: 'Broken' }] }));
   process.env.OBSERVOGRAM_CONTROL_ROOM_FAMILIES = file;
-  resetControlRoom();
+  resetRoom();
   try {
     const r = await room('oscar', ids.shop);
     assert.equal(r.status, 200);
@@ -414,6 +443,50 @@ test('a downstream\'s families file adds its own family, read when the endpoint 
     assert.deepEqual(own?.tiles.map((t) => [t.id, t.value, t.tone]), [['depth', 42, 'good']]);
   } finally {
     delete process.env.OBSERVOGRAM_CONTROL_ROOM_FAMILIES;
-    resetControlRoom();
+    resetRoom();
   }
+});
+
+test('scopeOfPack: what a repository declares — its scrape jobs and its alert rules by name, never a scaffold\'s', () => {
+  // A scan's shape: the scrape jobs it found as its annotation, the rules under spec.alerting.rules.
+  const pack = {
+    apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack',
+    metadata: { name: 'shop', version: '0.1.0', annotations: { 'crawler.discovered.scrape_jobs': 'shop,shop-db', 'crawler.discovered.scrape_jobs_count': '2' } },
+    spec: { alerting: { rules: [{ name: 'ShopSlow', expr: 'x > 1', severity: 'warning' }, { name: 'ShopDown', expr: 'up{job="shop"} == 0', severity: 'critical' }] } },
+  };
+  assert.deepEqual(scopeOfPack(pack), { jobs: ['shop', 'shop-db'], alerts: ['ShopDown', 'ShopSlow'] }, 'its jobs and its rules by name, sorted');
+  assert.deepEqual(scopeOfPack({ apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { name: 'empty', version: '0.1.0' }, spec: {} }), { jobs: [], alerts: [] });
+  // Every alert name the scan read: the burn-rate ones folded into the policy, and a repository's with no
+  // recording rules (alerting.rules then keeps none), from its crawler.discovered.alert_names.
+  const tier3 = { ...pack, metadata: { ...pack.metadata, annotations: { ...pack.metadata.annotations, 'crawler.discovered.alert_names': '["ShopBurnFast","ShopDown"]', 'crawler.discovered.alert_names_count': '2' } }, spec: {} };
+  assert.deepEqual(scopeOfPack(tier3), { jobs: ['shop', 'shop-db'], alerts: ['ShopBurnFast', 'ShopDown'] });
+});
+
+test('declaredScopeOf on a saved check: its Pack A\'s jobs and every alert name its scan read; a check whose pack cannot be read, and an environment never run, said apart', async () => {
+  resetRoom();
+  const root = join(WORKSPACE, 'orgs', 'acme');
+  mkdirSync(join(root, 'journeys'), { recursive: true });
+  mkdirSync(join(root, 'packs'), { recursive: true });
+  const pack = { apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack',
+    metadata: { name: 'real', version: '0.1.0', annotations: { 'crawler.discovered.scrape_jobs': '["real"]', 'crawler.discovered.scrape_jobs_count': '1', 'crawler.discovered.alert_names': '["RealBurnFast","RealDown"]', 'crawler.discovered.alert_names_count': '2' } },
+    spec: { alerting: { rules: [{ name: 'RealDown', expr: 'up{job="real"} == 0', severity: 'critical' }] } } };
+  writeFileSync(join(root, 'packs', 'real.pack.json'), JSON.stringify(pack));
+  writeFileSync(join(root, 'journeys', 'real.prod.journey.yaml'), 'name: real.prod\npackA:\n  file: ../packs/real.pack.json\npackB:\n  mcp:\n    url: http://127.0.0.1:1/mcp\nenv: prod\nservice: real\n');
+  writeFileSync(join(root, 'journeys', 'unreadable.prod.journey.yaml'), 'name: unreadable.prod\npackA:\n  file: ../packs/gone.pack.json\npackB:\n  mcp:\n    url: http://127.0.0.1:1/mcp\nenv: prod\nservice: unreadable\n');
+  const make = async (name) => {
+    const made = await call('ada', 'POST', '/api/services', { name });
+    assert.equal(made.status, 201, made.text);
+    assert.equal((await call('ada', 'POST', `/api/services/${made.json.service.id}/environments`, { name: 'prod', mcpEndpointId: reg.id })).status, 201);
+    return made.json.service.id;
+  };
+  const real = await room('oscar', await make('Real'));
+  assert.deepEqual([real.status, real.json.scope], [200, { kind: 'service', jobs: 1, alerts: 2, cut: { jobs: 0, alerts: 0 } }], 'its job, and its burn-rate alert by name beside its rule');
+  assert.ok(live.calls.some((c) => c.arguments?.query === 'count by (alertname, severity, alertstate) ((ALERTS{alertname=~"RealBurnFast|RealDown", job=""} or ALERTS{job=~"real"}))'), 'read as its own');
+  const before = live.calls.length;
+  const unreadable = await room('oscar', await make('Unreadable'));
+  assert.deepEqual([unreadable.status, unreadable.json.alerts.reason, unreadable.json.scope.neverRun], [200, "the saved check of Unreadable's last Run could not be read, so nothing live is known to be its own — Run it again", true]);
+  const unrun = await room('oscar', await make('Unrun'));
+  assert.equal(unrun.json.alerts.reason, 'Unrun has never been run in prod, so nothing live is known to be its own yet — Run it first');
+  assert.equal(live.calls.length, before, 'neither asks the endpoint');
+  resetRoom();
 });

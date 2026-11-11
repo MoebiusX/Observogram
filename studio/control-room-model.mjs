@@ -135,9 +135,11 @@ function overWords(timing) {
 // A severity label in a sentence: as it came, or "none set" for an alert without one.
 const labelWords = (l) => (String(l ?? '').trim() ? String(l).trim() : 'none set');
 
-function statusOf(alerts, windowDays, lastFiredAt, now) {
+function statusOf(alerts, windowDays, lastFiredAt, now, { scoped = false } = {}) {
   if (!isObj(alerts) || alerts.outcome === 'failed' || alerts.outcome === 'not-attempted') {
-    return { ...STATUS.unknown, key: 'unknown', sentence: `The alerts could not be read${alerts?.reason ? `: ${alerts.reason}` : ''}.`, counts: null, pending: 0 };
+    // Not asked (nothing is the service's yet, out of time) is not a read that failed.
+    const sentence = alerts?.outcome === 'not-attempted' && alerts.reason ? `Not read: ${alerts.reason}.` : `The alerts could not be read${alerts?.reason ? `: ${alerts.reason}` : ''}.`;
+    return { ...STATUS.unknown, key: 'unknown', sentence, counts: null, pending: 0 };
   }
   const by = { critical: 0, warning: 0, info: 0, other: 0, ...(alerts.bySeverity || {}) };
   const pending = Number(alerts.pending) || 0;
@@ -152,8 +154,11 @@ function statusOf(alerts, windowDays, lastFiredAt, now) {
   if (by.warning > 0) return { ...STATUS.warning, key: 'warning', sentence: `${plural(by.warning, 'warning')} firing, nothing critical.${pend}`, counts: by, pending };
   // Nothing fires. Quiet only where the store shows an alert history at all: with none, quiet and unwatched look the same.
   if (alerts.outcome === 'empty' && alerts.evidence !== true) {
+    // With a scope the history asked about is the service's alerts', never the whole store's.
     const why = alerts.evidence === false
-      ? `Nothing is firing, and no alert has fired or been pending here in ${plural(windowDays, 'day')}: this store shows no alert history, so quiet cannot be told from unwatched.`
+      ? (scoped
+        ? `Nothing of this service's is firing, and none of its alerts has fired or been pending here in ${plural(windowDays, 'day')}: this store holds no history of them, so quiet cannot be told from unwatched.`
+        : `Nothing is firing, and no alert has fired or been pending here in ${plural(windowDays, 'day')}: this store shows no alert history, so quiet cannot be told from unwatched.`)
       : `Nothing is firing, but whether this store holds an alert history could not be read.`;
     return { ...STATUS.unknown, key: 'unwatched', sentence: why, counts: null, pending };
   }
@@ -182,7 +187,7 @@ function targetLine(mttx, target, key) {
 }
 
 // The MTTR proxy, from the server's timing part.
-function mttrOf(timing, mttx, { readAt }) {
+function mttrOf(timing, mttx, { readAt, scoped = false }) {
   const target = targetOf(mttx, 'mttrTarget');
   const targetWords = targetLine(mttx, target, 'mttr');
   const base = { label: 'MTTR', long: 'Time to resolve', value: null, words: '—', sub: '', detail: '', target: targetWords, verdict: null, tone: 'neutral', basis: '', asOf: '', asOfWord: 'History read at' };
@@ -190,13 +195,18 @@ function mttrOf(timing, mttx, { readAt }) {
   const stepMin = Math.round((num(timing?.stepSeconds) || 120) / 60);
   const mergeMin = Math.round((num(timing?.mergeSeconds) || 300) / 60);
   const rule = `How long the alert rules' own firing records lasted, in ${stepMin}-minute steps; an alert that pauses for ${mergeMin} minutes or less and fires again is one incident, at the highest severity it reached.`;
-  const scope = ' The figures are the endpoint\'s: every alert it holds, not only this service\'s, over the history the store keeps (an evaluator that began writing later than that is not seen).';
+  const scope = scoped
+    ? ' The figures are this service\'s own: the alerts that fire on its scrape jobs, and the alerts its repository names that carry no job, over the history the store keeps (an evaluator that began writing later than that is not seen). Another service that shares one of its jobs is counted on it too.'
+    : ' The figures are the endpoint\'s: every alert it holds, not only this service\'s, over the history the store keeps (an evaluator that began writing later than that is not seen).';
   if (!isObj(timing)) return { ...base, sub: 'Not read yet.', basis: `${rule}${scope}` };
   // The history is kept a few minutes longer than the rest: its own read time, when older.
   const lag = Date.parse(readAt || '') - Date.parse(timing.readAt || '');
   const asOf = Number.isFinite(lag) && lag >= 60_000 ? timing.readAt : '';
   // Not read: when it was last tried, never "History read at".
-  if (timing.outcome === 'failed' || timing.outcome === 'not-attempted') return { ...base, asOf, asOfWord: 'Last tried at', sub: `The alert history could not be read${timing.reason ? `: ${timing.reason}` : ''}.`, basis: `${rule}${scope}` };
+  if (timing.outcome === 'failed' || timing.outcome === 'not-attempted') {
+    const sub = timing.outcome === 'not-attempted' && timing.reason ? `Not read: ${timing.reason}.` : `The alert history could not be read${timing.reason ? `: ${timing.reason}` : ''}.`;
+    return { ...base, asOf, asOfWord: 'Last tried at', sub, basis: `${rule}${scope}` };
+  }
   const { over, known } = overWords(timing);
   const left = [];
   const before = Number(timing.before) || 0;
@@ -209,7 +219,7 @@ function mttrOf(timing, mttx, { readAt }) {
     // Kept from an earlier read while something fires now: said as that read's, and read again next time.
     if (timing.outdated) return { ...base, asOf, sub: `No alert had fired in ${over} when the history was read; it is read again with the next refresh.`, basis };
     if (timing.evidence === true) return { ...base, asOf, sub: `No alert fired in ${over}.`, basis };
-    return { ...base, asOf, sub: timing.evidence === false ? 'No alert history in this store: nothing to time.' : 'Whether this store holds an alert history could not be read.', basis };
+    return { ...base, asOf, sub: timing.evidence === false ? (scoped ? 'None of its alerts has a history in this store: nothing to time.' : 'No alert history in this store: nothing to time.') : 'Whether this store holds an alert history could not be read.', basis };
   }
   const min = num(timing.minIncidents) || MIN_INCIDENTS;
   if (timing.tooFew) return { ...base, asOf, sub: `Too few incidents to say: ${timing.closed} cleared in ${over} (${min} needed).`, basis };
@@ -387,9 +397,11 @@ function alertRowsOf(alerts, timing, now, readAt) {
 }
 
 const TONE_RANK = { bad: 0, warn: 1, good: 2, info: 3 };
-function familiesOf(families, absent) {
+function familiesOf(families, absent, { scoped = false } = {}) {
   if (!isObj(families)) return { rows: [], note: '', absent: '' };
-  if (families.outcome === 'failed' || families.outcome === 'not-attempted') return { rows: [], note: `The known metrics could not be read${families.reason ? `: ${families.reason}` : ''}.`, absent: '' };
+  if (families.outcome === 'failed' || families.outcome === 'not-attempted') {
+    return { rows: [], note: families.outcome === 'not-attempted' && families.reason ? `Not read: ${families.reason}.` : `The known metrics could not be read${families.reason ? `: ${families.reason}` : ''}.`, absent: '' };
+  }
   const rows = (Array.isArray(families.rows) ? families.rows : []).filter(isObj).map((f) => {
     const tiles = (Array.isArray(f.tiles) ? f.tiles : []).filter(isObj).map((t) => {
       const value = num(t.value);
@@ -414,7 +426,11 @@ function familiesOf(families, absent) {
     return { id: String(f.id || ''), title: String(f.title || f.id || ''), layer: ['app', 'platform', 'infra'].includes(f.layer) ? f.layer : 'app', tone, toneWords, tiles, headline, chart };
   });
   const names = (Array.isArray(absent) ? absent : []).map((a) => String(a?.title || a?.id || '')).filter(Boolean);
-  return { rows, note: rows.length ? '' : 'None of the known metric families is exposed live.', absent: names.length ? `Not exposed live: ${names.join(', ')}.` : '' };
+  return {
+    rows,
+    note: rows.length ? '' : (scoped ? 'None of the known metric families is exposed by its scrape jobs.' : 'None of the known metric families is exposed live.'),
+    absent: names.length ? `Not exposed ${scoped ? 'by its scrape jobs' : 'live'}: ${names.join(', ')}.` : '',
+  };
 }
 
 // The strip's word on the next read: as the driver will do it.
@@ -423,6 +439,31 @@ function nextOf(state, intervalMs = CONTROL_ROOM_INTERVAL_MS) {
   if (state.reading) return 'reading now';
   if (state.failures) return `next read in ${durationWords(waitAfter(state, intervalMs) / 1000)}`;
   return 'refreshes every minute while open';
+}
+
+// What the figures are of, under the title. A service scope (the server's, since 0.8.31): only what its
+// repository declares — its alert rules by name and its scrape jobs; never run, nothing yet. Any other
+// (an older server): the endpoint's whole, said so.
+function scopeWords(scope, { name, endpoint }) {
+  const via = endpoint ? `, read through ${endpoint}` : '';
+  if (!isObj(scope) || scope.kind !== 'service') {
+    return `Everything ${endpoint || 'this endpoint'} reads, not only ${name}: its alerts, incidents, targets and metrics.${num(scope?.declaredJobs) ? ` Only the line on the exporters the repository declares is ${name}'s own.` : ''}`;
+  }
+  if (scope.neverRun) return `Nothing is read until ${name} has been run: the control room reads live what its repository declares.`;
+  // The declared numbers; the read's cut said beside them ("its 63 scrape jobs (read: the first 60)").
+  const jobs = num(scope.jobs) || 0, alerts = num(scope.alerts) || 0;
+  if (!jobs && !alerts) return `${name}'s repository declares no alert rule and no scrape job, so nothing live is known to be its own.`;
+  const cutJobs = isObj(scope.cut) ? num(scope.cut.jobs) || 0 : 0, cutAlerts = isObj(scope.cut) ? num(scope.cut.alerts) || 0 : 0;
+  const read = (n, cut) => (cut ? ` (read: the first ${n - cut})` : '');
+  // The alert rules without their count: the board's Alerts tile counts a burn-rate alert once per objective,
+  // the scope every rule by its name — two numbers for one thing; the jobs' count is the Exporters tile's.
+  const what = [alerts ? `the alert rules its repository names${cutAlerts ? ` (read: the first ${alerts - cutAlerts} of ${alerts})` : ''}` : '', jobs ? `its ${plural(jobs, 'scrape job')}${read(jobs, cutJobs)}` : ''].filter(Boolean).join(' and ');
+  // What the scope cannot tell apart, said: one store holds every service's series, and a job or an alert
+  // name is all a series carries of whose it is.
+  const shared = jobs
+    ? ' A service that shares one of these jobs (an exporter or a collector they all use) is counted on it too.'
+    : ' Another service\'s alert of the same name is counted too: there is no job to tell them apart.';
+  return `Only ${name}'s own: ${what}${via}.${shared}`;
 }
 
 // buildControlRoomModel({ state, serviceName, envName, mttx, now })
@@ -452,16 +493,14 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
   const first = !a && !state.error;
   const endpoint = String(a?.endpoint?.name || a?.endpoint?.origin || '');
   // Every figure but the declared exporters is the endpoint's, whatever else it reads.
-  const scope = a && a.scope?.kind !== 'service'
-    ? `Everything ${endpoint || 'this endpoint'} reads, not only ${name}: its alerts, incidents, targets and metrics.${num(a.scope?.declaredJobs) ? ` Only the line on the exporters the repository declares is ${name}'s own.` : ''}`
-    : '';
+  const scope = a ? scopeWords(a.scope, { name, endpoint }) : '';
   return {
     key: state.key, title, scope, reading: !!state.reading, first, stopped: !!state.stopped,
     error: state.error ? { text: state.error, final: !!state.stopped } : null,
     readAt: a?.readAt || null, cached: !!a?.cached,
     endpoint, next: nextOf(state),
-    status: a ? statusOf(a.alerts, num(a.timing?.windowDays) || 30, a.timing?.lastFiredAt || null, serverNow) : null,
-    kpis: a ? { mttr: mttrOf(a.timing, mttx, { readAt: a.readAt }), mttd: mttdOf(mttx, envName || a?.env?.name || '', serverNow) } : null,
+    status: a ? statusOf(a.alerts, num(a.timing?.windowDays) || 30, a.timing?.lastFiredAt || null, serverNow, { scoped: a.scope?.kind === 'service' }) : null,
+    kpis: a ? { mttr: mttrOf(a.timing, mttx, { readAt: a.readAt, scoped: a.scope?.kind === 'service' }), mttd: mttdOf(mttx, envName || a?.env?.name || '', serverNow) } : null,
     // The way to give the service its targets, from where the figures stand against them.
     targets: isObj(mttx) && !mttx.unread && (mttx.action === 'Set targets…' || mttx.action === 'Change targets…')
       ? { label: mttx.action, aria: `${mttx.action === 'Set targets…' ? 'Set' : 'Change'} the MTTD / MTTR targets of ${title}` }
@@ -474,7 +513,7 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
     insights: a ? insightsOf(a.timing, a.alerts, serverNow, a.readAt) : [],
     scrape: a ? scrapeOf(a.scrape) : null,
     alerts: a ? alertRowsOf(a.alerts, a.timing, serverNow, a.readAt) : { rows: [], more: 0 },
-    families: a ? familiesOf(a.families, a.absent) : { rows: [], note: '', absent: '' },
+    families: a ? familiesOf(a.families, a.absent, { scoped: a.scope?.kind === 'service' }) : { rows: [], note: '', absent: '' },
     calls: a?.calls || null,
   };
 }

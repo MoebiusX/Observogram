@@ -58,6 +58,43 @@ const answer = (over = {}) => ({
 const mttx = { declared: true, mttdTarget: '5m', mttrTarget: '2h', measured: null };
 const openState = () => controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer(), { now: NOW });
 
+test('the scope said under the title: only the service\'s own — the alert rules its repository names and its scrape jobs — or nothing yet when it was never run; an older server\'s answer is said as the endpoint\'s', () => {
+  const said = (scope, over = {}) => buildControlRoomModel({ state: controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer({ scope, ...over }), { now: NOW }), serviceName: 'Demo', envName: 'prod', mttx, now: NOW });
+  const own = said({ kind: 'service', jobs: 21, alerts: 58, cut: { jobs: 0, alerts: 0 } });
+  // What a job name cannot tell apart is said: a service that shares one of the jobs is counted on it too.
+  assert.equal(own.scope, 'Only Demo\'s own: the alert rules its repository names and its 21 scrape jobs, read through prod-mcp. A service that shares one of these jobs (an exporter or a collector they all use) is counted on it too.');
+  assert.match(own.kpis.mttr.basis, /The figures are this service's own: the alerts that fire on its scrape jobs, and the alerts its repository names that carry no job/);
+  assert.doesNotMatch(own.kpis.mttr.basis, /not only this service/);
+  // The declared numbers, the read's cut beside them.
+  assert.equal(said({ kind: 'service', jobs: 63, alerts: 58, cut: { jobs: 3, alerts: 0 } }).scope, 'Only Demo\'s own: the alert rules its repository names and its 63 scrape jobs (read: the first 60), read through prod-mcp. A service that shares one of these jobs (an exporter or a collector they all use) is counted on it too.');
+  assert.equal(said({ kind: 'service', jobs: 2, alerts: 0, cut: { jobs: 0, alerts: 0 } }).scope, 'Only Demo\'s own: its 2 scrape jobs, read through prod-mcp. A service that shares one of these jobs (an exporter or a collector they all use) is counted on it too.');
+  // Alert names alone: nothing tells them apart from another service's.
+  assert.equal(said({ kind: 'service', jobs: 0, alerts: 4, cut: { jobs: 0, alerts: 0 } }).scope, 'Only Demo\'s own: the alert rules its repository names, read through prod-mcp. Another service\'s alert of the same name is counted too: there is no job to tell them apart.');
+  assert.equal(said({ kind: 'service', jobs: 0, alerts: 0, cut: { jobs: 0, alerts: 0 } }).scope, 'Demo\'s repository declares no alert rule and no scrape job, so nothing live is known to be its own.');
+  // Nothing of the service's in the store: said of its alerts, never of the store's others; its families by its jobs.
+  const quietNone = said({ kind: 'service', jobs: 1, alerts: 0, cut: { jobs: 0, alerts: 0 } }, {
+    alerts: { outcome: 'empty', reason: null, evidence: false, bySeverity: { critical: 0, warning: 0, info: 0, other: 0 }, pending: 0, active: [], more: 0, otherSeverities: [] },
+    timing: { ...answer().timing, outcome: 'empty', evidence: false, incidents: 0, closed: 0, open: [] },
+    families: { outcome: 'data', reason: null, rows: [] }, absent: [{ id: 'kafka', title: 'Kafka' }],
+  });
+  assert.equal(quietNone.status.sentence, 'Nothing of this service\'s is firing, and none of its alerts has fired or been pending here in 30 days: this store holds no history of them, so quiet cannot be told from unwatched.');
+  assert.equal(quietNone.kpis.mttr.sub, 'None of its alerts has a history in this store: nothing to time.');
+  assert.deepEqual([quietNone.families.note, quietNone.families.absent], ['None of the known metric families is exposed by its scrape jobs.', 'Not exposed by its scrape jobs: Kafka.']);
+  // Never run: nothing read, said so — "Not read", never "could not be read".
+  const why = 'Demo has never been run, so nothing live is known to be its own yet — Run it first';
+  const none = { outcome: 'not-attempted', reason: why };
+  const never = said({ kind: 'service', jobs: 0, alerts: 0, neverRun: true }, { alerts: { ...none, bySeverity: null, active: [], more: 0 }, scrape: { ...none }, timing: { ...none }, families: { ...none, rows: [] }, absent: [] });
+  assert.equal(never.scope, 'Nothing is read until Demo has been run: the control room reads live what its repository declares.');
+  assert.deepEqual([never.status.word, never.status.sentence], ['Not known', `Not read: ${why}.`]);
+  assert.equal(never.kpis.mttr.sub, `Not read: ${why}.`);
+  assert.equal(never.families.note, `Not read: ${why}.`);
+  // A read that failed is still said as failed.
+  const failed = said({ kind: 'service', jobs: 1, alerts: 1, cut: { jobs: 0, alerts: 0 } }, { alerts: { outcome: 'failed', reason: 'HTTP 503', bySeverity: null, active: [], more: 0 } });
+  assert.equal(failed.status.sentence, 'The alerts could not be read: HTTP 503.');
+  // An older server (no service scope): the endpoint's, as before.
+  assert.match(said({ kind: 'endpoint', declaredJobs: 21 }).scope, /^Everything prod-mcp reads, not only Demo/);
+});
+
 test('the panel\'s state: open, reading, answered, failed — and when the next read is due (a minute, longer after a failure, never hidden, never after a final refusal)', () => {
   const s0 = controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW });
   assert.deepEqual([s0.open, s0.key, s0.reading, s0.answer], [true, '3:prod', false, null]);
