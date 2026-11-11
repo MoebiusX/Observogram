@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.8.26 — 2026-11-10
+
+**The screens are about the chain people know: exporters, alerts, dashboards and MTTD / MTTR.** The board counted everything the repository declares together — 741 things, 324 of them dashboard panels and 39 recording rules — and a reader could not tell the alerts they care about from the machinery behind them. Every kind of artefact now has a tier, Overview shows the chain alone with the rest named in a line, and Expert folds the machinery until asked for. The grade is unchanged.
+
+### Added
+- **The tiers** (`studio/artefact-tiers.mjs`, new, zero-import, vendorable). Every family of the artefact model has a tier: 1 the chain — exporters (scrape jobs), alerts (alert rules and burn-rate alerts), dashboards, the MTTD / MTTR targets —, 2 the detail — indicators, objectives, metrics, backends and storage, alert routes, chaos tests, synthetic checks, remediations, forecasts, profiling, and anything unclassified —, 3 the machinery — panels, recording rules, derived views, pipeline parts, instrumentation settings, collection, network, mesh and policy engines, imports. `declaredByTier(layered)` counts what a pack declares by link and tier, the objectives no burn-rate alert names, and the MTTD / MTTR targets (declared, or the scan's placeholder) with the newest MTTD a chaos run recorded; `comparisonByTier(diff)` counts a comparison by link, the targets, the detail and the machinery, set-asides included, adding up to its summary. Its id prefixes mirror `tools/lib/artefact-classify.mjs` `ID_RULES`, and a test holds the two equal.
+- **The runs** (`tools/lib/journey.mjs`). Every run records `drift.tiers`, the comparison by tier (without the service's set-asides, as the rest of the record), and the report gains a *The chain* line (*Exporters: 21 of 21 live · Alerts: 66 of 66 live · Dashboards: 7 not read live*).
+- **The repository's own MTTD / MTTR** (`tools/lib/repo-pack.mjs` — `readRepoPack` also returns `baselines` and `baselinesRefused`; new export `baselinesErrors`; `tools/lib/crawler.mjs`). A repository states its targets in `.observability/*.yaml` under `spec.baselines`, checked against the spec's Baselines; the scan takes them as declared (the evidence `<file>#spec.baselines`, `summary.discovered.baselines`), and a discovered chaos experiment with no expected MTTD of its own takes the team's target. Without one the placeholder stays, a scaffold as before; one that is not the spec's is left out with a warning naming the file and the reason. The crawl and compile goldens are byte-identical.
+
+### Changed
+- **Overview's board** (`studio/overview-model.mjs` — new `chainModel`, `chainDifferences`; `fidelityModel` gains `chain`, `changesModel` `beyond`; `studio/overview-view.mjs`, `studio/overview.css`).
+  - Discover is *The chain*: three tiles — Exporters, Alerts (rules and burn-rate counted under it), Dashboards — the warning a link carries (*10 of 18 objectives have no burn-rate alert.*), and the MTTD / MTTR tile (*Not declared*, the targets, the MTTD a chaos test measured). The detail is one line under it; the machinery, the stack and the coverage are behind *The machinery and the layers*. The Declared, Coverage and Unplaced tiles are gone.
+  - With a run that counts by tier, Diagnose B draws one line per link (*Exporters 21/21*, *Dashboards 7 not read live*) and the chain's alignment as its ring, and Remediate counts the chain's changes alone and says the rest in one line (*Beyond the chain, 31 details differ: 31 metrics. 4 more run live, not declared.* — what differs from the declaration, live-only things apart, as the board's other counts). The timed sentence and the next step name the chain first (*the chain matches what live showed: its dashboards could not be read. 31 details differ beyond it.*; *Fix the 3 things in the chain the live side does differently.*). A run recorded before draws the four counts of everything, as before.
+  - The board's import closure gains `artefact-tiers.mjs` (`docs/VENDORING.md`).
+- **Expert folds the machinery** (`studio/discover-board.mjs` — `boardGroupsHtml` takes `machinery`, new `MACHINERY_GROUPS`; `studio/layers-view.mjs`, `studio/compare-view.mjs`, `studio/assessment-page.mjs` — new `MACHINERY_GROUP`; `studio/state.mjs` — new `setShowMachinery`, `SHOW_MACHINERY_KEY`). Discover's board draws what people know and the detail; each band says what it folds (*276 panels · 39 recording rules*) with **Show the machinery**, and a *Machinery* switch above the bands draws it in Discover and in Compare's side by side. The switch is the browser's preference (`studioShowMachinery.v1`, like Overview or Expert), so it holds through Overview and across workspaces. Diagnose's differences put the machinery's in one closed row of their own, last, with its switch.
+- **Docs.** `README.md` (the board, *What people know, and what they do not*, a repository's `spec.baselines`, Discover's machinery), `docs/USER_JOURNEY.md`, `docs/VENDORING.md`; `docs/img/overview-board.png` and `docs/img/expert-discover.png` retaken.
+
+### Not here
+- The grade is computed as before: the tiers sort what is shown and counted.
+- The open layer's own toggles (Include the metric inventory and scrape jobs, the dashboard panels, the recording rules) are unchanged.
+- The board for a pack whose artefacts carry another toolchain's ids counts its chain by the artefact model's id prefixes only.
+
+### Tests
+- `tools/test-artefact-tiers.mjs` (new): the id prefixes against the model's, a tier and words for every family, a pack and a comparison by tier (set-asides, placeholders, families the live side could not read, the slots adding up to the summary), the lines.
+- `tools/test-overview-model.mjs` +3: `chainModel` (the links, the objectives without an alert, MTTD / MTTR declared, measured, placeholder), the chain against live (`fidelityModel`, `changesModel`, `stillTrueModel`, `nextActionModel`, an older record), the board drawn with both; the board's render test and its pack stub follow the new Discover, the import closure gains the module, the differences list's machinery row.
+- `tools/test-discover-rows.mjs` +1: the folded groups match the families' homes and tiers, a band folded and drawn whole. `tools/test-chaos-detect.mjs` +2: `spec.baselines` read, refused, declared in a scan, the placeholder without it. `tools/test-journey.mjs`: `drift.tiers` with and without set-asides, the report's line.
+- `npm run test:golden:board`: every golden byte-identical (they draw the machinery); one new, `krystaline-repo-carlos.folded.board.html`, the board as Discover first draws it.
+- Cut as 0.8.26: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1836 → 1850.
+
 ## 0.8.25 — 2026-11-10
 
 **A difference with live can be set aside for a service: under development, or not this service's.** The comparison takes everything it finds as the service's — a metric the repository declares and production does not run yet counts as missing, a rule production runs for another team as undeclared — and nothing told it otherwise. A person now confirms or adapts that while diagnosing, and the grade, the counts, the board and every run go by it, always saying how many are set aside.

@@ -14,6 +14,7 @@ import { escapeHtml } from './util.mjs';
 import { classifyArtefact, requireTaxonomy } from './taxonomy.mjs';
 import { verdictBadgeHtml } from './verdict-html.mjs';
 import { glossaryGroupMarkHtml, glossaryLabelHtml } from './glossary.mjs';
+import { isMachinery, countsInWords } from './artefact-tiers.mjs';
 
 // Items a group draws before "+N more" (which opens the layer's full list).
 export const BOARD_ITEMS_SHOWN = 6;
@@ -195,6 +196,14 @@ const DRAW = {
 // Which drawings lay their items out as tiles (a grid) instead of lines.
 const TILE_DRAWS = new Set(['sli', 'slo', 'dash']);
 
+// The groups every family homed in is the machinery (studio/artefact-tiers.mjs
+// tier 3: instrumentation settings, pipeline parts, recording rules, derived
+// views, panels, the platform extensions, imports): folded with it, even
+// empty. A group that mixes tiers (Receivers holds the scrape jobs beside the
+// pipeline receivers) stays, with its machinery folded out of it.
+// tools/test-discover-rows.mjs holds this list to FAMILY_HOME and the tiers.
+export const MACHINERY_GROUPS = Object.freeze(['otel', 'prc', 'qry', 'view', 'panel', 'net', 'poe', 'mesh', 'col', 'imp']);
+
 // ---------- a layer's groups ----------
 
 /**
@@ -259,11 +268,31 @@ function groupHtml(g, layerId, annotations) {
  * The groups of one layer band, as HTML. `annotations` is the pack's
  * meta.annotations: an empty group whose family the pack's producer could
  * not look for says so (see UNOBSERVED_GROUPS) instead of "None in this pack".
+ * `machinery`: draw the machinery too (the studio's "Show the machinery").
+ * Without it the band draws what people know and the detail, and one line
+ * says what is folded, by family, with the button that shows it — the board
+ * never hides an artefact without saying so.
  */
-export function boardGroupsHtml(layerId, entries, { annotations = null } = {}) {
+export function boardGroupsHtml(layerId, entries, { annotations = null, machinery = false } = {}) {
   const { flow, groups } = boardGroups(layerId, entries);
   if (!groups.length) return '<div class="dv-groups"><p class="dvb-none">Nothing on this layer</p></div>';
-  return `<div class="dv-groups${flow ? ' is-flow' : ''}">${groups.map(g => groupHtml(g, layerId, annotations)).join('')}</div>`;
+  if (machinery) return `<div class="dv-groups${flow ? ' is-flow' : ''}">${groups.map(g => groupHtml(g, layerId, annotations)).join('')}</div>`;
+  const folded = {};
+  const kept = [];
+  for (const g of groups) {
+    const own = g.entries.filter((e) => {
+      const family = classifyArtefact(e.a).family;
+      if (!isMachinery(family)) return true;
+      folded[family] = (folded[family] || 0) + 1;
+      return false;
+    });
+    if (own.length || (!g.entries.length && !MACHINERY_GROUPS.includes(g.id))) kept.push({ ...g, entries: own });
+  }
+  const words = countsInWords(folded);
+  const fold = words.length ? `
+    <p class="dvb-fold"><button type="button" class="dvb-fold-btn" data-ux-action="dv-machinery" data-dv-focus="machinery-${escapeHtml(layerId)}" aria-pressed="false" title="What makes the rest work: shown in Discover and Compare once you ask.">Show the machinery</button> <span class="dvb-fold-what">${escapeHtml(words.join(' · '))}</span></p>` : '';
+  const body = kept.length ? kept.map(g => groupHtml(g, layerId, annotations)).join('') : `<p class="dvb-none">${words.length ? 'Only the machinery on this layer' : 'Nothing on this layer'}</p>`;
+  return `<div class="dv-groups${flow && kept.length > 1 ? ' is-flow' : ''}">${body}</div>${fold}`;
 }
 
 // ---------- the board's head: which pack this is ----------

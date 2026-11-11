@@ -257,6 +257,46 @@ p.ov-scan__sum { cursor: default; }
 .ov-comp__row:last-child { padding-bottom: 0; }
 .ov-comp__name { color: var(--og-text-2); }
 .ov-comp__n { font-weight: 650; color: var(--og-text); font-variant-numeric: tabular-nums; text-align: right; }
+/* The chain: three tiles in the order a signal travels, the warnings under them, then MTTD / MTTR.
+   The tone is health (the top border, the count's colour never changes); the icon stays neutral. */
+.ov-chain { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: 4px; }
+.ov-chain__arrow { align-self: center; font: 500 14px/1 var(--og-font); color: var(--og-muted); }
+.ov-clink { --ov-t: var(--og-muted); display: grid; align-content: start; gap: 2px; min-width: 0; padding: 9px 10px; border: 1px solid var(--og-line); border-top: 3px solid var(--ov-t); border-radius: 8px; background: var(--og-panel-2); }
+.ov-clink--ok { --ov-t: var(--og-accent); }
+.ov-clink--warn { --ov-t: var(--og-warn); }
+.ov-clink--fail { --ov-t: var(--og-fail); }
+.ov-clink__head { display: flex; align-items: center; gap: 5px; min-width: 0; font: 600 12.5px/1.2 var(--og-font); color: var(--og-text); }
+.ov-clink__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-clink__ic { width: 15px; height: 15px; color: var(--og-text-2); }
+.ov-clink__n { font: 650 28px/1.05 var(--og-font); letter-spacing: -0.03em; color: var(--og-text); font-variant-numeric: tabular-nums; }
+.ov-clink__parts { font: 400 11.5px/1.3 var(--og-font); overflow-wrap: anywhere; }
+.ov-chain__notes { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font: 400 12.5px/1.35 var(--og-font); }
+.ov-chain__note--warn { color: var(--og-warn); }
+.ov-chain__note--fail { color: var(--og-fail); }
+.ov-mttx { --ov-t: var(--og-muted); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "ic name val" "ic note note"; column-gap: 8px; row-gap: 2px; align-items: center; padding: 9px 12px; border: 1px solid var(--og-line); border-left: 3px solid var(--ov-t); border-radius: 8px; background: var(--og-panel-2); }
+.ov-mttx--ok { --ov-t: var(--og-accent); }
+.ov-mttx--warn { --ov-t: var(--og-warn); }
+.ov-mttx--fail { --ov-t: var(--og-fail); }
+.ov-mttx__ic { grid-area: ic; align-self: start; width: 18px; height: 18px; margin-top: 1px; color: var(--og-text-2); }
+.ov-mttx__name { grid-area: name; font: 600 13px/1.25 var(--og-font); color: var(--og-text); }
+.ov-mttx__val { grid-area: val; font: 650 14px/1.25 var(--og-font); color: var(--ov-t); white-space: nowrap; }
+.ov-mttx__note { grid-area: note; font: 400 12px/1.35 var(--og-font); color: var(--og-text-2); }
+.ov-detail { margin: 0; font: 400 12.5px/1.45 var(--og-font); color: var(--og-text-2); }
+.ov-detail__h { margin-right: 4px; font: 600 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
+.ov-repo__line { font: 400 12.5px/1.4 var(--og-font); color: var(--og-text-2); }
+.ov-repo__cov { margin: 6px 0 0; font: 400 12px/1.35 var(--og-font); }
+/* The chain against live, in Diagnose: a row per link. */
+.ov-clive { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.ov-clive__row { --ov-t: var(--og-muted); display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "ic name line n"; column-gap: 7px; align-items: center; padding: 5px 9px; border: 1px solid var(--og-line); border-left: 3px solid var(--ov-t); border-radius: 8px; background: var(--og-panel-2); }
+.ov-clive__row--ok { --ov-t: var(--og-accent); }
+.ov-clive__row--warn { --ov-t: var(--og-warn); }
+.ov-clive__row--fail { --ov-t: var(--og-fail); }
+.ov-clive__ic { grid-area: ic; width: 15px; height: 15px; color: var(--og-text-2); }
+.ov-clive__name { grid-area: name; font: 600 13px/1.2 var(--og-font); color: var(--og-text); }
+.ov-clive__n { grid-area: n; font: 650 18px/1.1 var(--og-font); color: var(--ov-t); font-variant-numeric: tabular-nums; }
+.ov-clive__n small { font: 600 12px/1 var(--og-font); color: var(--og-muted); }
+.ov-clive__line { grid-area: line; min-width: 0; font: 400 11.5px/1.3 var(--og-font); text-align: right; overflow-wrap: anywhere; }
+.ov-beyond { margin: 8px 0 0; font: 400 12.5px/1.4 var(--og-font); }
 
 /* Diagnose: the status strip, then the two groups. */
 .ov-status { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--og-line); border-radius: 8px; background: var(--og-panel); font: 500 12.5px/1.3 var(--og-font); color: var(--og-text-2); }
@@ -356,6 +396,12 @@ p.ov-scan__sum { cursor: default; }
   .ov-cell { height: 18px; line-height: 16px; font-size: 10px; }
   .ov-stat { padding: 6px 8px; }
   .ov-stat dd { font-size: 19px; }
+  .ov-clink { padding: 6px 8px; }
+  .ov-clink__n { font-size: 24px; }
+  .ov-mttx { padding: 6px 10px; }
+  .ov-clive__row { padding: 3px 8px; }
+  .ov-clive__n { font-size: 16px; }
+  .ov-beyond { margin-top: 6px; }
   .ov-shield { width: 62px; height: 62px; border-radius: 14px; }
   .ov-shield__letter { font-size: 36px; }
   .ov-result { margin-top: 8px; }

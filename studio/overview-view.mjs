@@ -189,6 +189,10 @@ const ICON_PATHS = {
   add: 'M12 5v14M5 12h14',
   update: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5',
   review: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
+  exporters: 'M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0V7ZM12 16v5',
+  alerts: 'M6 16v-5a6 6 0 1 1 12 0v5l2 2H4l2-2ZM10 20a2 2 0 0 0 4 0',
+  dashboards: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',
+  mttx: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 4v5l3 2',
 };
 const iconHtml = (name, cls = '') => `<svg class="ov-ic${cls ? ` ${cls}` : ''}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${ICON_PATHS[name] || ''}"></path></svg>`;
 
@@ -278,21 +282,74 @@ function scanHtml(S) {
     : `<p class="ov-scan ov-scan--${escapeHtml(S.tone)} ov-scan__sum">${escapeHtml(S.sentence)}</p>`;
 }
 
-function discoverColHtml(L, S = null) {
-  const body = L
-    ? `${repoSummaryHtml(L)}
+// The chain (overview-model.mjs chainModel): what people know — the
+// exporters scraped, the alerts that fire, the dashboards they open — as
+// three tiles in the order a signal travels, then the MTTD / MTTR the team
+// holds itself to. A link's warning (objectives no alert covers, none found)
+// is a line under the row: the tiles stay a picture.
+function chainHtml(C) {
+  const tiles = C.links.map((l, i) => `${i ? '<span class="ov-chain__arrow" aria-hidden="true">→</span>' : ''}
+          <div class="ov-clink ov-clink--${escapeHtml(l.tone)}" role="listitem" title="${escapeHtml(`${l.count} ${l.words} — ${l.hint}`)}">
+            <span class="ov-clink__head">${iconHtml(l.key, 'ov-clink__ic')}<span class="ov-clink__name">${escapeHtml(l.name)}</span></span>
+            <span class="ov-clink__n">${l.count}</span>${l.parts ? `
+            <span class="ov-clink__parts og-muted">${escapeHtml(l.parts)}</span>` : ''}
+          </div>`).join('');
+  const notes = C.links.filter((l) => l.note).map((l) => `<li class="ov-chain__note ov-chain__note--${escapeHtml(l.tone)}">${escapeHtml(l.note)}</li>`).join('');
+  const m = C.mttx;
+  return `
+      <div class="ov-chain" role="list" aria-label="The chain: exporters, alerts, dashboards">${tiles}
+      </div>${notes ? `
+      <ul class="ov-chain__notes">${notes}</ul>` : ''}
+      <div class="ov-mttx ov-mttx--${escapeHtml(m.tone)}" title="${escapeHtml(m.hint)}">
+        ${iconHtml('mttx', 'ov-mttx__ic')}
+        <span class="ov-mttx__name">MTTD / MTTR</span>
+        <span class="ov-mttx__val">${escapeHtml(m.targets || 'Not declared')}</span>
+        <span class="ov-mttx__note">${escapeHtml(m.measured || m.note)}</span>
+      </div>`;
+}
+
+// Under the chain, the detail in one line; the machinery and the layers
+// behind one disclosure, which stays open or closed through a repaint.
+function machineryHtml(C, L) {
+  const machinery = C.machinery.count ? `<span class="ov-repo__line">${escapeHtml(C.machinery.line)}</span>` : '<span class="ov-repo__line og-muted">No machinery declared.</span>';
+  const layers = L ? `
+        <div class="ov-repo__layers">
+          ${kindHeadHtml(L.rows[0].kinds)}
+          <ol class="ov-stack" aria-label="The stack, top down">${L.rows.map(layerRowHtml).join('')}</ol>
+          <p class="ov-repo__cov og-muted">${escapeHtml(L.coverage)}${L.unplacedNote ? ` ${escapeHtml(L.unplacedNote)}` : ''}</p>
+        </div>` : '';
+  return `
+      <details class="ov-repo"${layersOpen ? ' open' : ''}>
+        <summary class="ov-repo__sum">
+          <span class="ov-repo__head"><span class="ov-repo__title">The machinery and the layers</span><span class="ov-repo__toggle" aria-hidden="true"><span class="ov-repo__show">Show</span><span class="ov-repo__hide">Hide</span></span></span>
+          ${machinery}
+        </summary>${layers}
+      </details>`;
+}
+
+function discoverColHtml(L, S = null, C = null) {
+  const body = C
+    ? `${chainHtml(C)}
+      ${C.detail.count ? `<p class="ov-detail"><span class="ov-detail__h">Under it</span> ${escapeHtml(C.detail.line)}</p>` : ''}
+      ${machineryHtml(C, L)}
+      ${scanHtml(S)}`
+    : L
+      ? `${repoSummaryHtml(L)}
       <dl class="ov-stats">
         <div class="ov-stat" title="${escapeHtml(L.lead)}"><dt>Declared</dt><dd>${L.declared}</dd></div>
         <div class="ov-stat" title="${escapeHtml(L.coverage)}"><dt>Coverage</dt><dd>${L.coveragePct}<small>%</small></dd></div>
         <div class="ov-stat" title="${escapeHtml(L.unplacedNote || 'Everything found its layer.')}"><dt>Unplaced</dt><dd>${L.unplaced}</dd></div>
       </dl>
       ${scanHtml(S)}`
-    : reading('the repository');
+      : reading('the repository');
+  const [title, sub] = C
+    ? ['The chain', 'Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them']
+    : ['Layers', 'The stack, top down, as the repository declares it'];
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
       <header class="ov-col__head">
-        <h2 class="ov-card__h" id="ov-discover-h">Layers</h2>
-        <p class="ov-card__sub">The stack, top down, as the repository declares it</p>
+        <h2 class="ov-card__h" id="ov-discover-h">${title}</h2>
+        <p class="ov-card__sub">${sub}</p>
         <span class="ov-src" title="What the repository declares">REPO</span>
       </header>
       ${body}
@@ -342,9 +399,11 @@ const ringTone = (pct) => (pct === null ? 'neutral' : pct >= 85 ? 'ok' : pct >= 
 const RING_R = 38;
 const RING_C = 2 * Math.PI * RING_R;
 function ringHtml(f) {
-  const pct = f?.known && f.alignmentPct !== null ? Math.max(0, Math.min(100, f.alignmentPct)) : null;
+  // With the chain counted, the ring is the chain's alignment, not everything's.
+  const raw = f?.known ? (f.chain ? f.chain.pct : f.alignmentPct) : null;
+  const pct = raw !== null && raw !== undefined ? Math.max(0, Math.min(100, raw)) : null;
   const offset = pct === null ? RING_C : RING_C * (1 - pct / 100);
-  const label = pct === null ? 'Not known' : `${Math.round(pct)} in 100 aligned`;
+  const label = pct === null ? 'Not known' : `${Math.round(pct)} in 100${f.chain ? ' of the chain' : ''} aligned`;
   return `
         <svg class="ov-ring ov-ring--${ringTone(pct)}" viewBox="0 0 88 88" role="img" aria-label="${escapeHtml(label)}">
           <circle class="ov-ring__track" cx="44" cy="44" r="${RING_R}"></circle>
@@ -354,9 +413,17 @@ function ringHtml(f) {
         </svg>`;
 }
 
+// The chain against live, one line per link: its name, what else holds in
+// words ("7 not read live"), and how many of the declared run live (21/21).
+function chainLiveHtml(chain) {
+  return `<ul class="ov-clive">${chain.links.map((l) => `<li class="ov-clive__row ov-clive__row--${escapeHtml(l.tone)}"${l.of ? ` title="${escapeHtml(`${l.live} of ${l.of} declared ${l.name.toLowerCase()} live`)}"` : ''}>${iconHtml(l.key, 'ov-clive__ic')}<span class="ov-clive__name">${escapeHtml(l.name)}</span><span class="ov-clive__line og-muted">${escapeHtml(l.line)}</span><span class="ov-clive__n">${l.of ? `${l.live}<small>/${l.of}</small>` : '–'}</span></li>`).join('')}</ul>`;
+}
+
 function fidelityHtml(f) {
   const tiles = f?.known
-    ? `<div class="ov-tiles">${f.tiles.map((t) => `<div class="ov-tile ov-tile--${escapeHtml(t.tone)}" title="${escapeHtml(t.note)}"><span class="ov-tile__n">${t.value}</span><span class="ov-tile__l">${escapeHtml(t.label)}</span></div>`).join('')}</div>`
+    ? (f.chain
+      ? chainLiveHtml(f.chain)
+      : `<div class="ov-tiles">${f.tiles.map((t) => `<div class="ov-tile ov-tile--${escapeHtml(t.tone)}" title="${escapeHtml(t.note)}"><span class="ov-tile__n">${t.value}</span><span class="ov-tile__l">${escapeHtml(t.label)}</span></div>`).join('')}</div>`)
     : `<p class="ov-fid__note og-muted">${escapeHtml(f?.note || 'Reading…')}</p>`;
   const c = f?.known ? f.chains : null;
   const chains = c ? `
@@ -436,7 +503,7 @@ const CHANGE_SHORT = { add: 'declared, not live', update: 'live, not as declared
 function remediateColHtml(c, n, primary) {
   const items = c
     ? (c.known
-      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value}</span><span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span></div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}`
+      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value}</span><span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span></div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}${c.beyond ? `<p class="ov-col__note ov-beyond og-muted">${escapeHtml(c.beyond)}</p>` : ''}`
       : `<p class="ov-col__lead og-muted">${escapeHtml(c.sentence)}</p>`)
     : reading('the last check');
   return `
@@ -456,7 +523,7 @@ function boardBodyHtml(model) {
   return `
     ${stagesHtml()}
     <div class="ov-board">
-      ${discoverColHtml(b.layers, b.scan)}
+      ${discoverColHtml(b.layers, b.scan, b.chain)}
       ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary, model.service?.id ?? null)}
       ${remediateColHtml(b.changes, model.next, model.primary)}
     </div>`;

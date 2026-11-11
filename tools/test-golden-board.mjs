@@ -112,7 +112,10 @@ export function boardEntries(pack, layerId) {
   return (layers[layerId] || []).map(a => ({ a, sub: null, key: key(null, a.id) }));
 }
 
-export function renderBoard(pack, { env = '' } = {}) {
+// `machinery`: the board with its machinery drawn (the default here, so the
+// goldens keep every group a family moves out of); false is the board as
+// Discover first draws it, the machinery folded into one line per band.
+export function renderBoard(pack, { env = '', machinery = true } = {}) {
   const bands = LAYER_DEFS.map(def => ({ id: def.id, entries: boardEntries(pack, def.id) }));
   const artefacts = bands.flatMap(b => b.entries.map(e => e.a));
   const head = boardHeadHtml({
@@ -124,7 +127,7 @@ export function renderBoard(pack, { env = '' } = {}) {
   });
   const groups = bands
     .filter(b => !(b.id === 'L2X' && !b.entries.length))   // optional in the spec: no band when empty
-    .map(b => `<!-- ${b.id} -->\n${boardGroupsHtml(b.id, b.entries, { annotations: pack.meta?.annotations })}`);
+    .map(b => `<!-- ${b.id} -->\n${boardGroupsHtml(b.id, b.entries, { annotations: pack.meta?.annotations, machinery })}`);
   return `${head}\n${groups.join('\n')}\n`;
 }
 
@@ -323,6 +326,8 @@ if (isMain) {
     const pack = loadPack(path);
     checkGolden(`${id}.board.html`, renderBoard(pack), 'board');
     checkGolden(`${id}.families.json`, JSON.stringify(familiesOf(pack), null, 2) + '\n', 'families');
+    // A real repository's scan, as Discover first draws it: the machinery folded.
+    if (id === 'krystaline-repo-carlos') checkGolden(`${id}.folded.board.html`, renderBoard(pack, { machinery: false }), 'board, the machinery folded');
   }
   process.stdout.write('\nthe override over an adapted pack\n');
   assert(withOverride.board === paymentBoard, 'payment-service: the board is byte-identical with the override installed');

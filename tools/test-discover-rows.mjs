@@ -16,7 +16,8 @@ import {
   artefactRowHtml, artefactStatus, inferredFrom, resolveInferredRule, artefactKind, artefactCardHtml,
   DISCOVER_VIEWS, DISCOVER_VIEW_DEFAULT, discoverView, artefactLightRowHtml, artefactStatusMark, artefactStatusWords, STATUS_MARKS,
 } from '../studio/card-html.mjs';
-import { BOARD_LAYERS, BOARD_ITEMS_SHOWN, boardGroups, boardGroupsHtml, boardHeadHtml, objectivePct } from '../studio/discover-board.mjs';
+import { BOARD_LAYERS, BOARD_ITEMS_SHOWN, MACHINERY_GROUPS, boardGroups, boardGroupsHtml, boardHeadHtml, objectivePct } from '../studio/discover-board.mjs';
+import { isMachinery } from '../studio/artefact-tiers.mjs';
 import { bindTaxonomy, classifyArtefact, taxonomyBound, UNBOUND } from '../studio/taxonomy.mjs';
 import * as artefactClassify from './lib/artefact-classify.mjs';
 import {
@@ -381,6 +382,32 @@ test('the board places every artefact of a layer in a group, and hides none', ()
   assert.deepEqual(l2.filter(g => g.entries.length).map(g => g.id), ['rcv', 'exp', 'metrics']);
   // The group a BOARD_LAYERS entry draws is the family's home (tools/lib/artefact-classify.mjs FAMILY_HOME).
   for (const [layer, def] of Object.entries(BOARD_LAYERS)) for (const g of def.groups) assert.ok(!('prefixes' in g), `${layer}/${g.id}: the board holds no prefix table of its own`);
+});
+
+test('the machinery folds: a band draws what people know and the detail, says what it folds by family with the button that shows it, and draws it all when asked', () => {
+  // The groups folded whole are exactly those every family homed in is the machinery.
+  for (const [layer, def] of Object.entries(BOARD_LAYERS)) {
+    for (const g of def.groups) {
+      const homed = Object.entries(artefactClassify.FAMILY_HOME).filter(([, h]) => h.layer === layer && h.group === g.id).map(([f]) => f);
+      if (!homed.length) continue;
+      assert.equal(MACHINERY_GROUPS.includes(g.id), homed.every(isMachinery), `${layer}/${g.id} (${homed.join(', ')})`);
+    }
+  }
+  const entries = (L) => (carlos.layers[L] || []).map((a, i) => ({ a, key: `${L}//${a.id}#${i}` }));
+  const l3 = boardGroupsHtml('L3', entries('L3'));
+  assert.deepEqual([...l3.matchAll(/data-group="([^"]+)"/g)].map((m) => m[1]), ['dash'], 'the dashboards alone: recording rules, derived views and panels fold');
+  assert.ok(l3.includes('<p class="dvb-fold"><button type="button" class="dvb-fold-btn" data-ux-action="dv-machinery" data-dv-focus="machinery-L3" aria-pressed="false"') && l3.includes('<span class="dvb-fold-what">276 panels · 39 recording rules</span></p>'), 'said, by family, with its button');
+  assert.ok(!l3.includes('is-flow'), 'one group left: no flow to draw');
+  const l2 = boardGroupsHtml('L2', entries('L2'));
+  assert.deepEqual([...l2.matchAll(/data-group="([^"]+)"/g)].map((m) => m[1]), ['rcv', 'exp', 'metrics'], 'a group of mixed tiers stays, its machinery folded out of it');
+  assert.ok(l2.includes('aria-label="Receivers: 21"') && l2.includes('<span class="dvb-fold-what">2 pipeline receivers · 4 pipeline processors · 3 pipeline exporters · 1 telemetry SDK setting</span>'), 'the scrape jobs stay; the pipeline exporters say themselves once');
+  assert.ok(boardGroupsHtml('GOV', entries('GOV')).includes('<p class="dvb-none">Nothing on this layer</p>'), 'an empty band of machinery groups has nothing to say it folds');
+  assert.ok(boardGroupsHtml('L2X', entries('L2X')).includes('<p class="dvb-none">Only the machinery on this layer</p>'));
+  assert.ok(!boardGroupsHtml('L1', entries('L1')).includes('dvb-fold'), 'nothing folded: no line');
+  // Asked for, the band is the board as it always was.
+  const all = boardGroupsHtml('L3', entries('L3'), { machinery: true });
+  assert.deepEqual([...all.matchAll(/data-group="([^"]+)"/g)].map((m) => m[1]), ['qry', 'view', 'dash', 'panel']);
+  assert.ok(!all.includes('dvb-fold') && all.includes('is-flow'));
 });
 
 test('a typed foreign artefact lands in its family\'s group on its own layer; the board never moves an artefact across layers', () => {

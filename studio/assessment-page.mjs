@@ -23,6 +23,7 @@ import { escapeHtml } from './util.mjs';
 import { termHtml } from './ux-kit-pure.mjs';
 import { GRADE_CRITERIA, GRADE_CRITERION_KEYS, INSTRUMENT_GRADE_SCALE, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER } from './diagnostic-grade.mjs';
 import { KIND_WORDS, SET_ASIDE_KINDS, setAsideId } from './set-asides.mjs';
+import { isMachinery } from './artefact-tiers.mjs';
 
 const LABEL = Object.fromEntries(GRADE_CRITERIA.map((c) => [c.key, c.label]));
 
@@ -245,6 +246,9 @@ export function setAsideWords(rec, state = 'active') {
 //   stale            saved set-asides that match no difference now (retired, gone)
 //   open             the ids of the layers drawn open ('declared:L2')
 //   layerTitle(L)    a layer's name ("L2 Metrics/Logs/Traces")
+// The group the machinery's differences share (its data-aside-group is `<side>:machinery`).
+export const MACHINERY_GROUP = 'machinery';
+
 export function setAsideListHtml({ declared = [], live = [], stale = [], open = [], layerTitle = (L) => L } = {}) {
   const opened = new Set(open);
   const total = declared.length + live.length;
@@ -262,18 +266,22 @@ export function setAsideListHtml({ declared = [], live = [], stale = [], open = 
             <button type="button" role="switch" class="diag-switch" aria-checked="${on ? 'true' : 'false'}" aria-label="${escapeHtml(`Set aside ${x.label}`)}" data-ux-action="diag-aside-toggle:${escapeHtml(x.id)}"><span class="diag-switch-knob" aria-hidden="true"></span></button>
           </li>`;
   };
+  // A row's group: its layer, or the machinery (studio/artefact-tiers.mjs tier 3: panels,
+  // recording rules, pipeline parts), which comes last, whatever layer it sits on.
+  const groupOf = (x) => (isMachinery(x.kind) ? MACHINERY_GROUP : x.layer);
+  const titleOf = (L) => (L === MACHINERY_GROUP ? 'The machinery — panels, recording rules, pipeline parts' : layerTitle(L));
   const side = (key, rows, words) => {
     if (!rows.length) return '';
-    const layers = [...new Set(rows.map((x) => x.layer))];
+    const layers = [...new Set(rows.map(groupOf))].sort((a, b) => (a === MACHINERY_GROUP) - (b === MACHINERY_GROUP));
     const groups = layers.map((L) => {
-      const own = rows.filter((x) => x.layer === L);
+      const own = rows.filter((x) => groupOf(x) === L);
       const n = own.filter((x) => x.tried).length;
       const all = n === own.length;
       const gid = `${key}:${L}`;
       return `
         <details class="diag-aside-layer"${opened.has(gid) ? ' open' : ''} data-aside-group="${escapeHtml(gid)}">
-          <summary class="diag-aside-sum"><span class="diag-more-caret" aria-hidden="true"></span><span class="diag-aside-layer-name">${escapeHtml(layerTitle(L))}</span><span class="diag-aside-layer-n">${own.length}${n ? ` · ${n} set aside` : ''}</span>
-            <button type="button" role="switch" class="diag-switch" aria-checked="${all ? 'true' : 'false'}" aria-label="${escapeHtml(`Set aside all ${own.length} in ${layerTitle(L)}`)}" title="${all ? 'Every one is set aside: switch off to count them again.' : 'Set every one of them aside.'}" data-ux-action="diag-aside-group:${escapeHtml(gid)}"><span class="diag-switch-knob" aria-hidden="true"></span></button></summary>
+          <summary class="diag-aside-sum"><span class="diag-more-caret" aria-hidden="true"></span><span class="diag-aside-layer-name">${escapeHtml(titleOf(L))}</span><span class="diag-aside-layer-n">${own.length}${n ? ` · ${n} set aside` : ''}</span>
+            <button type="button" role="switch" class="diag-switch" aria-checked="${all ? 'true' : 'false'}" aria-label="${escapeHtml(`Set aside all ${own.length} in ${L === MACHINERY_GROUP ? 'the machinery' : titleOf(L)}`)}" title="${all ? 'Every one is set aside: switch off to count them again.' : 'Set every one of them aside.'}" data-ux-action="diag-aside-group:${escapeHtml(gid)}"><span class="diag-switch-knob" aria-hidden="true"></span></button></summary>
           <ul class="diag-aside-items">${own.map(item).join('')}
           </ul>
         </details>`;

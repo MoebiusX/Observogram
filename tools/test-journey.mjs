@@ -853,6 +853,16 @@ try {
       'the record names the set that held (its fingerprint) and how many it left out, by side', aside.grade.setAside);
     assert(JSON.stringify(aside.branches) === JSON.stringify(plain.branches), 'the chain history is the engine\'s: a set-aside says nothing of what runs', { aside: aside.branches.length, plain: plain.branches.length });
     assert(!('setAside' in plain.grade) && !('setAside' in plain.drift), 'a run handed none carries no setAside key', { grade: Object.keys(plain.grade), drift: Object.keys(plain.drift) });
+    // --- the same comparison by tier: the chain's links, the detail, the machinery (studio/artefact-tiers.mjs) ---
+    const { comparisonByTier, chainLine } = await import('../studio/artefact-tiers.mjs');
+    assert(JSON.stringify(plain.drift.tiers) === JSON.stringify(comparisonByTier(fileDiff)), 'each run records its comparison by tier', plain.drift.tiers);
+    const tierSum = (k) => ['exporters', 'alerts', 'dashboards', 'mttx', 'detail', 'machinery'].reduce((n, t) => n + plain.drift.tiers[t][k], 0);
+    assert(tierSum('declaredNotLive') === plain.drift.declaredNotLive && tierSum('liveNotDeclared') === plain.drift.liveNotDeclared && tierSum('drifted') === plain.drift.drifted,
+      'the tiers add up to the record\'s own counts', { tiers: plain.drift.tiers, drift: plain.drift });
+    assert(JSON.stringify(aside.drift.tiers) === JSON.stringify(comparisonByTier(asideDiff)) && Object.values(aside.drift.tiers).reduce((n, t) => n + t.setAside, 0) === asideDiff.setAsides.declared,
+      'a run with set-asides counts its tiers without them, and says how many each holds aside', aside.drift.tiers);
+    assert(renderJourneyMarkdown(plain).includes(`| The chain | ${chainLine(plain.drift.tiers)} |`), 'the report says the chain on a line of its own', chainLine(plain.drift.tiers));
+    assert(!renderJourneyMarkdown({ ...plain, drift: { ...plain.drift, tiers: undefined } }).includes('| The chain |'), 'a record written before the tiers has no chain line');
     for (const none of [null, [], 'x', [{ key: 'no-colons', side: 'declared' }]]) {
       const r = await runJourney(fewerDef(), { setAside: none });
       assert(r.grade.score === plain.grade.score && r.drift.declaredNotLive === plain.drift.declaredNotLive, 'set-asides null, empty, not a list or naming nothing: the comparison as the engine made it', { none, grade: r.grade });

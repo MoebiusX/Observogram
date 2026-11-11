@@ -115,6 +115,7 @@ import {
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD, GRADE_CRITERION_KEYS } from '../../studio/diagnostic-grade.mjs';
 import { applySetAsides, SET_ASIDE_KINDS, SET_ASIDE_MAX, SET_ASIDE_SIDES } from '../../studio/set-asides.mjs';
+import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1424,6 +1425,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       ...(diff.summary?.partlyCompared ? { partlyCompared: diff.summary.partlyCompared } : {}),
       // Only when set-asides were asked for: the differences left out of the counts above, by side.
       ...(aside ? { setAside: { declaredNotLive: aside.declared, liveNotDeclared: aside.live } } : {}),
+      // The same comparison by tier (studio/artefact-tiers.mjs): the chain's
+      // links — exporters, alerts, dashboards — each, then the detail and the
+      // machinery, so a screen can say the chain without the noise.
+      tiers: comparisonByTier(diff),
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
     // On-wire liveness of the vantage point itself (Pack B annotations).
@@ -1713,6 +1718,7 @@ export function renderJourneyMarkdown(r) {
     `| Scope | env=${r.scope.env || '-'} service=${r.scope.service || '-'} mode=${r.scope.scopeMode || 'default'} |`,
     `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%)${Array.isArray(r.grade.off) && r.grade.off.length ? ` — on ${GRADE_CRITERION_KEYS.length - r.grade.off.length} of ${GRADE_CRITERION_KEYS.length} criteria (not graded: ${r.grade.off.join(', ')})` : ''} |`,
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
+    ...(r.drift.tiers ? [`| The chain | ${mdCell(chainLine(r.drift.tiers))} |`] : []),
     `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.declaredAhead ? `${r.drift.declaredAhead} declared ahead · ` : ''}${r.drift.liveNotDeclared} live-not-declared |`,
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
     `| Live probes | ${probesLine(r)} |`,

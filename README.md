@@ -80,26 +80,72 @@ whenever the row is run again ([A Service's Run](#a-services-run)).
 stages — *1 Discover · 2 Diagnose · 3 Remediate*, the words Expert uses — over
 three columns, every number the engine's own —
 
-- **Discover — What is in place.** The stack top down — user experience,
-  application, platform, infrastructure — each layer with ten cells, one per
-  kind of signal, lit where the repository declares some and carrying the
-  count; *7 of 10 kinds*; the pack's own layers as counts under it.
+- **Discover — The chain.** What people know, as the repository declares
+  it: the **exporters** scraped, the **alerts** that fire (alert rules and
+  burn-rate alerts, with *10 of 18 objectives have no burn-rate alert* under
+  them when that is so), the **dashboards** people open — each a count — and
+  the **MTTD / MTTR** targets the repository states, or *Not declared*, with
+  the MTTD a chaos test measured when one recorded it. Under them the detail
+  in one line (*18 indicators · 18 objectives · 208 metrics · …*); the
+  machinery (*324 panels · 39 recording rules · …*) and the stack — user
+  experience, application, platform, infrastructure, ten kinds of signal
+  each — behind *The machinery and the layers*.
 - **Diagnose — Are the right signals in place?** The diagnostic grade as a
   letter in a shield with its ladder name (*Industrial grade*), whether it
   was graded against live or from the repository alone, the specification's
   required rules as a bar, and the seven criteria behind the letter as one
   plain sentence each with a yes, a partly or a no. **Can you trust what the
-  signals show?** The alignment as a ring, four counts (*252 match · 5 run
-  differently · 38 not running live · 30 live only*), the promises that hold
-  end to end, and one of four words — *Never checked · Unchanged · Changed ·
-  Unreachable* — with a timed sentence from the service's saved journey:
-  *Checked 2 hours ago against live — 43 things differ from what the
-  repository declares.* **Check again** runs the journey against the live
-  platform while you watch.
-- **Remediate — What to change.** *38 to add · 5 to update · 30 to review*,
-  and one next step with one button.
+  signals show?** The chain against live, a row per link (*Exporters 21/21 ·
+  Alerts 66/66 · Dashboards 7 not read live*), the chain's alignment as a
+  ring, the promises that hold end to end, and one of four
+  words — *Never checked · Unchanged · Changed · Unreachable* — with a timed
+  sentence from the service's saved journey: *Checked 2 hours ago against
+  live — the chain matches what live showed: its dashboards could not be
+  read. 31 details differ beyond it.* **Check again** runs the journey against
+  the live platform while you watch. A check recorded before 0.8.26 has no
+  count by link: the board then counts everything together, as before (*252
+  match · 5 run differently · 38 not running live · 30 live only*).
+- **Remediate — What to change.** The chain's exporters, alerts and
+  dashboards *to add · to update · to review*, the details beyond them in one
+  line (*Beyond the chain, 31 details differ: 31 metrics.* — live-only things
+  said apart), and one next step with one button.
 
-![The Overview board for one service: the layers it declares, its grade and its alignment with live, and the changes to apply](docs/img/overview-board.png)
+![The Overview board for one service: the chain it declares, its grade and its chain against live, and the changes to apply](docs/img/overview-board.png)
+
+**What people know, and what they do not.** Every kind of artefact has a
+tier (`studio/artefact-tiers.mjs`), and every screen counts by it:
+
+| Tier | What | Where it shows |
+|---|---|---|
+| 1 · the chain | exporters (scrape jobs), alerts (alert rules, burn-rate alerts), dashboards (whole dashboards, never their panels), MTTD / MTTR | Overview, and first in Expert |
+| 2 · the detail | indicators, objectives, metrics, backends and storage, alert routes, chaos tests, synthetic checks, remediations, forecasts, profiling | Expert; one line on Overview |
+| 3 · the machinery | panels, recording rules, derived views, pipeline parts, instrumentation settings, collection, network, mesh and policy engines, imports | folded in Expert until asked for |
+
+The tiers sort what is shown and counted; the grade is unchanged. Every run
+records its comparison by tier (`drift.tiers` on the run record: each link,
+the MTTD / MTTR targets, the detail and the machinery, adding up to the
+record's own counts), and a check's report has a *The chain* line.
+
+A repository states the MTTD / MTTR it holds itself to in its own pack, and
+the scan takes them as declared instead of the placeholder it writes
+otherwise (*15m / 1d*, never counted as Calibrated):
+
+```yaml
+# .observability/pack.yaml
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+metadata: { name: checkout, version: 0.1.0 }
+spec:
+  baselines:
+    mttd_target_p50: 5m      # required
+    mttr_target_p50: 2h      # required
+    mttd_target_p95: 10m     # optional, as are mttr_target_p95,
+    review_cadence: monthly  # measurement_source and regression_gate
+```
+
+A `spec.baselines` that is not the spec's (a field it does not have, a
+duration it cannot read) is left out with a warning that names the file and
+the reason, and the placeholder stays.
 
 Each column opens its Expert view bound to the service. **Expert** is
 everything below — Discover · Diagnose · Remediate, Compare, Build, the
@@ -229,7 +275,15 @@ status mark), **Tiles** (the name with its kind, bound and status), **Cards** (t
 earlier card grid: ID, source, name, bound, summary, type and tags) or **Details**
 (the full row, the default). Selecting an artefact opens its full record in any of them.
 
-![Expert's Discover view: the service's pack across the layered model, its SLIs, SLOs and telemetry pipeline](docs/img/expert-discover.png)
+The machinery — panels, recording rules, derived views, pipeline parts,
+instrumentation settings — is folded on the board until asked for: each band
+draws what people know and the detail, and one line says what it folds
+(*276 panels · 39 recording rules* **Show the machinery**). The *Machinery*
+switch above the bands, remembered per browser, draws it in Discover and in
+Compare's side by side alike. In Diagnose, the differences of the machinery
+share one closed row, last, with a switch of its own.
+
+![Expert's Discover view: the service's pack across the layered model, its SLIs, SLOs and scrape jobs, the machinery folded](docs/img/expert-discover.png)
 
 ### 2. Diagnose - How reliable is this pack?
 
@@ -274,7 +328,8 @@ The checks are (grade schema 4):
 | Operability | Actionable | no — informational |
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
-platform defaults do not make a pack Calibrated, and a placeholder chaos
+platform defaults do not make a pack Calibrated (a repository states its own
+in `.observability/pack.yaml`, `spec.baselines`, and those count), and a placeholder chaos
 experiment does not make it Chaos-validated. Chaos-validated tells declared
 from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
 a quarter of the point, and the rest needs a recent passing run of every
@@ -1646,8 +1701,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.25 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.25
+docker build -t observogram:0.8.26 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.26
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1710,7 +1765,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.25
+  observogram:0.8.26
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1718,7 +1773,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.25
+    image: observogram:0.8.26
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

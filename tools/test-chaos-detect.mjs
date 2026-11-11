@@ -37,7 +37,7 @@ import {
   chaosExperimentErrors, chaosRunErrors, durationSeconds, formatDuration, isChaosCodePath, scenarioTablesIn,
   chaosControlIn, chaosToggleIn, chaosResourcesIn, scheduleOfCron, detectChaos, chaosExperimentsFrom, chaosControlSummary, chaosPassReads,
 } from './lib/chaos-detect.mjs';
-import { isRepoPackPath, readRepoPack } from './lib/repo-pack.mjs';
+import { isRepoPackPath, readRepoPack, baselinesErrors } from './lib/repo-pack.mjs';
 import { crawlFiles, detectArtefactKind, scanUsesFile } from './lib/crawler.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { isCrawlerFile, selectCrawlerFiles } from '../server/github-crawl.mjs';
@@ -596,4 +596,66 @@ test('the Diagnose blocker for Chaos-validated is worded from the proof: none, d
   assert.equal(part.title, 'Not every chaos experiment has a recent pass');
   assert.match(part.fix, /^Run the remaining experiments\. Record each run as/);
   assert.equal(chaosBlockerCopy({ declared: 2 }).title, 'No chaos experiment has a recorded run', 'a criterion without proof (an older engine) reads its count');
+});
+
+// ---------------------------------------------------------------------------
+// the repository's own MTTD / MTTR targets (spec.baselines)
+// ---------------------------------------------------------------------------
+
+const BASELINES_PACK = `
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+metadata: { name: shop-api, version: 0.1.0 }
+spec:
+  baselines:
+    mttd_target_p50: 5m
+    mttr_target_p50: 2h
+    mttd_target_p95: 10m
+    measurement_source: incident tracker
+    review_cadence: quarterly
+`;
+
+test('readRepoPack reads spec.baselines, and refuses one that is not the spec\'s Baselines', () => {
+  const read = readRepoPack('.observability/pack.yaml', BASELINES_PACK);
+  assert.deepEqual(read.baselines, {
+    entry: { mttd_target_p50: '5m', mttr_target_p50: '2h', mttd_target_p95: '10m', measurement_source: 'incident tracker', review_cadence: 'quarterly' },
+    source: '.observability/pack.yaml#spec.baselines',
+  });
+  assert.equal(read.baselinesRefused, null);
+  assert.deepEqual(read.chaos, [], 'a pack with no experiments declares none');
+  assert.equal(readRepoPack('.observability/pack.yaml', REPO_PACK).baselines, null, 'a pack without baselines has none');
+  assert.deepEqual(baselinesErrors({ mttd_target_p50: '5m', mttr_target_p50: '1h30m' }), []);
+  assert.deepEqual(baselinesErrors({ mttd_target_p50: '5m' }), ['mttr_target_p50 is required']);
+  assert.deepEqual(baselinesErrors({ mttd_target_p50: 'five minutes', mttr_target_p50: '1h' }), ['mttd_target_p50 is not a duration such as 15m or 1h30m']);
+  assert.deepEqual(baselinesErrors({ mttd_target_p50: '5m', mttr_target_p50: '1h', review_cadence: 'daily' }), ['review_cadence is none of weekly, monthly, quarterly']);
+  assert.deepEqual(baselinesErrors({ mttd_target_p50: '5m', mttr_target_p50: '1h', owner: 'x' }), ['owner is not a baselines field']);
+  assert.deepEqual(baselinesErrors([]), ['spec.baselines is not a mapping']);
+  const bad = readRepoPack('.observability/pack.yaml', BASELINES_PACK.replace('mttr_target_p50: 2h', 'mttr_target_p50: soon'));
+  assert.equal(bad.baselines, null);
+  assert.equal(bad.baselinesRefused, 'mttr_target_p50 is not a duration such as 15m or 1h30m');
+});
+
+test('the crawl takes the repository\'s MTTD / MTTR targets as declared, and keeps the placeholder without them', () => {
+  const opts = { repoName: 'shop-api', environment: 'prod', now: '2026-11-06T00:00:00.000Z' };
+  const { canonical, summary, evidence } = crawlFiles(repoFiles({ '.observability/pack.yaml': BASELINES_PACK }), opts);
+  assert.deepEqual(validateCanonical(canonical, SCHEMA), []);
+  assert.deepEqual(canonical.spec.baselines, { mttd_target_p50: '5m', mttr_target_p50: '2h', mttd_target_p95: '10m', measurement_source: 'incident tracker', review_cadence: 'quarterly' });
+  assert.ok(!('crawler.scaffold.baselines' in canonical.metadata.annotations), 'declared targets are no placeholder');
+  assert.equal(evidence.baselines, '.observability/pack.yaml#spec.baselines');
+  assert.equal(summary.discovered.baselines, '.observability/pack.yaml#spec.baselines');
+  assert.equal(summary.inferred.baselines, false);
+  const base = adapt(canonical).layers.L5.find(a => a.id === 'BASE-01');
+  assert.equal(base.source, 'Declared');
+  // a discovered experiment with no expected MTTD of its own takes the team's target, not the placeholder's
+  assert.ok(canonical.spec.validation.chaos_experiments.some(e => e.expected_mttd === '5m'), 'the declared MTTD target is the fallback');
+
+  const plain = crawlFiles(repoFiles(), opts);
+  assert.deepEqual(plain.canonical.spec.baselines, { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' });
+  assert.ok('crawler.scaffold.baselines' in plain.canonical.metadata.annotations);
+  assert.equal(plain.summary.inferred.baselines, true);
+  assert.equal(adapt(plain.canonical).layers.L5.find(a => a.id === 'BASE-01').source, 'Scaffold');
+
+  const refused = crawlFiles(repoFiles({ '.observability/pack.yaml': BASELINES_PACK.replace('review_cadence: quarterly', 'review_cadence: daily') }), opts);
+  assert.ok('crawler.scaffold.baselines' in refused.canonical.metadata.annotations, 'a refused declaration leaves the placeholder');
+  assert.ok(refused.summary.warnings.includes('.observability/pack.yaml: spec.baselines is not a valid spec 1.5 Baselines and is left out (review_cadence is none of weekly, monthly, quarterly).'));
 });
