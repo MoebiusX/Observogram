@@ -571,6 +571,50 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   const realBase = criterion(grade(withL5([REAL_BASE, SCAFFOLD_BASE, REAL_CHAOS])), 'calibrated');
   assert(realBase.pass === true && /^MTTD\/MTTR baselines \+ 1 SLO with explicit objective$/.test(realBase.detail), 'a declared baseline still passes beside a scaffold', realBase);
   assert(criterion(grade(withL5([REAL_CHAOS])), 'calibrated').detail === 'no MTTD/MTTR baselines declared', 'no baseline at all: the detail is as before');
+  // Targets set in the studio (mttx-targets.mjs withStudioTargets: meta.studioTargets) are declared ones:
+  // they pass Calibrated where the repository states none, said as the studio's; the repository's own win.
+  const { withStudioTargets } = await import('../studio/mttx-targets.mjs');
+  const LAB = { profile: 'lab', mttd: '1m', mttr: '5m', by: 'ada', at: '2026-11-11T16:00:00Z' };
+  const studio = criterion(grade(withStudioTargets(withL5([SCAFFOLD_BASE, REAL_CHAOS]), LAB)), 'calibrated');
+  assert(studio.pass === true && studio.detail === 'MTTD/MTTR targets set in the studio + 1 SLO with explicit objective'
+    && JSON.stringify(studio.baselines) === JSON.stringify({ declared: 0, scaffolds: 1, studio: { profile: 'lab', mttd: '1m', mttr: '5m' } }),
+  'targets set in the studio pass Calibrated beside the scan\'s scaffold, said as the studio\'s', studio);
+  const repoWins = criterion(grade(withStudioTargets(withL5([REAL_BASE, REAL_CHAOS]), LAB)), 'calibrated');
+  assert(repoWins.pass === true && !Object.hasOwn(repoWins.baselines, 'studio') && /^MTTD\/MTTR baselines \+/.test(repoWins.detail), 'the repository\'s own baselines win: the studio\'s are not the reason', repoWins);
+  const noSlo = withStudioTargets(withL5([SCAFFOLD_BASE, REAL_CHAOS]), LAB);
+  noSlo.layers.L1 = noSlo.layers.L1.filter((a) => !/^SLO-/.test(a.id || ''));
+  const noObjective = criterion(grade(noSlo), 'calibrated');
+  assert(noObjective.pass === false && noObjective.detail === 'MTTD/MTTR targets set in the studio but no SLOs have explicit objectives', 'targets alone are not Calibrated: an objective needs a number too', noObjective);
+  // An objective is a number someone set: the scan's invented SLOs (crawler.scaffold.slos.*, source Scaffold)
+  // earn nothing — with the studio's targets or the repository's own baselines — and the detail says why.
+  const scaffoldSlos = (L5) => {
+    const p = withL5(L5);
+    p.layers.L1 = [...p.layers.L1.filter((a) => !/^SLO-/.test(a.id || '')), { id: 'SLO-svc_99', title: 'svc_99', source: 'Scaffold', spec: { objective: 0.99 } }];
+    return p;
+  };
+  const inventedOnly = criterion(grade(withStudioTargets(scaffoldSlos([SCAFFOLD_BASE, REAL_CHAOS]), LAB)), 'calibrated');
+  assert(inventedOnly.pass === false && inventedOnly.detail === 'MTTD/MTTR targets set in the studio but no SLOs have explicit objectives - the one present is a scaffold (defaults, never measured)'
+    && JSON.stringify(inventedOnly.objectives) === JSON.stringify({ declared: 0, scaffolds: 1 }),
+  'the studio\'s targets beside the scan\'s invented objective are not Calibrated: no number came from the repository', inventedOnly);
+  const repoInvented = criterion(grade(scaffoldSlos([REAL_BASE, REAL_CHAOS])), 'calibrated');
+  assert(repoInvented.pass === false && /^baselines declared but no SLOs have explicit objectives - the one present is a scaffold/.test(repoInvented.detail), 'the repository\'s baselines beside an invented objective: not Calibrated either', repoInvented);
+  assert(!Object.hasOwn(studio, 'objectives'), 'no invented objective: no objectives key', studio);
+  // Out of the studio's range (whole minutes, 1m to a week) is no target either.
+  for (const odd of [null, {}, { mttd: 1, mttr: '5m' }, { profile: 'lab' }, { mttd: '0m', mttr: '5m' }, { mttd: '1m', mttr: '10081m' }, { mttd: '1d', mttr: '5m' }, { mttd: '30s', mttr: '5m' }]) {
+    const p = withL5([SCAFFOLD_BASE, REAL_CHAOS]);
+    p.meta.studioTargets = odd;
+    assert(criterion(grade(p), 'calibrated').pass === false, `targets that do not read count nothing: ${JSON.stringify(odd)}`);
+  }
+  assert(withStudioTargets(withL5([]), null).meta.studioTargets === undefined, 'no targets: the pack untouched');
+  assert(withStudioTargets(withL5([]), { profile: 'custom', mttd: '0m', mttr: '5m' }).meta.studioTargets === undefined, 'targets out of range: the pack untouched');
+  const week = withL5([SCAFFOLD_BASE, REAL_CHAOS]);
+  week.meta.studioTargets = { profile: 'custom', mttd: '1h30m', mttr: '10080m' };
+  assert(criterion(grade(week), 'calibrated').pass === true, 'hours and minutes up to a week read', criterion(grade(week), 'calibrated'));
+  // The posture's pack-level Baselines row: the studio's targets stand in where the repository has none, said as the studio's.
+  const fromStudio = computePostureMatrix(withStudioTargets(withL5([SCAFFOLD_BASE]), LAB), null).platformWide;
+  const fromRepo = computePostureMatrix(withStudioTargets(withL5([REAL_BASE]), LAB), null).platformWide;
+  assert(fromStudio.baselines === true && fromStudio.baselinesFrom === 'studio' && fromRepo.baselines === true && !Object.hasOwn(fromRepo, 'baselinesFrom'),
+    'the Baselines row counts the studio\'s targets where the repository has none, and says whose they are', { fromStudio, fromRepo });
   // The score moves by exactly one criterion.
   const before = grade(withL5([REAL_BASE, REAL_CHAOS]));
   assert(closeTo(before.overall.passed - scaffoldOnly.overall.passed, 1), 'scaffold baselines cost exactly the Calibrated point', [before.overall.passed, scaffoldOnly.overall.passed]);

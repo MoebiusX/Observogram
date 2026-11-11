@@ -88,6 +88,25 @@ export function isScaffoldArtefact(artefact) {
 // says baseline in its id or title).
 const isBaselineArtefact = (a) => /baseline/i.test(a?.id || '') || /baseline/i.test(a?.title || '');
 
+// The service's MTTD / MTTR targets set in the studio, as the pack carries them
+// for the grade (studio/mttx-targets.mjs withStudioTargets: meta.studioTargets),
+// or null: each a Duration of whole minutes or hours from 1m to a week (the
+// studio's own range; read here, not imported, so the engine stays zero-import).
+const STUDIO_TARGET_MINUTES_MAX = 10_080;
+const targetMinutes = (text) => {
+  if (typeof text !== 'string') return null;
+  const t = text.trim();
+  if (!t || !/^(?:\d+h)?(?:\d+m)?$/.test(t)) return null;
+  const h = /(\d+)h/.exec(t), m = /(\d+)m/.exec(t);
+  const n = (h ? Number(h[1]) * 60 : 0) + (m ? Number(m[1]) : 0);
+  return n >= 1 && n <= STUDIO_TARGET_MINUTES_MAX ? n : null;
+};
+function studioTargetsOf(pack) {
+  const st = pack?.meta?.studioTargets;
+  if (!st || typeof st !== 'object' || targetMinutes(st.mttd) === null || targetMinutes(st.mttr) === null) return null;
+  return { profile: typeof st.profile === 'string' && st.profile ? st.profile : 'custom', mttd: st.mttd, mttr: st.mttr };
+}
+
 // Why a side could not look at chaos experiments: the repository scan's
 // stamp (tools/lib/crawler.mjs, while it has no chaos detector) and the
 // live fetcher's (tools/fetch-live-pack.mjs).
@@ -441,15 +460,27 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   // Calibrated counts only baselines someone declared. The MTTD/MTTR block
   // the repository scan and the live fetcher always write is a scaffold
   // (platform defaults nobody measured; tools/lib/crawler.mjs marks it
-  // crawler.scaffold.baselines), and a scaffold earns no pass.
+  // crawler.scaffold.baselines), and a scaffold earns no pass. The targets
+  // set for the service in the studio (studio/mttx-targets.mjs
+  // withStudioTargets: the pack's meta.studioTargets) are declared ones too —
+  // a person chose them — counted where the repository states none, and said
+  // as the studio's (`baselines.studio`). An objective is a number someone
+  // set too: the scan's invented SLOs (marked crawler.scaffold.slos.*, an
+  // objective of defaults) earn nothing, or targets set in the studio would
+  // pass a repository that states no number at all (`objectives`).
   const baselineArtefacts = L5.filter(isBaselineArtefact);
   const scaffoldBaselines = baselineArtefacts.filter(isScaffoldArtefact).length;
-  const hasBaselines = baselineArtefacts.length > scaffoldBaselines;
+  const repoBaselines = baselineArtefacts.length > scaffoldBaselines;
+  const studioTargets = studioTargetsOf(packA);
+  const fromStudio = !repoBaselines && !!studioTargets;
+  const hasBaselines = repoBaselines || fromStudio;
   const slos = L1.filter(a => /^SLO-/.test(a.id || ''));
-  const slosWithObjective = slos.filter(a => {
+  const hasObjective = (a) => {
     const obj = a.spec?.objective ?? a.objective;
     return typeof obj === 'number' && obj > 0 && obj <= 1;
-  });
+  };
+  const slosWithObjective = slos.filter(a => hasObjective(a) && !isScaffoldArtefact(a));
+  const scaffoldObjectives = slos.filter(a => hasObjective(a) && isScaffoldArtefact(a)).length;
   const calibrated = hasBaselines && slosWithObjective.length > 0;
 
   let totalObserved = 0;
@@ -489,14 +520,19 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       pass: calibrated,
       detail: hasBaselines
         ? (slosWithObjective.length
-            ? `MTTD/MTTR baselines + ${slosWithObjective.length} SLO${slosWithObjective.length === 1 ? '' : 's'} with explicit objective`
-            : 'baselines declared but no SLOs have explicit objectives')
+            ? `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'MTTD/MTTR baselines'} + ${slosWithObjective.length} SLO${slosWithObjective.length === 1 ? '' : 's'} with explicit objective`
+            : `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'baselines declared'} but no SLOs have explicit objectives` + (scaffoldObjectives
+              ? ` - ${scaffoldObjectives === 1 ? 'the one present is a scaffold' : `the ${scaffoldObjectives} present are scaffolds`} (defaults, never measured)`
+              : ''))
         : 'no MTTD/MTTR baselines declared' + (scaffoldBaselines
             ? ` - ${scaffoldBaselines === 1 ? 'the one present is a scaffold' : `the ${scaffoldBaselines} present are scaffolds`} (defaults, never measured)`
             : ''),
       // Additive (vendored): the baseline artefacts counted, and the
       // scaffolds left out of the count.
-      baselines: { declared: baselineArtefacts.length - scaffoldBaselines, scaffolds: scaffoldBaselines },
+      baselines: { declared: baselineArtefacts.length - scaffoldBaselines, scaffolds: scaffoldBaselines, ...(fromStudio ? { studio: studioTargets } : {}) },
+      // Additive: the SLO objectives counted and the scan's left out — only
+      // when the scan wrote some.
+      ...(scaffoldObjectives ? { objectives: { declared: slosWithObjective.length, scaffolds: scaffoldObjectives } } : {}),
     },
     { key: 'comprehensive', label: 'Comprehensive', sub: 'coverage spans all layers',
       pass: comprehensive,
@@ -1085,10 +1121,15 @@ export function computePostureMatrix(packA, packB) {
     platformWide.instrumentation = true;
   }
 
-  // Baselines declared? A scaffold block (platform defaults) is not.
+  // Baselines declared? A scaffold block (platform defaults) is not. Where
+  // the repository declares none, the service's targets set in the studio
+  // are (as Calibrated counts them), said as the studio's: baselinesFrom.
   const L5 = packA?.layers?.L5 || [];
   if (L5.some(a => isBaselineArtefact(a) && !isScaffoldArtefact(a))) {
     platformWide.baselines = true;
+  } else if (studioTargetsOf(packA)) {
+    platformWide.baselines = true;
+    platformWide.baselinesFrom = 'studio';
   }
 
   // The artefacts the walk finds with no kind of their own (see

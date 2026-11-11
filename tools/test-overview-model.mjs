@@ -32,7 +32,7 @@ import {
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed,
-  serviceAsideKey,
+  serviceAsideKey, serviceTargetsKey, studioTargetsCounted,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
@@ -1114,8 +1114,14 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<p class="ov-card__sub">Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them</p>'), 'the column, the repository\'s');
   // Targets set in the studio: the tile and the column say so.
   const set = overviewContainer();
-  renderOverview(set, board({ diagnostic: diagnosticFull, services: services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s)) }), host);
-  assert.ok(set.innerHTML.includes('<span class="ov-mttx__note">Set in the studio (lab default), not in the repository. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.</span>') && !set.innerHTML.includes('ov-mttx__rec'), 'the studio\'s, no recommendation');
+  const labServices = services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s));
+  const countedDiag = structuredClone(diagnosticFull);
+  Object.assign(countedDiag.coverage.criteria.find((c) => c.key === 'calibrated'), { pass: true, baselines: { declared: 0, scaffolds: 1, studio: { profile: 'lab', mttd: '1m', mttr: '5m' } } });
+  renderOverview(set, board({ diagnostic: countedDiag, services: labServices }), host);
+  assert.ok(set.innerHTML.includes('<span class="ov-mttx__note">Set in the studio (lab default), not in the repository; the grade counts them for Calibrated. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.</span>') && !set.innerHTML.includes('ov-mttx__rec'), 'the studio\'s, no recommendation');
+  const uncounted = overviewContainer();
+  renderOverview(uncounted, board({ diagnostic: diagnosticFull, services: labServices }), host);
+  assert.ok(uncounted.innerHTML.includes('<span class="ov-mttx__note">Set in the studio (lab default), not in the repository. Not measured yet:'), 'a grade that does not read them (Calibrated off, or the repository\'s own): the tile does not say it counts them');
   assert.ok(set.innerHTML.includes('<p class="ov-card__sub">Exporters, alerts and dashboards as the repository declares them; MTTD / MTTR set in the studio</p>'), 'the column says where each comes from');
   const change = overviewContainer();
   renderOverview(change, board({ diagnostic: diagnosticFull, listable: true, services: services.map((s) => (s.id === 1 ? { ...s, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } : s)) }), host);
@@ -1298,10 +1304,10 @@ test('chainModel: the chain the repository declares — three links, the objecti
     },
   }, 'the scan\'s placeholder targets are not declared ones: the recommendation instead');
   // The same repository, with targets set in the studio: they stand, said as the studio's; the repository's own would win.
-  const studioSet = chainModel({ layered: layeredStub, targets: { profile: 'financial', mttd: '1m', mttr: '15m', by: 'ada', at: '2026-11-11T10:00:00Z' } }).mttx;
-  assert.deepEqual([studioSet.declared, studioSet.origin, studioSet.targets, studioSet.note, studioSet.tone, studioSet.recommended], [true, 'studio', 'MTTD ≤ 1 min · MTTR ≤ 15 min', 'Set in the studio (critical financial service), not in the repository. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.', 'warn', null]);
+  const studioSet = chainModel({ layered: layeredStub, targets: { profile: 'financial', mttd: '1m', mttr: '15m', by: 'ada', at: '2026-11-11T10:00:00Z' }, counted: true }).mttx;
+  assert.deepEqual([studioSet.declared, studioSet.origin, studioSet.targets, studioSet.note, studioSet.tone, studioSet.recommended], [true, 'studio', 'MTTD ≤ 1 min · MTTR ≤ 15 min', 'Set in the studio (critical financial service), not in the repository; the grade counts them for Calibrated. Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.', 'warn', null]);
   const custom = chainModel({ layered: layeredStub, targets: { profile: 'custom', mttd: '3m', mttr: '90m' } }).mttx;
-  assert.deepEqual([custom.targets, custom.note.startsWith('Set in the studio, not in the repository.')], ['MTTD ≤ 3 min · MTTR ≤ 1 h 30 min', true]);
+  assert.deepEqual([custom.targets, custom.note.startsWith('Set in the studio, not in the repository. Not measured yet')], ['MTTD ≤ 3 min · MTTR ≤ 1 h 30 min', true], 'not told they count: the note does not say so');
   assert.deepEqual(C.detail, { count: 241, line: '18 indicators · 18 objectives · 204 metrics · 1 chaos test' });
   assert.deepEqual(C.machinery, { count: 317, line: '317 panels' });
   const own = (L5) => keep(chainModel({ layered: { layers: { ...layeredStub.layers, L5 } } })).mttx;
@@ -3175,6 +3181,70 @@ test('the board and a service\'s set-asides: a run that left out other differenc
   assert.equal(rowOf({ setAside: { fingerprint: fp, declared: 3, live: 1 } }, {}), "Diagnostic grade · graded before this service's set-asides changed");
   assert.equal(rowOf({ setAside: null }, { setAside: ASIDE }), "Diagnostic grade · graded before this service's set-asides changed");
   assert.equal(rowOf({ setAside: null }, {}), 'Diagnostic grade', 'neither: as before');
+});
+
+test('the board and a service\'s MTTD / MTTR targets set in the studio: a run graded with other targets is not the letter, said so; a list row says it; the Why says Calibrated was counted from the studio', () => {
+  const LAB = { profile: 'lab', mttd: '1m', mttr: '5m' };
+  const key = serviceTargetsKey({ targets: { ...LAB, by: 'ada', at: '2026-11-11T16:00:00Z' } });
+  assert.deepEqual([key, serviceTargetsKey({}), serviceTargetsKey({ targets: null })], ['lab:1:5', '', '']);
+  // The letter: the run's only when it was graded with the targets the service has now.
+  const targetsRun = { ...atBarRun, grade: { ...atBarRun.grade, targets: LAB } };
+  assert.equal(runGradesBoard(targetsRun, krystalinePack, [], '', key), true);
+  assert.equal(runGradesBoard(targetsRun, krystalinePack, [], '', ''), false, 'the run counted targets the service no longer has');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack, [], '', key), false, 'the service has targets the run did not count');
+  assert.equal(runGradesBoard(atBarRun, krystalinePack), true, 'neither: as before');
+  // What changed, said for each way: counted now and not by the run (a run before they were set, or before
+  // runs named them), counted by the run and not now, or other targets.
+  const sourceOf = (r, targets) => keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: r, journey, now: NOW, targets }));
+  assert.deepEqual([sourceOf(atBarRun, key).basis, sourceOf(atBarRun, key).source], ['repository', 'Graded from the repository alone: the grade has counted the MTTD / MTTR targets set in the studio since the last live check. Check again to grade against live.']);
+  assert.equal(sourceOf(targetsRun, '').source, 'Graded from the repository alone: the grade has stopped counting the MTTD / MTTR targets set in the studio since the last live check. Check again to grade against live.');
+  assert.equal(sourceOf(targetsRun, 'financial:1:15').source, 'Graded from the repository alone: the MTTD / MTTR targets changed since the last live check. Check again to grade against live.');
+  assert.equal(sourceOf(targetsRun, key).basis, 'live');
+  assert.equal(boardComparison({ journey: { ...journey, livePack: { id: 'lp', refreshedAt: targetsRun.packB?.refreshedAt } }, run: targetsRun, catalog: [{ id: 'lp' }], pack: krystalinePack, targets: '' }), null, 'Expert is handed the run only on the same terms');
+  // The list row has no grade to ask whether they count: it flags only targets that differ, both named.
+  const lastRun = { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 };
+  const rowOf = (last, service) => serviceListModel({ services: [svcRow(service)], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, ...last })], endpoints: [EP], now: NOW }).rows[0].last.gradeLabel;
+  assert.equal(rowOf({ targets: LAB }, { targets: LAB }), 'Diagnostic grade');
+  assert.equal(rowOf({ targets: LAB }, { targets: { profile: 'financial', mttd: '1m', mttr: '15m' } }), "Diagnostic grade · graded before this service's targets changed");
+  assert.equal(rowOf({ targets: null }, { targets: LAB }), 'Diagnostic grade', 'a run that names none (the repository states its own, or before runs named them): not flagged');
+  assert.equal(rowOf({ targets: LAB }, {}), "Diagnostic grade · graded before this service's targets changed", 'the run counted targets the service no longer has: the board always grades again, and the row says so');
+  // The Why: Calibrated counted from the studio, said as the studio's.
+  const studioDiag = structuredClone(diagnosticFull);
+  const cal = studioDiag.coverage.criteria.find((c) => c.key === 'calibrated');
+  Object.assign(cal, { pass: true, detail: 'MTTD/MTTR targets set in the studio + 18 SLOs with explicit objective', baselines: { declared: 0, scaffolds: 1, studio: LAB } });
+  // The board compares the targets only where its grade counts them: with the repository's own baselines (or
+  // Calibrated switched off) the run that named none holds; counted, it does not until a check counts them too.
+  assert.deepEqual([studioTargetsCounted(diagnosticFull), studioTargetsCounted(studioDiag), studioTargetsCounted(null)], [false, true, null]);
+  const offDiag = structuredClone(studioDiag);
+  Object.assign(offDiag.coverage.criteria.find((c) => c.key === 'calibrated'), { applies: false, informational: true });
+  assert.equal(studioTargetsCounted(offDiag), false, 'Calibrated not graded: they count nothing');
+  const withLab = services.map((s) => (s.id === 1 ? { ...s, targets: { ...LAB, by: 'ada', at: '2026-11-11T16:00:00Z' } } : s));
+  const plainBasis = keep(screen({ diagnostic: diagnosticFull })).grade.basis;
+  assert.equal(keep(screen({ diagnostic: diagnosticFull, services: withLab })).grade.basis, plainBasis, 'not counted: the targets change nothing on the board');
+  assert.equal(keep(screen({ diagnostic: studioDiag, services: withLab })).grade.basis, plainBasis === 'live' ? 'repository' : plainBasis, 'counted: the run that did not count them is not the letter');
+  // No grade to ask (the pack could not be read) and Calibrated switched off: the targets count nothing, the run's letter holds as before.
+  const offRun = { ...run, grade: { ...run.grade, off: ['calibrated'] } };
+  const offServices = (t) => services.map((s) => (s.id === 1 ? { ...s, gradeOff: [{ key: 'calibrated', reason: 'measured elsewhere' }], targets: t } : s));
+  const unread = (t) => keep(screen({ diagnostic: null, diagnosticError: 'the pack could not be read', run: offRun, services: offServices(t) })).grade.basis;
+  assert.equal(unread(null), 'live', 'the run graded the board before the targets');
+  assert.equal(unread({ ...LAB, by: 'ada', at: '2026-11-11T16:00:00Z' }), unread(null), 'unreadable pack, Calibrated off: the targets do not take the run\'s letter away');
+  // The Why's no-line for objectives the scan invented, beside the studio's targets.
+  const invented = structuredClone(diagnosticFull);
+  Object.assign(invented.coverage.criteria.find((c) => c.key === 'calibrated'), { pass: false, detail: 'MTTD/MTTR targets set in the studio but no SLOs have explicit objectives - the 11 present are scaffolds (defaults, never measured)', baselines: { declared: 0, scaffolds: 1, studio: LAB }, objectives: { declared: 0, scaffolds: 11 } });
+  // (score NaN: the lines read alone, not held to a letter.)
+  const inventedWhy = gradeWhy({ diagnostic: invented, run: null, letter: 'D', score: NaN, now: NOW }).why.map((w) => [w.ok, w.text]);
+  assert.ok(inventedWhy.some(([ok, text]) => ok === 'no' && text === 'Normal is not defined with numbers: the objectives are defaults the scan wrote, not targets anyone set.'), JSON.stringify(inventedWhy));
+  // Expert (compare-view.mjs, a browser module): Calibrated's cause with the studio's targets is the objectives,
+  // never "defaults the scan wrote" — its branch comes first; the ledger and the Baselines row say whose they are.
+  const view = readFileSync(new URL('../studio/compare-view.mjs', import.meta.url), 'utf8');
+  const studioCause = view.indexOf("c.key === 'calibrated' && (c.baselines?.studio || c.baselines?.declared > 0)");
+  assert.ok(studioCause > 0 && studioCause < view.indexOf("c.key === 'calibrated' && c.baselines?.scaffolds > 0"), 'Expert\'s cause for targets set in the studio comes before the scaffold\'s');
+  assert.ok(view.includes("if (key === 'calibrated' && c?.baselines?.studio) return 'spec.slos[].objective + the service’s MTTD/MTTR targets set in the studio';") && view.includes("'set in the studio for this service, not in the repository (applies to all layers)'"));
+  const why = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: studioDiag, run: null, now: NOW })).why.map((w) => [w.ok, w.text]);
+  assert.ok(why.some(([ok, text]) => ok === 'yes' && text === 'Normal is defined with numbers: 18 objectives, with detection and repair targets set in the studio (lab default).'), JSON.stringify(why));
+  Object.assign(cal, { baselines: { declared: 0, scaffolds: 1, studio: { profile: 'custom', mttd: '3m', mttr: '90m' } } });
+  const custom = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: studioDiag, run: null, now: NOW })).why.map((w) => w.text);
+  assert.ok(custom.includes('Normal is defined with numbers: 18 objectives, with detection and repair targets set in the studio (MTTD ≤ 3 min · MTTR ≤ 1 h 30 min).'), JSON.stringify(custom));
 });
 
 test('the differences to set aside on the page: asideChanges tells a what-if from what is saved; whatIfWords and the verdict say how many; Keep asks once how they are set aside; the list draws a row and a switch per difference, a switch per layer, a due one with Forget, and the ones that match nothing', () => {

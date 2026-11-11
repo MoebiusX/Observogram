@@ -39,6 +39,10 @@
 //                               #   the newest for an experiment in this check's env (one naming no
 //                               #   environment applies anywhere) is its last_result when newer than
 //                               #   the repository's own. Written by the server, like gradeOff.
+//   mttxTargets:           # optional: the MTTD / MTTR targets set in the studio (studio/mttx-targets.mjs) —
+//     { profile: lab, mttd: 1m, mttr: 5m }
+//                               #   Calibrated counts them where the repository states no
+//                               #   spec.baselines of its own. Written by the server, like gradeOff.
 //   gate:                  # all optional; omitted criteria don't gate
 //     requireGradePass: true
 //     minAlignmentPct: 85
@@ -121,6 +125,7 @@ import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, depl
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD, GRADE_CRITERION_KEYS } from '../../studio/diagnostic-grade.mjs';
 import { applySetAsides, SET_ASIDE_KINDS, SET_ASIDE_MAX, SET_ASIDE_SIDES } from '../../studio/set-asides.mjs';
 import { CHAOS_RUNS_MAX, chaosRunErrors, withStudioRuns } from '../../studio/chaos-runs.mjs';
+import { storedTargetsError, withStudioTargets } from '../../studio/mttx-targets.mjs';
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
@@ -225,6 +230,9 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.gradeOff !== undefined) validateGradeOff(def.gradeOff, def.name);
   if (def.setAside !== undefined) validateSetAside(def.setAside, def.name);
   if (def.chaosRuns !== undefined) validateChaosRuns(def.chaosRuns, def.name);
+  if (def.mttxTargets !== undefined && storedTargetsError(def.mttxTargets)) {
+    throw new Error(`journey ${def.name}: mttxTargets must be the service's MTTD / MTTR targets — ${storedTargetsError(def.mttxTargets)}`);
+  }
   // Step 5: a typo'd or malformed schedule / stackBudget block is a
   // load-time configuration error (CLI `list` prints it, GET /api/journeys
   // puts it in loadError, capture answers 400) — never a run that silently
@@ -1243,7 +1251,7 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // recorded as packA.scan. A crawl: Pack A carries its own. A run that is
 // not told (Check now on the last scan) keeps the scan of the newest record
 // of the same Pack A file: the file is that scan's.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null, chaosRuns = null } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null, chaosRuns = null, mttxTargets = undefined } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1326,7 +1334,16 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // record to ask; a service's own check carries its switches, written by
   // the server). The record names them as grade.off.
   const off = Array.isArray(gradeOff) ? gradeOff : (Array.isArray(def.gradeOff) ? def.gradeOff : []);
-  const grade = computeDiagnosticGrade(layeredA, layeredB, posture, null, diff, { off });
+  // The MTTD / MTTR targets set in the studio: `mttxTargets` when the caller hands them in (the server:
+  // the journey's service record's, null for none), else the definition's own (a service's check carries
+  // them, written by the server). Calibrated counts them where the repository states none
+  // (studio/mttx-targets.mjs withStudioTargets) — the grade's copy of the pack alone: the comparison
+  // above never sees them. The record names them as grade.targets.
+  const targetsGiven = mttxTargets === undefined ? (def.mttxTargets ?? null) : mttxTargets;
+  const grade = computeDiagnosticGrade(withStudioTargets(layeredA, targetsGiven), layeredB, posture, null, diff, { off });
+  // Named on the record only when Calibrated counted them (graded, and the repository states none).
+  const calibrated = [...(grade.coverage?.criteria || []), ...(grade.trust?.criteria || [])].find((c) => c?.key === 'calibrated');
+  const targetsUsed = calibrated?.applies !== false ? (calibrated?.baselines?.studio ?? null) : null;
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
@@ -1425,6 +1442,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       // that held (studio/set-asides.mjs), so a reader tells a run graded on other
       // set-asides apart; `due` the ones whose review date had passed.
       ...(aside ? { setAside: { fingerprint: aside.fingerprint, declared: aside.declared, live: aside.live, chains: aside.chains, due: aside.due } } : {}),
+      // The MTTD / MTTR targets set in the studio this run's Calibrated counted (its service's when the
+      // run was made): absent when none was set, Calibrated was not graded or the repository states its own.
+      ...(targetsUsed ? { targets: { profile: targetsUsed.profile, mttd: targetsUsed.mttd, mttr: targetsUsed.mttr } } : {}),
     },
     traceability: rollup ? {
       integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,

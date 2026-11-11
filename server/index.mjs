@@ -93,7 +93,7 @@ import { readUpload } from './repository-uploads.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
 import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
 import { isAdoServices } from './ado-crawl.mjs';
-import { getService, getServiceBySlug } from './store/services.mjs';
+import { getService, getServiceBySlug, listServices } from './store/services.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
 import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
@@ -1017,6 +1017,9 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
             declared: Number.isInteger(lastRun.grade.setAside.declared) ? lastRun.grade.setAside.declared : 0,
             live: Number.isInteger(lastRun.grade.setAside.live) ? lastRun.grade.setAside.live : 0,
           } : null,
+          // The MTTD / MTTR targets set in the studio that score was graded with, null when none was.
+          targets: lastRun.grade?.targets && typeof lastRun.grade.targets === 'object' && typeof lastRun.grade.targets.mttd === 'string' && typeof lastRun.grade.targets.mttr === 'string'
+            ? { profile: String(lastRun.grade.targets.profile ?? '').slice(0, 40), mttd: lastRun.grade.targets.mttd.slice(0, 16), mttr: lastRun.grade.targets.mttr.slice(0, 16) } : null,
           breaches: lastRun.gate?.breaches?.length ?? 0,
           // Step 5: the delivery outcome of the last run — status, HTTP
           // status, reason. null when the record carries no notify object
@@ -1255,6 +1258,11 @@ const setAsideOfService = (service) => (Array.isArray(service?.setAside) ? servi
 // each run's own fields, a value it does not have left out.
 const chaosRunsOfService = (service) => (Array.isArray(service?.chaosRuns) ? service.chaosRuns : [])
   .map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null && v !== undefined && v !== '')));
+// A service's MTTD / MTTR targets as a check file carries them (journey.mjs mttxTargets), or null.
+const mttxTargetsOfService = (service) => {
+  const t = service?.targets;
+  return t && typeof t === 'object' && typeof t.mttd === 'string' && typeof t.mttr === 'string' ? { profile: t.profile, mttd: t.mttd, mttr: t.mttr } : null;
+};
 
 // The grade criteria a journey is not graded on. A journey of a service with
 // a record (serviceOfJourney) is graded on the record's switches
@@ -1282,17 +1290,26 @@ function chaosRunsOfJourney(def) {
   return Array.isArray(def?.chaosRuns) ? def.chaosRuns : [];
 }
 
+// The MTTD / MTTR targets set in the studio a journey is graded with, by the same rule: the record's
+// for a service's journey (null: none set), its own `mttxTargets` otherwise.
+function mttxTargetsOfJourney(def) {
+  const service = serviceOfJourney(def);
+  if (service) return mttxTargetsOfService(service);
+  return def?.mttxTargets ?? null;
+}
+
 // A definition about to be saved, with its service's switches in it (or
 // without the key when none is off): a run that has no record to ask —
 // `packc journey run`, which is what a schedule runs — then grades as the
 // service does. A journey of no service keeps what it carries.
 function withServiceGradeOff(def, service) {
   if (!service) return def;
-  const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, ...rest } = def;
+  const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, mttxTargets: _wasTargets, ...rest } = def;
   const keys = gradeOffKeysOf(service);
   const aside = setAsideOfService(service);
   const runs = chaosRunsOfService(service);
-  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}), ...(runs.length ? { chaosRuns: runs } : {}) };
+  const targets = mttxTargetsOfService(service);
+  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}), ...(runs.length ? { chaosRuns: runs } : {}), ...(targets ? { mttxTargets: targets } : {}) };
 }
 
 // A service's switches, written into every check the studio saved for it
@@ -1342,18 +1359,20 @@ function writeGradeOffToChecks(names, service) {
   const keys = gradeOffKeysOf(service);
   const aside = JSON.stringify(setAsideOfService(service));
   const runs = JSON.stringify(chaosRunsOfService(service));
+  const targets = JSON.stringify(mttxTargetsOfService(service));
   for (const name of names) {
     let def;
     try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
     const was = Array.isArray(def.gradeOff) ? def.gradeOff : [];
     const wasAside = JSON.stringify(Array.isArray(def.setAside) ? def.setAside : []);
     const wasRuns = JSON.stringify(Array.isArray(def.chaosRuns) ? def.chaosRuns : []);
-    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs) continue;
+    const wasTargets = JSON.stringify(def.mttxTargets ? { profile: def.mttxTargets.profile, mttd: def.mttxTargets.mttd, mttr: def.mttxTargets.mttr } : null);
+    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs && wasTargets === targets) continue;
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
     try { saveJourneyDef(name, withServiceGradeOff(rest, service), { banner }); }
-    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides and recorded chaos runs (${e.message})\n`); }
+    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs and MTTD / MTTR targets (${e.message})\n`); }
   }
 }
 
@@ -1362,7 +1381,7 @@ function writeGradeOffToChecks(names, service) {
 // service's, and a service made again under the name starts with none.
 function forgetGradeOffOfDeletedService(service) {
   const names = serviceCheckNames(service);
-  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [] });
+  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [], targets: null });
 }
 
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
@@ -1397,6 +1416,9 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       setAside: setAsideOfJourney(def),
       // The chaos runs recorded in the studio for its experiments (its record's).
       chaosRuns: chaosRunsOfJourney(def),
+      // The MTTD / MTTR targets set in the studio (its record's): Calibrated counts them where the
+      // repository states none.
+      mttxTargets: mttxTargetsOfJourney(def),
     });
     const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({
@@ -2932,6 +2954,38 @@ function rehydrateOrgs(silent) {
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
 
+// Boot step 7: a service's MTTD / MTTR targets set in the studio reach its
+// saved checks (`mttxTargets:`) when they change, when the service is made
+// with them and at its next Run — not at a Check now, which never rewrites a
+// check. A service whose targets were set before checks carried them gets them
+// into its studio-written checks here, so `packc journey run` and a schedule
+// grade as the server does from the first start. Idempotent: a check already
+// carrying them is not touched (writeGradeOffToChecks). Best effort: never a
+// boot failure.
+function syncTargetsIntoChecks(log) {
+  let written = 0;
+  for (const org of listOrgs(currentStore())) {
+    try {
+      runWithOrg(org.id, () => {
+        const services = listServices(currentStore()).filter((s) => s.targets);
+        if (!services.length) return;
+        const names = new Map(services.map((s) => [s.id, []]));
+        for (const name of listJourneys()) {
+          let def;
+          try { def = loadJourneyDef(name, { allowPath: false }); } catch { continue; }
+          const own = serviceOfJourney(def);
+          if (own && names.has(own.id) && !def.mttxTargets) names.get(own.id).push(name);
+        }
+        for (const service of services) {
+          const list = names.get(service.id);
+          if (list.length) { writeGradeOffToChecks(list, service); written += list.length; }
+        }
+      });
+    } catch (e) { process.stderr.write(`[studio] org ${org.id}: the MTTD / MTTR targets could not be written into its saved checks (${e.message})\n`); }
+  }
+  if (written) log(`[studio] wrote the services' MTTD / MTTR targets into ${written} saved check${written === 1 ? '' : 's'}`);
+}
+
 // The studio no longer reads the install's deployment-wide live pack
 // (STORE_PLAN slice 3: one per org). While that file exists and the default
 // org has no live pack of its own yet, one line says where the badge reads
@@ -3003,6 +3057,7 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // root through the same context-aware resolver the registry uses.
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
+  syncTargetsIntoChecks(log);
   noteLegacyLivePack(db, log, legacyLivePack);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process

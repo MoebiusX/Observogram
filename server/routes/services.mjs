@@ -84,8 +84,10 @@ function pathEnvironment(req, res, db) {
 const serviceSummary = (s) => ({ id: s.id, slug: s.slug, name: s.name, tier: s.tier });
 
 // `onGradeOffChanged(service)`: called after a PATCH changed a service's
-// grade criteria or its set-asides, inside the request's org — the server
-// writes both into the service's saved checks there (server/index.mjs).
+// grade criteria, its set-asides, its recorded chaos runs or its MTTD / MTTR
+// targets, and after a POST made one with targets, inside the request's org —
+// the server writes them into the service's saved checks there
+// (server/index.mjs).
 // `onServiceDeleting(service)`: called before a DELETE, with the service as
 // it is; the function it returns runs once the delete went through (the
 // server takes the switches out of the checks that were the service's).
@@ -101,7 +103,10 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
 
   router.post('/api/services', authorize('POST /api/services'), handler((req, res, { db, actor }) => {
     const service = createServiceFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
-    res.status(201).json({ ok: true, service: serviceViewOf(db, service) });
+    const view = serviceViewOf(db, service);
+    // Its targets go into any check already saved under its name (one a service of that name left).
+    if (service.targets) onGradeOffChanged?.(view);
+    res.status(201).json({ ok: true, service: view });
   }));
 
   router.get('/api/services/:id', authorize('GET /api/services/:id'), handler((req, res, { db }) => {
@@ -120,7 +125,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     // Pointed away from its upload: the copy goes with it.
     if (changed.includes('repository') && before?.repository?.kind === 'upload') deleteUpload(id);
     const view = serviceViewOf(db, service);
-    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns')) onGradeOffChanged?.(view);
+    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets')) onGradeOffChanged?.(view);
     res.json({ ok: true, service: view, changed });
   }));
 
@@ -130,7 +135,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
     const current = getService(db, id);
-    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length)) ? onServiceDeleting?.(current) : null;
+    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length) || current.targets) ? onServiceDeleting?.(current) : null;
     const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
     deleteUpload(id);   // its uploaded repository, if it had one
     if (typeof after === 'function') after();

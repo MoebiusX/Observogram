@@ -620,7 +620,7 @@ test('S5 — the wiring: each static text is shown by the view its row names, be
   assert.ok(read('studio/app.mjs').includes('<strong>Discover</strong> to crawl a repo, generate from a live MCP server, or\n        upload a manifest — then come back here.'));
   // The pure decision takes the texts as an input; criterionBlocker passes it through.
   assert.match(view, /export function buildAssessmentDecision\(\{[^}]*remedy = null \} = \{\}\)/);
-  assert.ok(view.includes('const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });'));
+  assert.ok(view.includes('const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets });'));
   // The shared modules take theirs as options and import nothing to know them: the grade's hint, the response path's
   // note (its imports pinned by tools/test-remediation-flow-view.mjs), the trace's actions.
   // (the grade is taken twice while a what-if is on screen — over its set and over what is saved — with the same hint).

@@ -148,9 +148,17 @@ record's own counts), and a check's report has a *The chain* line.
 A repository states the MTTD / MTTR it holds itself to in its own pack, and
 the scan takes them as declared instead of the placeholder it writes
 otherwise (*15m / 1d*, never counted as Calibrated). Without them, the
-targets set in the studio for the service (*Add a service*, *Change*) are
-what the board and the control room measure against, said as the studio's;
-they stay on the service record and do not enter the pack or its grade:
+targets set in the studio for the service (*Add a service*, *Set targets…*,
+*Change*) are what the board and the control room measure against, and what
+the grade's Calibrated counts, said as the studio's every time (*Normal is
+defined with numbers: 18 objectives, with detection and repair targets set in
+the studio (lab default).*): a person chose them, signed and dated, which the
+scan's placeholder never was. They stay on the service record and never enter
+the repository's pack (the grade reads a copy carrying them); a check records
+the ones its Calibrated counted (`grade.targets`), the studio's saved checks
+carry them (`mttxTargets:`) for `packc journey run` and a schedule, and a
+letter graded with other targets is graded again from the repository until the
+next check:
 
 ```yaml
 # .observability/pack.yaml
@@ -449,7 +457,10 @@ The checks are (grade schema 4):
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated (a repository states its own
-in `.observability/pack.yaml`, `spec.baselines`, and those count), and a placeholder chaos
+in `.observability/pack.yaml`, `spec.baselines`, and those count; where it
+states none, the MTTD / MTTR targets set in the studio for the service count,
+said as the studio's), nor do the SLOs the scan invents from an alert name
+(their objective is a default), and a placeholder chaos
 experiment does not make it Chaos-validated. Chaos-validated tells declared
 from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
 a quarter of the point, and the rest needs a recent passing run of every

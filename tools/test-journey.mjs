@@ -930,6 +930,56 @@ try {
       offFile('runs-badly', [line]);
       assert(thrown(() => loadJourneyDef('runs-badly')) === runsError('runs-badly', why), `a definition that says "${line}" does not load — the error names the journey and why`, thrown(() => loadJourneyDef('runs-badly')));
     }
+    // --- MTTD / MTTR targets set in the studio: Calibrated counts them where the repository states none ---
+    const LAB = { profile: 'lab', mttd: '1m', mttr: '5m' };
+    const calOf = (g) => g.coverage.criteria.find((c) => c.key === 'calibrated');
+    // The example declares its own baselines: the studio's change nothing, and the record names none (it names
+    // only targets Calibrated counted).
+    const repoOwn = await runJourney(fewerDef(), { mttxTargets: LAB });
+    assert(repoOwn.grade.score === plain.grade.score && !('targets' in repoOwn.grade),
+      'the repository states its own baselines: the studio\'s targets change nothing, and the record does not name them', repoOwn.grade);
+    // The same pack with no baselines of its own — the scan's placeholder in their place, marked as the scan
+    // marks it (the schema requires the block): the studio's pass Calibrated, as the engine says with them.
+    const { withStudioTargets } = await import('../studio/mttx-targets.mjs');
+    const bare = parseYaml(readFileSync(PACK_A, 'utf8'));
+    bare.spec.baselines = { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' };
+    bare.metadata.annotations = { ...(bare.metadata.annotations || {}), 'crawler.scaffold.baselines': 'schema-required fallback; no source evidence found in selected environment' };
+    const BARE = join(TMP, 'bare-baselines.pack.json');
+    writeFileSync(BARE, JSON.stringify(bare));
+    offFile('no-baselines', []);
+    writeFileSync(join(TMP, 'journeys', 'no-baselines.journey.yaml'), ['name: no-baselines', `packA: { file: ${BARE.replaceAll('\\', '/')} }`, `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`, 'env: prod', 'gate: { minAlignmentPct: 1 }'].join('\n'));
+    const bareA = adapt(bare, { environment: 'prod' });
+    const bareDiff = { ...diffPacks(bareA, fileB, {}), traceabilityGraph: comparePackBranches(bareA, fileB) };
+    const bareEngine = (t) => computeDiagnosticGrade(withStudioTargets(bareA, t), fileB, computePostureMatrix(bareA, fileB), null, bareDiff, {});
+    const noTargets = await runJourney(loadJourneyDef('no-baselines'));
+    const withTargets = await runJourney(loadJourneyDef('no-baselines'), { mttxTargets: LAB });
+    assert(calOf(bareEngine(null)).pass === false && calOf(bareEngine(LAB)).pass === true && withTargets.grade.score === pct(bareEngine(LAB)) && withTargets.grade.score > noTargets.grade.score,
+      'no baselines of its own: the studio\'s targets pass Calibrated and lift the score, as the engine says', { without: noTargets.grade, with: withTargets.grade });
+    assert(!('targets' in noTargets.grade) && JSON.stringify(withTargets.grade.targets) === JSON.stringify(LAB), 'the record names the targets it was graded with, none when none');
+    // Calibrated not graded for the service: the targets count nothing, and the record does not name them.
+    const calOff = await runJourney(loadJourneyDef('no-baselines'), { mttxTargets: LAB, gradeOff: ['calibrated'] });
+    assert(!('targets' in calOff.grade) && JSON.stringify(calOff.grade.off) === JSON.stringify(['calibrated']), 'Calibrated switched off: the record names no targets', calOff.grade);
+    // Handed null (the server: the service has none) is none, never the file's; the file's own, what the server writes, grades the same.
+    writeFileSync(join(TMP, 'journeys', 'no-baselines-targets.journey.yaml'), ['name: no-baselines-targets', `packA: { file: ${BARE.replaceAll('\\', '/')} }`, `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`, 'env: prod', 'gate: { minAlignmentPct: 1 }', 'mttxTargets: { profile: lab, mttd: 1m, mttr: 5m }'].join('\n'));
+    const fromFileTargets = await runJourney(loadJourneyDef('no-baselines-targets'));
+    const handedNone = await runJourney(loadJourneyDef('no-baselines-targets'), { mttxTargets: null });
+    assert(fromFileTargets.grade.score === withTargets.grade.score && handedNone.grade.score === noTargets.grade.score && !('targets' in handedNone.grade),
+      'a check file\'s own mttxTargets is what a run handed none grades with; handed null, none', { file: fromFileTargets.grade, none: handedNone.grade });
+    const DURATIONS = 'mttd and mttr are not durations of whole minutes from 1m to 10080m (a week)';
+    for (const [line, why] of [
+      ['mttxTargets: lab', 'it is not { profile, mttd, mttr }'],
+      ['mttxTargets: { profile: lab }', DURATIONS],
+      ["mttxTargets: { profile: custom, mttd: '30s', mttr: 5m }", DURATIONS],
+      ['mttxTargets: { profile: custom, mttd: 0m, mttr: 5m }', DURATIONS],
+      ['mttxTargets: { profile: custom, mttd: 1m, mttr: 10081m }', DURATIONS],
+      ['mttxTargets: { profile: lab, mttd: 1m, mttr: 5m, seen: yes }', 'seen is not a targets field'],
+    ]) {
+      offFile('targets-badly', [line]);
+      assert(thrown(() => loadJourneyDef('targets-badly')) === `journey targets-badly: mttxTargets must be the service's MTTD / MTTR targets — ${why}`,
+        `a definition that says "${line}" does not load — the error says why`, thrown(() => loadJourneyDef('targets-badly')));
+    }
+    for (const name of ['no-baselines', 'no-baselines-targets', 'targets-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
+    rmSync(BARE);
     for (const name of ['runs-by-file', 'runs-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     for (const name of ['aside-gated', 'aside-by-file', 'aside-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     for (const name of ['graded-by-file', 'graded-by-file-two', 'graded-by-file-none', 'graded-and-notified']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));

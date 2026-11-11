@@ -148,7 +148,10 @@ criteria (grade schema 4), plus one informational operability check:
 2. **Correlated** - a tracecontext propagator is declared, with log
    correlation or a logs backend, so traces and logs can be joined.
 3. **Calibrated** - SLOs have numeric objectives and baselines are declared
-   (the scan's default baselines, a scaffold, do not count).
+   (the scan's default baselines and the SLOs it invents from an alert name,
+   scaffolds, do not count); where the repository states no baselines, the
+   MTTD / MTTR targets set in the studio for the service count, said as the
+   studio's.
 4. **Comprehensive** - coverage spans the major service layers (the average
    of the posture matrix's four layers: infrastructure, platform,
    application, user experience); met when that average reaches 50 in 100.
@@ -561,7 +564,8 @@ Belongs here:
   - the **MTTD / MTTR** tile: the targets the repository states (*MTTD 5m ·
     MTTR 2h*, both or none — the scan's placeholder never counts); else the
     ones set in the studio, said so (*Set in the studio (lab default), not in
-    the repository.*); else *Not declared* with *Recommended: MTTD ≤ 1 min ·
+    the repository; the grade counts them for Calibrated.*, the last clause
+    only where it does); else *Not declared* with *Recommended: MTTD ≤ 1 min ·
     MTTR ≤ 5 min* and the other profiles behind a fold — and the MTTD this
     environment's newest chaos run recorded (*over the 5m target*: amber,
     never green; a failed or aborted run said as such), or *Not measured

@@ -128,7 +128,7 @@ import { renderOverview, renderServiceList, readTokenDrafts } from './overview-v
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
 import { createControlRoomDriver } from './control-room-api.mjs';
 import { buildControlRoomModel } from './control-room-model.mjs';
-import { MTTX_CUSTOM } from './mttx-targets.mjs';
+import { MTTX_CUSTOM, withStudioTargets } from './mttx-targets.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -279,14 +279,19 @@ async function rehydrateFromPersistence() {
 }
 
 // The chaos runs recorded in the studio for a service (studio/chaos-runs.mjs) are its experiments'
-// last_result where newer than the repository's, so Expert grades what the board grades: only for
-// the service page's own pack (its primary), in that environment.
+// last_result where newer than the repository's, and its MTTD / MTTR targets set in the studio
+// (studio/mttx-targets.mjs) ride on the pack for the grade's Calibrated, so Expert grades what the
+// board grades: for the pack that is a service's own (its primary link, as gradeServiceInFocus
+// finds the switches), in that environment.
 function withServiceStudioRuns(pack, packId, env) {
-  const service = Number.isInteger(state.serviceId) ? findServiceRecord(state.serviceId) : null;
-  if (!service || !Array.isArray(service.chaosRuns) || !service.chaosRuns.length) return pack;
-  const own = packForService(service, state.catalog, { isLiveAggregatePack });
-  if (own.how !== 'primary' || own.pack?.id !== packId) return pack;
-  return withStudioRuns(pack, service.chaosRuns, { env: env || state.serviceEnv || null });
+  const service = Array.isArray(state.services)
+    ? state.services.find((s) => Array.isArray(s?.packs) && s.packs.some((p) => p && p.id === packId && p.role === 'primary')) || null
+    : null;
+  const hasRuns = Array.isArray(service?.chaosRuns) && service.chaosRuns.length > 0;
+  if (!service || (!hasRuns && !service.targets)) return pack;
+  const pageEnv = state.serviceId === service.id ? state.serviceEnv : null;   // the service page's, for its own pack only
+  const withRuns = hasRuns ? withStudioRuns(pack, service.chaosRuns, { env: env || pageEnv || null }) : pack;
+  return withStudioTargets(withRuns, service.targets);
 }
 
 // The /conformance report carries onPlaceholder itself — worked out for this
@@ -1138,6 +1143,9 @@ async function handleFile(file) {
       // alongside the file-backed ones. Pack B picker reads the same
       // catalog so it's available there too.
       await refreshCatalogue();
+      // Registered as a service's own pack: graded with its recorded chaos runs and its MTTD / MTTR
+      // targets set in the studio, as a pack Expert loads is (loadPack).
+      state.pack = withServiceStudioRuns(state.pack, state.selectedPackId, state.selectedEnv);
     }
     state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === state.selectedPackId))
       || normalizeServiceKey(state.pack?.meta?.service)
@@ -1985,7 +1993,8 @@ function deriveOverview(f, gradeOff = []) {
       d.diagnostic = computeOverviewDiagnostic(f.layered, d.posture, { off: gradeOff });
     } catch (e) { d.diagnosticError = e.message || String(e); }
   }
-  if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic }); } catch (_) { d.decision = null; } }
+  // The board's pack is a service's own: Calibrated's fix may name its targets set in the studio.
+  if (d.diagnostic) { try { d.decision = buildAssessmentDecision({ diagnostic: d.diagnostic, serviceTargets: true }); } catch (_) { d.decision = null; } }
   overviewDerived = d;
   return d;
 }
@@ -2741,7 +2750,8 @@ async function refreshOverviewFacts() {
   if (gen !== overviewGeneration) return;
   // The chaos runs recorded in the studio for this service and environment (studio/chaos-runs.mjs):
   // the measured MTTD, the control room and the repository's grade read them as the check does.
-  const layered = facts.layered ? withStudioRuns(facts.layered, picked.service.chaosRuns, { env: picked.env || null }) : facts.layered;
+  // Its MTTD / MTTR targets set in the studio ride on the pack for the grade's Calibrated (only the grade reads them).
+  const layered = facts.layered ? withStudioTargets(withStudioRuns(facts.layered, picked.service.chaosRuns, { env: picked.env || null }), picked.service.targets) : facts.layered;
   overviewFacts = { ...facts, layered, running: false, startError: null, loaded: true };
   redraw();
   // A run just recorded (Save and check again): the check runs once the board knows its journey.

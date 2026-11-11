@@ -20,9 +20,12 @@
 // "90m"), copied from the profile when one is chosen, so a later change to
 // this table never moves a service's targets — or null for none.
 //
-// Used by the studio (overview-model.mjs: the form and the board's tile;
-// app.mjs: the control room) and by the server (service-admin.mjs
-// parseTargets), as diagnostic-grade.mjs is.
+// Used by the studio (overview-model.mjs: the form, the board's tile and
+// which run's letter holds; app.mjs: the control room and Expert's pack), by
+// the server (service-admin.mjs parseTargets; index.mjs writing them into the
+// service's checks) and by tools/lib/journey.mjs (a check's `mttxTargets:`).
+// diagnostic-grade.mjs reads the pack's meta.studioTargets on its own, with
+// no import.
 
 export const MTTX_PROFILES = Object.freeze([
   Object.freeze({ id: 'lab', name: 'Lab default', mttd: '1m', mttr: '5m', mttdWords: '≤ 1 min', mttrWords: '≤ 5 min', conditions: 'A service crash, a dependency outage, a failed deployment', recommended: true }),
@@ -129,6 +132,47 @@ export function targetsView(t) {
     profile: own ? p.id : MTTX_CUSTOM, name: own ? p.name : 'Custom', mttd: t.mttd, mttr: t.mttr, mttdWords, mttrWords,
     words: `MTTD ${mttdWords} · MTTR ${mttrWords}`, by: typeof t.by === 'string' ? t.by : null, at: typeof t.at === 'string' ? t.at : null,
   };
+}
+
+// ---------- the grade ----------
+//
+// The grade (diagnostic-grade.mjs Calibrated) counts a service's targets where the repository states
+// none; the server writes them into the service's saved checks (`mttxTargets:`, tools/lib/journey.mjs)
+// and the board compares a run's with the service's (overview-model.mjs). A duration out of the
+// studio's range (1m to a week) is no target.
+
+const STORED_KEYS = new Set(['profile', 'mttd', 'mttr', 'by', 'at']);
+const inRange = (n) => n !== null && n >= 1 && n <= MTTX_MINUTES_MAX;
+const gradeTargetsView = (t) => {
+  const v = targetsView(t);
+  return v && inRange(durationMinutes(v.mttd)) && inRange(durationMinutes(v.mttr)) ? v : null;
+};
+
+/**
+ * The layered pack carrying the service's targets for the grade, as `meta.studioTargets`
+ * ({ profile, mttd, mttr }): computeDiagnosticGrade (diagnostic-grade.mjs) counts them for Calibrated
+ * where the repository states none of its own — a person chose them, signed and dated, which the
+ * scan's placeholder never was. Only the grade reads them: the comparison with live does not. None
+ * set (or not targets): the same object, untouched.
+ */
+export function withStudioTargets(layered, targets) {
+  const v = gradeTargetsView(targets);
+  if (!v || !isObj(layered)) return layered;
+  return { ...layered, meta: { ...(isObj(layered.meta) ? layered.meta : {}), studioTargets: { profile: v.profile, mttd: v.mttd, mttr: v.mttr } } };
+}
+
+/** The targets a grade was given, as a key a record and the board compare ('' for none). */
+export function targetsTermKey(t) {
+  const v = gradeTargetsView(t);
+  return v ? `${v.profile}:${durationMinutes(v.mttd)}:${durationMinutes(v.mttr)}` : '';
+}
+
+/** A check file's `mttxTargets` (the service's, written by the studio): why it does not read, or ''. */
+export function storedTargetsError(t) {
+  if (!isObj(t)) return 'it is not { profile, mttd, mttr }';
+  const extra = Object.keys(t).filter((k) => !STORED_KEYS.has(k));
+  if (extra.length) return `${extra.join(', ')} ${extra.length === 1 ? 'is not a targets field' : 'are not targets fields'}`;
+  return gradeTargetsView(t) ? '' : `mttd and mttr are not durations of whole minutes from 1m to ${MTTX_MINUTES_MAX}m (a week)`;
 }
 
 // ---------- the form's answer ----------

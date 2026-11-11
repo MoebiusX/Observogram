@@ -1156,6 +1156,8 @@ function renderDiagnose(view) {
   const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
   const decision = buildAssessmentDecision({
     diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel,
+    // A service's own pack: Calibrated's fix names the service's targets set in the studio.
+    serviceTargets: !!state.gradeService,
     remedy: isStatic() ? (key) => staticRemedy(key, staticInput()) : null,
   });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
@@ -2111,7 +2113,7 @@ export function renderPostureMatrix(posture) {
       </th>
       <td class="posture-cell-span" colspan="${POSTURE_LAYERS.length}">
         <span class="posture-pip">${pass ? '✓' : '✗'}</span>
-        <span class="posture-platform-msg">${pass ? 'declared at the pack level (applies to all layers)' : 'not declared'}</span>
+        <span class="posture-platform-msg">${!pass ? 'not declared' : posture.platformWide[`${m.key}From`] === 'studio' ? 'set in the studio for this service, not in the repository (applies to all layers)' : 'declared at the pack level (applies to all layers)'}</span>
       </td>
     </tr>`;
   }).join('');
@@ -2279,13 +2281,19 @@ const notGradedWords = (off) => notGradedSentence(off);
 const CRITERION_EVIDENCE = Object.freeze({
   'multi-modal': { field: 'spec.telemetry.backends[].signal', expected: 'metrics + logs + traces (≥ 3 of 4)' },
   correlated: { field: 'spec.otel.sdk.propagators', expected: 'includes tracecontext' },
-  calibrated: { field: 'spec.slos[].objective + spec.baselines', expected: '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared (a scaffold does not count)' },
+  calibrated: { field: 'spec.slos[].objective + spec.baselines', expected: '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared, or targets set in the studio (a scaffold does not count)' },
   comprehensive: { field: 'posture matrix · 4 layers × 10 mechanisms', expected: 'average ≥ 50% observed' },
   actionable: { field: 'spec.remediation[]', expected: '≥ 1 remediation runbook declared (informational — not scored)' },
   'chaos-validated': { field: 'spec.validation.chaos_experiments[] · last_result / the live run feed', expected: 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)' },
   'drift-free': { field: 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', expected: 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded' },
   fresh: { field: 'metadata.annotations.mcp.refreshedAt', expected: 'within last 24h' },
 });
+// The field a check read: Calibrated read the service's targets set in the
+// studio (diagnostic-grade.mjs baselines.studio) where the repository has none.
+function evidenceField(c, key) {
+  if (key === 'calibrated' && c?.baselines?.studio) return 'spec.slos[].objective + the service’s MTTD/MTTR targets set in the studio';
+  return CRITERION_EVIDENCE[key]?.field || '';
+}
 const LEDGER_ORDER = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'actionable', 'chaos-validated', 'drift-free', 'fresh'];
 
 function renderDiagnosticGradeVerdict(diagnostic) {
@@ -2324,7 +2332,7 @@ function renderDiagnosticGradeVerdict(diagnostic) {
     || trust.criteria.find(c => c.key === key)
     || operability.criteria.find(c => c.key === key);
   const evidenceRows = LEDGER_ORDER.map((key) => ({
-    key, field: CRITERION_EVIDENCE[key].field, exp: CRITERION_EVIDENCE[key].expected,
+    key, field: evidenceField(C(key), key), exp: CRITERION_EVIDENCE[key].expected,
     obs: C(key)?.detail || '—',
     pass: C(key)?.pass,
     score: C(key)?.score,
@@ -4130,7 +4138,7 @@ const OPERABILITY_WHY = 'Runbooks say how ready the response is, not how well th
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
-function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null }) {
+function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null, serviceTargets = false }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
     key: c.key, scored: true,
@@ -4176,14 +4184,32 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     b.actionId = 'diag-goto:diag-layers';
   } else if (c.key === 'chaos-validated') {
     Object.assign(b, chaosBlockerCopy(c));
+  } else if (c.key === 'calibrated' && (c.baselines?.studio || c.baselines?.declared > 0)) {
+    // The baselines half is there — the repository's, or the service's MTTD /
+    // MTTR targets set in the studio standing in for them: what is missing is
+    // an SLO with a number of its own (the scan's invented ones earn nothing).
+    const whose = c.baselines?.studio ? 'The detection and repair targets set in the studio count' : 'The detection and repair baselines are declared';
+    b.why = c.objectives?.scaffolds > 0
+      ? `${whose}, but the SLO objectives are defaults the scan wrote, so nothing says what normal is.`
+      : `${whose}, but no SLO has a numeric objective, so nothing says what normal is.`;
+    b.fix = 'Give each SLO a numeric objective.';
   } else if (c.key === 'calibrated' && c.baselines?.scaffolds > 0 && !c.baselines.declared) {
     // The only baselines are the scaffold every scan writes (platform
     // defaults): nothing measured them, and the next scan writes them again.
+    // A service's own targets set in the studio count for them.
     b.why = 'The detection and repair baselines in this pack are defaults the scan wrote, never measured, so nobody can tell whether a response was fast or slow.';
-    b.fix = 'Measure MTTD and MTTR and declare them as baselines. A pack the repository scan writes keeps its default baselines until the scan can read measured ones.';
+    b.fix = serviceTargets
+      ? `${STUDIO_TARGETS_FIX}, or measure MTTD and MTTR and declare them as baselines in the repository.`
+      : 'Measure MTTD and MTTR and declare them as baselines. A pack the repository scan writes keeps its default baselines until the scan can read measured ones.';
+  } else if (c.key === 'calibrated' && serviceTargets) {
+    b.fix = `${copy.fix} For the baselines, you can instead ${STUDIO_TARGETS_FIX.charAt(0).toLowerCase()}${STUDIO_TARGETS_FIX.slice(1)}.`;
   }
   return b;
 }
+
+// Where the pack is a service's own (`serviceTargets`), Calibrated's fix names
+// the studio's route for the baselines: the service's targets count for them.
+const STUDIO_TARGETS_FIX = 'Set this service’s MTTD / MTTR targets in the studio (Set targets… on its board)';
 
 // THE Assessment decision, derived from the diagnostic (and, with a
 // baseline, the same lensed digest the drill renders). Pure: every input
@@ -4193,7 +4219,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
 // the header's causes. `remedy` is the static posture's text for a fix that
 // names a server action (studio/static-remedies.mjs staticRemedy, bound to
 // the product), or null on a server.
-export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '', remedy = null } = {}) {
+export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '', serviceTargets = false, remedy = null } = {}) {
   const overall = diagnostic.overall;
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
@@ -4238,7 +4264,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   const noLiveFresh = !hasLive && failing.some(f => f.c.key === 'drift-free') ? failing.find(f => f.c.key === 'fresh') : null;
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
-    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy });
+    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -4315,12 +4341,12 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     const left = !informational && c.applies === false;
     const score = criterionScore(c);
     const st = informational ? 'info' : left ? 'off' : c.pass ? 'pass' : score > 0 ? 'partial' : 'fail';
-    const b = st === 'fail' || st === 'partial' ? criterionBlocker(c, 1 - score, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy }) : null;
+    const b = st === 'fail' || st === 'partial' ? criterionBlocker(c, 1 - score, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets }) : null;
     const elsewhere = b && b.actionId !== `diag-crit:${c.key}`;   // "View the check" is the row itself
     const counts = st === 'pass' || st === 'partial' || st === 'fail';
     return {
       key: c.key, label: c.label, group, state: st, met: !!c.pass,
-      observed: c.detail || '', expected: CRITERION_EVIDENCE[c.key]?.expected || c.sub || '', field: CRITERION_EVIDENCE[c.key]?.field || '',
+      observed: c.detail || '', expected: CRITERION_EVIDENCE[c.key]?.expected || c.sub || '', field: evidenceField(c, c.key),
       earned: counts ? score * pointsPerCheck : 0, worth: counts ? pointsPerCheck : 0,
       title: b?.title || '', why: b?.why || CRITERION_COPY[c.key]?.why || (informational ? OPERABILITY_WHY : ''), fix: b?.fix || '', cost: b?.cost || '',
       actionLabel: elsewhere ? b.actionLabel : '', actionId: elsewhere ? b.actionId : '',

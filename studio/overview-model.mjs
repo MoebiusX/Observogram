@@ -32,7 +32,7 @@ import { agoText, packForService } from './services-model.mjs';
 import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
-import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
+import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
@@ -155,11 +155,11 @@ export function journeyIsLive(journey) {
 // grades the repository alone then, and so does Expert), a recording, a
 // listing without the field — and Expert opens on the repository alone, as
 // before: a host whose server keeps no live pack is unchanged.
-export function boardComparison({ journey = null, run = null, catalog = [], pack = null, off = [], aside = '' } = {}) {
+export function boardComparison({ journey = null, run = null, catalog = [], pack = null, off = [], aside = '', targets = '' } = {}) {
   const kept = journey?.livePack;
   const read = run?.packB?.refreshedAt;
   if (!kept || typeof kept.id !== 'string' || !kept.id || !read || kept.refreshedAt !== read) return null;
-  if (!runGradesBoard(run, pack, off, aside)) return null;
+  if (!runGradesBoard(run, pack, off, aside, targets)) return null;
   if (!(Array.isArray(catalog) ? catalog : []).some((p) => p && p.id === kept.id && p.ok !== false)) return null;
   return { packBId: kept.id, envB: null, label: typeof kept.label === 'string' && kept.label ? kept.label : null };
 }
@@ -223,10 +223,24 @@ export function verdictWordFor(scorePct) {
 // (its grade.setAside.fingerprint) is not the letter either.
 const offKey = (off) => gradeOffKeys(off).join(',');
 const asideKey = (run) => (typeof run?.grade?.setAside?.fingerprint === 'string' ? run.grade.setAside.fingerprint : '');
+// `targets`: the key of the MTTD / MTTR targets set in the studio the grade counts now
+// (mttx-targets.mjs targetsTermKey, '' for none: none set, or Calibrated does not read them) — a
+// run graded with other targets (its grade.targets, recorded only when its Calibrated counted
+// them) is not the letter either.
+const runTargetsKey = (run) => targetsTermKey(run?.grade?.targets ?? null);
 const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
-const sameTerms = (run, off, aside) => offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '');
-export function runGradesBoard(run, pack, off = [], aside = '') {
-  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside);
+const sameTerms = (run, off, aside, targets = '') => offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '') && runTargetsKey(run) === (targets || '');
+export function runGradesBoard(run, pack, off = [], aside = '', targets = '') {
+  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
+}
+// The key of a service's MTTD / MTTR targets now ('' for none).
+export const serviceTargetsKey = (service) => targetsTermKey(service?.targets ?? null);
+// Whether the grade counts the service's targets set in the studio: its Calibrated read them (the
+// repository states no baselines of its own, and Calibrated is graded). null: no grade to ask.
+export function studioTargetsCounted(diagnostic) {
+  if (!diagnostic) return null;
+  const c = criterionOf(diagnostic, 'calibrated');
+  return !!c?.baselines?.studio && c.applies !== false;
 }
 // The name of a service's set-asides that hold at `now` ('' for none).
 export const serviceAsideKey = (service, now = Date.now()) => setAsideFingerprint(service?.setAside, new Date(now).toISOString());
@@ -284,7 +298,10 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
       'Traces and logs can be joined, so one request can be followed end to end.',
       'Traces and logs cannot be joined, so a request cannot be followed end to end.'),
     line(c.calibrated,
-      `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
+      c.calibrated.baselines?.studio
+        // Counted from the studio: said as the studio's, never as the repository's.
+        ? `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair targets set in the studio (${studioTargetsName(c.calibrated.baselines.studio)}).`
+        : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
       calibratedNo(c.calibrated)),
     line(c.comprehensive,
       `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience.`,
@@ -293,10 +310,22 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
   ];
 }
 
+// The targets set in the studio, named: a profile's name ("lab default"), or their minutes.
+function studioTargetsName(t) {
+  const v = targetsView(t);
+  if (!v) return 'set by hand';
+  return v.profile === MTTX_CUSTOM ? v.words : v.name.toLowerCase();
+}
+
 // Calibrated's "no": the baselines are missing, or only placeholders the
 // scan wrote (the engine's `baselines.scaffolds`), or no objective has a target.
 function calibratedNo(crit) {
-  if (!/no .*baselines/i.test(crit.detail)) return 'Normal is not defined with numbers: no objective has a target.';
+  if (!/no .*baselines/i.test(crit.detail)) {
+    // The baselines half is there; the objectives are missing, or only the scan's invented ones (`objectives.scaffolds`).
+    return crit.objectives?.scaffolds > 0 && !crit.objectives.declared
+      ? 'Normal is not defined with numbers: the objectives are defaults the scan wrote, not targets anyone set.'
+      : 'Normal is not defined with numbers: no objective has a target.';
+  }
   return crit.baselines?.scaffolds > 0
     ? 'Normal is not defined with numbers: the detection and repair baselines are defaults the scan wrote, not measurements.'
     : 'Normal is not defined with numbers: no detection and repair baselines.';
@@ -448,7 +477,7 @@ const toneForLetter = (letter) => {
 // side (outcome pass or gate-failed); otherwise the pack-alone grade, and the
 // source line says which. A live recording as Pack B is graded "against a
 // recording", never "against live".
-export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now(), off = [], aside = '' } = {}) {
+export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagnosticError = null, run = null, journey = null, now = Date.now(), off = [], aside = '', targets = '' } = {}) {
   const offCount = gradeOffKeys(off).length;
   const criteria = offCount ? { criteria: `Graded on ${GRADE_CRITERIA.length - offCount} of ${GRADE_CRITERIA.length} criteria` } : {};
   if (!pack || how === 'none') {
@@ -460,7 +489,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // A run that saw less of the live side than the check before graded a
   // smaller picture: not usable as the letter, and the source line says so.
   const shrank = vantageShrank(run);
-  if (runGradesBoard(run, pack, off, aside)) {
+  if (runGradesBoard(run, pack, off, aside, targets)) {
     const ig = instrumentGradeFor(Number(run.grade.score)) || { letter: run.grade.letter, label: run.grade.letterLabel || '', blurb: '' };
     const letter = run.grade.letter;
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
@@ -486,8 +515,12 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
-  const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside);
-  const whatChanged = offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed' : 'what is set aside changed';
+  const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
+  const whatChanged = offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed'
+    : asideKey(run) !== (aside || '') ? 'what is set aside changed'
+      : !runTargetsKey(run) ? 'the grade has counted the MTTD / MTTR targets set in the studio'
+        : !targets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
+          : 'the MTTD / MTTR targets changed';
   // A check that reads a recording is not checked again from here: the line does not say to.
   const liveCheck = journey ? journeyIsLive(journey) : /^mcp:/i.test(String(run?.packB?.source || ''));
   return {
@@ -988,7 +1021,7 @@ const targetsActionFor = (origin, settable) => (!settable || origin === 'reposit
 //            (chaosExperimentsOf) and the host can open the form (`settable`, as for the targets)
 //   parts  for a link of several families, each one's count ("58 alert rules · 8 burn-rate alerts")
 //   note   alerts: the objectives no burn-rate alert covers; a link with none: that none was found
-export function chainModel({ layered = null, targets = null, env = null, settable = false } = {}) {
+export function chainModel({ layered = null, targets = null, env = null, settable = false, counted = false } = {}) {
   if (!layered) return null;
   const d = declaredByTier(layered);
   const links = CHAIN_LINKS.map((l) => {
@@ -1020,7 +1053,7 @@ export function chainModel({ layered = null, targets = null, env = null, settabl
     declared: true, origin: 'studio',
     targets: src.words,
     measured,
-    note: `Set in the studio${src.view.profile === MTTX_CUSTOM ? '' : ` (${src.view.name.toLowerCase()})`}, not in the repository. ${measured ? `${measured}.`.replace(/\.\.$/, '.') : (elsewhere || notMeasured)}`,
+    note: `Set in the studio${src.view.profile === MTTX_CUSTOM ? '' : ` (${src.view.name.toLowerCase()})`}, not in the repository${counted ? '; the grade counts them for Calibrated' : ''}. ${measured ? `${measured}.`.replace(/\.\.$/, '.') : (elsewhere || notMeasured)}`,
     hint: 'Set in the studio for this service and kept with its record.',
     tone: met ? 'ok' : 'warn', recommended: null, action: targetsActionFor('studio', settable),
   } : {
@@ -1383,7 +1416,12 @@ export function buildOverviewModel(input = {}) {
   const off = Array.isArray(picked.service.gradeOff) ? picked.service.gradeOff : [];
   // The differences its grade leaves out (its record's setAside), by the name of those that hold now.
   const aside = serviceAsideKey(picked.service, now);
-  const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off, aside });
+  // The MTTD / MTTR targets its grade counts (its record's targets, where Calibrated reads them), by
+  // their key; with no grade to ask, the record's.
+  const counted = studioTargetsCounted(pending ? null : diagnostic);
+  // No grade to ask (the pack could not be read): Calibrated switched off counts nothing either way.
+  const targets = counted === false || (counted === null && gradeOffKeys(off).includes('calibrated')) ? '' : serviceTargetsKey(picked.service);
+  const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off, aside, targets });
   const canSwitch = gradeSwitches === true && picked.how === 'primary' && !pending;
   // `graded`: the criteria the service is graded on, by name — where the reasons are not offered
   // (they would not add up to the letter), the board lists these so each can still be switched.
@@ -1411,7 +1449,7 @@ export function buildOverviewModel(input = {}) {
     // The chain the repository declares (exporters, alerts, dashboards, MTTD / MTTR).
     // Set targets… / Change targets… only where the host draws the service list (the form lives there),
     // for a service record, to a rank that may change it.
-    chain: graded ? chainModel({ layered, targets: picked.service?.targets ?? null, env: picked.env ?? null, settable: !!listable && Number.isInteger(picked.service?.id) && access?.canWrite !== false }) : null,
+    chain: graded ? chainModel({ layered, targets: picked.service?.targets ?? null, env: picked.env ?? null, settable: !!listable && Number.isInteger(picked.service?.id) && access?.canWrite !== false, counted: counted === true }) : null,
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     // What the last Run's scan read and left out (null: no record says).
     scan: graded && journey ? scanModel({ run }) : null,
@@ -1426,7 +1464,7 @@ export function buildOverviewModel(input = {}) {
     journey: journey ? { name: journey.name, live: journeyIsLive(journey) } : null,
     // What the columns' "Open in …" carry to the host: the comparison the
     // board graded (boardComparison), null while nothing graded it.
-    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off, aside }) : null,
+    compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off, aside, targets }) : null,
     grade, still, next, primary, productName, layout, board,
     // The control room (control-room-model.mjs): offered when the host wires
     // it (`controlRoom`) — a read of the environment's live endpoint, so the
@@ -1508,7 +1546,14 @@ export function repositoryLine(repository, { now = Date.now() } = {}) {
 // the sign).
 // `off`: the criteria the service is not graded on now (its record's gradeOff);
 // `aside`: the name of its set-asides that hold now (serviceAsideKey).
-function lastCheckOf(journey, now, off = [], aside = '') {
+// A row has no grade to ask whether the targets count now. A run that counted targets differs from a
+// service with other targets or none (the board always grades it again then); a run that names none
+// (before any were set, or its Calibrated did not read them) is not flagged — only a grade can tell.
+const targetsDiffer = (runTargets, targets) => {
+  const was = targetsTermKey(runTargets ?? null);
+  return !!was && was !== (targets || '');
+};
+function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
   const last = journey?.lastRun || null;
   if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
   const ago = agoText(last.startedAt, now);
@@ -1525,7 +1570,8 @@ function lastCheckOf(journey, now, off = [], aside = '') {
   const lastAside = typeof last.setAside?.fingerprint === 'string' ? last.setAside.fingerprint : '';
   const before = !ig ? ''
     : offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed"
-      : lastAside !== (aside || '') ? " · graded before this service's set-asides changed" : '';
+      : lastAside !== (aside || '') ? " · graded before this service's set-asides changed"
+        : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';
   const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
   const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
   return {
@@ -1600,7 +1646,7 @@ export function serviceListModel(input = {}) {
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
-        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now));
+        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now), serviceTargetsKey(s));
       const busy = !!running[key];
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;

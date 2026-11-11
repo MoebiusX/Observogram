@@ -504,6 +504,93 @@ test('a journey\'s run is graded on the switches of its own org\'s service recor
   assert.deepEqual((await ok('GET /api/services/:id', 'vera', `/api/services/${ids.ledgerNulls}`)).json.service.gradeOff, []);
 });
 
+test('a journey\'s run counts its service\'s MTTD / MTTR targets set in the studio for Calibrated where the repository states none: the record and the listing name them, the studio\'s saved check is rewritten with them, and none set grades as before', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { computeDiagnosticGrade, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const { withStudioTargets } = await import('../studio/mttx-targets.mjs');
+  const { adapt } = await import('../tools/lib/adapter.mjs');
+  const { diffPacks } = await import('../tools/lib/diff.mjs');
+  const { comparePackBranches } = await import('../tools/lib/traceability-graph.mjs');
+  const NAME = 'targets-graded';
+  const RUN = 'POST /api/journeys/:name/run';
+  const dir = join(WORKSPACE, 'orgs', 'acme', 'journeys');
+  mkdirSync(dir, { recursive: true });
+  // A scanned repository with no baselines of its own: the scan's placeholder, marked as the scan marks it.
+  const packA = parseYaml(readFileSync(join(ROOT, 'examples', 'target-advanced.pack.yaml'), 'utf8'));
+  packA.spec.baselines = { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' };
+  packA.metadata.annotations = { ...(packA.metadata.annotations || {}), 'crawler.scaffold.baselines': 'schema-required fallback; no source evidence found in selected environment' };
+  const FILE_A = join(WORKSPACE, 'orgs', 'acme', 'targets-graded.pack.json');
+  const FILE_B = join(ROOT, 'examples', 'production-curated.pack.yaml');
+  writeFileSync(FILE_A, JSON.stringify(packA));
+  const layeredA = adapt(packA, { environment: 'prod' });
+  const layeredB = adapt(parseYaml(readFileSync(FILE_B, 'utf8')), {});
+  const diff = { ...diffPacks(layeredA, layeredB, { service: 'ledger-nulls' }), traceabilityGraph: comparePackBranches(layeredA, layeredB) };
+  const LAB = { profile: 'lab', mttd: '1m', mttr: '5m' };
+  const scoreWith = (t) => Math.round(computeDiagnosticGrade(withStudioTargets(layeredA, t), layeredB, computePostureMatrix(layeredA, layeredB), null, diff, {}).overall.audit.scorePctExact);
+  assert.ok(scoreWith(LAB) > scoreWith(null), 'the studio\'s targets lift this pack\'s score');
+  const file = join(dir, `${NAME}.journey.yaml`);
+  // Written as the studio writes a service's check (its banner), so the server keeps it in step with the record.
+  writeFileSync(file, ['# Saved by the service ledger-nulls, environment prod, on 2026-11-11T16:00:00.000Z.', `name: ${NAME}`, `packA: { file: ${FILE_A.replaceAll('\\', '/')} }`, `packB: { file: ${FILE_B.replaceAll('\\', '/')} }`, 'env: prod', 'service: ledger-nulls', 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+  try {
+    const before = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([before.json.record.grade.score, 'targets' in before.json.record.grade], [scoreWith(null), false], 'none set: graded as before');
+    await ok('PATCH /api/services/:id', 'oscar', `/api/services/${ids.ledgerNulls}`, { targets: { profile: 'lab' } });
+    assert.match(readFileSync(file, 'utf8'), /mttxTargets:/, 'the studio\'s saved check is rewritten with them');
+    const counted = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([counted.json.record.grade.score, counted.json.record.grade.targets], [scoreWith(LAB), LAB], 'counted for Calibrated, named on the record');
+    const lastRun = (await call('vera', 'GET', '/api/journeys')).json.journeys.find((j) => j.name === NAME).lastRun;
+    assert.deepEqual(lastRun.targets, LAB, 'and on the listing');
+    await ok('PATCH /api/services/:id', 'oscar', `/api/services/${ids.ledgerNulls}`, { targets: null });
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /mttxTargets:/, 'cleared: the check loses them');
+    const cleared = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([cleared.json.record.grade.score, 'targets' in cleared.json.record.grade], [scoreWith(null), false]);
+  } finally {
+    for (const path of [file, FILE_A, join(WORKSPACE, 'orgs', 'acme', 'runs', NAME)]) rmSync(path, { recursive: true, force: true });
+    await call('oscar', 'PATCH', `/api/services/${ids.ledgerNulls}`, { targets: null });
+  }
+});
+
+test('a service\'s MTTD / MTTR targets reach its saved checks: made with them (a check left under its name gains them), a check saved without them is graded on them through the server, left as it was by a Check now and given them at the next start, and deleting a service whose only studio value is its targets takes them out', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const NAME = 'targets-everywhere';
+  const dir = join(WORKSPACE, 'orgs', 'acme', 'journeys');
+  mkdirSync(dir, { recursive: true });
+  const packA = parseYaml(readFileSync(join(ROOT, 'examples', 'target-advanced.pack.yaml'), 'utf8'));
+  packA.spec.baselines = { mttd_target_p50: '15m', mttr_target_p50: '1d', review_cadence: 'monthly' };
+  packA.metadata.annotations = { ...(packA.metadata.annotations || {}), 'crawler.scaffold.baselines': 'schema-required fallback; no source evidence found in selected environment' };
+  const FILE_A = join(WORKSPACE, 'orgs', 'acme', `${NAME}.pack.json`);
+  const FILE_B = join(ROOT, 'examples', 'production-curated.pack.yaml');
+  writeFileSync(FILE_A, JSON.stringify(packA));
+  const file = join(dir, `${NAME}.journey.yaml`);
+  // A check the studio saved for a service of this name, before any targets reached files.
+  const plain = ['# Saved by the service targets-only, environment prod, on 2026-11-11T16:00:00.000Z.', `name: ${NAME}`, `packA: { file: ${FILE_A.replaceAll('\\', '/')} }`, `packB: { file: ${FILE_B.replaceAll('\\', '/')} }`, 'env: prod', 'service: targets-only', 'gate: { minAlignmentPct: 1 }', ''].join('\n');
+  writeFileSync(file, plain);
+  let id = null;
+  try {
+    // 1. Made with targets: the check under its name gains them at once.
+    id = (await ok('POST /api/services', 'oscar', '/api/services', { name: 'Targets Only', targets: { profile: 'lab' } }, 201)).json.service.id;
+    assert.match(readFileSync(file, 'utf8'), /mttxTargets:/, 'a service made with targets writes them into its check');
+    // 2. A check without them (saved before targets reached files): through the server the record is asked, and a
+    // Check now never rewrites the check — the service's next Run or a change of its targets does.
+    writeFileSync(file, plain);
+    const run = await ok('POST /api/journeys/:name/run', 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual(run.json.record.grade.targets, { profile: 'lab', mttd: '1m', mttr: '5m' }, 'the run counts the record\'s targets');
+    assert.equal(readFileSync(file, 'utf8'), plain, 'and leaves the check as it was');
+    // 3. The next start writes them in (a check saved before checks carried them), its banner and keys kept.
+    const again = await start({ port: 0, host: '127.0.0.1', silent: true });
+    await new Promise((resolve) => again.close(resolve));
+    const synced = readFileSync(file, 'utf8');
+    assert.ok(/mttxTargets:/.test(synced) && synced.startsWith('# Saved by the service targets-only') && /service: targets-only/.test(synced), `a start writes the service's targets into its check: ${synced}`);
+    // 4. Deleted with only targets set: the check is no service's and loses them.
+    await ok('DELETE /api/services/:id', 'oscar', `/api/services/${id}`);
+    id = null;
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /mttxTargets:/, 'deleting the service takes its targets out of its check');
+  } finally {
+    for (const path of [file, FILE_A, join(WORKSPACE, 'orgs', 'acme', 'runs', NAME)]) rmSync(path, { recursive: true, force: true });
+    if (id !== null) await call('oscar', 'DELETE', `/api/services/${id}`);
+  }
+});
+
 // ---------- environments ----------
 
 test('POST /api/services/:id/environments: an environment (201) as the view, its exact row; effectiveTier falls back to the service\'s', async () => {
