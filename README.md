@@ -148,9 +148,17 @@ record's own counts), and a check's report has a *The chain* line.
 A repository states the MTTD / MTTR it holds itself to in its own pack, and
 the scan takes them as declared instead of the placeholder it writes
 otherwise (*15m / 1d*, never counted as Calibrated). Without them, the
-targets set in the studio for the service (*Add a service*, *Change*) are
-what the board and the control room measure against, said as the studio's;
-they stay on the service record and do not enter the pack or its grade:
+targets set in the studio for the service (*Add a service*, *Set targets…*,
+*Change*) are what the board and the control room measure against, and what
+the grade's Calibrated counts, said as the studio's every time (*Normal is
+defined with numbers: 18 objectives, with detection and repair targets set in
+the studio (lab default).*): a person chose them, signed and dated, which the
+scan's placeholder never was. They stay on the service record and never enter
+the repository's pack (the grade reads a copy carrying them); a check records
+the ones its Calibrated counted (`grade.targets`), the studio's saved checks
+carry them (`mttxTargets:`) for `packc journey run` and a schedule, and a
+letter graded with other targets is graded again from the repository until the
+next check:
 
 ```yaml
 # .observability/pack.yaml
@@ -449,7 +457,10 @@ The checks are (grade schema 4):
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated (a repository states its own
-in `.observability/pack.yaml`, `spec.baselines`, and those count), and a placeholder chaos
+in `.observability/pack.yaml`, `spec.baselines`, and those count; where it
+states none, the MTTD / MTTR targets set in the studio for the service count,
+said as the studio's), nor do the SLOs the scan invents from an alert name
+(their objective is a default), and a placeholder chaos
 experiment does not make it Chaos-validated. Chaos-validated tells declared
 from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
 a quarter of the point, and the rest needs a recent passing run of every
@@ -1859,8 +1870,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.31 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.31
+docker build -t observogram:0.8.32 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.32
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1923,7 +1934,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.31
+  observogram:0.8.32
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1931,7 +1942,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.31
+    image: observogram:0.8.32
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

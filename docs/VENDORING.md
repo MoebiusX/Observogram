@@ -153,8 +153,18 @@ same packs. Calibrated and Chaos-validated skip artefacts whose `source` is
 `Scaffold` (the scan's default baselines, a library chaos experiment still on
 its generic fault), and a chaos experiment's posture layer (Comprehensive)
 comes from its `spec.target`, else its steady-state hypothesis' SLO — never its
-id or title. Two criteria gain optional keys a host may ignore: Calibrated's
-`baselines` (`{ declared, scaffolds }`), Chaos-validated's `declared`,
+id or title; the SLOs the scan invents from an alert name (`crawler.scaffold.slos.*`,
+an objective of defaults) earn Calibrated nothing either. Two criteria gain optional
+keys a host may ignore: Calibrated's
+`baselines` (`{ declared, scaffolds }`, and `studio: { profile, mttd, mttr }` whenever
+the pack carries MTTD / MTTR targets set in the studio — its
+`meta.studioTargets`, put there by `studio/mttx-targets.mjs` `withStudioTargets`;
+whole minutes from 1m to a week, else they count nothing — and the repository
+states no baselines of its own; they counted only where the criterion is graded,
+`applies !== false`, as `tools/lib/journey.mjs` and `overview-model.mjs`
+`studioTargetsCounted` read it; the posture matrix's `platformWide` then gains
+`baselinesFrom: 'studio'`) and `objectives` (`{ declared, scaffolds }`, only when
+the scan invented some), Chaos-validated's `declared`,
 `scaffolds`, `unobserved` (`{ repository, live }`, each a reason or null) and
 `fromScan` (Pack A carries `crawler.discoveredAt`). `unobserved` reads two
 annotations: `crawler.unobserved.chaos` on Pack A (the repository scan has no
@@ -168,7 +178,7 @@ without the third argument it says "None in this pack" as before.
 | [`studio/control-room-model.mjs`](../studio/control-room-model.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | the control room's model, pure: the panel's state from one read to the next (`controlRoomOpened`, `controlRoomReading`, `controlRoomAnswered`, `controlRoomFailed`, `controlRoomDue` — a minute; 1, 2, then 4 minutes after consecutive failures; none hidden, none after a final refusal) and `buildControlRoomModel({ state, serviceName, envName, mttx, now })`, the server's answer in words and numbers (MTTR and MTTD first, never a figure the read did not support; what the figures are of said under the title — the service's own, as the server scopes the read to its repository's alert rules and scrape jobs, or the endpoint's whole from an older server); `mttx` is `overview-model.mjs` `controlRoomMttx({ loaded, layered, layeredError, targets, settable })` — the repository's targets (`origin: 'repository'`), else the studio's with their words (`origin: 'studio'`, `mttdWords`, `mttrWords`: measured against, said so), else `{ declared: false, recommended }` (no verdict), each with every recorded chaos run (`runs`) and, with `settable`, `action` (*Set targets…* / *Change targets…*, the model's `targets: { label, aria }`, the panel's button to `host.overview.setTargets()`); `{ unread: true }` while the repository's pack is not read |
 | [`studio/control-room-view.mjs`](../studio/control-room-view.mjs) | imports `util.mjs` (escapeHtml), `host.mjs`, `ux-kit-pure.mjs` — as `overview-view.mjs` (CI-asserted) | `renderControlRoom(container, model, host)`: the panel into its own host element (never inside the board, which repaints) — two children, the panel and a live region kept across repaints; a repaint of the same service environment redraws only the pieces whose words changed — `host.overview.closeControlRoom` and `refreshControlRoom`; `placeControlRoom(head)`; `formatValue`, `boundWords` |
 | [`studio/control-room-api.mjs`](../studio/control-room-api.mjs) | imports `services-api.mjs` (requestJson) and `control-room-model.mjs` (CI-asserted) | `loadControlRoom(serviceId, env)` (`POST /api/services/:id/control-room`) and `createControlRoomDriver({ load, onChange, timers, visibility })`: one read at a time while the panel is open, paused while the page is hidden |
-| [`studio/mttx-targets.mjs`](../studio/mttx-targets.mjs) | **zero-import** (CI-asserted: `tools/test-mttx-targets.mjs`) | the MTTD / MTTR targets a service can be given in the studio: `MTTX_PROFILES` (Lab default — the recommended one —, Critical financial service, Significant degradation, Noncritical service), `targetsView`, the form's answer (`targetsFormValues`, `targetsFromForm`, `targetsFormProblems`, `targetsOptions`) and what the server accepts (`targetsErrors`, `targetsRecord`); the server's `parseTargets` reads the same list |
+| [`studio/mttx-targets.mjs`](../studio/mttx-targets.mjs) | **zero-import** (CI-asserted: `tools/test-mttx-targets.mjs`) | the MTTD / MTTR targets a service can be given in the studio: `MTTX_PROFILES` (Lab default — the recommended one —, Critical financial service, Significant degradation, Noncritical service), `targetsView`, the form's answer (`targetsFormValues`, `targetsFromForm`, `targetsFormProblems`, `targetsOptions`) and what the server accepts (`targetsErrors`, `targetsRecord`); the server's `parseTargets` reads the same list. The grade: `withStudioTargets(layered, targets)` puts them on the pack (`meta.studioTargets`) for `computeDiagnosticGrade`'s Calibrated, which counts them where the repository states no baselines of its own — apply it as the board and Expert do (`studio/app.mjs`), and a check takes them as `runJourney({ mttxTargets })` or its file's `mttxTargets` (`storedTargetsError` says why one does not load); `targetsTermKey` is the key the board compares a run's `grade.targets` with the service's — a run names them only when its Calibrated counted them, so a host grading checks itself records `grade.targets` the same way, or the board grades a counted letter again from the repository (`overview-model.mjs` `studioTargetsCounted`) |
 | [`studio/chaos-runs.mjs`](../studio/chaos-runs.mjs) | **zero-import** (CI-asserted: `tools/test-chaos-runs.mjs`) | the chaos runs a person records in the studio: what the server accepts (`chaosRunErrors`, `chaosRunRecord`, `chaosRunId`, `sameChaosRun`), the MTTD typed (`parseMttdText`, `mttdSeconds`, `mttdDuration`), a run in words (`chaosRunWords`), and `withStudioRuns(layered, runs, { env })` — the newest run of each experiment in an environment as its `last_result` where newer than the repository's; the server's `parseChaosRuns` and the journey runner read the same rules |
 | [`studio/artefact-tiers.mjs`](../studio/artefact-tiers.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | what people know and what they do not: every artefact family's tier — 1 the chain (exporters, alerts, dashboards, MTTD / MTTR), 2 the detail, 3 the machinery — `declaredByTier(layered)` (what a pack declares by tier, the objectives no burn-rate alert covers, the MTTD / MTTR targets), `comparisonByTier(diff)` (a comparison by link and tier: what each run records as `drift.tiers`), `CHAIN_LINKS`, `tierOfFamily`, `familyOfArtefact`; its id prefixes mirror `tools/lib/artefact-classify.mjs` (CI-asserted: `tools/test-artefact-tiers.mjs`) |
 | [`studio/overview-view.mjs`](../studio/overview-view.mjs) | `escapeHtml` from `util.mjs` (the stub); `host.mjs`; `ux-kit-pure.mjs` (CI-asserted) | `renderOverview(container, model, host)`: the board and its simple fallback layout from the model; actions ride on `host.overview` |
@@ -441,9 +451,10 @@ folder on the server) and the live MCP endpoint (the environment's
 `mcpEndpoint`) — its last check, and *Run*, *Open*, *Change*; *Add a service*
 is the form of five answers (the fifth, the MTTD / MTTR targets, saved on
 the service record as `targets`; the board's tile takes them as
-`chainModel({ layered, targets, env, settable })`, after the repository's own, with the
+`chainModel({ layered, targets, env, settable, counted })`, after the repository's own, with the
 environment's newest chaos run beside them, and `buildOverviewModel` sets
-`settable` from `listable` and the reader's rank, so the tile offers *Set
+`counted` (`studioTargetsCounted(diagnostic) === true`: the tile then says the
+grade counts them) and `settable` from `listable` and the reader's rank, so the tile offers *Set
 targets…* / *Change targets…* to `host.overview.setTargets()`; pass `targetsTouched` from the
 form to `savePlan` so an *Add* that completes a record never replaces the
 targets it has with the form's own start). It is opt-in like the start: without
