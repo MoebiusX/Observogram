@@ -18,6 +18,7 @@ import { CONTROL_ROOM_FAMILIES, CONTROL_ROOM_UNITS } from './lib/contracts/contr
 import {
   CONTROL_ROOM_LIMITS, normaliseSeverity, statusWord, judgeValue, jobsRegex, cleanError,
   incidentsFrom, timingSummary, familyRowErrors, controlRoomFamilies, detectionQuery, pickVariant, readControlRoom, openControlRoom,
+  scopeSelectors, scopeQueries,
 } from './lib/control-room.mjs';
 import { capabilityTool } from './lib/contracts/mcp-capabilities.mjs';
 
@@ -447,4 +448,94 @@ test('openControlRoom: an answer past its cap fails that part, said; end() sends
   await new Promise((r) => setTimeout(r, 10));
   await Promise.race([r2.end(), new Promise((r) => setTimeout(r, 200))]);
   assert.equal(requests.filter((q) => q.method === 'DELETE').length, 1, 'the main session ended, the history one still opening');
+});
+
+// ---------- the scope: a service's own series ----------
+
+// The metric names an expression reads: every name outside strings, matchers, by / without / on lists,
+// ranges and function calls — each must carry the scope's matcher.
+const PROMQL_WORDS = new Set(['sum', 'rate', 'irate', 'increase', 'by', 'without', 'histogram_quantile', 'or', 'and', 'unless', 'on', 'ignoring', 'group_left', 'group_right', 'offset', 'bool', 'max', 'min', 'avg', 'count', 'topk', 'bottomk', 'clamp_min', 'clamp_max', 'abs', 'time', 'vector', 'scalar', 'label_replace', 'max_over_time', 'min_over_time', 'avg_over_time', 'sum_over_time', 'last_over_time', 'delta', 'deriv', 'changes', 'resets', 'absent', 'count_over_time', 'quantile', 'stddev', 'round', 'ceil', 'floor', 'sort', 'timestamp']);
+function unscopedNames(out, matcher) {
+  const bare = out.replace(/"[^"]*"/g, (q) => '_'.repeat(q.length));
+  const missed = [];
+  for (const m of bare.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)) {
+    const w = m[0];
+    const head = bare.slice(0, m.index);
+    if (PROMQL_WORDS.has(w) || /[0-9.]$/.test(head)) continue;
+    if (/^\s*\(/.test(bare.slice(m.index + w.length))) continue;
+    if ((head.match(/\{/g) || []).length > (head.match(/\}/g) || []).length) continue;
+    if (/\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*$/.test(head) || /\[[^\]]*$/.test(head)) continue;
+    if (!out.slice(m.index + w.length).startsWith('{' + matcher)) missed.push(w);
+  }
+  return missed;
+}
+
+test('scopeSelectors: the job matcher on every selector of every built-in family\'s tile and chart, nothing else changed; keywords, functions, by-lists, ranges, durations and strings left as they are', () => {
+  const M = 'job=~"api|db"';
+  let n = 0;
+  for (const f of CONTROL_ROOM_FAMILIES) for (const v of f.variants) for (const e of [...v.tiles.map((t) => t.expr), v.chart?.expr].filter(Boolean)) {
+    n += 1;
+    const out = scopeSelectors(e, M);
+    assert.deepEqual(unscopedNames(out, M), [], `${f.id}: ${out}`);
+    assert.equal(out.split('{' + M + ', ').join('{').split('{' + M + '}').join(''), e, `${f.id}: only the matcher added`);
+  }
+  assert.ok(n > 40, 'every built-in expression');
+  // The small cases: an aggregation written with by / without before its argument, offset, bool, a
+  // nameless selector, a string that looks like a name, an empty matcher.
+  assert.equal(scopeSelectors('histogram_quantile(0.99, sum by (le) (rate(x_bucket{a="b"}[5m]))) > bool 0', M), 'histogram_quantile(0.99, sum by (le) (rate(x_bucket{job=~"api|db", a="b"}[5m]))) > bool 0');
+  assert.equal(scopeSelectors('max without (pod) (y) offset 5m', M), 'max without (pod) (y{job=~"api|db"}) offset 5m');
+  assert.equal(scopeSelectors('{__name__=~"a|b"}', M), '{job=~"api|db", __name__=~"a|b"}');
+  assert.equal(scopeSelectors('label_replace(up, "dst", "$1", "src", "(.*)") * on (job) group_left(team) team_info{}', M), 'label_replace(up{job=~"api|db"}, "dst", "$1", "src", "(.*)") * on (job) group_left(team) team_info{job=~"api|db"}');
+  assert.equal(scopeSelectors('rate(a[5m]) / 1e3', M), 'rate(a{job=~"api|db"}[5m]) / 1e3');
+  assert.equal(scopeSelectors('sum(x)', ''), 'sum(x)', 'no matcher: as it was');
+});
+
+test('scopeQueries: the alerts a service names or that fire on its jobs, each selector apart; jobs alone, alerts alone, neither; cut at the limits and said', () => {
+  const S = scopeQueries({ jobs: ['kx-b', 'a.c', 'kx-b', ''], alerts: ['Up', 'Down'] });
+  assert.deepEqual([S.jobs, S.alerts, S.job, S.empty, S.cut], [['a.c', 'kx-b'], ['Down', 'Up'], 'job=~"a\\\\.c|kx-b"', false, { jobs: 0, alerts: 0 }], 'sorted, each once, escaped');
+  // A named alert is the service's on its jobs (the job arm) or with no job at all: another service's alert of the same name, on its own job, is not.
+  assert.equal(S.alertsSel(), '(ALERTS{alertname=~"Down|Up", job=""} or ALERTS{job=~"a\\\\.c|kx-b"})');
+  assert.deepEqual(S.alertsParts('alertstate="firing"'), ['ALERTS{alertstate="firing", alertname=~"Down|Up", job=""}', 'ALERTS{alertstate="firing", job=~"a\\\\.c|kx-b"}']);
+  assert.equal(S.forStateSel(), '(ALERTS_FOR_STATE{alertname=~"Down|Up", job=""} or ALERTS_FOR_STATE{job=~"a\\\\.c|kx-b"})');
+  assert.deepEqual([scopeQueries({ jobs: ['api'] }).alertsSel(), scopeQueries({ alerts: ['X'] }).alertsSel(), scopeQueries({ alerts: ['X'] }).job], ['ALERTS{job=~"api"}', 'ALERTS{alertname=~"X"}', '']);
+  const none = scopeQueries({ jobs: [], alerts: [] });
+  assert.deepEqual([none.empty, none.alertsSel(), none.forStateSel()], [true, null, null]);
+  const cut = scopeQueries({ jobs: ['a', 'b', 'c'], alerts: ['x', 'y'] }, { declaredJobs: 2, declaredAlerts: 1 });
+  assert.deepEqual([cut.jobs, cut.alerts, cut.cut], [['a', 'b'], ['x'], { jobs: 1, alerts: 1 }]);
+});
+
+test('readControlRoom with a scope: only the service\'s alerts, history, targets and families are asked for; nothing named reads nothing; no jobs reads no targets and no metrics', async () => {
+  const now = 1_800_000_000;
+  const sel = '(ALERTS{alertname=~"ShopDown", job=""} or ALERTS{job=~"shop"})';
+  const fake = fakeTool([
+    [`count by (alertname, severity, alertstate) (${sel})`, vec([{ alertname: 'ShopDown', severity: 'critical', alertstate: 'firing' }, 1])],
+    ['count(up{job=~"shop"})', vec([{}, 2])], ['sum(up{job=~"shop"})', vec([{}, 2])],
+    [/^count by \(__name__\) \(\{__name__=~"[^"]*", job=~"shop"\}\)$/, vec([{ __name__: 'http_requests_total' }, 1], [{ __name__: 'http_request_duration_seconds_bucket' }, 1])],
+  ]);
+  const r = await readControlRoom({ callTool: fake.callTool, tool: 'q', nowSeconds: now, scope: { jobs: ['shop'], alerts: ['ShopDown'] }, declaredJobs: ['ignored-with-a-scope'] });
+  assert.deepEqual(r.scope, { kind: 'service', jobs: 1, alerts: 1, cut: { jobs: 0, alerts: 0 } });
+  assert.deepEqual(r.alerts.active.map((a) => a.name), ['ShopDown']);
+  assert.deepEqual([r.scrape.up, r.scrape.total, r.scrape.declared.jobs], [2, 2, 1]);
+  const asked = fake.seen.map((c) => c.query);
+  assert.ok(asked.includes('max by (alertname, severity) ((ALERTS{alertstate="firing", alertname=~"ShopDown", job=""} or ALERTS{alertstate="firing", job=~"shop"}))[30d:2m]'), 'the history of its own alerts');
+  assert.ok(asked.includes('sum(rate(http_requests_total{job=~"shop"}[5m]))'), 'its families from its jobs\' series');
+  assert.deepEqual(asked.filter((q) => /\b(ALERTS|ALERTS_FOR_STATE)\b(?!\{)/.test(q) || /\bup\b(?!\{)/.test(q.replace(/timestamp\(up\)/g, ''))), [], 'nothing of another service: only the store\'s age reads the whole up');
+  assert.ok(!asked.some((q) => q.includes('ignored-with-a-scope')), 'the scope\'s jobs, not declaredJobs');
+  // Nothing named: no call at all, every part said why.
+  const silent = fakeTool([]);
+  const none = await readControlRoom({ callTool: silent.callTool, tool: 'q', nowSeconds: now, scope: { jobs: [], alerts: [] } });
+  assert.equal(silent.seen.length, 0, 'nothing asked');
+  for (const p of ['alerts', 'scrape', 'timing', 'families']) assert.equal(none[p].outcome, 'not-attempted', p);
+  assert.match(none.alerts.reason, /declares no alert rule and no scrape job/);
+  assert.match(none.scrape.reason, /declares no scrape job/);
+  // Alert names but no jobs: its alerts are read; no target or metric is known to be its own.
+  const named = fakeTool([]);
+  const onlyAlerts = await readControlRoom({ callTool: named.callTool, tool: 'q', nowSeconds: now, scope: { alerts: ['ShopDown'] } });
+  assert.deepEqual([onlyAlerts.scrape.outcome, onlyAlerts.families.outcome, onlyAlerts.alerts.outcome], ['not-attempted', 'not-attempted', 'empty']);
+  assert.ok(named.seen.some((c) => c.query === 'count by (alertname, severity, alertstate) (ALERTS{alertname=~"ShopDown"})'));
+  // No scope: the endpoint's whole, as before.
+  const whole = fakeTool([]);
+  const old = await readControlRoom({ callTool: whole.callTool, tool: 'q', nowSeconds: now });
+  assert.equal(Object.hasOwn(old, 'scope'), false, 'no scope key: an older caller\'s answer keeps its own');
+  assert.ok(whole.seen.some((c) => c.query === 'count by (alertname, severity, alertstate) (ALERTS)'));
 });

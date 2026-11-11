@@ -386,6 +386,14 @@ p.ov-scan__sum { cursor: default; }
 .ov-change__l { font: 600 12.5px/1.2 var(--og-font); color: var(--og-text); white-space: nowrap; }
 .ov-change__n { grid-column: 1 / -1; font: 650 28px/1.05 var(--og-font); letter-spacing: -0.03em; color: var(--ov-t); margin-top: 2px; }
 .ov-change__note { grid-column: 1 / -1; font: 400 11.5px/1.3 var(--og-font); }
+/* The tile's count by link: the chain's three, each with Discover's icon, its number at the right. */
+.ov-change__parts { grid-column: 1 / -1; display: grid; gap: 1px; margin: 4px 0 0; padding: 0; list-style: none; font: 400 11.5px/1.35 var(--og-font); color: var(--og-text-2); }
+.ov-change__parts li { display: grid; grid-template-columns: 13px minmax(0, 1fr) auto; column-gap: 5px; align-items: center; }
+.ov-change__pic { width: 12px; height: 12px; color: var(--og-muted); }
+.ov-change__pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-change__pn { font-variant-numeric: tabular-nums; }
+.ov-change__parts li.is-some { color: var(--og-text); }
+.ov-change__parts li.is-some .ov-change__pn { color: var(--ov-t); font-weight: 650; }
 .ov-board .ov-next__row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--og-line); }
 .ov-board .ov-next__sentence { flex: 1 1 180px; margin: 0; font: 600 14px/1.4 var(--og-font); color: var(--og-text); }
 .ov-board .ov-next__why { margin-top: 10px; }
@@ -693,7 +701,7 @@ p.ov-scan__sum { cursor: default; }
 .ov-cr__kpi-value { font: 700 30px/1.05 var(--og-font); letter-spacing: -0.03em; color: var(--og-text); font-variant-numeric: tabular-nums; }
 .ov-cr__kpi-sub, .ov-cr__kpi-detail, .ov-cr__kpi-target { margin: 0; font: 400 12px/1.35 var(--og-font); color: var(--og-text-2); }
 .ov-cr__kpi-target { color: var(--og-text); }
-.ov-cr__targets { margin: -2px 0 0; }
+.ov-cr__targets { display: flex; flex-wrap: wrap; gap: 0 18px; margin: -2px 0 0; }
 .ov-cr__targets .og-btn--text { min-height: 26px; padding: 2px 0; font: 600 12.5px/1.3 var(--og-font); }
 .ov-cr__targets .og-btn--text:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
 .ov-cr__verdict--met { color: var(--og-accent); }

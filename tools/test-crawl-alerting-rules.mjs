@@ -149,4 +149,22 @@ assert(artefacts.every(a => a.source === 'Declared') && artefacts.filter(a => a.
   'Declared, tool by engine', artefacts.map(a => [a.title, a.tool, a.source]));
 assert(layered.layers.L4.policy.filter(a => a.id.startsWith('POL-')).length === M, `and M = ${M} burn-rate artefacts`, layered.layers.L4.policy.map(a => a.title));
 
-report('crawl alerting.rules', `N = ${N} operational rules in alerting.rules, M = ${M} burn-rate entries in policy; valid, round-trips, projects.`);
+// 5. Every alert name the repository declares, the burn-rate ones folded into the policy included, in one
+// annotation (the control room's scope reads it: server/routes/control-room.mjs scopeOfPack).
+{
+  const ann = canonical.metadata.annotations;
+  const all = [...OPERATIONAL, ...BURN_RULES].sort();
+  assert(ann['crawler.discovered.alert_names'] === JSON.stringify(all) && ann['crawler.discovered.alert_names_count'] === String(all.length),
+    'every alert name the scan read, burn-rate ones included, sorted, in crawler.discovered.alert_names', [ann['crawler.discovered.alert_names'], ann['crawler.discovered.alert_names_count']]);
+  // A repository with no recording rules (the tier-3 fallback): alerting.rules keeps none, the names stay.
+  const tier3 = crawlFiles({ 'prometheus/shop.rules.yml': [
+    'groups:', '  - name: shop', '    rules:',
+    '      - alert: ShopDown', '        expr: up{job="shop"} == 0', '        for: 1m', '        labels:', '          severity: critical',
+    '      - alert: ShopSlow', '        expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job="shop"}[5m]))) > 1', '        labels:', '          severity: warning',
+  ].join('\n') }, opts).canonical;
+  assert(!tier3.spec.alerting?.rules && tier3.metadata.annotations['crawler.discovered.alert_names'] === '["ShopDown","ShopSlow"]',
+    'no recording rules: no alerting.rules, and every alert still named for the scope', [tier3.spec.alerting, tier3.metadata.annotations['crawler.discovered.alert_names']]);
+  assert(!crawlFiles({ 'README.md': '# no rules' }, opts).canonical.metadata.annotations['crawler.discovered.alert_names'], 'no rule read: no annotation');
+}
+
+report('crawl alerting.rules', `N = ${N} operational rules in alerting.rules, M = ${M} burn-rate entries in policy; valid, round-trips, projects; every alert name annotated.`);

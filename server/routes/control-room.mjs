@@ -3,11 +3,14 @@
 // POST /api/services/:id/control-room { env?, fresh? }
 //   The environment's live MCP endpoint, read with the org endpoint's
 //   server-held read token (the same target its Run uses, resolved by id:
-//   never a typed URL), through tools/lib/control-room.mjs: what is firing,
-//   the targets up (and the scrape jobs the repository declares), how long
-//   incidents took to clear over 30 days, and the known metric families'
-//   tiles. Nothing from the request reaches a query: the body names an
-//   environment, nothing else.
+//   never a typed URL), through tools/lib/control-room.mjs, scoped to the
+//   service: what its repository declares (its saved check's Pack A) — its
+//   alert rules by name and its scrape jobs. What is firing among those
+//   alerts or on those jobs, its jobs' targets up, how long its incidents
+//   took to clear over 30 days, the known metric families' tiles from its
+//   jobs' series. An endpoint shared by several services shows each its own;
+//   a service never run (no Pack A) reads nothing and says so. Nothing from
+//   the request reaches a query: the body names an environment, nothing else.
 //
 // Class operator with the live MCP posture (server/route-table.mjs LIVE):
 // every server-side MCP read is one. A viewer is told why, as for a Run.
@@ -16,8 +19,8 @@
 //
 // Cost: one read serves every viewer of the same service environment and
 // endpoint (its address and credential) for CONTROL_ROOM_TTL_MS (single
-// flight while it runs); the firing history, the heavy part and the
-// endpoint's whatever service reads it, is kept per endpoint
+// flight while it runs); the firing history, the heavy part, is kept per
+// endpoint and scope (two services that declare the same share it)
 // CONTROL_ROOM_TIMING_TTL_MS — CONTROL_ROOM_TIMING_FAILED_TTL_MS when it
 // could not be read or was cut — and its open incidents are checked against
 // each fresh read's alerts (an alert firing now that it does not hold open,
@@ -45,6 +48,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import express from 'express';
 import { adapt } from '../../tools/lib/adapter.mjs';
+import { annotationList } from '../../tools/lib/traceability.mjs';
 import { cleanError, controlRoomFamilies, openControlRoom, readControlRoom } from '../../tools/lib/control-room.mjs';
 import { loadJourneyDef, readJourneyPackA } from '../../tools/lib/journey.mjs';
 import { isTransportHookError } from '../../tools/lib/mcp-client.mjs';
@@ -89,8 +93,9 @@ export function controlRoomFamilySet() {
   return familySet;
 }
 
-// Test seams: the clock, the deadline and its grace, and a cache reset.
-const seams = { now: () => Date.now(), deadlineMs: CONTROL_ROOM_DEADLINE_MS, graceMs: CONTROL_ROOM_GRACE_MS };
+// Test seams: the clock, the deadline and its grace, the service's scope (what its repository
+// declares: declaredScopeOf, below), and a cache reset.
+const seams = { now: () => Date.now(), deadlineMs: CONTROL_ROOM_DEADLINE_MS, graceMs: CONTROL_ROOM_GRACE_MS, scopeOf: (service, env) => declaredScopeOf(service, env) };
 export function setControlRoomSeams(over = {}) { Object.assign(seams, over); }
 export function resetControlRoom() {
   cache.clear();
@@ -102,6 +107,7 @@ export function resetControlRoom() {
   seams.now = () => Date.now();
   seams.deadlineMs = CONTROL_ROOM_DEADLINE_MS;
   seams.graceMs = CONTROL_ROOM_GRACE_MS;
+  seams.scopeOf = (service, env) => declaredScopeOf(service, env);
 }
 
 // key → { at, answer, flight: Promise | null, freshAt, touched }; the firing history per endpoint:
@@ -129,22 +135,47 @@ function sweep(now) {
 // another token, is another backend). The digest never leaves the process.
 const endpointKey = (target, id) => `${id}:${createHash('sha256').update(`${target.mcpUrl}\u0000${target.mcpAuth ?? ''}`).digest('hex').slice(0, 24)}`;
 
-// The scrape jobs the service's repository declares: its saved check's Pack A
-// (the scan its last Run registered), read inside this org's own part of the
-// workspace, as a run reads it. None when it was never run.
-function declaredJobsOf(service, env) {
+// The service's scope: what its repository declares — the scrape jobs and the
+// alert rules' names of its saved check's Pack A (the scan its last Run
+// registered), read inside this org's own part of the workspace, as a run
+// reads it. → { scope: { jobs, alerts } } — or { scope: null, why } when it
+// was never run in this environment, or its last Run's pack cannot be read.
+export function declaredScopeOf(service, env) {
+  let def;
+  try { def = loadJourneyDef(serviceJourneyName(service.slug, env.name), { allowPath: false }); }
+  // No saved check for this environment: never run here. One that is there but does not read: said so.
+  catch (e) { return { scope: null, why: /^journey not found/.test(String(e?.message || '')) ? NEVER_RUN(service.name, env.name) : UNREADABLE(service.name) }; }
   try {
-    const def = loadJourneyDef(serviceJourneyName(service.slug, env.name), { allowPath: false });
     const canonical = readJourneyPackA(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
-    if (!canonical) return [];
-    const jobs = new Set();
-    for (const layer of Object.values(adapt(canonical).layers || {})) {
-      const list = Array.isArray(layer) ? layer : Object.values(layer || {}).filter(Array.isArray).flat();
-      for (const a of list) if (/^SCRAPE-SRC-/.test(String(a?.id || '')) && a.source !== 'Scaffold' && a.spec?.job) jobs.add(String(a.spec.job));
-    }
-    return [...jobs].sort();
-  } catch { return []; }
+    if (canonical) return { scope: scopeOfPack(canonical) };
+  } catch { /* said below */ }
+  return { scope: null, why: UNREADABLE(service.name) };
 }
+
+// A pack's scope: its declared (never a scaffold's) scrape jobs and the names of every alert rule it
+// declares — the operational ones (alerting.rules) and every name the scan read, burn-rate alerts and a
+// repository's with no recording rules included (its crawler.discovered.alert_names annotation).
+export function scopeOfPack(canonical) {
+  const jobs = new Set();
+  const ann = canonical?.metadata?.annotations || {};
+  const alerts = new Set(annotationList(ann['crawler.discovered.alert_names'], ann['crawler.discovered.alert_names_count']).map((x) => String(x).trim()).filter(Boolean));
+  for (const layer of Object.values(adapt(canonical).layers || {})) {
+    const list = Array.isArray(layer) ? layer : Object.values(layer || {}).filter(Array.isArray).flat();
+    for (const a of list) {
+      if (!a || a.source === 'Scaffold' || a._evidence || a._propagated) continue;
+      const id = String(a.id || '');
+      if (/^SCRAPE-SRC-/.test(id) && a.spec?.job) jobs.add(String(a.spec.job));
+      if (/^RULE-/.test(id) && typeof a.spec?.name === 'string' && a.spec.name.trim()) alerts.add(a.spec.name.trim());
+    }
+  }
+  return { jobs: [...jobs].sort(), alerts: [...alerts].sort() };
+}
+const scopeDigest = (scope) => createHash('sha256').update(JSON.stringify(scope || null)).digest('hex').slice(0, 16);
+const NEVER_RUN = (name, env) => `${name} has never been run in ${env}, so nothing live is known to be its own yet — Run it first`;
+const UNREADABLE = (name) => `the saved check of ${name}'s last Run could not be read, so nothing live is known to be its own — Run it again`;
+// The seam's answer as { scope, why }: a test may give the scope alone, or null for a service never run.
+const resolvedScope = (got, service, env) => (got && Object.hasOwn(got, 'scope') ? got
+  : got && Array.isArray(got.jobs) ? { scope: got } : { scope: null, why: NEVER_RUN(service.name, env.name) });
 
 const redactAll = (v, target) => (typeof v === 'string' ? redactTarget(v, target)
   : Array.isArray(v) ? v.map((x) => redactAll(x, target))
@@ -195,7 +226,23 @@ export function controlRoomRoutes({ authorize }) {
     const org = currentOrg() ?? '';
     const now = seams.now();
     sweep(now);
-    const key = `${org}:${service.id}:${env.id}:${endpointKey(target, env.mcpEndpointId)}`;
+    const origin = mcpUrlOrigin(target.safeMcpUrl);
+    // The service's own: what its repository declares. Nothing known (never run, its pack unreadable):
+    // said at once, before any slot or transport, and never kept — the Run that follows reads anew.
+    const { scope, why } = resolvedScope(seams.scopeOf(service, env), service, env);
+    if (!scope) {
+      const none = { outcome: 'not-attempted', reason: why };
+      return res.json(redactAll({
+        ok: true, readAt: new Date(now).toISOString(),
+        service: { id: service.id, name: service.name, slug: service.slug }, env: { name: env.name },
+        endpoint: { id: target.endpoint?.id ?? env.mcpEndpointId, name: target.endpoint?.name ?? null, origin },
+        scope: { kind: 'service', jobs: 0, alerts: 0, neverRun: true },
+        tookMs: 0, cached: false,
+        calls: { made: 0, budget: 0 }, alerts: { ...none, bySeverity: null, active: [], more: 0 }, scrape: { ...none }, timing: { ...none }, families: { ...none, rows: [] }, absent: [],
+      }, target));
+    }
+    // The answer is the scope's too: a Run that changed what the repository declares reads anew.
+    const key = `${org}:${service.id}:${env.id}:${endpointKey(target, env.mcpEndpointId)}:${scopeDigest(scope)}`;
     const known = cache.get(key) || null;
     const wantsFresh = body.fresh === true && now - (known?.freshAt || 0) >= CONTROL_ROOM_FRESH_MIN_MS;
     if (known?.answer && !wantsFresh && now - known.at < CONTROL_ROOM_TTL_MS) { known.touched = now; return res.json({ ...known.answer, cached: true }); }
@@ -217,11 +264,10 @@ export function controlRoomRoutes({ authorize }) {
     }
     const entry = known || { at: 0, answer: null, flight: null, freshAt: 0, touched: now };
     cache.set(key, entry);
-    // The firing history is the endpoint's: one per endpoint, whichever service environment reads it.
-    const timingKey = `${org}:${endpointKey(target, env.mcpEndpointId)}`;
+    // The firing history of this scope on this endpoint (two services that declare the same share it).
+    const timingKey = `${org}:${endpointKey(target, env.mcpEndpointId)}:${scopeDigest(scope)}`;
     if (wantsFresh) entry.freshAt = now;
 
-    const origin = mcpUrlOrigin(target.safeMcpUrl);
     inFlight += 1;
     bump(orgInFlight, org, 1);
     const passed = new AbortController();
@@ -243,17 +289,17 @@ export function controlRoomRoutes({ authorize }) {
       let room = null;
       try {
         const transport = await mcpTransport();
-        room = await openControlRoom({ mcpUrl: target.mcpUrl, mcpAuth: target.mcpAuth, transport, timeoutMs: 10_000, signal: passed.signal });
-        const declaredJobs = declaredJobsOf(service, env);
         const head = {
           ok: true, readAt: new Date(started).toISOString(),
           service: { id: service.id, name: service.name, slug: service.slug }, env: { name: env.name },
           endpoint: { id: target.endpoint?.id ?? env.mcpEndpointId, name: target.endpoint?.name ?? null, origin },
-          scope: { kind: 'endpoint', declaredJobs: declaredJobs.length },
+          // What the repository declares (the read may be cut at its limits: `cut`, below).
+          scope: { kind: 'service', jobs: scope.jobs.length, alerts: scope.alerts.length, cut: { jobs: 0, alerts: 0 } },
         };
         let read;
         // The history this read did not ask for (kept from an earlier one): never quoted as this read's failure.
         let timingKept = false;
+        room = await openControlRoom({ mcpUrl: target.mcpUrl, mcpAuth: target.mcpAuth, transport, timeoutMs: 10_000, signal: passed.signal });
         if (!room.advertised) {
           const none = { outcome: 'not-attempted', reason: NOT_OFFERED };
           read = { calls: { made: 0, budget: 0 }, alerts: { ...none, bySeverity: null, active: [], more: 0 }, scrape: { ...none }, timing: { ...none }, families: { ...none, rows: [] }, absent: [] };
@@ -263,8 +309,10 @@ export function controlRoomRoutes({ authorize }) {
           timingKept = !!kept;
           read = await readControlRoom({
             callTool: room.callTool, callHistoryTool: room.callHistoryTool, tool: room.tool, families: controlRoomFamilySet().families,
-            declaredJobs, nowSeconds: started / 1000, signal: passed.signal, timing: !kept,
+            scope, nowSeconds: started / 1000, signal: passed.signal, timing: !kept,
           });
+          // What the read left out at its limits, beside the declared numbers.
+          head.scope = { ...head.scope, cut: read.scope?.cut || { jobs: 0, alerts: 0 } };
           // Given up on at the deadline: nothing this read returns is kept, or answered.
           if (gaveUp) return null;
           if (read.timing) {
@@ -283,7 +331,8 @@ export function controlRoomRoutes({ authorize }) {
           return failure(said ? `${deadlineWords()} (before that: ${said})` : deadlineWords());
         }
         const tookMs = Math.max(0, Math.round(seams.now() - started));
-        const answer = redactAll({ ...head, tookMs, cached: false, ...read }, target);
+        // The declared numbers (head's), never the read's own count after its cut.
+        const answer = redactAll({ ...head, tookMs, cached: false, ...read, scope: head.scope }, target);
         entry.at = seams.now();
         entry.answer = answer;
         process.stderr.write(`[control-room] ${service.slug}/${env.name} ${origin} ${read.calls.made} calls ${tookMs}ms${read.calls.outOfTime ? ' (cut at the deadline)' : ''}\n`);

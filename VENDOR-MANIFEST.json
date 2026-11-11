@@ -469,9 +469,34 @@
       "changedSinceRelease": false
     },
     "tools/lib/control-room.mjs": {
-      "sha256": "a22d9caa8ef168d4ab1cb6a48dea0583fa0428c8ec2e34c2c01fe20b5ed52720",
-      "bytes": 42461,
+      "sha256": "aa9dd207255655266a1449548562037bb46ed17a6371deb3379ad4e6e40a7027",
+      "bytes": 51273,
       "exports": [
+        "CONTROL_ROOM_LIMITS",
+        "cleanError",
+        "controlRoomFamilies",
+        "detectionQuery",
+        "familyRowErrors",
+        "incidentsFrom",
+        "jobsRegex",
+        "judgeValue",
+        "normaliseSeverity",
+        "openControlRoom",
+        "pickVariant",
+        "readControlRoom",
+        "scopeQueries",
+        "scopeSelectors",
+        "statusWord",
+        "timingSummary"
+      ],
+      "imports": [
+        "tools/lib/contracts/control-room-families.mjs",
+        "tools/lib/contracts/mcp-capabilities.mjs",
+        "tools/lib/mcp-client.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "CONTROL_ROOM_LIMITS",
         "cleanError",
         "controlRoomFamilies",
@@ -486,18 +511,11 @@
         "readControlRoom",
         "statusWord",
         "timingSummary"
-      ],
-      "imports": [
-        "tools/lib/contracts/control-room-families.mjs",
-        "tools/lib/contracts/mcp-capabilities.mjs",
-        "tools/lib/mcp-client.mjs"
-      ],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "f2a2a544be20073851e2480c89cb3c1aa6d2b8dc7b67c9fa4c9fd9464db04d34",
-      "bytes": 157388,
+      "sha256": "6f0232fe1b88b433541651b46124a38a9017c774f677f460706c63b240c79dea",
+      "bytes": 158153,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",

@@ -35,8 +35,18 @@
 // evaluator (Prometheus, vmalert, a ruler) writes ALERTS on every
 // evaluation, into the store the query capability reads.
 //
+// The scope (`scope`: { jobs, alerts }): the service's own, as its repository
+// declares it — its scrape jobs and its alert rules' names. With a scope,
+// every part reads only what is the service's: the alerts and the firing
+// history of the alerts it names or that fire on its jobs, the targets of
+// its jobs, the families' series of its jobs (scopeSelectors adds the job
+// matcher to every selector). An endpoint shared by several services (one
+// store) then shows each its own. A scope that names nothing reads nothing
+// and says why; with no scope (an older caller) the read is the endpoint's
+// whole, as before.
+//
 // Every query is this module's: nothing from the request reaches PromQL
-// but the repository's declared job names, regex-escaped. The PromQL tool
+// but the repository's declared job and alert names, regex-escaped. The PromQL tool
 // is the `control_room_query` capability's (never named here). One answer
 // is read up to `answerBytes` (the firing history up to
 // `historyAnswerBytes`); past it that part says so.
@@ -68,6 +78,8 @@ export const CONTROL_ROOM_LIMITS = Object.freeze({
   activeShown: 12,
   // Declared jobs read at most (a longer regex is cut, and said).
   declaredJobs: 60,
+  // Declared alert names read at most, the same way.
+  declaredAlerts: 200,
   toolsListMaxPages: 10,
   // One answer's size: a few KiB is usual; the 30-day firing history is the one large one.
   answerBytes: 4 * 1024 * 1024,
@@ -324,10 +336,112 @@ export function controlRoomFamilies(custom = null) {
   return { families, warnings };
 }
 
-/** The one query that says which families' metric names the endpoint exposes. */
-export function detectionQuery(families) {
+/** The one query that says which families' metric names the endpoint exposes (with `matcher`, among the scope's series). */
+export function detectionQuery(families, matcher = '') {
   const names = [...new Set(families.flatMap((f) => f.variants.flatMap((v) => v.requires)))].sort();
-  return `count by (__name__) ({__name__=~${promString(names.join('|'))}})`;
+  return `count by (__name__) ({__name__=~${promString(names.join('|'))}${matcher ? `, ${matcher}` : ''}})`;
+}
+
+// ---------- the scope: a service's own series ----------
+
+// Words of PromQL that are no metric name: keywords, and the lists that follow some of them.
+const PROMQL_KEYWORDS = new Set(['by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'bool', 'offset', 'and', 'or', 'unless', 'atan2', 'inf', 'nan', 'start', 'end']);
+const PROMQL_LISTS = new Set(['by', 'without', 'on', 'ignoring', 'group_left', 'group_right']);
+// The index of the character that closes the bracket opened at `at` (quotes skipped), or the end.
+function closing(s, at, open, close) {
+  let depth = 0;
+  for (let i = at; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = quoteEnd(s, i); continue; }
+    if (ch === open) depth += 1;
+    else if (ch === close && --depth === 0) return i;
+  }
+  return s.length - 1;
+}
+function quoteEnd(s, at) {
+  const q = s[at];
+  for (let i = at + 1; i < s.length; i += 1) {
+    if (s[i] === '\\' && q !== '`') { i += 1; continue; }
+    if (s[i] === q) return i;
+  }
+  return s.length - 1;
+}
+
+/**
+ * The expression with `matcher` (e.g. `job=~"a|b"`) added to every vector selector: `x` → `x{m}`,
+ * `x{a="b"}` → `x{m, a="b"}`, `{__name__=~"…"}` → `{m, __name__=~"…"}`. Functions, keywords, the
+ * label lists of by / without / on / ignoring / group_*, numbers, durations, ranges and strings are
+ * left as they are. The families' queries are this repository's (or a downstream's validated rows),
+ * so this reads PromQL as they write it, not every PromQL there is.
+ */
+export function scopeSelectors(expr, matcher) {
+  const s = String(expr ?? '');
+  if (!matcher) return s;
+  const withMatcher = (inner) => `{${matcher}${inner.trim() ? `, ${inner.trim()}` : ''}}`;
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'" || ch === '`') { const e = quoteEnd(s, i); out += s.slice(i, e + 1); i = e + 1; continue; }
+    // A range or a subquery: copied as it is.
+    if (ch === '[') { const e = s.indexOf(']', i); const end = e < 0 ? s.length - 1 : e; out += s.slice(i, end + 1); i = end + 1; continue; }
+    // A selector with no name.
+    if (ch === '{') { const e = closing(s, i, '{', '}'); out += withMatcher(s.slice(i + 1, e)); i = e + 1; continue; }
+    // A number or a duration (5m, 0.99, 1e3).
+    if (/[0-9.]/.test(ch)) { let j = i; while (j < s.length && /[0-9a-zA-Z._]/.test(s[j])) j += 1; out += s.slice(i, j); i = j; continue; }
+    if (/[a-zA-Z_:]/.test(ch)) {
+      let j = i;
+      while (j < s.length && /[a-zA-Z0-9_:]/.test(s[j])) j += 1;
+      const word = s.slice(i, j);
+      let k = j;
+      while (k < s.length && /\s/.test(s[k])) k += 1;
+      const lower = word.toLowerCase();
+      if (PROMQL_LISTS.has(lower) && s[k] === '(') { const e = closing(s, k, '(', ')'); out += s.slice(i, e + 1); i = e + 1; continue; }
+      // An aggregation written "sum by (le) (…)" or "max without (x) (…)": the word before by / without is no metric.
+      const nextWord = /^[a-zA-Z_]+/.exec(s.slice(k))?.[0]?.toLowerCase() || '';
+      if (PROMQL_KEYWORDS.has(lower) || s[k] === '(' || nextWord === 'by' || nextWord === 'without') { out += word; i = j; continue; }
+      if (s[k] === '{') { const e = closing(s, k, '{', '}'); out += `${word}${withMatcher(s.slice(k + 1, e))}`; i = e + 1; continue; }
+      out += `${word}{${matcher}}`;
+      i = j;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * The scope in PromQL: { jobs, alerts, cut: { jobs, alerts }, job, alertsSel(extra), alertsParts(extra), forStateSel(), empty }.
+ * `job` is the job matcher (or ''); `alertsSel('alertstate="firing"')` the ALERTS selector of the
+ * alerts the service names or that fire on its jobs (or null when it names neither).
+ */
+export function scopeQueries(scope, limits = CONTROL_ROOM_LIMITS) {
+  const L = { ...CONTROL_ROOM_LIMITS, ...limits };
+  const clean = (xs) => [...new Set((Array.isArray(xs) ? xs : []).map((x) => String(x ?? '').trim()).filter(Boolean))].sort();
+  const allJobs = clean(scope?.jobs), allAlerts = clean(scope?.alerts);
+  const jobs = allJobs.slice(0, L.declaredJobs), alerts = allAlerts.slice(0, L.declaredAlerts);
+  const job = jobs.length ? `job=~${promString(jobsRegex(jobs))}` : '';
+  // A named alert is the service's on its own jobs (the job arm has those) or with no job at all (a
+  // burn-rate alert over a summed series): another service's alert of the same name, on its own job,
+  // is not. With no jobs to tie it to, the name alone (the scope line says what that counts).
+  const named = alerts.length ? `alertname=~${promString(jobsRegex(alerts))}${jobs.length ? ', job=""' : ''}` : '';
+  // Each selector apart (a range applies to one selector, never to an "or"), and joined.
+  const parts = (metric, extra = '') => {
+    const pre = extra ? `${extra}, ` : '';
+    return [named && `${metric}{${pre}${named}}`, job && `${metric}{${pre}${job}}`].filter(Boolean);
+  };
+  const sel = (metric, extra = '') => {
+    const p = parts(metric, extra);
+    return p.length ? (p.length === 1 ? p[0] : `(${p.join(' or ')})`) : null;
+  };
+  return {
+    jobs, alerts, cut: { jobs: allJobs.length - jobs.length, alerts: allAlerts.length - alerts.length },
+    job, empty: !jobs.length && !alerts.length,
+    alertsSel: (extra = '') => sel('ALERTS', extra),
+    alertsParts: (extra = '') => parts('ALERTS', extra),
+    forStateSel: () => sel('ALERTS_FOR_STATE'),
+  };
 }
 
 /** For each family, the first variant whose required names are all exposed, or null. */
@@ -345,10 +459,10 @@ const valueOf = (s) => (Array.isArray(s.value) ? num(s.value[1]) : null);
 // An instant answer's number: the first series that holds one.
 const scalarOf = (r) => { for (const s of seriesOf(r)) { const v = valueOf(s); if (v !== null) return v; } return null; };
 
-// The query that says whether this store holds any alert history at all: an
-// ALERTS series anywhere in the window. Without one, "nothing fired" cannot be
-// told from "nothing writes alerts here".
-const evidenceQuery = (window) => `count(last_over_time(ALERTS[${window}]))`;
+// The query that says whether this store holds any alert history at all (with
+// a scope, of the service's alerts): an ALERTS series anywhere in the window.
+// Without one, "nothing fired" cannot be told from "nothing writes alerts here".
+const evidenceQuery = (window, sels = ['ALERTS']) => `count(${sels.map((x) => `last_over_time(${x}[${window}])`).join(' or ')})`;
 
 // A pool that runs at most `size` reads at once and stops starting new ones
 // past `budget` calls; once `signal` aborts, every read still queued is
@@ -381,16 +495,27 @@ function readPool({ size, budget, signal }) {
   };
 }
 
-// readControlRoom({ callTool, callHistoryTool, tool, families, declaredJobs, nowSeconds, limits, signal, timing })
+// readControlRoom({ callTool, callHistoryTool, tool, families, declaredJobs, scope, nowSeconds, limits, signal, timing })
 //   callTool         an initialised client's callTool(name, args)
 //   callHistoryTool  the same for the firing history (a client with the larger answer cap); callTool when not given
 //   tool             the PromQL query tool's name (the control_room_query capability's)
-//   → { calls, alerts, scrape, timing, families, absent }
+//   scope            { jobs, alerts } — the service's own (its repository's scrape jobs and alert rule
+//                    names): every part reads only those (above); null reads the endpoint's whole,
+//                    with `declaredJobs` beside it as before
+//   → { calls, scope?, alerts, scrape, timing, families, absent }
+//      scope  { kind: 'service', jobs, alerts, cut: { jobs, alerts } } — only with a scope (the counts read)
 //   timing    false skips the firing history (the route keeps it longer than the rest); the answer's timing is then null
 // A part that cannot be made sense of fails alone ({ outcome: 'failed', reason }); a transport hook
 // fault, or the signal's abort, fails the whole read.
-export async function readControlRoom({ callTool, callHistoryTool = null, tool, families = CONTROL_ROOM_FAMILIES, declaredJobs = [], nowSeconds = Date.now() / 1000, limits = CONTROL_ROOM_LIMITS, signal = null, timing: withTiming = true } = {}) {
+export async function readControlRoom({ callTool, callHistoryTool = null, tool, families = CONTROL_ROOM_FAMILIES, declaredJobs = [], scope = null, nowSeconds = Date.now() / 1000, limits = CONTROL_ROOM_LIMITS, signal = null, timing: withTiming = true } = {}) {
   const L = { ...CONTROL_ROOM_LIMITS, ...limits };
+  // The service's own series, when the caller names them.
+  const S = scope ? scopeQueries(scope, L) : null;
+  // Said only for a scoped read: an older caller's own answer keeps its own scope key.
+  const scopeOut = S ? { kind: 'service', jobs: S.jobs.length, alerts: S.alerts.length, cut: S.cut } : null;
+  const alertsSel = (extra = '') => (S ? S.alertsSel(extra) : `ALERTS${extra ? `{${extra}}` : ''}`);
+  const NOTHING_NAMED = 'the repository declares no alert rule and no scrape job: nothing live is known to be this service\'s';
+  const NO_JOBS = 'the repository declares no scrape job: no target or metric is known to be this service\'s';
   // The pool's own stop: the caller's abort, or a transport hook fault (which fails the whole read:
   // nothing queued after it may still reach the endpoint).
   const stop = new AbortController();
@@ -436,24 +561,26 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
   // true · false · null (could not be read).
   let evidenceP = null;
   const evidence = () => {
-    evidenceP ||= askSoon(evidenceQuery(W)).then((r) => (r.outcome === 'data' ? (scalarOf(r) ?? 0) > 0 : r.outcome === 'empty' ? false : null));
+    evidenceP ||= askSoon(evidenceQuery(W, S ? S.alertsParts() : ['ALERTS'])).then((r) => (r.outcome === 'data' ? (scalarOf(r) ?? 0) > 0 : r.outcome === 'empty' ? false : null));
     return evidenceP;
   };
 
-  // The families the endpoint exposes, first (their tiles depend on it).
-  const detect = ask(detectionQuery(families));
+  // The families the endpoint exposes (with a scope, among the service's jobs' series), first (their tiles depend on it).
+  const detect = S && !S.job ? Promise.resolve({ outcome: 'not-attempted', result: null, reason: NO_JOBS }) : ask(detectionQuery(families, S ? S.job : ''));
 
   // Alerts now: a name firing and pending at once is two rows, never one, each with its own age
   // (ALERTS_FOR_STATE carries no state: joined to ALERTS for it; by name alone where the join fails).
   const alertsP = part(async () => {
+    if (S?.empty) return { outcome: 'not-attempted', reason: NOTHING_NAMED, evidence: null, bySeverity: null, pending: 0, active: [], more: 0, otherSeverities: [] };
+    const forState = S ? S.forStateSel() : 'ALERTS_FOR_STATE';
     const [states, since] = await Promise.all([
-      ask('count by (alertname, severity, alertstate) (ALERTS)'),
-      ask('min by (alertname, alertstate) (ALERTS_FOR_STATE * ignoring(alertstate) group_left(alertstate) ALERTS)'),
+      ask(`count by (alertname, severity, alertstate) (${alertsSel()})`),
+      ask(`min by (alertname, alertstate) (${forState} * ignoring(alertstate) group_left(alertstate) ${alertsSel()})`),
     ]);
     if (states.outcome === 'failed' || states.outcome === 'not-attempted') return { outcome: states.outcome, reason: states.reason, evidence: null, bySeverity: null, pending: 0, active: [], more: 0, otherSeverities: [] };
     // By name alone (the join failed): the name's earliest activeAt is its firing instance's, so a
     // pending row of a name that also fires gets no age rather than its twin's.
-    const byName = since.outcome === 'failed' ? await askSoon('min by (alertname) (ALERTS_FOR_STATE)') : null;
+    const byName = since.outcome === 'failed' ? await askSoon(`min by (alertname) (${forState})`) : null;
     const firingNames = new Set(seriesOf(states).filter((s) => labelOf(s, 'alertstate') === 'firing').map((s) => labelOf(s, 'alertname')));
     const sinceOf = new Map(byName
       ? seriesOf(byName).flatMap((s) => {
@@ -492,13 +619,15 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
     return { outcome: states.outcome, reason: null, evidence: ev, bySeverity, pending: all.length - firing.length, active: all.slice(0, L.activeShown), more: Math.max(0, all.length - L.activeShown), otherSeverities };
   }, { evidence: null, bySeverity: null, pending: 0, active: [], more: 0, otherSeverities: [] });
 
-  // Scrape health: everything, then the repository's declared jobs. A count is
-  // shown only as read: a failed `sum(up)` is "not read", never 0 up.
-  const declared = [...new Set((declaredJobs || []).map(String).filter(Boolean))];
+  // Scrape health: everything (with a scope, the service's jobs only), then the repository's
+  // declared jobs one by one. A count is shown only as read: a failed `sum(up)` is "not read", never 0 up.
+  const declared = S ? S.jobs : [...new Set((declaredJobs || []).map(String).filter(Boolean))];
+  const upSel = S ? `up{${S.job}}` : 'up';
   const scrapeP = part(async () => {
+    if (S && !S.job) return { outcome: 'not-attempted', reason: NO_JOBS, up: null, total: null, downJobs: [], downRead: false };
     const read = declared.slice(0, L.declaredJobs);
     const [total, up, down, mine] = await Promise.all([
-      ask('count(up)'), ask('sum(up)'), ask('count by (job) (up == 0)'),
+      ask(`count(${upSel})`), ask(`sum(${upSel})`), ask(`count by (job) (${upSel} == 0)`),
       read.length ? ask(`sum by (job) (up{job=~${promString(jobsRegex(read))}}) / count by (job) (up{job=~${promString(jobsRegex(read))}})`) : Promise.resolve(null),
     ]);
     const t = scalarOf(total), u = up.outcome === 'data' ? scalarOf(up) : null;
@@ -510,7 +639,9 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
       }
       : {
         outcome: total.outcome === 'empty' ? 'empty' : total.outcome === 'data' ? 'failed' : total.outcome,
-        reason: total.outcome === 'empty' ? 'the endpoint answers no up series' : total.outcome === 'data' ? 'the answer holds no number' : total.reason,
+        reason: total.outcome === 'empty'
+          ? (S ? `no target of its ${S.jobs.length === 1 ? 'scrape job' : `${S.jobs.length} scrape jobs`} answers here` : 'the endpoint answers no up series')
+          : total.outcome === 'data' ? 'the answer holds no number' : total.reason,
         up: null, total: null, downJobs: [], downRead: false,
       };
     if (mine) {
@@ -527,18 +658,19 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
           downCount: read.filter((j) => share(j) === 0).length,
           missing: read.filter((j) => !seen.has(j)).slice(0, 8),
           missingCount: read.filter((j) => !seen.has(j)).length,
-          cut: declared.length - read.length,
+          cut: S ? S.cut.jobs : declared.length - read.length,
         };
-      } else out.declared = { outcome: mine.outcome, reason: mine.reason, jobs: read.length, cut: declared.length - read.length };
+      } else out.declared = { outcome: mine.outcome, reason: mine.reason, jobs: read.length, cut: S ? S.cut.jobs : declared.length - read.length };
     }
     return out;
   }, { up: null, total: null, downJobs: [], downRead: false });
 
   // How fast incidents cleared: the firing history over the window, one series an alert name and severity.
   const timingP = withTiming ? part(async () => {
+    if (S?.empty) return { windowDays: L.windowDays, stepSeconds: L.stepSeconds, mergeSeconds: L.mergeSeconds, minIncidents: L.minIncidents, outcome: 'not-attempted', reason: NOTHING_NAMED, historyFrom: null, coversDays: null };
     const step = `${Math.round(L.stepSeconds / 60)}m`;
     const [history, from] = await Promise.all([
-      ask(`max by (alertname, severity) (ALERTS{alertstate="firing"})[${W}:${step}]`, callHistoryTool || callTool),
+      ask(`max by (alertname, severity) (${alertsSel('alertstate="firing"')})[${W}:${step}]`, callHistoryTool || callTool),
       ask(`min(min_over_time(timestamp(up)[${W}:${Math.round(L.historyStartStepSeconds / 3600)}h]))`),
     ]);
     const base = { windowDays: L.windowDays, stepSeconds: L.stepSeconds, mergeSeconds: L.mergeSeconds, minIncidents: L.minIncidents };
@@ -568,7 +700,10 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
     const incidents = incidentsFrom(seriesOf(history), { stepSeconds: L.stepSeconds, mergeSeconds: L.mergeSeconds, nowSeconds, windowStartSeconds: start, beforeSlackSeconds: historyFrom === null ? 0 : 2 * L.stepSeconds });
     if (!incidents.length) {
       const ev = await evidence();
-      const reason = ev === true ? 'no alert fired in the window' : ev === false ? 'the store shows no alert history' : 'whether the store holds an alert history was not read';
+      // With a scope the history is the service's alerts': none of them in the store says nothing of the store's others.
+      const reason = ev === true ? 'no alert fired in the window'
+        : ev === false ? (S ? 'none of its alerts has a history in this store' : 'the store shows no alert history')
+          : 'whether the store holds an alert history was not read';
       return { ...base, outcome: 'empty', reason, evidence: ev, historyFrom: iso(historyFrom), coversDays: covers, ...timingSummary([], { minIncidents: L.minIncidents }) };
     }
     return {
@@ -586,7 +721,7 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
     const picked = families.map((f) => ({ f, v: pickVariant(f, exposed) }));
     const rows = await Promise.all(picked.filter((p) => p.v).map(async ({ f, v }) => {
       const tiles = await Promise.all(v.tiles.map(async (tile) => {
-        const r = await ask(tile.expr, callTool, 'later');
+        const r = await ask(S ? scopeSelectors(tile.expr, S.job) : tile.expr, callTool, 'later');
         const value = r.outcome === 'data' ? scalarOf(r) : null;
         const outcome = r.outcome === 'data' && value === null ? 'empty' : r.outcome;
         return {
@@ -597,7 +732,7 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
       }));
       let chart = null;
       if (v.chart) {
-        const r = await ask(`(${v.chart.expr})[${L.chartRange}:${L.chartStep}]`, callTool, 'later');
+        const r = await ask(`(${S ? scopeSelectors(v.chart.expr, S.job) : v.chart.expr})[${L.chartRange}:${L.chartStep}]`, callTool, 'later');
         const first = seriesOf(r)[0];
         const pts = r.outcome === 'data' && first && Array.isArray(first.values)
           ? first.values.filter(Array.isArray).map(([at, val]) => [num(at), num(val)]).filter(([at]) => at !== null)
@@ -612,6 +747,7 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
   const [alerts, scrape, timing, fam] = await Promise.all([alertsP, scrapeP, timingP, familiesP]);
   return {
     calls: { made: pool.made, budget: L.maxCalls, ...(signal?.aborted ? { outOfTime: true } : {}) },
+    ...(scopeOut ? { scope: scopeOut } : {}),
     alerts, scrape, timing,
     families: { outcome: fam.outcome, reason: fam.reason, rows: fam.rows },
     absent: fam.absent,

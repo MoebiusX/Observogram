@@ -1246,6 +1246,10 @@ export function crawlFiles(filesInput, opts = {}) {
         // resource, the repository's own pack); how an in-process system is
         // triggered and gated, and whether this environment switches it off.
         ...(chaosDiscovered.length ? { 'crawler.discovered.chaos_experiments': annotationJson(chaosDiscovered) } : {}),
+        // Every alert rule's exact name the repository declares — the burn-rate ones folded into the
+        // policy and a repository's with no recording rules (the tier-3 fallback) included, which
+        // alerting.rules does not keep: the control room's scope reads it (server/routes/control-room.mjs).
+        ...alertNameAnnotations(alertRules),
         ...(chaosFound.scenarios.length && chaosControlSummary(chaosFound) ? { 'crawler.chaos.control': chaosControlSummary(chaosFound) } : {}),
         ...(chaosFound.scenarios.length && chaosFound.toggle?.enabled === false ? { 'crawler.chaos.disabled': `${chaosFound.toggle.path}: false (${chaosFound.toggle.file})` } : {}),
         ...metricAnnotations,
@@ -2058,6 +2062,12 @@ function buildMetricDefinitionAnnotations(metricDefinitions) {
 
 const JSON_ANNOTATION_BLOCK_LENGTH = 4096;
 
+// The names of every alert rule read, each once, sorted — none when there are none.
+function alertNameAnnotations(alertRules) {
+  const names = [...new Set(alertRules.map((r) => String(r.name || '').trim()).filter(Boolean))].sort();
+  return names.length ? { 'crawler.discovered.alert_names': annotationJson(names), 'crawler.discovered.alert_names_count': String(names.length) } : {};
+}
+
 function annotationJson(value) {
   const compact = JSON.stringify(value);
   return compact.length > JSON_ANNOTATION_BLOCK_LENGTH
@@ -2599,7 +2609,7 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // read from: the ones that turn out to guard no SLO are declared in
     // alerting.rules (crawlFiles), name for name. A rule skipped above
     // (its model could not be read) is not declared either.
-    alertRules.push({ rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}` });
+    alertRules.push({ rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName });
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);
       const id = `pol-${burnRateAlerts.length}`;

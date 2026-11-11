@@ -1380,11 +1380,19 @@ test('the chain against live: a run that counts by tier draws the links and thei
   assert.deepEqual(extra.chain.beyond, { count: 31, liveOnly: 4, line: 'Beyond the chain, 31 details differ: 31 metrics. 4 more run live, not declared.' });
   const c = keep(changesModel({ fidelity: f }));
   assert.deepEqual(c.items.map((i) => [i.key, i.value]), [['add', 0], ['update', 0], ['review', 0]]);
-  assert.deepEqual([c.total, c.sentence, c.beyond], [0, 'Nothing to change in the chain: its exporters, alerts and dashboards match live.', 'Beyond the chain, 31 details differ: 31 metrics.']);
+  // Each tile by link, in the chain's words; a link live did not read is "not read", never 0.
+  assert.deepEqual(c.items[0].parts, [{ key: 'exporters', name: 'Exporters', value: 0, unread: false }, { key: 'alerts', name: 'Alerts', value: 0, unread: false }, { key: 'dashboards', name: 'Dashboards', value: 0, unread: true }]);
+  // The dashboards were not read: never "they match live".
+  assert.deepEqual([c.total, c.sentence, c.beyond], [0, 'Nothing to change in the exporters and alerts: they match live. Not read live, so not compared: the 7 dashboards.', 'Beyond the chain, 31 details differ: 31 metrics.']);
   const s = keep(stillTrueModel({ journey, run: tiered(), now: NOW }));
-  assert.deepEqual([s.status, s.sentence], ['changed', 'Checked 2 hours ago against live — the chain matches what live showed: its dashboards could not be read. 31 details differ beyond it.']);
+  assert.deepEqual([s.status, s.sentence], ['changed', 'Checked 2 hours ago against live — its exporters and alerts match live, and the 7 dashboards could not be read. 31 details differ beyond the chain.']);
   const n = keep(nextActionModel({ still: s, grade: { basis: 'live' }, run: tiered(), journey, now: NOW }));
-  assert.deepEqual([n.sentence, n.button.label, n.why], ['The chain matches live; look at the 31 details beyond it.', 'See the differences', ['Beyond the chain, 31 details differ.']]);
+  assert.deepEqual([n.sentence, n.button.label, n.why], ['Exporters and alerts match live, the 7 dashboards could not be read; look at the 31 details beyond the chain.', 'See the differences', ['Not read live, so not compared: the 7 dashboards.', 'Beyond the chain, 31 details differ.']]);
+  // Everything read and alike: the chain matches, said whole.
+  const all = tiered({ dashboards: { aligned: 7, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 } });
+  const call = keep(changesModel({ fidelity: keep(fidelityModel({ run: all, journey, pack: krystalinePack, now: NOW })) }));
+  assert.equal(call.sentence, 'Nothing to change in the exporters, alerts and dashboards: they match live.');
+  assert.equal(keep(nextActionModel({ still: keep(stillTrueModel({ journey, run: all, now: NOW })), grade: { basis: 'live' }, run: all, journey, now: NOW })).sentence, 'The chain matches live; look at the 31 details beyond it.');
   // The chain itself differs: two alerts not live, an exporter scraped differently, one alert live only.
   const worse = tiered({
     exporters: { aligned: 20, drifted: 1, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 },
@@ -1394,12 +1402,47 @@ test('the chain against live: a run that counts by tier draws the links and thei
   assert.deepEqual(fw.chain.links.map((l) => [l.live, l.of, l.line, l.tone]), [[21, 21, '1 not as declared', 'warn'], [64, 66, '1 live only', 'fail'], [0, 0, '7 not read live', 'warn']]);
   assert.equal(fw.chain.pct, 95, '84 of 88 compared');
   const cw = keep(changesModel({ fidelity: fw }));
-  assert.deepEqual([cw.items.map((i) => i.value), cw.total, cw.sentence], [[2, 1, 1], 4, '']);
+  assert.deepEqual([cw.items.map((i) => i.value), cw.total, cw.sentence], [[2, 1, 1], 4, 'Not read live, so not counted here: the 7 dashboards.']);
+  assert.deepEqual(cw.items.map((i) => i.parts.map((p) => (p.unread ? 'not read' : p.value))), [[0, 2, 'not read'], [1, 0, 'not read'], [0, 1, 'not read']], 'which link each change is in');
   const sw = keep(stillTrueModel({ journey, run: worse, now: NOW }));
-  assert.equal(sw.sentence, 'Checked 2 hours ago against live — 3 in the chain differ from what the repository declares, and 31 details beyond it.');
+  assert.equal(sw.sentence, 'Checked 2 hours ago against live — 1 exporter and 2 alerts differ from what the repository declares, and 31 details beyond the chain. The 7 dashboards could not be read live.');
   const nw = keep(nextActionModel({ still: sw, grade: { basis: 'live' }, run: worse, journey, now: NOW }));
-  assert.deepEqual([nw.sentence, nw.why], ['Fix the 3 things in the chain the live side does differently.', ['1 exporter runs differently live than declared.', '2 declared alerts are not running live.', 'Beyond the chain, 31 details differ.']]);
-  assert.deepEqual(chainDifferences(worse), { chain: 3, beyond: 31, links: [{ key: 'exporters', many: 'exporters', one: 'exporter', missing: 0, drifted: 1 }, { key: 'alerts', many: 'alerts', one: 'alert', missing: 2, drifted: 0 }, { key: 'dashboards', many: 'dashboards', one: 'dashboard', missing: 0, drifted: 0 }], unread: ['dashboards'] });
+  // The line beyond the chain is never cut by the others.
+  assert.deepEqual([nw.sentence, nw.why], ['Fix the 1 exporter and 2 alerts the live side does differently.', ['1 exporter runs differently live than declared.', '2 declared alerts are not running live.', 'Beyond the chain, 31 details differ.']]);
+  assert.deepEqual(chainDifferences(worse), {
+    chain: 3, beyond: 31, beyondLiveOnly: 0,
+    links: [
+      { key: 'exporters', name: 'Exporters', many: 'exporters', one: 'exporter', missing: 0, drifted: 1, aligned: 20, notRead: 0, liveOnly: 0 },
+      { key: 'alerts', name: 'Alerts', many: 'alerts', one: 'alert', missing: 2, drifted: 0, aligned: 64, notRead: 0, liveOnly: 1 },
+      { key: 'dashboards', name: 'Dashboards', many: 'dashboards', one: 'dashboard', missing: 0, drifted: 0, aligned: 0, notRead: 7, liveOnly: 0 },
+    ],
+    unread: ['dashboards'],
+  });
+  // Nothing of the chain read: never "nothing differs", no count drawn as 0.
+  const blind = tiered({ exporters: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 21, setAside: 0 }, alerts: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 66, setAside: 0 } });
+  const cb = keep(changesModel({ fidelity: keep(fidelityModel({ run: blind, journey, pack: krystalinePack, now: NOW })) }));
+  assert.deepEqual([cb.items.map((i) => i.value), cb.total, cb.sentence], [[null, null, null], 0, 'Nothing in the chain could be compared. Not read live, so not compared: the 21 exporters, the 66 alerts and the 7 dashboards.']);
+  const sb = keep(stillTrueModel({ journey, run: blind, now: NOW }));
+  assert.equal(sb.sentence, 'Checked 2 hours ago against live — nothing in the chain could be compared: the 21 exporters, the 66 alerts and the 7 dashboards could not be read. 31 details differ beyond the chain.');
+  assert.equal(keep(nextActionModel({ still: sb, grade: { basis: 'live' }, run: blind, journey, now: NOW })).sentence, 'Nothing in the chain could be compared: the 21 exporters, the 66 alerts and the 7 dashboards could not be read; look at the 31 details beyond the chain.');
+  // A link live read in part counts what it read; one with all its declared set aside is no gap.
+  const part = tiered({ dashboards: { aligned: 5, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 2, setAside: 0 } });
+  const cp = keep(changesModel({ fidelity: keep(fidelityModel({ run: part, journey, pack: krystalinePack, now: NOW })) }));
+  assert.deepEqual(cp.items[0].parts.find((p) => p.key === 'dashboards'), { key: 'dashboards', name: 'Dashboards', value: 0, unread: false });
+  assert.equal(cp.sentence, 'Nothing to change in the exporters and alerts: they match live. Not read live, so not compared: the 2 dashboards.');
+  const aside = tiered({ dashboards: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 7 } });
+  assert.equal(keep(changesModel({ fidelity: keep(fidelityModel({ run: aside, journey, pack: krystalinePack, now: NOW })) })).sentence, 'Nothing to change in the exporters and alerts: they match live.');
+  const noneAtAll = tiered({ dashboards: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 }, exporters: { aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 } });
+  assert.equal(keep(changesModel({ fidelity: keep(fidelityModel({ run: noneAtAll, journey, pack: krystalinePack, now: NOW })) })).sentence, 'Nothing to change in the alerts: they match live. No exporters or dashboards are declared.');
+  // Nothing to change, but something runs live undeclared — in the chain and beyond it: the next step says both.
+  const extraRun = tiered({ dashboards: { aligned: 7, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0 }, alerts: { aligned: 66, drifted: 0, declaredNotLive: 0, liveNotDeclared: 1, notRead: 0, setAside: 0 }, detail: { aligned: 250, drifted: 0, declaredNotLive: 0, liveNotDeclared: 3, notRead: 0, setAside: 0, families: {} } });
+  extraRun.drift = { ...extraRun.drift, drifted: 0, declaredNotLive: 0, liveNotDeclared: 4 };
+  const se = keep(stillTrueModel({ journey, run: extraRun, now: NOW }));
+  assert.deepEqual([se.status, se.sentence], ['unchanged', 'Checked 2 hours ago against live — it matches: its exporters, alerts and dashboards are running live as declared. Also running live, not declared: 1 alert and 3 details.']);
+  const ne = keep(nextActionModel({ still: se, grade: { basis: 'live' }, run: extraRun, journey, now: NOW }));
+  assert.deepEqual([ne.sentence, ne.button?.label], ['Nothing is missing live. Running live, not in the repository yet: 1 alert and 3 details beyond the chain.', 'See the differences']);
+  // No "thing" in any sentence a tiered record makes.
+  for (const said of [c.sentence, s.sentence, n.sentence, ...n.why, cw.sentence, sw.sentence, nw.sentence, ...nw.why, cb.sentence, sb.sentence, cp.sentence, se.sentence, ne.sentence]) assert.ok(!/\bthings?\b/.test(said), said);
   // A record written before the tiers counts everything, as before.
   assert.equal(chainDifferences(run), null);
   assert.equal(keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW })).chain, null);
@@ -1416,8 +1459,12 @@ test('renderOverview: with a run that counts by tier, Diagnose draws a row per l
   assert.ok(html.includes('<li class="ov-clive__row ov-clive__row--warn">') && html.includes('<span class="ov-clive__name">Dashboards</span><span class="ov-clive__line og-muted">7 not read live</span><span class="ov-clive__n">–</span>'), 'what was not read is said, not counted as missing');
   assert.ok(!html.includes('<div class="ov-tiles">'), 'the four counts of everything are gone');
   assert.equal(countOf(html, 'Beyond the chain, 31 details differ: 31 metrics.'), 1, 'said once, under the changes: the sentence in Diagnose already counts them');
-  assert.ok(html.includes('<p class="ov-col__note og-muted">Nothing to change in the chain: its exporters, alerts and dashboards match live.</p>'));
-  assert.ok(html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — the chain matches what live showed: its dashboards could not be read. 31 details differ beyond it.</p>'));
+  assert.ok(html.includes('<p class="ov-col__note og-muted">Nothing to change in the exporters and alerts: they match live. Not read live, so not compared: the 7 dashboards.</p>'));
+  assert.ok(html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — its exporters and alerts match live, and the 7 dashboards could not be read. 31 details differ beyond the chain.</p>'));
+  // Each tile by link, with Discover's icons; the generic caption is gone.
+  assert.equal(countOf(html, '<ul class="ov-change__parts" aria-label="'), 3, 'a list per tile');
+  assert.ok(html.includes('<ul class="ov-change__parts" aria-label="to add by link"><li><svg class="ov-ic ov-change__pic"') && html.includes('<span class="ov-change__pname">Exporters</span><span class="ov-change__pn">0</span>') && html.includes('<span class="ov-change__pname">Dashboards</span><span class="ov-change__pn"><span class="og-muted" title="not read live" aria-hidden="true">–</span><span class="ov-sr">not read live</span></span>'));
+  assert.ok(!html.includes('declared, not live</span>') && !html.includes('live, not as declared</span>'), 'no caption about things in general');
   // No layered pack (an older host): the layers' summary and the three stats, as before.
   const old = overviewContainer();
   renderOverview(old, board({ diagnostic: diagnosticFull, layered: null }), {});

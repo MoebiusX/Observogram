@@ -529,10 +529,15 @@ function diagnoseColHtml(g, rules, f, s, primary, serviceId = null) {
 // one next step with its one primary button.
 const CHANGE_ICON = { add: 'add', update: 'update', review: 'review' };
 const CHANGE_SHORT = { add: 'declared, not live', update: 'live, not as declared', review: 'live, not declared' };
+// A tile's count by link, in the chain's words (Exporters 0 · Alerts 2 · Dashboards not read); a record
+// counted before the tiers has no parts and keeps the short caption.
+const changePartsHtml = (i) => (Array.isArray(i.parts) && i.parts.length
+  ? `<ul class="ov-change__parts" aria-label="${attr(`${i.label} by link`)}">${i.parts.map((p) => `<li${p.value ? ' class="is-some"' : ''}>${iconHtml(p.key, 'ov-change__pic')}<span class="ov-change__pname">${escapeHtml(p.name)}</span><span class="ov-change__pn">${p.unread ? '<span class="og-muted" title="not read live" aria-hidden="true">–</span><span class="ov-sr">not read live</span>' : p.value}</span></li>`).join('')}</ul>`
+  : `<span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span>`);
 function remediateColHtml(c, n, primary) {
   const items = c
     ? (c.known
-      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value}</span><span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span></div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}${c.beyond ? `<p class="ov-col__note ov-beyond og-muted">${escapeHtml(c.beyond)}</p>` : ''}`
+      ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value === null ? '<span aria-hidden="true">–</span><span class="ov-sr">not read live</span>' : i.value}</span>${changePartsHtml(i)}</div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}${c.beyond ? `<p class="ov-col__note ov-beyond og-muted">${escapeHtml(c.beyond)}</p>` : ''}`
       : `<p class="ov-col__lead og-muted">${escapeHtml(c.sentence)}</p>`)
     : reading('the last check');
   return `
