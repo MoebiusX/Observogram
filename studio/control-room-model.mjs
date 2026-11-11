@@ -229,7 +229,7 @@ function mttrOf(timing, mttx, { readAt }) {
 // failed, an aborted one as aborted — never a figure "within target" — and another environment's run
 // is named beside, never used.
 const MEASURED_BASIS = 'From the fault the test injected to the slowest of the alerts it expected: a chaos test knows when its fault began.';
-const RECORD_BASIS = 'A chaos test knows its start. Record its runs in the repository (.observability/pack.yaml, each experiment\'s last_result, with its environment) and MTTD shows here.';
+const RECORD_BASIS = 'A chaos test knows its start. Record its runs with Record a chaos run…, or in the repository (.observability/pack.yaml, each experiment\'s last_result, with its environment), and MTTD shows here.';
 function mttdOf(mttx, envName, now) {
   const target = targetOf(mttx, 'mttdTarget');
   const base = { label: 'MTTD', long: 'Time to detect', value: null, words: '—', detail: '', target: mttx?.unread ? '' : targetLine(mttx, target, 'mttd'), verdict: null, tone: 'neutral', asOf: '' };
@@ -251,7 +251,7 @@ function mttdOf(mttx, envName, now) {
     const verdict = placed && target !== null ? (s <= target ? 'met' : 'missed') : null;
     return {
       ...base, value: s, words: figureWords(s, target, verdict),
-      sub: `Measured in a chaos test${placed ? ` in ${pick.environment}` : ''} on ${when(pick)}, recorded in the repository.${placed ? '' : ' The run names no environment, so no verdict.'}`,
+      sub: `Measured in a chaos test${placed ? ` in ${pick.environment}` : ''} on ${when(pick)}, recorded in the ${pick.studio ? `studio${pick.by ? ` by ${pick.by}` : ''}` : 'repository'}.${placed ? '' : ' The run names no environment, so no verdict.'}`,
       verdict, tone: verdict === 'missed' ? 'warn' : verdict === 'met' ? 'ok' : 'neutral', basis: MEASURED_BASIS,
     };
   }
@@ -434,10 +434,11 @@ function nextOf(state, intervalMs = CONTROL_ROOM_INTERVAL_MS) {
 //           { declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords } }
 //           — none: the recommendation, never a verdict; or { unread: true } while the
 //           repository's pack is not read; `action` ('Set targets…' | 'Change targets…')
-//           becomes the panel's `targets` button
+//           becomes the panel's `targets` button; `record` (true) its Record a chaos run… button
 //   → null when closed, else { title, scope, reading, stopped, error, readAt, cached, endpoint, next,
 //      status, kpis: { mttr, mttd }, targets, insights, scrape, alerts, families, calls }
 //   targets  { label, aria } — Set targets… / Change targets… under the two figures — or null
+//   record   { label, aria } — Record a chaos run… beside it, when the pack declares an experiment — or null
 export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName = '', envName = '', mttx = null, now = Date.now() } = {}) {
   if (!state?.open) return null;
   const a = isObj(state.answer) ? state.answer : null;
@@ -465,6 +466,8 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
     targets: isObj(mttx) && !mttx.unread && (mttx.action === 'Set targets…' || mttx.action === 'Change targets…')
       ? { label: mttx.action, aria: `${mttx.action === 'Set targets…' ? 'Set' : 'Change'} the MTTD / MTTR targets of ${title}` }
       : null,
+    // The way to record a chaos run's result, from where MTTD says none is recorded.
+    record: isObj(mttx) && !mttx.unread && mttx.record === true ? { label: 'Record a chaos run…', aria: `Record a chaos run of ${title}` } : null,
     timingReadAt: a?.timing?.readAt || null,
     // Cut at the deadline: the parts not read say so; the strip says why.
     outOfTime: !!a?.calls?.outOfTime,

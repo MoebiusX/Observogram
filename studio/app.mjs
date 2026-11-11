@@ -121,7 +121,8 @@ import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMod
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
-  targetsFormOpened, targetsOnlyPlan } from './overview-model.mjs';
+  targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan } from './overview-model.mjs';
+import { withStudioRuns } from './chaos-runs.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
@@ -277,6 +278,17 @@ async function rehydrateFromPersistence() {
   return true;
 }
 
+// The chaos runs recorded in the studio for a service (studio/chaos-runs.mjs) are its experiments'
+// last_result where newer than the repository's, so Expert grades what the board grades: only for
+// the service page's own pack (its primary), in that environment.
+function withServiceStudioRuns(pack, packId, env) {
+  const service = Number.isInteger(state.serviceId) ? findServiceRecord(state.serviceId) : null;
+  if (!service || !Array.isArray(service.chaosRuns) || !service.chaosRuns.length) return pack;
+  const own = packForService(service, state.catalog, { isLiveAggregatePack });
+  if (own.how !== 'primary' || own.pack?.id !== packId) return pack;
+  return withStudioRuns(pack, service.chaosRuns, { env: env || state.serviceEnv || null });
+}
+
 // The /conformance report carries onPlaceholder itself — worked out for this
 // env overlay — whenever the pack carries library todos, and omits it when the
 // server cannot say, so it survives reloads and env switches as is.
@@ -286,7 +298,7 @@ async function loadPack(id, env) {
     api(`/api/packs/${encodeURIComponent(id)}${q}`),
     api(`/api/packs/${encodeURIComponent(id)}/conformance${q}`),
   ]);
-  state.pack = pack;
+  state.pack = withServiceStudioRuns(pack, id, env);
   state.conformance = conformance;
   state.uploadedSource = null;
   state.symbolTable = buildSymbolTable(pack);
@@ -2409,6 +2421,67 @@ function openTargetsForm(from = 'board') {
   renderMainView();
 }
 
+// Record a chaos run…, from the board's MTTD / MTTR tile or the control room: the chaos run form on
+// the service list (overview-model.mjs chaosRunFormOpened), the service's own experiments; Save or
+// Cancel brings the board back. `from`: 'board' or 'control-room' — where the focus goes back to.
+let checkAfterRecord = false;
+function openChaosRunForm(from = 'board') {
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!serviceListAvailable() || !Number.isInteger(picked.service?.id)) return;
+  const form = chaosRunFormOpened(state.services, { serviceId: picked.service.id, env: picked.env || null, layered: overviewFacts.layered, now: Date.now(), tzOffset: new Date().getTimezoneOffset() });
+  if (!form) return;
+  if (controlRoom.state().open) controlRoom.close();
+  const back = { serviceId: picked.service.id, env: picked.env || null, focus: from === 'control-room' ? '[data-ux-action="ov-control-room"]' : '[data-ux-action="ov-mttx-record"]' };
+  enterOverviewList();
+  listForm = { ...form, returnTo: back };
+  renderMainView();
+}
+
+// Save and check again: the run first in the service's list (PATCH { chaosRuns }), then back to the
+// board, which checks the service again so the grade takes it.
+async function saveChaosRunForm(nav) {
+  const plan = chaosRunPlan(listForm, { services: state.services || [], now: Date.now() });
+  if (Object.keys(plan.problems).length) {
+    listForm = { ...listForm, error: formProblemsNote(plan.problems), focus: Object.keys(plan.problems)[0] };
+    renderMainView();
+    return;
+  }
+  listForm = { ...listForm, saving: true, error: null };
+  renderMainView();
+  try {
+    await patchService(plan.serviceId, plan.patch);
+  } catch (e) {
+    await refreshServices();
+    listForm = { ...listForm, saving: false, error: e?.message || String(e) };
+    renderMainView();
+    return;
+  }
+  await refreshServices();
+  const returnTo = listForm.returnTo || null;
+  listForm = FORM_CLOSED;
+  announce(`${plan.name}${plan.envName ? ` · ${plan.envName}` : ''}: the chaos run of ${plan.run.experiment} is recorded. Checking again, so the grade takes it.`);
+  if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') { renderMainView(); return; }
+  checkAfterRecord = true;
+  afterListForm(returnTo);
+}
+
+// Forget a run recorded here (the form's list): the list without it, saved at once; the form stays
+// open on the list as the server now has it, and the board checks again when it is closed.
+async function forgetChaosRun(runId) {
+  if (!listForm.chaosRun || listForm.saving) return;
+  const plan = chaosRunForgetPlan(state.services || [], listForm.serviceId, runId);
+  if (!plan) return;
+  listForm = { ...listForm, saving: true, error: null };
+  renderMainView();
+  try { await patchService(plan.serviceId, plan.patch); }
+  catch (e) { listForm = { ...listForm, saving: false, error: e?.message || String(e) }; renderMainView(); return; }
+  await refreshServices();
+  const service = (state.services || []).find((s) => s.id === plan.serviceId);
+  listForm = { ...listForm, saving: false, forgot: true, runs: Array.isArray(service?.chaosRuns) ? service.chaosRuns : [] };
+  renderMainView();
+  announce(`${plan.name}: the recorded run is forgotten. The board checks again when this form closes.`);
+}
+
 // A form closed (Cancel) or saved: back to the board it was opened from — the focus on the control
 // that opened it once the board is drawn (takeBoardFocus) — else the list.
 let boardFocus = null;
@@ -2459,6 +2532,7 @@ async function saveTargetsForm(nav) {
 }
 
 function listFormInput(field, value, { redraw = false } = {}) {
+  if (listForm.chaosRun) { listForm = chaosRunFormInput(listForm, field, value); if (redraw) renderMainView(); return; }
   listForm = serviceFormInput(listForm, field, value);
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
   if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
@@ -2477,6 +2551,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (!listForm.open || listForm.saving) return;
   const nav = navGeneration;
   if (listForm.targetsOnly) { await saveTargetsForm(nav); return; }
+  if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
   const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
@@ -2664,8 +2739,16 @@ async function refreshOverviewFacts() {
     journeyFor: (journeys) => journeyForService(journeys, { slug: picked.service.slug, env: picked.env, packId: picked.pack?.id || null }),
   });
   if (gen !== overviewGeneration) return;
-  overviewFacts = { ...facts, running: false, startError: null, loaded: true };
+  // The chaos runs recorded in the studio for this service and environment (studio/chaos-runs.mjs):
+  // the measured MTTD, the control room and the repository's grade read them as the check does.
+  const layered = facts.layered ? withStudioRuns(facts.layered, picked.service.chaosRuns, { env: picked.env || null }) : facts.layered;
+  overviewFacts = { ...facts, layered, running: false, startError: null, loaded: true };
   redraw();
+  // A run just recorded (Save and check again): the check runs once the board knows its journey.
+  if (checkAfterRecord) {
+    checkAfterRecord = false;
+    if (overviewFacts.journey && onOverviewBoard()) runOverviewCheck();
+  }
 }
 
 // Enter Overview on a service (the remembered one, else the first with a
@@ -2807,8 +2890,10 @@ const overviewActions = {
   editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
   formInput: listFormInput,
   saveService: saveListForm,
-  closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
+  closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
   setTargets: (from) => openTargetsForm(from === 'control-room' ? 'control-room' : 'board'),
+  recordChaosRun: (from) => openChaosRunForm(from === 'control-room' ? 'control-room' : 'board'),
+  forgetChaosRun: (runId) => forgetChaosRun(String(runId || '')),
   browseFolders: listBrowseFolders,
   openFolder: (path) => { listOpenFolder(path); },
   chooseFolder: (path) => { folderGeneration++; listForm = folderBrowseChosen(listForm, path); renderMainView(); },

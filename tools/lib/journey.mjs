@@ -34,6 +34,11 @@
 //                               #   side declared | live, kind in-development | not-this-service, until
 //                               #   YYYY-MM-DD (the review date; past it the difference counts again).
 //                               #   Written by the server into a service's own checks, like gradeOff.
+//   chaosRuns:             # optional: chaos runs recorded in the studio (studio/chaos-runs.mjs) —
+//     - { experiment: pod-kill, at: 2026-11-11T13:05:00Z, outcome: pass, environment: prod, mttd: 45s }
+//                               #   the newest for an experiment in this check's env (one naming no
+//                               #   environment applies anywhere) is its last_result when newer than
+//                               #   the repository's own. Written by the server, like gradeOff.
 //   gate:                  # all optional; omitted criteria don't gate
 //     requireGradePass: true
 //     minAlignmentPct: 85
@@ -115,6 +120,7 @@ import {
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD, GRADE_CRITERION_KEYS } from '../../studio/diagnostic-grade.mjs';
 import { applySetAsides, SET_ASIDE_KINDS, SET_ASIDE_MAX, SET_ASIDE_SIDES } from '../../studio/set-asides.mjs';
+import { CHAOS_RUNS_MAX, chaosRunErrors, withStudioRuns } from '../../studio/chaos-runs.mjs';
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
@@ -218,6 +224,7 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   }
   if (def.gradeOff !== undefined) validateGradeOff(def.gradeOff, def.name);
   if (def.setAside !== undefined) validateSetAside(def.setAside, def.name);
+  if (def.chaosRuns !== undefined) validateChaosRuns(def.chaosRuns, def.name);
   // Step 5: a typo'd or malformed schedule / stackBudget block is a
   // load-time configuration error (CLI `list` prints it, GET /api/journeys
   // puts it in loadError, capture answers 400) — never a run that silently
@@ -258,6 +265,25 @@ export function validateSetAside(setAside, journeyName = '?') {
     : setAside.length > SET_ASIDE_MAX ? `it has more than ${SET_ASIDE_MAX} entries`
       : Array.from(setAside).map(why).find(Boolean) || null;
   if (bad) throw new Error(`journey ${journeyName}: setAside must be a list of { key, side, kind, until } — ${bad}`);
+}
+
+// chaosRuns — chaos runs recorded in the studio for the check's experiments:
+// a list of { experiment, at, outcome, environment?, mttd?, alertsFired?,
+// note?, by?, recordedAt? } (studio/chaos-runs.mjs). A malformed one is a
+// load-time error, never a run that silently grades without it. A run's time
+// is not checked against the clock here: the server did when it was recorded.
+export function validateChaosRuns(chaosRuns, journeyName = '?') {
+  const why = (r) => {
+    const errors = chaosRunErrors(r, { now: Number.MAX_SAFE_INTEGER });
+    if (errors.length) return errors[0];
+    if (r.by !== undefined && r.by !== null && typeof r.by !== 'string') return 'by is text';
+    if (r.recordedAt !== undefined && r.recordedAt !== null && typeof r.recordedAt !== 'string') return 'recordedAt is text';
+    return null;
+  };
+  const bad = !Array.isArray(chaosRuns) ? 'it is not a list'
+    : chaosRuns.length > CHAOS_RUNS_MAX ? `it has more than ${CHAOS_RUNS_MAX} entries`
+      : Array.from(chaosRuns).map(why).find(Boolean) || null;
+  if (bad) throw new Error(`journey ${journeyName}: chaosRuns must be a list of { experiment, at, outcome } — ${bad}`);
 }
 
 // packB.mcp.endpointId — the org's registered MCP endpoint a server-run
@@ -1217,7 +1243,7 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 // recorded as packA.scan. A crawl: Pack A carries its own. A run that is
 // not told (Check now on the last scan) keeps the scan of the newest record
 // of the same Pack A file: the file is that scan's.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null, chaosRuns = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1267,7 +1293,12 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     if (errors.length) throw new Error(`${label} failed schema validation: ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ''}`);
   }
 
-  const layeredA = adapt(a.canonical, { environment: def.env || undefined });
+  // The chaos runs recorded in the studio: `chaosRuns` when the caller hands them in (the server:
+  // the journey's service record's), else the definition's own. The newest for an experiment in this
+  // environment is its last_result where it is newer than the repository's (studio/chaos-runs.mjs):
+  // the grade, its Chaos-validated and the MTTD read it from there.
+  const runList = Array.isArray(chaosRuns) ? chaosRuns : (Array.isArray(def.chaosRuns) ? def.chaosRuns : []);
+  const layeredA = withStudioRuns(adapt(a.canonical, { environment: def.env || undefined }), runList, { env: def.env || null });
   const layeredB = adapt(b.canonical, {});
   // Same construct as the studio's /api/diff: the requirement-chain
   // comparison rides on the diff, and the grade's Drift-free criterion

@@ -26,6 +26,7 @@ import {
   gradeModel, gradeWhy, stillTrueModel, nextActionModel, buildOverviewModel,
   layersModel, compositionOf, rulesModel, fidelityModel, changesModel, decideOverviewLayout, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS,
   chainModel, chainDifferences, controlRoomMttx, targetsFormOpened, targetsOnlyPlan,
+  chaosExperimentsOf, chaosRunFormOpened, chaosRunFormInput, chaosRunProblems, chaosRunPlan, chaosRunForgetPlan, localDateTimeValue, isoFromLocal, CHAOS_RECORD_LABEL,
   START_IDLE, startChoose, startAdopted,
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, sourceOffText, ALL_SOURCES_OFF,
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
@@ -1286,7 +1287,7 @@ test('chainModel: the chain the repository declares — three links, the objecti
   ]);
   assert.deepEqual(C.mttx, {
     declared: false, origin: null, targets: '', measured: '', note: 'No MTTD / MTTR targets are set for this service.',
-    hint: 'Until they are set, the recommendation is what to aim for.', tone: 'fail', action: null,
+    hint: 'Until they are set, the recommendation is what to aim for.', tone: 'fail', action: null, record: null,
     recommended: {
       name: 'Lab default', words: 'MTTD ≤ 1 min · MTTR ≤ 5 min', conditions: 'A service crash, a dependency outage, a failed deployment',
       profiles: [
@@ -1348,9 +1349,9 @@ test('controlRoomMttx: the control room\'s targets — unread while the pack is 
   assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub, layeredError: '502: the saved check could not be read' }), { unread: true }, 'failed');
   assert.deepEqual(controlRoomMttx({ loaded: true, layered: null }), { unread: true }, 'never run');
   const lab = { profile: 'lab', mttd: '1m', mttr: '5m' };
-  assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub }), { declared: false, runs: [], recommended: { name: 'Lab default', mttd: '1m', mttr: '5m', mttdWords: '≤ 1 min', mttrWords: '≤ 5 min' }, action: null }, 'the scan\'s placeholder targets: the recommendation');
+  assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub }), { declared: false, runs: [], recommended: { name: 'Lab default', mttd: '1m', mttr: '5m', mttdWords: '≤ 1 min', mttrWords: '≤ 5 min' }, action: null, record: false }, 'the scan\'s placeholder targets: the recommendation');
   assert.deepEqual(controlRoomMttx({ loaded: true, layered: layeredStub, targets: { profile: 'noncritical', mttd: '15m', mttr: '240m' } }),
-    { declared: true, origin: 'studio', mttdTarget: '15m', mttrTarget: '240m', mttdWords: '≤ 15 min', mttrWords: '≤ 4 hours', runs: [], action: null });
+    { declared: true, origin: 'studio', mttdTarget: '15m', mttrTarget: '240m', mttdWords: '≤ 15 min', mttrWords: '≤ 4 hours', runs: [], action: null, record: false });
   // Where the host can open the service's form: the same way to set them as on the board.
   assert.equal(controlRoomMttx({ loaded: true, layered: layeredStub, settable: true }).action, 'Set targets…');
   assert.equal(controlRoomMttx({ loaded: true, layered: layeredStub, settable: true, targets: lab }).action, 'Change targets…');
@@ -1358,7 +1359,7 @@ test('controlRoomMttx: the control room\'s targets — unread while the pack is 
   const run = { id: 'CHAOS-01', spec: { id: 'kill-pod', environment: 'prod', last_result: { at: '2026-11-01T10:00:00Z', outcome: 'pass', observed_mttd: '40s' } } };
   const repo = { layers: { ...layeredStub.layers, L5: [{ id: 'BASE-01', spec: { mttd_target_p50: '5m', mttr_target_p50: '2h' } }, run] } };
   assert.deepEqual(controlRoomMttx({ loaded: true, layered: repo, targets: lab }),
-    { declared: true, origin: 'repository', mttdTarget: '5m', mttrTarget: '2h', runs: [{ experiment: 'kill-pod', at: '2026-11-01T10:00:00Z', outcome: 'pass', environment: 'prod', mttd: '40s' }], action: null }, 'the repository\'s win over the studio\'s');
+    { declared: true, origin: 'repository', mttdTarget: '5m', mttrTarget: '2h', runs: [{ experiment: 'kill-pod', at: '2026-11-01T10:00:00Z', outcome: 'pass', environment: 'prod', mttd: '40s' }], action: null, record: false }, 'the repository\'s win over the studio\'s');
   assert.equal(controlRoomMttx({ loaded: true, layered: repo, targets: lab, settable: true }).action, null, 'the repository\'s: none to change here');
   const half = { layers: { ...layeredStub.layers, L5: [{ id: 'BASE-01', spec: { mttr_target_p50: '2h' } }] } };
   assert.equal(controlRoomMttx({ loaded: true, layered: half, targets: lab }).origin, 'studio', 'one target alone is not the repository\'s');
@@ -1733,6 +1734,88 @@ const svcRow = (over = {}) => ({
 });
 const lastRunAt = new Date(NOW - 2 * HOUR).toISOString();
 const listJourney = (name, scope, lastRun, packA = '/w/packs/x.pack.yaml') => ({ name, scope, packA, packB: 'mcp: https://mcp.example.test/mcp', lastRun });
+
+test('Record a chaos run…: the experiments a run can be recorded for, the form it opens (now, Passed, every expected alert ticked), what Save sends and what it refuses, Forget, the tile\'s and the control room\'s button, a studio run said as the studio\'s', () => {
+  const T = Date.parse('2026-11-11T15:00:00Z');
+  const layered = { layers: { L1: [], L2: [], L3: [], L4: {}, L5: [
+    { id: 'CHAOS-01', spec: { id: 'pod-kill', expected_alerts: ['PodDown', 'HighErrorRate', 'PodDown'], expected_mttd: '2m', schedule: 'weekly', environment: 'prod' } },
+    { id: 'CHAOS-02', spec: { id: 'latency' } },
+    { id: 'CHAOS-03', source: 'Scaffold', spec: { id: 'library-placeholder' } },
+    { id: 'CHAOS-04', spec: { id: 'Not A Slug' } },
+    { id: 'CHAOS-05', spec: { id: 'pod-kill' } },
+  ] } };
+  assert.deepEqual(chaosExperimentsOf(layered), [
+    { id: 'pod-kill', expectedAlerts: ['PodDown', 'HighErrorRate'], expectedMttd: '2m', schedule: 'weekly', environment: 'prod' },
+    { id: 'latency', expectedAlerts: [], expectedMttd: null, schedule: null, environment: null },
+  ], 'a scaffold, an id no run can name and a second declaration of one id are left out');
+  assert.deepEqual(chaosExperimentsOf(null), []);
+  // Local times: Paris in winter is an hour ahead of UTC (getTimezoneOffset -60).
+  assert.equal(localDateTimeValue(T, -60), '2026-11-11T16:00');
+  assert.equal(isoFromLocal('2026-11-11T16:00', -60), '2026-11-11T15:00:00Z');
+  assert.deepEqual(['', '2026-02-30T10:00', '2026-11-11 16:00', '2026-11-11T24:00'].map((v) => isoFromLocal(v)), [null, null, null, null]);
+  // The form: a service record and a pack that declares an experiment, else none.
+  const svc = svcRow({ chaosRuns: [] });
+  assert.equal(chaosRunFormOpened([svc], { serviceId: 2, env: 'prod', layered, now: T }), null, 'no such service');
+  assert.equal(chaosRunFormOpened([svc], { serviceId: 1, env: 'prod', layered: { layers: { L5: [] } }, now: T }), null, 'no experiment');
+  const opened = chaosRunFormOpened([svc], { serviceId: 1, env: 'prod', layered, now: T, tzOffset: -60 });
+  assert.deepEqual([opened.chaosRun, opened.serviceId, opened.focus, opened.values], [true, 1, 'crExperiment', {
+    name: 'Checkout', env: 'prod', crExperiment: 'pod-kill', crAt: '2026-11-11T16:00', crOutcome: 'pass', crMttd: '', crNote: '', 'crFired:PodDown': '1', 'crFired:HighErrorRate': '1',
+  }]);
+  assert.equal(formDraft(opened), null, 'it keeps no draft: it has no sign-in to survive');
+  // Another experiment brings its own alerts (none here); typing keeps the rest.
+  const other = chaosRunFormInput(opened, 'crExperiment', 'latency');
+  assert.deepEqual(Object.keys(other.values).filter((k) => k.startsWith('crFired:')), []);
+  assert.equal(chaosRunFormInput(chaosRunFormInput(other, 'crExperiment', 'pod-kill'), 'crFired:PodDown', '').values['crFired:HighErrorRate'], '1');
+  // What Save sends: the service's list as the server gave it, the new run first.
+  let form = chaosRunFormInput(chaosRunFormInput(chaosRunFormInput(opened, 'crMttd', '1m30s'), 'crFired:HighErrorRate', ''), 'crNote', '  game day ');
+  const earlier = { experiment: 'latency', at: '2026-11-01T10:00:00Z', outcome: 'pass', environment: 'prod', mttd: null, alertsFired: null, note: '', by: 'ada', recordedAt: '2026-11-01T11:00:00Z' };
+  const plan = chaosRunPlan(form, { services: [svcRow({ chaosRuns: [earlier] })], now: T });
+  assert.deepEqual(plan, {
+    problems: {}, serviceId: 1, name: 'Checkout', envName: 'prod',
+    run: { experiment: 'pod-kill', at: '2026-11-11T15:00:00Z', outcome: 'pass', environment: 'prod', mttd: '1m30s', alertsFired: ['PodDown'], note: 'game day' },
+    patch: { chaosRuns: [{ experiment: 'pod-kill', at: '2026-11-11T15:00:00Z', outcome: 'pass', environment: 'prod', mttd: '1m30s', alertsFired: ['PodDown'], note: 'game day' }, earlier] },
+  });
+  assert.equal(chaosRunPlan(chaosRunFormInput(form, 'crMttd', '45'), { services: [svc], now: T }).run.mttd, '45s', 'a plain number is seconds');
+  assert.equal(chaosRunPlan(chaosRunFormInput(form, 'crMttd', ''), { services: [svc], now: T }).run.mttd, null, 'none measured');
+  assert.equal(chaosRunPlan(chaosRunFormInput(form, 'crExperiment', 'latency'), { services: [svc], now: T }).run.alertsFired, null, 'an experiment that expects no alert says none');
+  // What it refuses, each where it goes.
+  const problems = (over, runs = []) => chaosRunProblems({ ...form.values, ...over }, { experiments: form.experiments, tzOffset: -60, now: T, runs });
+  assert.deepEqual(problems({}), {});
+  assert.deepEqual(problems({ crExperiment: 'gone' }), { crExperiment: 'Choose the experiment that ran.' });
+  assert.deepEqual(problems({ crAt: '' }), { crAt: 'Say when it ran: a date and a time.' });
+  assert.deepEqual(problems({ crAt: '2026-11-11T17:00' }), { crAt: 'It cannot have run in the future.' });
+  assert.deepEqual(problems({ crOutcome: '' }), { crOutcome: 'Say whether it passed, failed or was aborted.' });
+  assert.deepEqual(problems({ crMttd: 'two minutes' }), { crMttd: 'Give the MTTD in seconds (45) or as a duration (2m30s), at most a week.' });
+  assert.deepEqual(problems({ crNote: 'x'.repeat(281) }), { crNote: 'At most 280 characters on one line.' });
+  assert.deepEqual(problems({}, [{ experiment: 'pod-kill', at: '2026-11-11T15:00:00Z', environment: 'prod' }]), { crAt: 'A run of this experiment at this time is already recorded.' });
+  assert.deepEqual(chaosRunPlan(form, { services: [], now: T }).problems, { crExperiment: 'This service is no longer listed: close the form and open it again.' });
+  // Forget: the list without that run.
+  const kept = [earlier, { ...earlier, at: '2026-11-02T10:00:00Z' }];
+  const forgot = chaosRunForgetPlan([svcRow({ chaosRuns: kept })], 1, `latency\u00002026-11-01T10:00:00Z\u0000prod`);
+  assert.deepEqual(forgot, { serviceId: 1, name: 'Checkout', patch: { chaosRuns: [kept[1]] } });
+  assert.equal(chaosRunForgetPlan([svcRow({ chaosRuns: kept })], 1, 'nothing'), null);
+  // The model the renderer draws, and the form drawn on the service list.
+  form = { ...form, runs: kept };
+  const m = formModel(form, { now: T });
+  assert.deepEqual([m.chaosRun, m.title, m.experiments.map((x) => [x.label, x.selected]), m.outcomes.map((o) => o.value), m.fired], [true, 'Record a chaos run · Checkout · prod',
+    [['pod-kill — expects MTTD ≤ 2m', true], ['latency', false]], ['pass', 'fail', 'aborted'],
+    [{ alert: 'PodDown', field: 'crFired:PodDown', checked: true }, { alert: 'HighErrorRate', field: 'crFired:HighErrorRate', checked: false }]]);
+  assert.deepEqual(m.recent.map((r) => r.words), ['Passed · 2026-11-01 10:00 UTC · prod · by ada', 'Passed · 2026-11-02 10:00 UTC · prod · by ada']);
+  const list = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const c = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [], addEventListener() {} };
+  renderServiceList(c, list, m, { overview: {} });
+  for (const bit of ['data-chaos-run="1"', 'data-field="crExperiment"', 'type="datetime-local" data-field="crAt" value="2026-11-11T16:00"', 'type="checkbox" data-field="crFired:PodDown" checked', 'data-field="crFired:HighErrorRate">', '>Save and check again<', 'data-ux-action="ov-cr-forget"', 'Recorded here']) {
+    assert.ok(c.innerHTML.includes(bit), bit);
+  }
+  // The tile's button and the control room's: where the form can open and the pack declares an experiment.
+  assert.equal(chainModel({ layered, settable: true }).mttx.record, CHAOS_RECORD_LABEL);
+  assert.equal(chainModel({ layered, settable: false }).mttx.record, null, 'not where the host cannot open the form');
+  assert.equal(chainModel({ layered: { layers: { L5: [] } }, settable: true }).mttx.record, null, 'not for a pack with no experiment');
+  assert.equal(controlRoomMttx({ loaded: true, layered, settable: true }).record, true);
+  // A run recorded in the studio, said as the studio's on the tile.
+  const studio = { layers: { ...layered.layers, L5: [{ ...layered.layers.L5[0], spec: { ...layered.layers.L5[0].spec, last_result: { at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', observed_mttd: '45s' } }, _studioRun: { by: 'carlos' } }] } };
+  assert.match(chainModel({ layered: studio, env: 'prod', targets: { profile: 'lab', mttd: '1m', mttr: '5m' } }).mttx.note, /MTTD 45s in a chaos test on 11 Nov, recorded in the studio, within the 1 min target/);
+});
 
 test('repositoryLine: GitHub as owner/repo with its branch, Azure DevOps as project/repo, a folder by its name with its path beneath; nothing → null', () => {
   assert.deepEqual(repositoryLine({ kind: 'github', location: 'https://github.com/acme/checkout', ref: 'develop' }),
@@ -2563,9 +2646,10 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './constants.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './chaos-runs.mjs', './constants.mjs'],
   'studio/artefact-tiers.mjs': [],
   'studio/mttx-targets.mjs': [],
+  'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
   'studio/overview-api.mjs': ['./services-api.mjs', './diagnostic-grade.mjs'],

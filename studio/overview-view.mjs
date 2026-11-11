@@ -316,8 +316,8 @@ function chainHtml(C) {
         ${iconHtml('mttx', 'ov-mttx__ic')}
         <span class="ov-mttx__name">MTTD / MTTR</span>
         <span class="ov-mttx__val">${escapeHtml(m.targets || 'Not declared')}</span>
-        <span class="ov-mttx__note">${escapeHtml(m.origin === 'studio' ? m.note : (m.measured || m.note))}</span>${m.recommended ? mttxRecommendedHtml(m.recommended) : ''}${m.action ? `
-        <button type="button" class="og-btn og-btn--text ov-mttx__set" data-ux-action="ov-mttx-set">${escapeHtml(m.action)}</button>` : ''}
+        <span class="ov-mttx__note">${escapeHtml(m.origin === 'studio' ? m.note : (m.measured || m.note))}</span>${m.recommended ? mttxRecommendedHtml(m.recommended) : ''}${m.action || m.record ? `
+        <span class="ov-mttx__acts">${m.action ? `<button type="button" class="og-btn og-btn--text ov-mttx__set" data-ux-action="ov-mttx-set">${escapeHtml(m.action)}</button>` : ''}${m.record ? `<button type="button" class="og-btn og-btn--text ov-mttx__set" data-ux-action="ov-mttx-record">${escapeHtml(m.record)}</button>` : ''}</span>` : ''}
       </div>`;
 }
 
@@ -715,6 +715,8 @@ export function renderOverview(container, model, host = appHost) {
     'ov-back': () => ov.backToList?.(),
     // The MTTD / MTTR tile's Set targets… / Change targets…: the service's form at its Targets answer.
     'ov-mttx-set': () => ov.setTargets?.('board'),
+    // Record a chaos run…: the service's chaos run form, on the service list where its form lives.
+    'ov-mttx-record': () => ov.recordChaosRun?.('board'),
     // A criterion's switch (the model's `switches`): ask why in place, then the host's setGradeCriterion.
     'ov-grade-ask': (ev, el) => { gradeAsk = { service: model.service?.id ?? null, key: el.dataset.key, reason: '', focus: true }; whyOpen = true; redraw(); },
     'ov-grade-ask-cancel': () => { gradeAsk = null; redraw(); },
@@ -941,7 +943,54 @@ function targetsFormHtml(f) {
     </form>`;
 }
 
+// Record a chaos run…: which experiment ran, when, how it went, how fast its alerts fired, which of
+// the expected ones fired, a note. Save checks the service again; Cancel goes back. The runs already
+// recorded here are listed under it, each with Forget.
+function chaosRunFormHtml(f) {
+  const off = !f.canWrite;
+  const v = f.values;
+  const shown = !!f.error;   // the field notes appear once a save was tried
+  const opts = (list) => list.map((o) => `<option value="${attr(o.value ?? o.id)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+  const fired = f.fired.length ? `
+        <fieldset class="ov-form__fired">
+          <legend class="ov-form__l">The expected alerts that fired</legend>${f.fired.map((x) => `
+          <label class="ov-form__check"><input type="checkbox" data-field="${attr(x.field)}"${x.checked ? ' checked' : ''}> ${escapeHtml(x.alert)}</label>`).join('')}
+        </fieldset>` : '';
+  const recent = f.recent.length ? `
+      <div class="ov-form__recent">
+        <h3 class="ov-form__l">Recorded here</h3>
+        <ul class="ov-form__runs">${f.recent.map((r) => `
+          <li><span>${escapeHtml(r.experiment)} · ${escapeHtml(r.words)}${r.note ? ` <span class="og-muted">— ${escapeHtml(r.note)}</span>` : ''}</span><button type="button" class="og-btn og-btn--text" data-ux-action="ov-cr-forget" data-run="${attr(encodeURIComponent(r.id))}"${f.saving || off ? ' disabled' : ''} aria-label="Forget the run of ${attr(r.experiment)}: ${attr(r.words)}">Forget</button></li>`).join('')}
+        </ul>
+      </div>` : '';
+  return `
+    <form class="ov-form ov-form--chaos og-panel" aria-labelledby="ov-form-h" novalidate data-chaos-run="1">
+      <header class="ov-form__head">
+        <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
+        <p class="ov-card__sub">${escapeHtml(f.hint)}</p>
+      </header>
+      <div class="ov-form__grid">
+        <label class="ov-form__f"><span class="ov-form__l">Experiment</span>
+          <select class="og-input" data-field="crExperiment">${opts(f.experiments)}</select>${fieldErr(f, 'crExperiment', shown)}</label>
+        <label class="ov-form__f"><span class="ov-form__l">When it ran <em>(your time)</em></span>
+          <input class="og-input" type="datetime-local" data-field="crAt" value="${attr(v.crAt)}">${fieldErr(f, 'crAt', shown)}</label>
+        <label class="ov-form__f"><span class="ov-form__l">How it went</span>
+          <select class="og-input" data-field="crOutcome">${opts(f.outcomes)}</select>${fieldErr(f, 'crOutcome', shown)}</label>
+        <label class="ov-form__f"><span class="ov-form__l">Measured MTTD <em>(from the fault to the slowest expected alert)</em></span>
+          <input class="og-input" data-field="crMttd" value="${attr(v.crMttd)}" placeholder="45s, 2m30s or 45" inputmode="text" autocomplete="off">${fieldErr(f, 'crMttd', shown)}</label>${fired}
+        <label class="ov-form__f ov-form__note"><span class="ov-form__l">Note <em>(optional)</em></span>
+          <input class="og-input" data-field="crNote" value="${attr(v.crNote)}" maxlength="280" autocomplete="off">${fieldErr(f, 'crNote', shown)}</label>
+      </div>${f.error ? `
+      <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
+      <div class="ov-form__acts">
+        <button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-save"${f.saving || off ? ' disabled' : ''}${off ? ` title="${attr(f.reason)}"` : ''}>${f.saving ? 'Saving…' : 'Save and check again'}</button>
+        <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
+      </div>${recent}
+    </form>`;
+}
+
 function svcFormHtml(f) {
+  if (f.chaosRun) return chaosRunFormHtml(f);
   if (f.targetsOnly) return targetsFormHtml(f);
   const v = f.values;
   const shown = !!f.error;   // the field notes appear once a save was tried
@@ -1132,6 +1181,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     // Save: on the targets-only form it is the submit button, so the click's own submit is not a second save.
     'ov-form-save': (ev) => { ev?.preventDefault?.(); ov.saveService?.(saveWith(false)); },
     'ov-form-close': () => ov.closeForm?.(),
+    // A run recorded here, forgotten (the chaos run form's list).
+    'ov-cr-forget': (ev, el) => ov.forgetChaosRun?.(decodeURIComponent(el.dataset.run || '')),
     // No row to run again afterwards (null), and the host keeps the form's answers while the sign-in is under way.
     'ov-form-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, null, { fromForm: true }),
     'ov-form-browse': () => ov.browseFolders?.(),
@@ -1158,8 +1209,10 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     formEl.addEventListener('submit', (ev) => { ev.preventDefault(); ov.saveService?.(saveWith(!targetsOnly)); });
     formEl.querySelectorAll('[data-field]').forEach((input) => {
       // The select re-draws the form (the new-endpoint fields); typing keeps the host's copy in step.
-      const event = input.tagName === 'SELECT' ? 'change' : 'input';
-      input.addEventListener(event, () => ov.formInput?.(input.dataset.field, input.value, { redraw: input.tagName === 'SELECT' }));
+      // A box (the chaos run's alerts that fired) is '1' ticked, '' not.
+      const box = input.type === 'checkbox';
+      const event = input.tagName === 'SELECT' || box ? 'change' : 'input';
+      input.addEventListener(event, () => ov.formInput?.(input.dataset.field, box ? (input.checked ? '1' : '') : input.value, { redraw: input.tagName === 'SELECT' }));
     });
     // Escape closes the folder panel, not the form.
     const panel = formEl.querySelector('.ov-folders');

@@ -896,6 +896,41 @@ try {
       offFile('aside-badly', [line]);
       assert(thrown(() => loadJourneyDef('aside-badly')) === asideError('aside-badly', why), `a definition that says "${line}" does not load — the error names the journey and why`, thrown(() => loadJourneyDef('aside-badly')));
     }
+    // --- chaos runs recorded in the studio: the newest of an experiment in the check's env is its last_result; the grade reads it ---
+    const { withStudioRuns } = await import('../studio/chaos-runs.mjs');
+    const recentAt = new Date(Date.now() - 3_600_000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const studioRuns = [
+      { experiment: 'api-network-latency', at: recentAt, outcome: 'pass', environment: 'prod', mttd: '45s', by: 'carlos', recordedAt: recentAt },
+      { experiment: 'kafka-partition-failure', at: recentAt, outcome: 'pass', mttd: '2m', by: 'carlos', recordedAt: recentAt },
+      { experiment: 'api-pod-kill', at: recentAt, outcome: 'pass', environment: 'staging', mttd: '30s', by: 'carlos', recordedAt: recentAt },
+    ];
+    const withRunsA = withStudioRuns(fileA, studioRuns, { env: 'prod' });
+    const runsEngine = computeDiagnosticGrade(withRunsA, fileB, computePostureMatrix(withRunsA, fileB), null, fileDiff, {});
+    const chaosOfGrade = (g) => g.trust.criteria.find((c) => c.key === 'chaos-validated');
+    assert(chaosOfGrade(runsEngine).proof.state === 'proven' && chaosOfGrade(runsEngine).proof.fresh === 2 && pct(runsEngine) > pct(onSeven),
+      'the two runs that apply in prod prove two experiments; staging\'s is not prod\'s', chaosOfGrade(runsEngine).proof);
+    const recorded = await runJourney(fewerDef(), { chaosRuns: studioRuns });
+    assert(recorded.grade.score === pct(runsEngine) && recorded.grade.score > plain.grade.score, 'a run handed the service\'s recorded chaos runs grades as the engine does with them', { recorded: recorded.grade, plain: plain.grade });
+    assert(JSON.stringify(Object.keys(recorded.grade)) === JSON.stringify(Object.keys(plain.grade)), 'and the record\'s grade keeps its keys', Object.keys(recorded.grade));
+    for (const none of [null, []]) {
+      const r = await runJourney(fewerDef(), { chaosRuns: none });
+      assert(r.grade.score === plain.grade.score, 'chaosRuns null or empty: graded as before', { none, grade: r.grade });
+    }
+    // The definition's own chaosRuns, what the server writes into a service's check: they load and grade the same.
+    offFile('runs-by-file', ['chaosRuns:', ...studioRuns.map((r) => `  - { experiment: ${r.experiment}, at: '${r.at}', outcome: ${r.outcome}${r.environment ? `, environment: ${r.environment}` : ''}, mttd: ${r.mttd}, by: carlos, recordedAt: '${r.recordedAt}' }`)]);
+    const fromFileRuns = await runJourney(loadJourneyDef('runs-by-file'));
+    assert(fromFileRuns.grade.score === recorded.grade.score, 'a check file\'s own chaosRuns is what a run handed none grades with', { file: fromFileRuns.grade, handed: recorded.grade });
+    const runsError = (name, why) => `journey ${name}: chaosRuns must be a list of { experiment, at, outcome } — ${why}`;
+    for (const [line, why] of [
+      ['chaosRuns: pod-kill', 'it is not a list'],
+      ["chaosRuns: [{ experiment: 'Pod Kill', at: '2026-11-11T13:05:00Z', outcome: pass }]", 'experiment "Pod Kill" is not an experiment\'s id'],
+      ["chaosRuns: [{ experiment: pod-kill, at: 'yesterday', outcome: pass }]", 'at "yesterday" is not a date-time (2026-11-11T14:05:00Z)'],
+      ["chaosRuns: [{ experiment: pod-kill, at: '2026-11-11T13:05:00Z', outcome: ok }]", 'outcome is pass, fail, aborted, not "ok"'],
+    ]) {
+      offFile('runs-badly', [line]);
+      assert(thrown(() => loadJourneyDef('runs-badly')) === runsError('runs-badly', why), `a definition that says "${line}" does not load — the error names the journey and why`, thrown(() => loadJourneyDef('runs-badly')));
+    }
+    for (const name of ['runs-by-file', 'runs-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     for (const name of ['aside-gated', 'aside-by-file', 'aside-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     for (const name of ['graded-by-file', 'graded-by-file-two', 'graded-by-file-none', 'graded-and-notified']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
   }

@@ -100,7 +100,8 @@ const textOrNull = (v) => (typeof v === 'string' && v.trim() ? v : null);
 // An experiment proves recovery only through a recorded run that passed, and
 // only while that run is recent for the experiment's own cadence. The run is
 // the live side's (the MCP's run feed, `mcp.chaos.runs` on Pack B: measured)
-// or the pack's `last_result` (recorded in the repository); the live one wins.
+// or the pack's `last_result` (recorded in the repository, or in the studio:
+// studio/chaos-runs.mjs withStudioRuns marks the experiment `_studio`); the live one wins.
 
 /** How many days a recorded pass stays proof, by the experiment's `schedule`. */
 export const CHAOS_PROOF_WINDOW_DAYS = Object.freeze({ daily: 2, weekly: 8, monthly: 35, 'on-demand': 90, ci: 90 });
@@ -137,7 +138,7 @@ export function liveChaosRuns(annotationValue) {
 export function chaosProof(experiments, { nowMs = Date.now(), liveRuns = null } = {}) {
   const rows = (experiments || []).map((e) => {
     const live = liveRuns && Object.prototype.hasOwnProperty.call(liveRuns, e.id) ? liveRuns[e.id] : null;
-    const run = isRunRecord(live) ? { ...live, source: 'measured' } : isRunRecord(e.last_result) ? { ...e.last_result, source: 'recorded' } : null;
+    const run = isRunRecord(live) ? { ...live, source: 'measured' } : isRunRecord(e.last_result) ? { ...e.last_result, source: e._studio ? 'studio' : 'recorded' } : null;
     const windowDays = CHAOS_PROOF_WINDOW_DAYS[e.schedule] ?? CHAOS_PROOF_WINDOW_DAYS['on-demand'];
     const atMs = run ? Date.parse(run.at) : NaN;
     const ageDays = Number.isFinite(atMs) ? (nowMs - atMs) / DAY_MS : null;
@@ -168,14 +169,14 @@ export function chaosProof(experiments, { nowMs = Date.now(), liveRuns = null } 
     declared,
     fresh: freshPasses.length,
     provenAt: latestFresh ? latestFresh.run.at : null,
-    source: latestFresh ? (freshPasses.some(r => r.run.source === 'measured') ? 'measured' : 'recorded') : null,
+    source: latestFresh ? (freshPasses.some(r => r.run.source === 'measured') ? 'measured' : freshPasses.some(r => r.run.source === 'recorded') ? 'recorded' : 'studio') : null,
     failed,
     stale: latestStale ? { id: latestStale.id, at: latestStale.run.at, windowDays: latestStale.windowDays, source: latestStale.run.source } : null,
     never,
   };
 }
 
-const SOURCE_WORDS = { measured: 'measured by the live run feed', recorded: 'recorded in the repository' };
+const SOURCE_WORDS = { measured: 'measured by the live run feed', recorded: 'recorded in the repository', studio: 'recorded in the studio' };
 
 // The Chaos-validated detail: what is declared and what its runs prove, and
 // when nothing is declared, what each side could not see — never a claim
@@ -537,7 +538,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   const chaosArtefacts = L5.filter(a => /^CHAOS-/.test(a.id || ''));
   const chaosScaffolds = chaosArtefacts.filter(isScaffoldArtefact).length;
   const chaosCount = chaosArtefacts.length - chaosScaffolds;
-  const chaosExperiments = chaosArtefacts.filter(a => !isScaffoldArtefact(a)).map(a => ({ ...(a.spec || {}), id: a.spec?.id || a.title }));
+  const chaosExperiments = chaosArtefacts.filter(a => !isScaffoldArtefact(a)).map(a => ({ ...(a.spec || {}), id: a.spec?.id || a.title, ...(a._studioRun ? { _studio: true } : {}) }));
   const chaosRunsLive = liveChaosRuns(annB[LIVE_CHAOS_RUNS]) || liveChaosRuns(ann[LIVE_CHAOS_RUNS]);
   const proof = chaosProof(chaosExperiments, { nowMs, liveRuns: chaosRunsLive });
   const chaosUnobserved = {

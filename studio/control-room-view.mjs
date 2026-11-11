@@ -204,8 +204,8 @@ function bodyHtml(m) {
   return `${stale}
       ${statusHtml(m.status)}
       <section class="ov-cr__kpis" aria-label="Detection and resolution">${kpiHtml(m.kpis.mttr)}${kpiHtml(m.kpis.mttd)}
-      </section>${m.targets ? `
-      <p class="ov-cr__targets"><button type="button" class="og-btn og-btn--text" data-ux-action="cr-targets" aria-label="${escapeHtml(m.targets.aria)}">${escapeHtml(m.targets.label)}</button></p>` : ''}
+      </section>${m.targets || m.record ? `
+      <p class="ov-cr__targets">${m.targets ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-targets" aria-label="${escapeHtml(m.targets.aria)}">${escapeHtml(m.targets.label)}</button>` : ''}${m.record ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-record" aria-label="${escapeHtml(m.record.aria)}">${escapeHtml(m.record.label)}</button>` : ''}</p>` : ''}
       ${insights}
       ${scrapeHtml(m.scrape)}
       ${alertsHtml(m.alerts)}
@@ -323,6 +323,8 @@ export function renderControlRoom(container, model, host = appHost) {
     'cr-refresh': () => { if (!model.reading) ov.refreshControlRoom?.(); },
     // Set targets… / Change targets…: the service's form at its Targets answer (the panel closes).
     'cr-targets': () => ov.setTargets?.('control-room'),
+    // Record a chaos run…: the service's chaos run form (the panel closes).
+    'cr-record': () => ov.recordChaosRun?.('control-room'),
   });
   // A new service environment takes the focus.
   if (!sameKey) aside.focus({ preventScroll: true });

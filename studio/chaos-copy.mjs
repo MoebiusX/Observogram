@@ -8,7 +8,8 @@
 // reads it without the app.
 //
 // On a pack the repository scan wrote, a hand edit lasts until the next Run,
-// so the fix points at the repository. The scan reads its scenario tables and
+// so the fix points at the board's Record a chaos run… (a run kept with the
+// service, studio/chaos-runs.mjs) and at the repository. The scan reads its scenario tables and
 // resources, and `.observability/*.yaml` carries a run's `last_result`. A pack
 // scanned before the scan read chaos still carries the scan's "cannot detect"
 // stamp (`unobserved.repository`), and its fix says so.
@@ -25,7 +26,7 @@ const capitalise = (s) => s[0].toUpperCase() + s.slice(1);
 export function chaosBlockerCopy(c = {}) {
   const proof = c.proof || { state: (c.declared || 0) > 0 ? 'declared' : 'none' };
   const record = c.fromScan
-    ? 'record each run in the repository as the experiment’s last_result in .observability/pack.yaml (the next Run reads it), or let the live check read the chaos run feed'
+    ? 'record each run on the board (Record a chaos run… on the MTTD / MTTR tile, kept with the service), or in the repository as the experiment’s last_result in .observability/pack.yaml (the next Run reads it), or let the live check read the chaos run feed'
     : 'record each run as the experiment’s last_result, or let the live check read the chaos run feed';
   if (proof.state === 'none') {
     if (!c.fromScan) return {};

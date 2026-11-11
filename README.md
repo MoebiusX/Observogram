@@ -196,9 +196,11 @@ declared exporters are the service's own.
   - Alertmanager answers only alerts still open, and Grafana's state history
     covers Grafana-managed rules only, so neither is read for it.
   - *MTTD* needs a fault's start, which no alert history knows. It shows the
-    MTTD that this environment's newest chaos run recorded in the repository
-    (`last_result.observed_mttd`: from the fault to the slowest alert it
-    expected), against the target. A failed run is said as failed and an
+    MTTD that this environment's newest chaos run recorded — in the
+    repository (`last_result.observed_mttd`: from the fault to the slowest
+    alert it expected) or in the studio, said so (*recorded in the studio by
+    carlos*) — against the target. *Record a chaos run…* beside *Set
+    targets…* opens the chaos run form (*Record a chaos run* below). A failed run is said as failed and an
     aborted one as aborted, with no figure and no verdict. Another
     environment's run is named beside, never used, and a run that names no
     environment gets no verdict. Otherwise it says it is not measured.
@@ -434,7 +436,7 @@ in `.observability/pack.yaml`, `spec.baselines`, and those count), and a placeho
 experiment does not make it Chaos-validated. Chaos-validated tells declared
 from proven (spec 1.5, docs/CHAOS_EXPERIMENTS.md): a declared experiment earns
 a quarter of the point, and the rest needs a recent passing run of every
-experiment — its `last_result` in the repository, or the live run feed — within
+experiment — its `last_result` in the repository or recorded in the studio (*Record a chaos run*), or the live run feed — within
 the window its schedule sets (daily 2 days, weekly 8, monthly 35, on-demand
 and ci 90). A failed newest run earns nothing. The scan reads experiments from
 code, from Chaos Mesh and Litmus resources and from the repository's own
@@ -1486,6 +1488,43 @@ difference can be **set aside** for the service (`studio/set-asides.mjs`):
   the last live check*. The studio-saved checks carry the list
   (`setAside:`) for `packc journey run` and a schedule, as they carry
   `gradeOff`.
+
+#### Record a chaos run
+
+A chaos run proves recovery only once it is recorded, and a repository
+rarely carries its runs. **Record a chaos run…** — on the board's *MTTD /
+MTTR* tile and under the control room's two figures, for a service whose
+pack declares an experiment — opens a form on the service list:
+
+- **Experiment**: the pack's own (a scaffold left out), with the MTTD it
+  expects; **When it ran**, in your time, now by default (never in the
+  future); **How it went**: passed, failed or aborted; **Measured MTTD**: from
+  the fault to the slowest expected alert, in seconds (`45`) or as a
+  duration (`2m30s`), or none; **The expected alerts that fired**, each
+  ticked; a **Note**.
+- **Save and check again** keeps it with the service for this environment and
+  checks the service again, so the grade takes it. Under the form, the runs
+  recorded here are listed, each with **Forget**.
+- **What reads it.** The newest run of an experiment in an environment (one
+  naming no environment stands for any) is the experiment's `last_result`
+  where it is newer than the repository's own, its `evidence` saying
+  *Recorded in the studio by …* (`studio/chaos-runs.mjs` `withStudioRuns`).
+  The grade's *Chaos-validated* counts it as a recorded run, said so
+  (*… passed a run within its window (recorded in the studio)*); the board's
+  *MTTD / MTTR* tile and the control room's MTTD read it, said so; Expert
+  grades the service page's own pack with it.
+- **The record.** `PATCH /api/services/:id { chaosRuns: [{ experiment, at,
+  outcome, environment, mttd, alertsFired, note }] }` sends the whole list
+  (at most 200), newest first: `at` an ISO date-time (at most 5 minutes
+  ahead of the server), `outcome` `pass`, `fail` or `aborted`, `mttd` a
+  Duration of at most a week or null, `alertsFired` the names or null, a
+  note of at most 280 characters. The view carries `chaosRuns` with `by`
+  and `recordedAt`, kept while a run stays as it is; the `service.update`
+  row counts them (`runs`, `pass`, `fail`). Kept beside the row in
+  `schema_meta` (`chaos_runs:<org>:<id>`): no schema step.
+- **The runs.** A check run through the server grades with them; the
+  studio-saved checks carry them (`chaosRuns:`) for `packc journey run` and
+  a schedule, as they carry `setAside`.
 
 #### Whose access reads a repository
 

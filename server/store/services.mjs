@@ -25,6 +25,11 @@
 // repository that states none (studio/mttx-targets.mjs): { profile, mttd,
 // mttr, by, at } as parseTargets wrote it, or null. Kept the same way, under
 // mttx_targets:<orgId>:<serviceId>.
+//
+// chaosRuns is the chaos runs recorded in the studio for the service's
+// experiments (studio/chaos-runs.mjs): [{ experiment, at, outcome,
+// environment, mttd, alertsFired, note, by, recordedAt }] as parseChaosRuns
+// wrote it, [] for none. Kept the same way, under chaos_runs:<orgId>:<serviceId>.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -36,6 +41,7 @@ const REPO = 'services';
 export const gradeOffKey = (orgId, serviceId) => `grade_off:${orgId}:${serviceId}`;
 export const setAsideKey = (orgId, serviceId) => `set_aside:${orgId}:${serviceId}`;
 export const targetsKey = (orgId, serviceId) => `mttx_targets:${orgId}:${serviceId}`;
+export const chaosRunsKey = (orgId, serviceId) => `chaos_runs:${orgId}:${serviceId}`;
 
 export function rowToService(r) {
   if (!r) return null;
@@ -78,13 +84,23 @@ function storedTargets(db, orgId, serviceId) {
   return value;
 }
 
-// The service as the callers read it: the row, and its switches, set-asides and targets beside it.
+// The stored chaos runs, or [] when there are none; damage is named, as above.
+function storedChaosRuns(db, orgId, serviceId) {
+  const key = chaosRunsKey(orgId, serviceId);
+  const value = getMetaJson(db, key, []);
+  if (!Array.isArray(value) || value.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.experiment !== 'string' || typeof x.at !== 'string')) {
+    throw new Error(`observogram store: schema_meta ${key} is not a list of chaos runs`);
+  }
+  return value;
+}
+
+// The service as the callers read it: the row, and its switches, set-asides, targets and recorded chaos runs beside it.
 function withGradeOff(db, service) {
   if (!service) return null;
   const { createdAt, updatedAt, ...rest } = service;
   return {
     ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id),
-    targets: storedTargets(db, service.orgId, service.id), createdAt, updatedAt,
+    targets: storedTargets(db, service.orgId, service.id), chaosRuns: storedChaosRuns(db, service.orgId, service.id), createdAt, updatedAt,
   };
 }
 
@@ -111,6 +127,14 @@ function targetsJson(targets) {
     throw new TypeError('observogram store: targets is { profile, mttd, mttr, by, at } or null');
   }
   return JSON.stringify(targets);
+}
+
+// An array of plain objects with an experiment and a time (the admin module owns their shape); none is no key.
+function chaosRunsJson(chaosRuns) {
+  if (!Array.isArray(chaosRuns) || chaosRuns.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.experiment !== 'string' || typeof x.at !== 'string')) {
+    throw new TypeError('observogram store: chaosRuns is an array of { experiment, at, outcome, environment, mttd, alertsFired, note, by, recordedAt }');
+  }
+  return chaosRuns.length ? JSON.stringify(chaosRuns) : null;
 }
 
 // null, or a plain object (the admin module owns its shape).
@@ -165,6 +189,7 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     putMeta(db, gradeOffKey(org, row.id), null);
     putMeta(db, setAsideKey(org, row.id), null);
     putMeta(db, targetsKey(org, row.id), targetsJson(targets));
+    putMeta(db, chaosRunsKey(org, row.id), null);
     // The targets as they start, the same shape an update's row names: the profile and the two durations.
     writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail: targets ? { ...(detail || {}), targets: { profile: targets.profile, mttd: targets.mttd, mttr: targets.mttr } } : detail });
     return withGradeOff(db, rowToService(row));
@@ -184,8 +209,9 @@ export function updateService(db, actor, id, patch) {
   const gradeOff = patch.gradeOff === undefined ? undefined : gradeOffJson(patch.gradeOff);
   const setAside = patch.setAside === undefined ? undefined : setAsideJson(patch.setAside);
   const targets = patch.targets === undefined ? undefined : targetsJson(patch.targets);
+  const chaosRuns = patch.chaosRuns === undefined ? undefined : chaosRunsJson(patch.chaosRuns);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets'])];
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns'])];
   // The row names the criteria now off, so the audit says what the grade stopped counting,
   // and how many differences are set aside on each side (the list itself can be long).
   const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
@@ -195,6 +221,8 @@ export function updateService(db, actor, id, patch) {
     ...(patch.setAside === undefined ? {} : { setAside: { declared: sideCount('declared'), live: sideCount('live') } }),
     // The targets as they now are: the profile and the two durations (none: null).
     ...(patch.targets === undefined ? {} : { targets: patch.targets ? { profile: patch.targets.profile, mttd: patch.targets.mttd, mttr: patch.targets.mttr } : null }),
+    // The recorded chaos runs: how many, and how many of each outcome (the list itself can be long).
+    ...(patch.chaosRuns === undefined ? {} : { chaosRuns: { runs: patch.chaosRuns.length, pass: patch.chaosRuns.filter((x) => x.outcome === 'pass').length, fail: patch.chaosRuns.filter((x) => x.outcome === 'fail').length } }),
   };
   return atomic(db, () => {
     const current = rowOf(db, org, id);
@@ -203,6 +231,7 @@ export function updateService(db, actor, id, patch) {
     if (gradeOff !== undefined) putMeta(db, gradeOffKey(org, id), gradeOff);
     if (setAside !== undefined) putMeta(db, setAsideKey(org, id), setAside);
     if (targets !== undefined) putMeta(db, targetsKey(org, id), targets);
+    if (chaosRuns !== undefined) putMeta(db, chaosRunsKey(org, id), chaosRuns);
     prepare(db, `UPDATE services SET ${sql ? `${sql}, ` : ''}updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
     writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail });
@@ -220,11 +249,12 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     if (!row) throw notFound('service', id);
     // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [] }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
     putMeta(db, setAsideKey(org, id), null);
     putMeta(db, targetsKey(org, id), null);
+    putMeta(db, chaosRunsKey(org, id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });

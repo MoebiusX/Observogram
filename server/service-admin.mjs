@@ -32,6 +32,7 @@ import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
 import { SET_ASIDE_KINDS, SET_ASIDE_LAYERS, SET_ASIDE_MAX, SET_ASIDE_SIDES, baseKeyOf, setAsideId } from '../studio/set-asides.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, sameTargets, targetsErrors, targetsRecord } from '../studio/mttx-targets.mjs';
+import { CHAOS_RUNS_MAX, chaosRunErrors, chaosRunId, chaosRunRecord, sameChaosRun } from '../studio/chaos-runs.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
@@ -101,6 +102,9 @@ export const WAYS = Object.freeze({
   gradeOffTwice: (key) => `${key} is listed twice`,
   gradeOffReason: (key) => `say why ${key} is not graded for this service — a reason of 1–200 characters on one line`,
   gradeOffAll: 'a service is graded on at least one criterion — leave one switched on',
+  chaosRuns: `chaosRuns is the whole list of chaos runs recorded in the studio for this service — [{ experiment, at, outcome, environment, mttd, alertsFired, note }], [] for none, at most ${CHAOS_RUNS_MAX}`,
+  chaosRun: (why) => `a recorded chaos run: ${why}`,
+  chaosRunTwice: (run) => `${run.experiment} at ${run.at}${run.environment ? ` in ${run.environment}` : ''} is recorded twice`,
   targets: (why) => `targets is the MTTD / MTTR targets the studio keeps for this service — { profile } (one of ${MTTX_PROFILES.map((p) => p.id).join(', ')}), { profile: "${MTTX_CUSTOM}", mttd, mttr } in whole minutes, or null for none: ${why}`,
   setAside: `setAside is the whole list of differences this service's grade leaves out — [{ key, side, layer, label, kind, note, until }], [] for none, at most ${SET_ASIDE_MAX}`,
   setAsideKey: (x) => `${JSON.stringify(x)} is not a difference's key — the comparison's kind::identity, 3–600 characters on one line`,
@@ -366,6 +370,28 @@ export function parseTargets(value, { current = null, actor, now = new Date().to
   return { ...record, by: actor ?? null, at: now };
 }
 
+// The chaos runs recorded in the studio (studio/chaos-runs.mjs): the whole list, each
+// { experiment, at, outcome, environment, mttd, alertsFired, note } — `by` and `recordedAt` are the
+// server's: a run sent again as it is keeps its author and time, a new or changed one takes `actor`
+// and `now`. Newest first, by when the run happened.
+export function parseChaosRuns(value, { current = [], actor, now = new Date().toISOString() } = {}) {
+  if (!Array.isArray(value) || value.length > CHAOS_RUNS_MAX) invalid(WAYS.chaosRuns);
+  const kept = new Map((Array.isArray(current) ? current : []).map((x) => [chaosRunId(x), x]));
+  const nowMs = Date.parse(now);
+  const seen = new Set();
+  const runs = value.map((entry) => {
+    const errors = chaosRunErrors(entry, { now: Number.isFinite(nowMs) ? nowMs : Date.now() });
+    if (errors.length) invalid(WAYS.chaosRun(errors[0]));
+    const next = chaosRunRecord(entry);
+    const id = chaosRunId(next);
+    if (seen.has(id)) invalid(WAYS.chaosRunTwice(next));
+    seen.add(id);
+    const was = kept.get(id);
+    return was && sameChaosRun(was, next) ? { ...next, by: was.by ?? null, recordedAt: was.recordedAt ?? null } : { ...next, by: actor ?? null, recordedAt: now };
+  });
+  return runs.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
 export function parseSetAside(value, { current = [], actor, now = new Date().toISOString() } = {}) {
   if (!Array.isArray(value) || value.length > SET_ASIDE_MAX) invalid(WAYS.setAside);
   const kept = new Map((Array.isArray(current) ? current : []).map((x) => [setAsideId(x.side, x.key), x]));
@@ -488,6 +514,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.gradeOff !== undefined) next.gradeOff = parseGradeOff(patch.gradeOff, { current: current.gradeOff, actor });
     if (patch.setAside !== undefined) next.setAside = parseSetAside(patch.setAside, { current: current.setAside, actor });
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
+    if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
     const changed = changedFields(current, next);
     if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
@@ -662,6 +689,9 @@ function serviceView(service, environments, links) {
     setAside: Array.isArray(service.setAside) ? service.setAside : [],
     // The MTTD / MTTR targets the studio keeps for it (studio/mttx-targets.mjs): { profile, mttd, mttr, by, at } or null.
     targets: service.targets ?? null,
+    // The chaos runs recorded in the studio (studio/chaos-runs.mjs), newest first: [{ experiment, at, outcome,
+    // environment, mttd, alertsFired, note, by, recordedAt }], [] for none.
+    chaosRuns: Array.isArray(service.chaosRuns) ? service.chaosRuns : [],
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),
