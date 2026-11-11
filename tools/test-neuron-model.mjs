@@ -403,7 +403,7 @@ test('notify hints name the org\'s hook variables — <KEY>, said so, when the o
   assert.ok(!refused.includes('Set up'));
   // The Neuron view's Notification row says the refusal whatever the newest
   // record says: a journey that notified before the rule, or through the
-  // CronJob's CLI, is the one the migration must find (DOWNSTREAM §17.2 step 1).
+  // CronJob's CLI, is the one the migration must find (docs/NOTIFY_HOOKS.md §17.2 step 1).
   const nv = await import('../studio/neuron-view.mjs');
   const { escapeHtml } = await import('../studio/util.mjs');
   const legacy = (runs) => entry('legacy', runs, { notify: { urlEnv: 'MY_HOOK_URL', authEnv: null, on: 'always', format: 'json', problem } });

@@ -61,7 +61,7 @@ manifest by introspecting common observability artefacts.
     --exporter-catalogue <file>
                          a JSON exporter family catalogue whose entries
                          replace or extend the built-in ones
-                         (tools/lib/exporter-catalogue.mjs; docs/DOWNSTREAM.md §18)
+                         (tools/lib/exporter-catalogue.mjs; docs/EXPORTER_METRICS.md)
     -h, --help           print this message
 
   Output:

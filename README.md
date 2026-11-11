@@ -528,7 +528,7 @@ the end of the log. When the leg first went green its summary printed Windows
 on `D:` and `TEMP` an 8.3 short name on `C:`
 (`C:\Users\RUNNER~1\AppData\Local\Temp`), a symlink created, and the tests the
 Ubuntu floor ran; `npm test` takes 138–219 s there. A Windows box of your own
-reports with the command in [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §13.
+reports with the command in [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 On Windows, today:
 
@@ -1995,7 +1995,7 @@ The crawler reads source files such as:
   catalogue (`--exporter-catalogue <file.json>` adds or replaces entries).
   `packc emit --exporter <url>` writes the manifest from a live endpoint, and
   its `dynamicFamilies` declare by pattern the names an exporter mints at
-  runtime ([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §18)
+  runtime ([`docs/EXPORTER_METRICS.md`](docs/EXPORTER_METRICS.md))
 
 It emits a canonical v1.5 pack plus crawler annotations describing what was
 scanned and what was inferred. A fresh crawl validates (exit 0) and needs no
@@ -2013,7 +2013,7 @@ inventory). Every value the crawler invents — the stub SLI/SLO, an assumed
 port, an Alertmanager address the config does not state, the default owner,
 the OTel SDK defaults — carries a `crawler.scaffold.<symbol>` annotation with
 the reason; the conformance tool turns those into rows
-([`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §12). Every alert rule is kept: a rule whose
+([`docs/CANONICAL_PACKS.md`](docs/CANONICAL_PACKS.md)). Every alert rule is kept: a rule whose
 expression references a recorded SLO series is a burn-rate alert
 (`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
 saturated, a certificate expiring — is an operational alert and is declared in
@@ -2123,7 +2123,7 @@ The studio's **Live MCP connection** panel and **new from live** panel do
 this in three steps — test the connection, choose **Draft** (a scaffold from
 MCP discovery) or **Snapshot** (an inventory of what is actually deployed),
 then follow the gate log — and the same routes serve a script (rebadge batch
-3; docs/DOWNSTREAM.md §15 has every shape). Without sign-in the live MCP API
+3; docs/LIVE_FETCH.md has every shape). Without sign-in the live MCP API
 answers only a request sent straight to a loopback address, and every POST
 takes `X-Observogram-CSRF: 1` (the bearer is exempt). Below, `$H` is your
 auth (`-H "Authorization: Bearer $OBSERVOGRAM_API_TOKEN"` or a session
@@ -2193,7 +2193,7 @@ MCP endpoint (an admin or owner, or the open posture's caller on a direct
 loopback request). The contract for MCP server authors, and what the studio
 cannot enforce, is [docs/MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md),
 "Server settings (admin configuration)"; a downstream's migration off a
-separate configuration page is docs/DOWNSTREAM.md §16.
+separate configuration page is docs/MCP_SERVER_SETTINGS.md.
 
 | Variable | Meaning |
 |---|---|
@@ -2321,7 +2321,7 @@ rows are what still has to become real; the server answers the same report at
 `GET /api/packs/:id/placeholders` (and the static bundle in the browser). The
 workflow, the marker contract and
 the merge-safe `upconvert-legacy` (`-o` onto an existing canonical file merges;
-`--merge`, `--overwrite`) are in [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) §11.
+`--merge`, `--overwrite`) are in [`docs/PACK_CONFORMANCE.md`](docs/PACK_CONFORMANCE.md).
 
 `--waivers <file>` applies a waiver file — `{ "version": 1, "waivers": [{
 "ruleId", "artefactId"?, "reason", "expiresAt", "author" }] }`, the same
@@ -2459,7 +2459,7 @@ was (`npm run test:golden:board` keeps the 24 goldens and adds
 `typed.glossary.board.html`, the typed fixture under the v2 file, which
 stripped of its marks is the mapped golden). The static bundle shows the same
 marks from the baked v2 file (`--taxonomy`). The Tiles, List and Cards views
-carry no mark (`glossary-light-views`, `docs/DOWNSTREAM.md` §14).
+carry no mark (`glossary-light-views`, `docs/RELIABILITY_WORKFLOW.md`).
 
 A typed pack reaches the pipeline either as a layered JSON upload whose items
 carry a `type` (kept through the upconvert as
@@ -2982,7 +2982,7 @@ carries any part of the hook's URL or token. Without sign-in, a journey that
 notifies runs only from a request sent straight to a loopback address, and
 never on a server bound beyond loopback. The CLI keeps reading any name from
 its own environment. A journey written before this rule names another
-variable: [docs/DOWNSTREAM.md](docs/DOWNSTREAM.md) §17.2 is the migration —
+variable: [docs/NOTIFY_HOOKS.md](docs/NOTIFY_HOOKS.md) §17.2 is the migration —
 rotate the secrets such a journey posted, scrub its records, set the hook,
 list its origin, rename the names in the file.
 
@@ -3946,6 +3946,14 @@ deploy/k8s/
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
 - [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/DOWNSTREAM_REFRESH.md`](docs/DOWNSTREAM_REFRESH.md) - refreshing a downstream that runs the whole repository: export the copy (`npm run vendor-export`), prove it with `--check`, re-apply its local patches, check
+- [`docs/PACK_CONFORMANCE.md`](docs/PACK_CONFORMANCE.md) - from validates to conformant (was `DOWNSTREAM.md` §11)
+- [`docs/CANONICAL_PACKS.md`](docs/CANONICAL_PACKS.md) - packs born canonical: the recommended end state (was `DOWNSTREAM.md` §12)
+- [`docs/PLATFORMS.md`](docs/PLATFORMS.md) - platforms (was `DOWNSTREAM.md` §13)
+- [`docs/RELIABILITY_WORKFLOW.md`](docs/RELIABILITY_WORKFLOW.md) - reliability-workflow features (GAP batch 2) (was `DOWNSTREAM.md` §14)
+- [`docs/LIVE_FETCH.md`](docs/LIVE_FETCH.md) - live-fetch UX (rebadge batch 3) (was `DOWNSTREAM.md` §15)
+- [`docs/MCP_SERVER_SETTINGS.md`](docs/MCP_SERVER_SETTINGS.md) - in-page MCP server settings (rebadge batch 4) (was `DOWNSTREAM.md` §16)
+- [`docs/NOTIFY_HOOKS.md`](docs/NOTIFY_HOOKS.md) - a journey's notify hooks (follow-up journey-notify-env-ownership) (was `DOWNSTREAM.md` §17)
+- [`docs/EXPORTER_METRICS.md`](docs/EXPORTER_METRICS.md) - metrics from prebuilt exporters (follow-up exporter-metrics) (was `DOWNSTREAM.md` §18)
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 - [`docs/DELIVERY-REBADGE-BATCH3.md`](docs/DELIVERY-REBADGE-BATCH3.md) - delivery report for rebadge batch 3 (live-fetch UX: a caller-supplied MCP URL is a privilege, the ping, the true snapshot and live jobs, comparison identity modes): what shipped per item, the measured test totals, what is deferred by name, what a plugin bridge still does
 - [`docs/DELIVERY-GAP-BATCH2.md`](docs/DELIVERY-GAP-BATCH2.md) - delivery report for rebadge batch 2, PR 2 (B3, GAP batch 2: verdicts, waivers, diagnose → remediate flow, glossary widgets, service audit report): what shipped per feature, the measured test totals, what is deferred by name and why

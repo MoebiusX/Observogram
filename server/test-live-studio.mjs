@@ -44,7 +44,7 @@
  *
  * The Neuron view at a 390 px phone width, with sign-in off (the follow-up
  * journey-notify-env-ownership): a journey that notifies through the default
- * org's hook PLATFORM_ALERTS (one of docs/DOWNSTREAM.md §17's examples),
+ * org's hook PLATFORM_ALERTS (one of docs/NOTIFY_HOOKS.md's examples),
  * with that hook's token, prints both variables whole in the focus header,
  * and the page does not scroll sideways.
  *
@@ -470,7 +470,7 @@ test('BROWSER: the Neuron view at a 390 px phone width — a journey through the
   catch (e) { return skip(`chromium.launch failed: ${e.message.split('\n')[0]}`); }
   t.after(() => browser.close());
 
-  // The default org's hook PLATFORM_ALERTS, one of docs/DOWNSTREAM.md §17's examples: on this machine, so no origin list.
+  // The default org's hook PLATFORM_ALERTS, one of docs/NOTIFY_HOOKS.md's examples: on this machine, so no origin list.
   const URL_ENV = 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_PLATFORM_ALERTS_URL';
   const TOKEN_ENV = 'OBSERVOGRAM_ORG_DEFAULT_NOTIFY_PLATFORM_ALERTS_TOKEN';
   const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

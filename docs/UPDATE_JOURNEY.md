@@ -786,7 +786,7 @@ goldens, none changed).
 Delivered as `tools/lib/pack-conformance.mjs` (zero-import, listed) with the
 CLI `tools/pack-conformance.mjs` / `packc conformance`, and `mergeUpconvert` in
 `tools/lib/legacy.mjs` behind `tools/upconvert-legacy.mjs`;
-[`DOWNSTREAM.md`](DOWNSTREAM.md) §11 is the workflow. Decisions: a separate
+[`PACK_CONFORMANCE.md`](PACK_CONFORMANCE.md) is the workflow. Decisions: a separate
 CLI rather than a `validate-pack --conformance` mode, because validate-pack's
 contract (exit code by validity, `✓/✗ path` per file) is pinned by the README
 and every script that pipes it, and the two tools answer different questions
@@ -816,7 +816,7 @@ annotation key order preserved. Tests: 847 → 864 (`tools/test-pack-conformance
 `tools/lib/crawler.mjs`, `tools/crawl-repo.mjs`, `tools/lib/slug.mjs`
 (`packSlug`), `tools/lib/sli-inference.mjs` (`isSpecRecordingRuleName`,
 `SPEC_DURATION_RE`) and `tools/lib/alert-routes.mjs` (the `invented`
-collector); [`DOWNSTREAM.md`](DOWNSTREAM.md) §12 is the end state. Decisions,
+collector); [`CANONICAL_PACKS.md`](CANONICAL_PACKS.md) is the end state. Decisions,
 in the house style: an input the crawler can spell canonically is normalized
 and the original kept (names, environments; owners only in the summary, since
 an owner string may be an address); an input with a closed vocabulary is
@@ -850,7 +850,7 @@ pins in `tools/test-crawl.mjs` and `tools/test-pack-conformance.mjs`.
 `fileURLToPath` in the three module-relative resolvers, the separator-safe
 studio-bundle T1 assertion, `closeStore()` before the five in-process suites
 remove their workspace, `* text=auto eol=lf` in `.gitattributes` (README,
-"Platforms"; [`DOWNSTREAM.md`](DOWNSTREAM.md) §13). Decisions: *fileURLToPath
+"Platforms"; [`PLATFORMS.md`](PLATFORMS.md)). Decisions: *fileURLToPath
 over `URL.pathname`, everywhere* — `.pathname` is `/C:/…` on Windows and
 percent-encoded on every platform, so the guard refuses the idiom under
 `server/`, `tools/` and `studio/` rather than fixing the two sites that bit;
@@ -927,7 +927,7 @@ Tests: 884 → 885 (one more test in `tools/test-doc-test-totals.mjs`).
 **G1 — verdicts.** A reviewer's `trusted | suspect | failed` record, with a
 reason, the actor and the time, on one artefact of one registered pack
 (`docs/ADAPTER.md` "Verdicts — a reviewer's record per artefact"; README
-"Record Verdicts"; `DOWNSTREAM.md` §14 `verdicts`). Decisions: `unreviewed`
+"Record Verdicts"; `RELIABILITY_WORKFLOW.md` `verdicts`). Decisions: `unreviewed`
 is the absence of a row, never a stored value; a verdict is a trust record
 and never feeds the conformance score or the diagnostic grade (Diagnose's
 "verdict" is the engine's grade — the two share a word and nothing else);
@@ -957,7 +957,7 @@ five more in `server/test-store.mjs`, three in `tools/test-discover-rows.mjs`).
 finding — a rubric clause and, for the four per-item clauses, optionally one
 canonical symbol of it (`docs/CONFORMANCE.md` "Waivers"; `docs/ADAPTER.md`
 "Waivers — a service record's suppression of a finding"; README "Waive A
-Conformance Finding"; `DOWNSTREAM.md` §14 `waivers`). Decisions: the server
+Conformance Finding"; `RELIABILITY_WORKFLOW.md` `waivers`). Decisions: the server
 keeps a waiver on the SERVICE record a pack is primarily linked to (a
 re-upload keeps it; a catalogue pack has no service and no waiver), the CLI
 reads the same object from a sidecar file (`packc conformance --waivers`) —
@@ -986,7 +986,7 @@ two more in `tools/test-pack-conformance.mjs`).
 
 **G3 — diagnose → remediate flow.** The response path from a firing alert to
 the remediation the pack declares for it, computed from pack data alone
-(`docs/ADAPTER.md` "Response path"; README "Remediate"; `DOWNSTREAM.md` §14
+(`docs/ADAPTER.md` "Response path"; README "Remediate"; `RELIABILITY_WORKFLOW.md`
 `diagnose-remediate-flow`). Decisions: the spec binds a remediation to its
 alert by a free slug (`trigger: alert:<slug>`) and the vendored spec cannot
 be edited here (`sync-spec` pins it), so the linking rule lives in
@@ -1026,7 +1026,7 @@ Tests: 934 → 958 (`tools/test-remediation-flow.mjs` 14,
 **G4 — glossary widgets.** Definitions for the taxonomy's families and for
 spec terms, sourced from a `glossary` section of the taxonomy file and shown
 as an accessible mark beside the label they explain (README "Classify Typed
-Packs"; `DOWNSTREAM.md` §14 `glossary`). Decisions: the W3 schema is
+Packs"; `RELIABILITY_WORKFLOW.md` `glossary`). Decisions: the W3 schema is
 versioned rather than loosened — `TAXONOMY_VERSIONS` `[1, 2]`,
 `TAXONOMY_VERSION_LATEST` 2, and `TAXONOMY_VERSION` KEEPS the value 1, so a
 downstream that writes `version: TAXONOMY_VERSION` keeps emitting files its
@@ -1078,7 +1078,7 @@ one in `tools/test-discover-rows.mjs`, one in `tools/test-studio-bundle.mjs` —
 **G5 — the service audit report.** One exportable report per pack, HTML and
 JSON, that reads every engine this repository ships and adds no judgement of
 its own (README "Export A Service Audit Report"; `docs/ADAPTER.md` "The
-service audit report" and "Artefact addresses"; `DOWNSTREAM.md` §14
+service audit report" and "Artefact addresses"; `RELIABILITY_WORKFLOW.md`
 `service-audit-report`). Decisions: the engine's conformance numbers headline
 and a waivers overlay's `effective` sits beside them, never in their place
 (D6); a verdict never feeds them (D2); the report's conformance section IS
@@ -1640,7 +1640,7 @@ names are single words wider than a phone, so the Neuron view's focus header
 breaks them inside its row rather than scroll the page sideways at 390 px.
 Tests: 1467 → 1468 (one more in `server/test-live-studio.mjs`).
 
-The docs close the item. `docs/DOWNSTREAM.md` §17 states the rule with every
+The docs close the item. `docs/NOTIFY_HOOKS.md` states the rule with every
 sentence capture and a run answer, and the migration for a journey written
 before it: find every journey that notifies in every org's root, rotate
 each secret such a journey posted, scrub the records that kept a value, set
