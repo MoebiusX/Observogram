@@ -274,7 +274,7 @@ family is passed through untouched.
 ## Dynamic metric families
 
 An exporter that mints metric names at runtime declares them as a pattern in
-its manifest (docs/DOWNSTREAM.md §18.1), which a pack carries as a
+its manifest (docs/EXPORTER_METRICS.md §18.1), which a pack carries as a
 `METRIC-FAM-NN` artefact (`spec.origin_kind: exporter-family`,
 `spec.name_pattern`). Without it, every name such an exporter mints reads
 `live, not declared`, and no list could ever keep up.

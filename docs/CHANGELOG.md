@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed: DOWNSTREAM.md's feature references move to pages of their own
+`docs/DOWNSTREAM.md` keeps the downstream contract, §1–§10: the manifest workflow, the seams and embedding the studio. Its feature references, §11–§18, were 1,500 of its 2,057 lines, and a downstream refreshing its copy had to read past them. They move, text unchanged, each to a page of its own that keeps its section numbers.
+- **The pages:** `docs/PACK_CONFORMANCE.md` (§11), `docs/CANONICAL_PACKS.md` (§12), `docs/PLATFORMS.md` (§13), `docs/RELIABILITY_WORKFLOW.md` (§14), `docs/LIVE_FETCH.md` (§15), `docs/MCP_SERVER_SETTINGS.md` (§16), `docs/NOTIFY_HOOKS.md` (§17) and `docs/EXPORTER_METRICS.md` (§18). A chapter's title is its page's, its `###` sections are `##`, and a reference to another chapter is a link to that page. Nothing else in the text changed.
+- **The index:** where §11–§18 were, DOWNSTREAM.md lists them, one line each with its page, so an old section number still leads to its text.
+- **The references:** README (and its *Key Docs*, which lists the eight pages), `docs/`, `server/`, `studio/neuron-view.mjs`, `tools/crawl-repo.mjs`'s usage, the CI workflow, the journeys CronJob, `deploy/k8s/README.md`, `examples/legacy/README.md` and `.env.example` point at the page.
+- **Kept as written:** the `tools/lib` modules, whose comments and texts still say `docs/DOWNSTREAM.md §…` (among them the journey schedule's refusals, `§17.2`), so no listed module's hash changes and `VENDOR-MANIFEST.json` is as it was; the index leads those numbers to the page. The CHANGELOG's released entries, the `docs/DELIVERY-*.md` reports and `docs/archive/` keep the references they were written with.
+- **Downstream:** none — doc pages only; DOWNSTREAM.md's §11–§18 are eight pages under `docs/` now, and its index leads each old section number to its page.
+
+### Tests
+- `tools/test-live-snapshot.mjs` (the live stage table), `tools/test-tap-summary.mjs` (the Windows report command) and `server/test-notify-target-policy.mjs` (the migration's steps, the orgs-file sentence) read the page their text moved to, with the same assertions.
+- Suite total 1880 → 1880.
+- **Downstream:** none — tests only.
+
 ## 0.8.27 — 2026-11-11
 
 **Overview's control room: what a service's live side shows now, with MTTR and MTTD first.** A panel beside the board, opened from its context bar, reads the environment's live endpoint every minute while open. Its headline is the figure people ask for and rarely see — how long incidents take to clear — measured, over what, on how many incidents, or why there is no figure.

@@ -437,7 +437,7 @@ What the component adds ([components/journeys](components/journeys)):
   `OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL` and its `_TOKEN`, bound on the
   studio Deployment as well (its commented stanza, with
   `OBSERVOGRAM_NOTIFY_ORIGINS`): the studio reads no other notify name
-  ([`docs/DOWNSTREAM.md`](../../docs/DOWNSTREAM.md) §17). It
+  ([`docs/NOTIFY_HOOKS.md`](../../docs/NOTIFY_HOOKS.md)). It
   never mounts the store claim and sets no `OBSERVOGRAM_DB`: the journey
   runner opens no database. The read tokens an org's MCP endpoint records
   name (`readTokenEnv`, `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id
