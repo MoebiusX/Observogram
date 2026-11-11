@@ -31,6 +31,7 @@ import { delimiter, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import { normalizeServiceKey } from '../tools/lib/service-keys.mjs';
 import { GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
 import { SET_ASIDE_KINDS, SET_ASIDE_LAYERS, SET_ASIDE_MAX, SET_ASIDE_SIDES, baseKeyOf, setAsideId } from '../studio/set-asides.mjs';
+import { MTTX_CUSTOM, MTTX_PROFILES, sameTargets, targetsErrors, targetsRecord } from '../studio/mttx-targets.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
@@ -100,6 +101,7 @@ export const WAYS = Object.freeze({
   gradeOffTwice: (key) => `${key} is listed twice`,
   gradeOffReason: (key) => `say why ${key} is not graded for this service — a reason of 1–200 characters on one line`,
   gradeOffAll: 'a service is graded on at least one criterion — leave one switched on',
+  targets: (why) => `targets is the MTTD / MTTR targets the studio keeps for this service — { profile } (one of ${MTTX_PROFILES.map((p) => p.id).join(', ')}), { profile: "${MTTX_CUSTOM}", mttd, mttr } in whole minutes, or null for none: ${why}`,
   setAside: `setAside is the whole list of differences this service's grade leaves out — [{ key, side, layer, label, kind, note, until }], [] for none, at most ${SET_ASIDE_MAX}`,
   setAsideKey: (x) => `${JSON.stringify(x)} is not a difference's key — the comparison's kind::identity, 3–600 characters on one line`,
   setAsideSide: (x) => `a set-aside's side is ${SET_ASIDE_SIDES.join(' or ')}, not ${JSON.stringify(x)}`,
@@ -353,6 +355,17 @@ const optionalLine = (v, field) => {
   if (typeof v !== 'string' || v.length > TEXT_MAX || hasControl(v)) invalid(WAYS.setAsideText(field));
   return v.trim();
 };
+// A service's MTTD / MTTR targets (studio/mttx-targets.mjs): null for none, else the record kept —
+// a profile's own durations copied in, who set them and when (kept as they were when nothing changed).
+export function parseTargets(value, { current = null, actor, now = new Date().toISOString() } = {}) {
+  if (value === null) return null;
+  const errors = targetsErrors(value);
+  if (errors.length) invalid(WAYS.targets(errors[0]));
+  const record = targetsRecord(value);
+  if (current && sameTargets(current, record)) return { ...record, by: current.by ?? null, at: current.at ?? null };
+  return { ...record, by: actor ?? null, at: now };
+}
+
 export function parseSetAside(value, { current = [], actor, now = new Date().toISOString() } = {}) {
   if (!Array.isArray(value) || value.length > SET_ASIDE_MAX) invalid(WAYS.setAside);
   const kept = new Map((Array.isArray(current) ? current : []).map((x) => [setAsideId(x.side, x.key), x]));
@@ -435,10 +448,11 @@ function changedFields(current, next) {
 
 // `caller` (mcpCallerOf(req)) decides whether a folder repository may be
 // named; a repository of a source the org switched off is refused (409).
-export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository } = {}, { caller = null } = {}) {
+export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
+    targets: targets === undefined ? null : parseTargets(targets, { actor }),
   };
   if (namedSource(repository)) refuseSourceOff(db, namedSource(repository));
   fields.repository = parseRepository(repository, { caller }) ?? null;
@@ -473,6 +487,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     }
     if (patch.gradeOff !== undefined) next.gradeOff = parseGradeOff(patch.gradeOff, { current: current.gradeOff, actor });
     if (patch.setAside !== undefined) next.setAside = parseSetAside(patch.setAside, { current: current.setAside, actor });
+    if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     const changed = changedFields(current, next);
     if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
@@ -645,6 +660,8 @@ function serviceView(service, environments, links) {
     gradeOff: Array.isArray(service.gradeOff) ? service.gradeOff : [],
     // The differences with live its grade leaves out: [{ key, side, layer, label, kind, note, until, by, at }], [] for none.
     setAside: Array.isArray(service.setAside) ? service.setAside : [],
+    // The MTTD / MTTR targets the studio keeps for it (studio/mttx-targets.mjs): { profile, mttd, mttr, by, at } or null.
+    targets: service.targets ?? null,
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

@@ -99,6 +99,7 @@ Overview: Services          one row per service and environment:
   |-- Add a service         1 Service · 2 Environment
   |                         3 Repository (GitHub · Azure DevOps · Folder · Upload)
   |                         4 Live (an MCP endpoint of the org, or a new one)
+  |                         5 Targets (MTTD / MTTR: a profile, custom minutes, or none)
   |-- Save and run, or Run on a row
   v
 The Run
@@ -432,11 +433,15 @@ Belongs here:
 - **Run** (*Running… Scanning the repository, then checking live*), **Open →**
   (the board, offered when the service has a pack of its own or a check) and
   **Change** (where it is declared or where it runs);
-- **Add a service**, the one primary button: four numbered answers — *1
+- **Add a service**, the one primary button: five numbered answers — *1
   Service*, *2 Environment* (prod by default), *3 Repository — where it is
   declared*, *4 Live — where it runs* (one of the org's endpoints, or *A new
   MCP endpoint…* with *Endpoint URL*, *Its name* and an optional *Token
-  variable* when this reader may register one) — then **Save and run**,
+  variable* when this reader may register one), *5 Targets — how fast an
+  incident is detected and resolved* (a dropdown: *Lab default — MTTD ≤ 1
+  min · MTTR ≤ 5 min (recommended)*, chosen for a new service, the three
+  other profiles, *Custom* with *MTTD, minutes* and *MTTR, minutes*, or *Not
+  set*) — then **Save and run**,
   **Save** or **Cancel**. A name that keys an existing record completes it,
   never a second one;
 - the Repository answer's kinds: GitHub or Azure DevOps with an optional
@@ -543,7 +548,8 @@ Remediate*, each over its column in a 30 / 40 / 30 rhythm.
 Belongs here:
 
 - **Discover — The chain** (*Exporters, alerts, dashboards and MTTD / MTTR,
-  as the repository declares them*):
+  as the repository declares them*; *… MTTD / MTTR set in the studio* when
+  they are the studio's):
   - three tiles in the order a signal travels — **Exporters** (scrape jobs),
     **Alerts** (alert rules and burn-rate alerts, each counted under the
     tile), **Dashboards** (whole dashboards, never their panels) — each a
@@ -551,8 +557,13 @@ Belongs here:
     link carries (*10 of 18 objectives have no burn-rate alert.*, *No
     dashboard found in the repository.*);
   - the **MTTD / MTTR** tile: the targets the repository states (*MTTD 5m ·
-    MTTR 2h*) or *Not declared* — the scan's placeholder never counts — and
-    the MTTD a chaos test recorded, or *Not measured yet*;
+    MTTR 2h*, both or none — the scan's placeholder never counts); else the
+    ones set in the studio, said so (*Set in the studio (lab default), not in
+    the repository.*); else *Not declared* with *Recommended: MTTD ≤ 1 min ·
+    MTTR ≤ 5 min* and the other profiles behind a fold — and the MTTD this
+    environment's newest chaos run recorded (*over the 5m target*: amber,
+    never green; a failed or aborted run said as such), or *Not measured
+    yet*;
   - *Under it*, the detail in one line (*18 indicators · 18 objectives · 208
     metrics · 11 backends · 8 alert routes · 5 chaos tests*);
   - behind *The machinery and the layers*, the machinery in one line (*324
@@ -632,7 +643,8 @@ Belongs here:
     fires and the store shows no alert history at all;
   - **MTTR** and **MTTD** side by side: the median time an incident took to
     clear over the last 30 days with its incident count and p95, against the
-    target the repository states; *too few to say* below five; the history's
+    target the repository states, else the studio's (*· set in the studio*),
+    else the recommendation with no verdict; *too few to say* below five; the history's
     own read time when it is older than the rest; MTTD measured by this
     environment's newest chaos run recorded in the repository (a failed or
     aborted one said as such, with no figure; another environment's named

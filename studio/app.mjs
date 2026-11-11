@@ -120,13 +120,13 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
 import { createControlRoomDriver } from './control-room-api.mjs';
 import { buildControlRoomModel } from './control-room-model.mjs';
-import { declaredByTier } from './artefact-tiers.mjs';
+import { MTTX_CUSTOM } from './mttx-targets.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -2016,13 +2016,10 @@ function controlRoomHost() {
   if (!el) { el = document.createElement('div'); el.id = 'ov-cr-host'; document.body.appendChild(el); }
   return el;
 }
-// The MTTD / MTTR targets the repository states, and the newest chaos run that measured MTTD;
-// { unread } while the service's saved check is not read (loading, failed, never run).
+// The MTTD / MTTR targets (the repository's, else the studio's, else the recommendation) and every
+// recorded chaos run; { unread } while the service's saved check is not read (overview-model.mjs controlRoomMttx).
 function controlRoomTargets() {
-  if (!overviewFacts.loaded || overviewFacts.layeredError || !overviewFacts.layered) return { unread: true };
-  const m = declaredByTier(overviewFacts.layered).mttx;
-  // Every recorded chaos run (the model picks this environment's newest and says a failed one as failed).
-  return { declared: m.declared, mttdTarget: m.mttd, mttrTarget: m.mttr, runs: Array.isArray(m.runs) ? m.runs : [] };
+  return controlRoomMttx({ loaded: overviewFacts.loaded, layered: overviewFacts.layered, layeredError: overviewFacts.layeredError, targets: overviewService()?.targets ?? null });
 }
 function drawControlRoom() {
   const st = controlRoom.state();
@@ -2388,6 +2385,8 @@ function listFormInput(field, value, { redraw = false } = {}) {
   listForm = serviceFormInput(listForm, field, value);
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
   if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
+  // Custom targets: straight to the first of their two minute fields; any other choice keeps the select.
+  if (field === 'targetProfile') listForm = { ...listForm, focus: value === MTTX_CUSTOM ? 'targetMttd' : 'targetProfile' };
   if (redraw) renderMainView();
 }
 
@@ -2409,7 +2408,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   }
   listForm = { ...listForm, saving: true, error: null };
   renderMainView();
-  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null });
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched });
   let serviceId = plan.service.id ?? null;
   try {
     let endpointId = plan.endpoint.id;

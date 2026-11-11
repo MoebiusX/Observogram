@@ -281,6 +281,16 @@ p.ov-scan__sum { cursor: default; }
 .ov-mttx__name { grid-area: name; font: 600 13px/1.25 var(--og-font); color: var(--og-text); }
 .ov-mttx__val { grid-area: val; font: 650 14px/1.25 var(--og-font); color: var(--ov-t); white-space: nowrap; }
 .ov-mttx__note { grid-area: note; font: 400 12px/1.35 var(--og-font); color: var(--og-text-2); }
+/* No targets anywhere: the recommendation under the note, the other profiles behind a fold. */
+.ov-mttx__rec, .ov-mttx__more { grid-column: 2 / -1; font: 400 12px/1.4 var(--og-font); color: var(--og-text-2); }
+.ov-mttx__rec b { color: var(--og-text); font-weight: 650; }
+.ov-mttx__more summary { cursor: pointer; color: var(--og-text-2); width: fit-content; }
+.ov-mttx__more summary:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.ov-mttx__profiles { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.ov-mttx__profiles b { color: var(--og-text); font-weight: 650; white-space: nowrap; }
+.ov-mttx__pname { color: var(--og-text); }
+.ov-mttx__how { margin: 6px 0 0; }
+.ov-form__mins { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .ov-detail { margin: 0; font: 400 12.5px/1.45 var(--og-font); color: var(--og-text-2); }
 .ov-detail__h { margin-right: 4px; font: 600 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
 .ov-repo__line { font: 400 12.5px/1.4 var(--og-font); color: var(--og-text-2); }
@@ -520,6 +530,11 @@ p.ov-scan__sum { cursor: default; }
 .ov-form__n { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--ov-stage-1); color: var(--ov-on-stage); font: 700 12.5px/1 var(--og-font); margin-top: 1px; }
 .ov-form__step:nth-child(2) .ov-form__n { background: var(--ov-stage-1); }
 .ov-form__step:nth-child(4) .ov-form__n { background: var(--ov-stage-2); }
+/* The fifth answer, the targets, takes the whole row under the four: the dropdown reads whole, its hint beside it. */
+.ov-form__step--targets { grid-column: 1 / -1; }
+.ov-form__step--targets .ov-form__f { display: grid; grid-template-columns: minmax(0, 30rem) minmax(0, 1fr); column-gap: 14px; row-gap: 6px; align-items: start; }
+.ov-form__step--targets .ov-form__l, .ov-form__step--targets .ov-form__mins { grid-column: 1 / -1; }
+.ov-form__step--targets .ov-form__mins { max-width: 30rem; }
 .ov-form__f { display: grid; gap: 6px; min-width: 0; }
 .ov-form__l { font: 600 12.5px/1.2 var(--og-font); color: var(--og-text); }
 .ov-form__l em { font-style: normal; font-weight: 400; color: var(--og-muted); }
@@ -597,6 +612,7 @@ p.ov-scan__sum { cursor: default; }
   .ov-page--list { padding: 16px 16px 40px; }
   .ov-svc { grid-template-columns: minmax(0, 1fr); }
   .ov-form__steps { grid-template-columns: minmax(0, 1fr); }
+  .ov-form__step--targets .ov-form__f { grid-template-columns: minmax(0, 1fr); }
   .ov-svcs__h { font-size: 24px; }
 }
 

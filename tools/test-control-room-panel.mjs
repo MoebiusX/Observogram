@@ -227,6 +227,20 @@ test('the model never shows a number it did not read: too few incidents, none at
   assert.equal(odd.alerts.rows[0].severityText, 'sev-a', 'its row says its own label');
   const noTargets = buildControlRoomModel({ state: openState(), mttx: null, now: NOW });
   assert.equal(noTargets.kpis.mttr.target, '', 'no declared target: none shown');
+  // Targets set in the studio: real verdicts, the target said as the studio's.
+  const studio = buildControlRoomModel({ state: openState(), mttx: { declared: true, origin: 'studio', mttdTarget: '1m', mttrTarget: '5m', runs: [] }, now: NOW }).kpis;
+  assert.deepEqual([studio.mttr.target, studio.mttr.verdict, studio.mttr.tone, studio.mttd.target], ['Target 5 min · set in the studio', 'met', 'ok', 'Target 1 min · set in the studio']);
+  // None anywhere: the recommendation, never a verdict.
+  const rec = buildControlRoomModel({ state: openState(), mttx: { declared: false, runs: [], recommended: { name: 'Lab default', mttd: '1m', mttr: '5m' } }, now: NOW }).kpis;
+  assert.deepEqual([rec.mttr.target, rec.mttr.verdict, rec.mttr.tone, rec.mttd.target, rec.mttd.verdict], ['Recommended ≤ 5 min (lab default); none declared', null, 'neutral', 'Recommended ≤ 1 min (lab default); none declared', null]);
+  // The studio's and the recommendation's own words, when given, so the panel says them as the board and the form do.
+  const worded = buildControlRoomModel({ state: openState(), mttx: { declared: true, origin: 'studio', mttdTarget: '15m', mttrTarget: '240m', mttdWords: '≤ 15 min', mttrWords: '≤ 4 hours', runs: [] }, now: NOW }).kpis;
+  assert.deepEqual([worded.mttr.target, worded.mttd.target], ['Target 4 hours · set in the studio', 'Target 15 min · set in the studio']);
+  const recWorded = buildControlRoomModel({ state: openState(), mttx: { declared: false, runs: [], recommended: { name: 'Noncritical service', mttd: '15m', mttr: '240m', mttdWords: '≤ 15 min', mttrWords: '≤ 4 hours' } }, now: NOW }).kpis;
+  assert.equal(recWorded.mttr.target, 'Recommended ≤ 4 hours (noncritical service); none declared');
+  // A pack not read: neither the studio's nor the recommendation (the repository's own might be there).
+  const unreadRec = buildControlRoomModel({ state: openState(), mttx: { unread: true }, now: NOW }).kpis;
+  assert.deepEqual([unreadRec.mttr.target, unreadRec.mttd.target], ["The repository's targets were not read.", '']);
   const unread = buildControlRoomModel({ state: openState(), mttx: { unread: true }, now: NOW });
   assert.deepEqual([unread.kpis.mttr.target, unread.kpis.mttd.target, unread.kpis.mttd.sub], ["The repository's targets were not read.", '', 'Not measured here: an alert knows when it fired, not when the fault began.'], 'the pack not read: never "record its runs"');
   assert.doesNotMatch(unread.kpis.mttd.basis, /Record its runs/);

@@ -554,7 +554,8 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.equal(payView.targets, null, 'no targets until they are set');
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
       assert.deepEqual(payView.environments.map((e) => [e.name, e.tier, e.effectiveTier, e.mcpEndpoint]),
@@ -835,6 +836,60 @@ test('registration takes the caller (D4): none throws; without sign-in (the anon
   } finally {
     close();
   }
+});
+
+test('a service\'s MTTD / MTTR targets: set on a create or a patch — a profile\'s own durations copied in, custom minutes kept, signed; the same again writes nothing; null clears them; every refusal writes nothing; a deletion takes them, and a reused id starts with none', async () => {
+  const { db, close } = await freshStore('targets');
+  try {
+    runWithOrg('acme', () => {
+      const updates = () => rows(db, 'acme', 'service.update');
+      // Created with the lab default: the durations copied in, signed, the create row names the profile.
+      const t0 = Date.now();
+      const svc = admin.createServiceFromApi(db, 'oscar', { name: 'Pay', targets: { profile: 'lab' } });
+      assert.deepEqual({ ...svc.targets, at: undefined }, { profile: 'lab', mttd: '1m', mttr: '5m', by: 'oscar', at: undefined });
+      assert.match(svc.targets.at, ISO_TIME);
+      assert.ok(Date.parse(svc.targets.at) >= t0);
+      assert.deepEqual(rows(db, 'acme', 'service.create').at(-1), ['service.create', 'oscar', 'pay', { targets: { profile: 'lab', mttd: '1m', mttr: '5m' } }], 'the row names them as an update\'s does');
+      const viewOf = () => admin.serviceViewOf(db, services.getService(db, svc.id));
+      assert.deepEqual(viewOf().targets, svc.targets, 'the view carries them as the record holds them');
+      // The same profile again: nothing changes, nothing is written.
+      const same = admin.updateServiceFromApi(db, 'ada', svc.id, { targets: { profile: 'lab' } });
+      assert.deepEqual([same.changed, same.service.targets], [[], svc.targets]);
+      assert.equal(updates().length, 0);
+      // ada chooses custom minutes: kept as durations, signed by her, one row with what they now are.
+      const custom = admin.updateServiceFromApi(db, 'ada', svc.id, { targets: { profile: 'custom', mttd: '3m', mttr: '90m' } });
+      assert.deepEqual([custom.changed, custom.service.targets.profile, custom.service.targets.mttd, custom.service.targets.mttr, custom.service.targets.by], [['targets'], 'custom', '3m', '90m', 'ada']);
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['targets'], targets: { profile: 'custom', mttd: '3m', mttr: '90m' } }]);
+      // A refusal writes nothing — not the targets, not the field beside it, not a row.
+      const count = updates().length;
+      const held = services.getService(db, svc.id);
+      for (const [targets, why] of [
+        ['lab', 'targets is { profile } — a profile id or "custom" with mttd and mttr — or null'],
+        [{ profile: 'fast' }, 'profile is none of lab, financial, degradation, noncritical, custom'],
+        [{ profile: 'custom', mttd: '3m' }, 'mttr is not a duration of whole minutes from 1m to 10080m (a week)'],
+        [{ profile: 'custom', mttd: '0m', mttr: '5m' }, 'mttd is not a duration of whole minutes from 1m to 10080m (a week)'],
+        [{ profile: 'custom', mttd: '30s', mttr: '5m' }, 'mttd is not a duration of whole minutes from 1m to 10080m (a week)'],
+        [{ profile: 'custom', mttd: '1m', mttr: '10081m' }, 'mttr is not a duration of whole minutes from 1m to 10080m (a week)'],
+        [{ profile: 'lab', mttd: '9m' }, 'mttd is the profile\'s own (1m): leave it out, or choose "custom"'],
+        [{ profile: 'lab', why: 'x' }, 'why is not a targets field'],
+        // Not text: refused as any other wrong value, never a server error.
+        [{ profile: 'custom', mttd: 3, mttr: '5m' }, 'mttd is not a duration of whole minutes from 1m to 10080m (a week)'],
+        [{ profile: 'lab', mttd: 1 }, 'mttd is the profile\'s own (1m): leave it out, or choose "custom"'],
+      ]) {
+        assert.throws(() => admin.updateServiceFromApi(db, 'ada', svc.id, { name: 'Never', targets }), invalid(admin.WAYS.targets(why)), JSON.stringify(targets));
+      }
+      assert.deepEqual(services.getService(db, svc.id), held, 'the record is as it was');
+      assert.equal(updates().length, count, 'and no row was written');
+      assert.throws(() => admin.createServiceFromApi(db, 'oscar', { name: 'Ledger', targets: { profile: 'fast' } }), invalid(admin.WAYS.targets('profile is none of lab, financial, degradation, noncritical, custom')));
+      assert.equal(services.getServiceBySlug(db, 'ledger'), null, 'a refused create creates nothing');
+      // null clears them; then they go with the record, and a reused id starts with none.
+      assert.equal(admin.updateServiceFromApi(db, 'ada', svc.id, { targets: null }).service.targets, null);
+      admin.updateServiceFromApi(db, 'ada', svc.id, { targets: { profile: 'noncritical' } });
+      assert.deepEqual(viewOf().targets.mttr, '240m', 'four hours, as minutes');
+      assert.equal(admin.deleteServiceFromApi(db, 'ada', svc.id).service.targets.profile, 'noncritical', 'the deletion\'s view shows them as they were');
+      assert.equal(admin.createServiceFromApi(db, 'oscar', { name: 'Pay' }).targets, null, 'a new service of a reused id has no targets');
+    });
+  } finally { close(); }
 });
 
 test('updateServiceFromApi { setAside }: the whole list replaces the record\'s — each entry normalised and signed, the same list again writes nothing, a changed review date re-signs only its entry; one row counting each side; every refusal writes nothing; a deletion takes them, and a reused id starts with none; another org\'s record is not found', async () => {

@@ -32,6 +32,7 @@ import { agoText, packForService } from './services-model.mjs';
 import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
+import { MTTX_CUSTOM, MTTX_PROFILES, durationSeconds as targetSeconds, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
@@ -861,13 +862,55 @@ const CHAIN_EMPTY = {
 };
 const familyList = (families) => families.map((x) => x.words).join(' · ');
 
-// chainModel({ layered }) → null without a pack, else
+// Where a service's MTTD / MTTR targets come from: the repository's, when its pack states both
+// (spec.baselines mttd_target_p50 and mttr_target_p50); else the studio's (the service record's
+// `targets`, mttx-targets.mjs); else none (null).
+function targetsSource(m, targets) {
+  if (m.declared && typeof m.mttd === 'string' && typeof m.mttr === 'string') {
+    return { origin: 'repository', mttd: m.mttd, mttr: m.mttr, words: `MTTD ${m.mttd} · MTTR ${m.mttr}`, view: null };
+  }
+  const v = targetsView(targets);
+  return v ? { origin: 'studio', mttd: v.mttd, mttr: v.mttr, words: v.words, view: v } : null;
+}
+
+// The chaos run an environment's MTTD stands on, as the control room picks it
+// (control-room-model.mjs mttdOf): its newest; one that names no environment stands in.
+function chaosRunFor(m, env) {
+  const runs = (Array.isArray(m.runs) ? m.runs : [])
+    .filter((r) => r && typeof r === 'object' && Number.isFinite(Date.parse(r.at || '')))
+    .sort((x, y) => Date.parse(y.at) - Date.parse(x.at));
+  return runs.find((r) => env && r.environment === env) || runs.find((r) => !r.environment) || null;
+}
+
+// The measured MTTD beside its target: { words, met, over }. A failed run is said as failed, an
+// aborted one as aborted; a verdict (over / within) only for a run that names this environment.
+function measuredMttd(run, src) {
+  if (!run) return { words: '', met: false, over: false };
+  const on = dayMonth(run.at);
+  if (run.outcome === 'fail') return { words: `The last chaos test, on ${on}, failed: an alert it expected never fired.`, met: false, over: false };
+  if (run.outcome !== 'pass') return { words: `The last chaos test, on ${on}, was ${run.outcome === 'aborted' ? 'aborted' : `recorded as ${run.outcome}`}: nothing measured.`, met: false, over: false };
+  const s = targetSeconds(run.mttd);
+  if (s === null) return { words: `The last chaos test, on ${on}, passed without recording how fast its alerts fired.`, met: false, over: false };
+  const t = src && run.environment ? targetSeconds(src.mttd) : null;
+  const target = t === null ? '' : src.view ? src.view.mttdWords.replace(/^≤ /, '') : src.mttd;
+  const over = t !== null && s > t;
+  return { words: `MTTD ${run.mttd} in a chaos test on ${on}${t === null ? '' : over ? `, over the ${target} target` : `, within the ${target} target`}`, met: !over, over };
+}
+
+// chainModel({ layered, targets, env }) → null without a pack, else
 //   { links: [{ key, name, hint, count, words, parts, note, tone }],
-//     mttx: { declared, targets, measured, note, hint, tone },
+//     mttx: { declared, origin, targets, measured, note, hint, tone, recommended },
 //     detail: { count, line }, machinery: { count, line } }
+//   targets  the service's MTTD / MTTR targets set in the studio (its record's `targets`,
+//            mttx-targets.mjs), or null. The repository's own (spec.baselines, both stated) win;
+//            then the studio's, said as the studio's; with neither, `recommended` is the
+//            recommended profile and the others ({ name, words, profiles: [{ name, words, conditions }] }).
+//   env      the board's environment: its newest chaos run is the measured MTTD (a failed run said
+//            as failed), set beside the target — over it, the tile is amber, never green
+//   origin   'repository' | 'studio' | null
 //   parts  for a link of several families, each one's count ("58 alert rules · 8 burn-rate alerts")
 //   note   alerts: the objectives no burn-rate alert covers; a link with none: that none was found
-export function chainModel({ layered = null } = {}) {
+export function chainModel({ layered = null, targets = null, env = null } = {}) {
   if (!layered) return null;
   const d = declaredByTier(layered);
   const links = CHAIN_LINKS.map((l) => {
@@ -882,22 +925,62 @@ export function chainModel({ layered = null } = {}) {
     return { key: l.key, name: l.name, hint: l.hint, count: x.count, words: x.count === 1 ? l.one : l.many, parts, note, tone: !x.count ? 'fail' : (bare ? 'warn' : 'ok') };
   });
   const m = d.mttx;
-  const measured = m.measured ? `MTTD ${m.measured.mttd} in a chaos test on ${dayMonth(m.measured.at)}` : '';
-  const mttx = {
-    declared: m.declared,
-    targets: m.declared ? `MTTD ${m.mttd} · MTTR ${m.mttr}` : '',
+  const src = targetsSource(m, targets);
+  // The measured MTTD: this environment's newest chaos run, and how it stands against the target.
+  const { words: measured, met } = measuredMttd(chaosRunFor(m, env), src);
+  const notMeasured = 'Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.';
+  const rec = recommendedProfile();
+  const mttx = src?.origin === 'repository' ? {
+    declared: true, origin: 'repository',
+    targets: src.words,
     measured,
-    note: m.declared
-      ? (measured ? '' : 'Not measured yet: no chaos test has recorded how fast an alert fired, and nothing measures recovery.')
-      : 'The repository states no MTTD / MTTR targets.',
+    note: measured ? '' : notMeasured,
     hint: 'A repository states them in its own pack: .observability/pack.yaml, under spec.baselines.',
-    tone: m.declared ? (measured ? 'ok' : 'warn') : 'fail',
+    tone: met ? 'ok' : 'warn', recommended: null,
+  } : src ? {
+    // Set in the studio (Add a service, Change): real targets, said as the studio's, never the repository's.
+    declared: true, origin: 'studio',
+    targets: src.words,
+    measured,
+    note: `Set in the studio${src.view.profile === MTTX_CUSTOM ? '' : ` (${src.view.name.toLowerCase()})`}, not in the repository. ${measured ? `${measured}.`.replace(/\.\.$/, '.') : notMeasured}`,
+    hint: "Set in Add a service or Change on the service list. A repository's own .observability/pack.yaml, under spec.baselines, wins.",
+    tone: met ? 'ok' : 'warn', recommended: null,
+  } : {
+    declared: false, origin: null,
+    targets: '',
+    measured,
+    note: 'The repository states no MTTD / MTTR targets.',
+    hint: 'A repository states them in its own pack: .observability/pack.yaml, under spec.baselines; or set them in the studio with Change on the service list.',
+    tone: 'fail',
+    // What to aim for meanwhile: the recommended profile, and the others with the incidents each fits.
+    recommended: {
+      name: rec.name, words: `MTTD ${rec.mttdWords} · MTTR ${rec.mttrWords}`,
+      profiles: MTTX_PROFILES.filter((p) => !p.recommended).map((p) => ({ name: p.name, words: `MTTD ${p.mttdWords} · MTTR ${p.mttrWords}`, conditions: p.conditions })),
+      conditions: rec.conditions,
+    },
   };
   return {
     links, mttx,
     detail: { count: d.detail.count, line: familyList(d.detail.families) },
     machinery: { count: d.machinery.count, line: familyList(d.machinery.families) },
   };
+}
+
+// controlRoomMttx({ loaded, layered, layeredError, targets }) → the control room's `mttx`
+// (control-room-model.mjs buildControlRoomModel): { unread: true } while the pack is not read;
+// the repository's targets ({ declared, origin: 'repository', mttdTarget, mttrTarget, runs });
+// else the studio's, with their words ({ declared, origin: 'studio', mttdTarget, mttrTarget,
+// mttdWords, mttrWords, runs }) — measured against, said as the studio's; else the recommendation
+// ({ declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords } }), never a verdict.
+export function controlRoomMttx({ loaded = false, layered = null, layeredError = null, targets = null } = {}) {
+  if (!loaded || layeredError || !layered) return { unread: true };
+  const m = declaredByTier(layered).mttx;
+  const runs = Array.isArray(m.runs) ? m.runs : [];
+  const src = targetsSource(m, targets);
+  if (src?.origin === 'repository') return { declared: true, origin: 'repository', mttdTarget: src.mttd, mttrTarget: src.mttr, runs };
+  if (src) return { declared: true, origin: 'studio', mttdTarget: src.mttd, mttrTarget: src.mttr, mttdWords: src.view.mttdWords, mttrWords: src.view.mttrWords, runs };
+  const rec = recommendedProfile();
+  return { declared: false, runs, recommended: { name: rec.name, mttd: rec.mttd, mttr: rec.mttr, mttdWords: rec.mttdWords, mttrWords: rec.mttrWords } };
 }
 
 // What a run says about the chain, from its record's drift.tiers (a record
@@ -1221,7 +1304,7 @@ export function buildOverviewModel(input = {}) {
   const fidelity = fidelityModel({ run: graded && journey ? run : null, journey, pack: picked.pack, now });
   const board = {
     // The chain the repository declares (exporters, alerts, dashboards, MTTD / MTTR).
-    chain: graded ? chainModel({ layered }) : null,
+    chain: graded ? chainModel({ layered, targets: picked.service?.targets ?? null, env: picked.env ?? null }) : null,
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     // What the last Run's scan read and left out (null: no record says).
     scan: graded && journey ? scanModel({ run }) : null,
@@ -1577,6 +1660,8 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
     name: s?.name || '', env: e?.name || env || (s ? '' : 'prod'),
     kind: s?.repository?.kind || firstSourceOn(sources), location: s?.repository?.location || '', ref: s?.repository?.ref || '',
     endpointId, epName: '', epUrl: '', epToken: '',
+    // The MTTD / MTTR targets (mttx-targets.mjs): a new service starts on the recommended profile.
+    ...targetsFormValues(s?.targets ?? null, { isNew: !s }),
   };
   // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
   const r = s?.repository;
@@ -1598,6 +1683,8 @@ function firstSourceOn(sources) {
 export function formInput(form, field, value) {
   if (!form?.open || !Object.hasOwn(form.values || {}, field)) return form;
   const next = { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+  // The targets answered by the person (not the form's own start): only then may a save change a record's.
+  if (field.startsWith('target')) next.targetsTouched = true;
   if (field === 'kind' && next.browse) next.browse = null;
   if (field === 'kind' && (form.values.kind === 'upload') !== (next.values.kind === 'upload')) {
     next.values.location = next.values.kind === 'upload' ? (form.upload?.staged?.name || form.uploaded?.name || '') : '';
@@ -1619,7 +1706,7 @@ const FORM_DRAFT_VALUE_MAX = 2048;
 
 export function formDraft(form, { now = Date.now() } = {}) {
   if (!form?.open) return null;
-  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values } };
+  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched };
 }
 
 export function formRestored(services, draft, { endpoints = [], sources = null, now = Date.now() } = {}) {
@@ -1634,6 +1721,10 @@ export function formRestored(services, draft, { endpoints = [], sources = null, 
     const value = values[field];
     if (typeof value !== 'string' || value.length > FORM_DRAFT_VALUE_MAX) continue;
     if (field === 'kind' && !REPOSITORY_KINDS.some((k) => k.kind === value)) continue;
+    // The targets come back only when the person had answered them; a profile this build does not
+    // know (an older or a broken draft) stays as the form opened it.
+    if (field.startsWith('target') && draft.targetsTouched !== true) continue;
+    if (field === 'targetProfile' && value !== '' && value !== MTTX_CUSTOM && !MTTX_PROFILES.some((p) => p.id === value)) continue;
     form = formInput(form, field, value);
   }
   return form;
@@ -1664,6 +1755,7 @@ export function formProblems(values = {}, { sources = null, original = null, upl
     if (!trimmed(values.epUrl)) out.epUrl = "Give the MCP endpoint's URL.";
     if (!trimmed(values.epName)) out.epName = 'Name the endpoint.';
   }
+  Object.assign(out, targetsFormProblems(values));
   return out;
 }
 
@@ -1717,6 +1809,12 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     upload: uploadModel(form, v, { uploads, canWrite, now }),
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
+    // The MTTD / MTTR targets: the dropdown, the custom minutes when chosen, and what they mean.
+    targets: {
+      options: targetsOptions(v.targetProfile ?? ''),
+      custom: v.targetProfile === MTTX_CUSTOM,
+      hint: 'Used while the repository states none: its own .observability/pack.yaml spec.baselines win. The board and the control room say them as set in the studio.',
+    },
     problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged }),
     canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
   };
@@ -1897,12 +1995,17 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 //   env       { create: { name } } | { id, bind: boolean } — bind: point it at the endpoint
 //   upload    { name, files, skipped } | null — PUT /api/services/:id/repository-upload, last;
 //             `skipped` what the browser did not read and why, kept with the copy so each Run names it
+// The service's MTTD / MTTR targets ride on its create, or on its patch when they differ from the
+// record's (mttx-targets.mjs targetsFromForm: { profile } | { profile: 'custom', mttd, mttr } | null)
+// — for a record the form was opened on (`serviceId`), or one a typed name reached only when the
+// person answered the targets (`targetsTouched`): an Add that completes a record never replaces its
+// targets with the form's own start.
 // A name that keys an existing record (the catalogue's slug rule, `keyOf`,
 // injected: tools/lib/service-keys.mjs normalizeServiceKey) is that record —
 // the form completes it, never a second one. An Upload never names its
 // repository: the service is created without one (or left as it is) and the
 // upload points it at its copy; `upload` is the staged files (form.upload.staged).
-export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null } = {}) {
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
   const uploading = values.kind === 'upload';
@@ -1913,9 +2016,17 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
     ? { create: { name: trimmed(values.epName), url: trimmed(values.epUrl), ...(trimmed(values.epToken) ? { readTokenEnv: trimmed(values.epToken) } : {}) } }
     : { id: Number(values.endpointId) };
   const sameRepo = (r) => !!r && r.kind === repository.kind && r.location === repository.location && (r.ref || '') === (repository.ref || '');
+  const targets = targetsFromForm(values);
+  // Compared as the record would keep them (who and when aside): unchanged targets are not sent.
+  const mayRetarget = !!existing && (existing.id === serviceId || targetsTouched === true);
+  const targetsChanged = mayRetarget && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
+  const patchOf = (repo) => {
+    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}) };
+    return Object.keys(p).length ? p : null;
+  };
   let service;
-  if (uploading) service = existing ? { id: existing.id, patch: null } : { create: { name } };
-  else service = existing ? { id: existing.id, patch: sameRepo(existing.repository) ? null : { repository } } : { create: { name, repository } };
+  if (uploading) service = existing ? { id: existing.id, patch: patchOf(null) } : { create: { name, targets } };
+  else service = existing ? { id: existing.id, patch: patchOf(sameRepo(existing.repository) ? null : repository) } : { create: { name, repository, targets } };
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
   return {
     endpoint, service,

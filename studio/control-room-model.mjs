@@ -166,14 +166,25 @@ function statusOf(alerts, windowDays, lastFiredAt, now) {
   return { ...STATUS.quiet, key: 'quiet', sentence: `No alert is firing${by.info ? ` beyond ${plural(by.info, 'notice')}` : ''}.${pend}${ago}`, counts: by, pending };
 }
 
-// The repository's targets: stated, not read, or none.
+// The targets measured against (the repository's, or the studio's): stated, not read, or none.
 const targetOf = (mttx, key) => (mttx && !mttx.unread && mttx.declared ? durationSeconds(mttx[key]) : null);
 const UNREAD_TARGETS = "The repository's targets were not read.";
+// A target in words: the repository's as it stands, the studio's said so; none: the recommendation,
+// never a verdict. The studio's and the recommendation's own words (`mttdWords`, "≤ 4 hours") when
+// given, so the panel says them as the board and the form do.
+const ownWords = (words) => (typeof words === 'string' && words.trim() ? words.trim().replace(/^≤\s*/, '') : '');
+function targetLine(mttx, target, key) {
+  if (target !== null) return mttx?.origin === 'studio' ? `Target ${ownWords(mttx[`${key}Words`]) || durationWords(target)} · set in the studio` : `Target ${durationWords(target)}`;
+  if (mttx?.unread) return UNREAD_TARGETS;
+  const rec = mttx?.recommended;
+  const s = rec ? durationSeconds(rec[key]) : null;
+  return s !== null ? `Recommended ≤ ${ownWords(rec[`${key}Words`]) || durationWords(s)} (${String(rec.name || 'recommended').toLowerCase()}); none declared` : '';
+}
 
 // The MTTR proxy, from the server's timing part.
 function mttrOf(timing, mttx, { readAt }) {
   const target = targetOf(mttx, 'mttrTarget');
-  const targetWords = target !== null ? `Target ${durationWords(target)}` : mttx?.unread ? UNREAD_TARGETS : '';
+  const targetWords = targetLine(mttx, target, 'mttr');
   const base = { label: 'MTTR', long: 'Time to resolve', value: null, words: '—', sub: '', detail: '', target: targetWords, verdict: null, tone: 'neutral', basis: '', asOf: '', asOfWord: 'History read at' };
   // How it is measured, said whatever the read gave: the rule does not change with the answer.
   const stepMin = Math.round((num(timing?.stepSeconds) || 120) / 60);
@@ -221,7 +232,7 @@ const MEASURED_BASIS = 'From the fault the test injected to the slowest of the a
 const RECORD_BASIS = 'A chaos test knows its start. Record its runs in the repository (.observability/pack.yaml, each experiment\'s last_result, with its environment) and MTTD shows here.';
 function mttdOf(mttx, envName, now) {
   const target = targetOf(mttx, 'mttdTarget');
-  const base = { label: 'MTTD', long: 'Time to detect', value: null, words: '—', detail: '', target: target !== null ? `Target ${durationWords(target)}` : '', verdict: null, tone: 'neutral', asOf: '' };
+  const base = { label: 'MTTD', long: 'Time to detect', value: null, words: '—', detail: '', target: mttx?.unread ? '' : targetLine(mttx, target, 'mttd'), verdict: null, tone: 'neutral', asOf: '' };
   if (mttx?.unread) return { ...base, sub: 'Not measured here: an alert knows when it fired, not when the fault began.', target: '', basis: `${UNREAD_TARGETS} A chaos test recorded there knows a fault's start, and its MTTD shows here once the repository is read (a Run).` };
   const runs = Array.isArray(mttx?.runs)
     ? mttx.runs.filter((r) => isObj(r) && Number.isFinite(Date.parse(r.at || ''))).sort((x, y) => Date.parse(y.at) - Date.parse(x.at))
@@ -416,11 +427,13 @@ function nextOf(state, intervalMs = CONTROL_ROOM_INTERVAL_MS) {
 
 // buildControlRoomModel({ state, serviceName, envName, mttx, now })
 //   state   the panel's state (controlRoomOpened …)
-//   mttx    the board's MTTD / MTTR tile (overview-model.mjs chainModel's
-//           mttx: { declared, targets, measured … }), read as
-//           { declared, mttdTarget, mttrTarget, measured: { mttd, day } } —
-//           the targets the repository states and its chaos runs — or
-//           { unread: true } while the repository's pack is not read
+//   mttx    the targets and the chaos runs (overview-model.mjs controlRoomMttx):
+//           { declared: true, origin: 'repository', mttdTarget, mttrTarget, runs } —
+//           the repository's; { declared: true, origin: 'studio', mttdTarget, mttrTarget,
+//           mttdWords, mttrWords, runs } — set in the studio, measured against and said so;
+//           { declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords } }
+//           — none: the recommendation, never a verdict; or { unread: true } while the
+//           repository's pack is not read
 //   → null when closed, else { title, scope, reading, stopped, error, readAt, cached, endpoint, next,
 //      status, kpis: { mttr, mttd }, insights, scrape, alerts, families, calls }
 export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName = '', envName = '', mttx = null, now = Date.now() } = {}) {

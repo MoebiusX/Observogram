@@ -316,8 +316,22 @@ function chainHtml(C) {
         ${iconHtml('mttx', 'ov-mttx__ic')}
         <span class="ov-mttx__name">MTTD / MTTR</span>
         <span class="ov-mttx__val">${escapeHtml(m.targets || 'Not declared')}</span>
-        <span class="ov-mttx__note">${escapeHtml(m.measured || m.note)}</span>
+        <span class="ov-mttx__note">${escapeHtml(m.origin === 'studio' ? m.note : (m.measured || m.note))}</span>${m.recommended ? mttxRecommendedHtml(m.recommended) : ''}
       </div>`;
+}
+
+// No targets anywhere: what to aim for — the recommended profile in words, the others behind a fold
+// with the incidents each one fits, and where to set them.
+function mttxRecommendedHtml(r) {
+  return `
+        <span class="ov-mttx__rec">Recommended: <b>${escapeHtml(r.words)}</b> <span class="og-muted">(${escapeHtml(r.name.toLowerCase())}: ${escapeHtml(r.conditions.toLowerCase())})</span></span>
+        <details class="ov-mttx__more">
+          <summary>Other profiles, and where to set them</summary>
+          <ul class="ov-mttx__profiles">${r.profiles.map((p) => `
+            <li><span class="ov-mttx__pname">${escapeHtml(p.name)}</span> <b>${escapeHtml(p.words)}</b> <span class="og-muted">— ${escapeHtml(p.conditions.toLowerCase())}</span></li>`).join('')}
+          </ul>
+          <p class="ov-mttx__how og-muted">Set them for this service with Change on the service list, or in the repository: .observability/pack.yaml, under spec.baselines (mttd_target_p50, mttr_target_p50).</p>
+        </details>`;
 }
 
 // Under the chain, the detail in one line; the machinery and the layers
@@ -355,7 +369,10 @@ function discoverColHtml(L, S = null, C = null) {
       ${scanHtml(S)}`
       : reading('the repository');
   const [title, sub] = C
-    ? ['The chain', 'Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them']
+    // Targets set in the studio are not the repository's: the subtitle says where each part comes from.
+    ? ['The chain', C.mttx?.origin === 'studio'
+      ? 'Exporters, alerts and dashboards as the repository declares them; MTTD / MTTR set in the studio'
+      : 'Exporters, alerts, dashboards and MTTD / MTTR, as the repository declares them']
     : ['Layers', 'The stack, top down, as the repository declares it'];
   return `
     <section class="ov-col ov-col--discover og-panel og-panel--pad" aria-labelledby="ov-discover-h">
@@ -913,7 +930,7 @@ function svcFormHtml(f) {
     <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
       <header class="ov-form__head">
         <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
-        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared or where it runs. Each Run reads both again.' : 'Four answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
+        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
       </header>
       <ol class="ov-form__steps">
         <li class="ov-form__step">
@@ -946,7 +963,21 @@ function svcFormHtml(f) {
             </select>${f.newEndpoint.allowed ? '' : `
             <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}
           </div>
-        </li>
+        </li>${f.targets ? `
+        <li class="ov-form__step ov-form__step--targets">
+          <span class="ov-form__n">5</span>
+          <div class="ov-form__f">
+            <span class="ov-form__l" id="ov-form-targets-l">Targets — how fast an incident is detected and resolved</span>
+            <select class="og-input" data-field="targetProfile" aria-labelledby="ov-form-targets-l" aria-describedby="ov-form-targets-hint">
+              ${f.targets.options.map((o) => `<option value="${attr(o.value)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+            </select>${f.targets.custom ? `
+            <div class="ov-form__sub ov-form__mins">
+              <label class="ov-form__f"><span class="ov-form__l">MTTD, minutes</span><input class="og-input" data-field="targetMttd" value="${attr(v.targetMttd)}" inputmode="numeric" placeholder="1" autocomplete="off">${fieldErr(f, 'targetMttd', shown)}</label>
+              <label class="ov-form__f"><span class="ov-form__l">MTTR, minutes</span><input class="og-input" data-field="targetMttr" value="${attr(v.targetMttr)}" inputmode="numeric" placeholder="5" autocomplete="off">${fieldErr(f, 'targetMttr', shown)}</label>
+            </div>` : ''}
+            <span class="ov-form__hint og-muted" id="ov-form-targets-hint">${escapeHtml(f.targets.hint)}</span>
+          </div>
+        </li>` : ''}
       </ol>${f.error ? `
       <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
       <div class="ov-form__acts">
