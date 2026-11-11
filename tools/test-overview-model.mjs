@@ -1513,6 +1513,8 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
   const chaos = (L5) => { const x = gradeWhy({ diagnostic: computeOverviewDiagnostic(layered(L5)), run: null, letter: 'D', score: NaN, now: NOW }).why.find((y) => /chaos|Recovery/i.test(y.text)); return x && { ok: x.ok, text: x.text }; };
   assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' })]), { ok: 'yes', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 1 chaos experiment passed a recent run (recorded in the repository).` });
   assert.deepEqual(chaos([exp(1, { at: ago(1), outcome: 'pass' }), exp(2)]), { ok: 'partly', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 2 chaos experiments passed a recent run (recorded in the repository).` }, 'one of two: partly');
+  // A run recorded in the studio (studio/chaos-runs.mjs marks its artefact): said as the studio's.
+  assert.deepEqual(chaos([{ ...exp(1, { at: ago(1), outcome: 'pass' }), _studioRun: { by: 'ada' } }]), { ok: 'yes', text: `Recovery proven ${ago(1).slice(0, 10)} by fault injection: 1 of 1 chaos experiment passed a recent run (recorded in the studio).` });
   assert.deepEqual(chaos([exp(1, { at: ago(2), outcome: 'fail', alerts_fired: [] })]), { ok: 'no', text: `Chaos experiment fault-1 failed on ${ago(2).slice(0, 10)}: KxDown did not fire within 3m.` });
   assert.deepEqual(chaos([exp(1, { at: ago(20), outcome: 'pass' })]), { ok: 'partly', text: `1 chaos experiment declared; the last recorded pass, ${ago(20).slice(0, 10)}, is older than 8 days.` });
   assert.deepEqual(chaos([exp(1)]), { ok: 'partly', text: '1 chaos experiment declared, never recorded as run.' });
@@ -1813,7 +1815,7 @@ test('Record a chaos run…: the experiments a run can be recorded for, the form
   assert.equal(chainModel({ layered: { layers: { L5: [] } }, settable: true }).mttx.record, null, 'not for a pack with no experiment');
   assert.equal(controlRoomMttx({ loaded: true, layered, settable: true }).record, true);
   // A run recorded in the studio, said as the studio's on the tile.
-  const studio = { layers: { ...layered.layers, L5: [{ ...layered.layers.L5[0], spec: { ...layered.layers.L5[0].spec, last_result: { at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', observed_mttd: '45s' } }, _studioRun: { by: 'carlos' } }] } };
+  const studio = { layers: { ...layered.layers, L5: [{ ...layered.layers.L5[0], spec: { ...layered.layers.L5[0].spec, last_result: { at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', observed_mttd: '45s' } }, _studioRun: { by: 'ada' } }] } };
   assert.match(chainModel({ layered: studio, env: 'prod', targets: { profile: 'lab', mttd: '1m', mttr: '5m' } }).mttx.note, /MTTD 45s in a chaos test on 11 Nov, recorded in the studio, within the 1 min target/);
 });
 

@@ -306,7 +306,7 @@ function calibratedNo(crit) {
 // by a recent passing run, failed, declared with only an old pass, declared
 // and never recorded as run — or none, and then what each side could not
 // see, never that recovery is unproven.
-const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository' };
+const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository', studio: 'recorded in the studio' };
 function chaosLine(crit, liveUnobserved) {
   const n = Number.isFinite(crit.declared) ? crit.declared : (numbersIn(crit.detail)[0] || 0);
   const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;

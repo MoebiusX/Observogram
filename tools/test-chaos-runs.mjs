@@ -23,7 +23,7 @@ const NOW = Date.parse('2026-11-11T15:00:00Z');
 const pack = () => adapt(parseYaml(readFileSync(resolve(SPEC_DIR, 'examples/payment-service.pack.yaml'), 'utf8')), { environment: 'prod' });
 const chaosOf = (grade) => grade.trust.criteria.find((c) => c.key === 'chaos-validated');
 const gradeOf = (layered) => computeDiagnosticGrade(layered, null, computePostureMatrix(layered, null), null, null, { nowMs: NOW });
-const run = (over = {}) => ({ experiment: 'api-network-latency', at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', mttd: '45s', alertsFired: null, note: '', by: 'carlos', recordedAt: '2026-11-11T14:00:00Z', ...over });
+const run = (over = {}) => ({ experiment: 'api-network-latency', at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', mttd: '45s', alertsFired: null, note: '', by: 'ada', recordedAt: '2026-11-11T14:00:00Z', ...over });
 
 test('the module imports nothing, so a downstream copies it alone', () => {
   assert.equal([...readFileSync(MODULE, 'utf8').matchAll(/^import\s/gm)].length, 0);
@@ -75,10 +75,10 @@ test('the run an experiment takes: its newest in the environment, one naming non
   assert.equal(studioRunFor(runs, 'api-pod-kill', 'prod'), null);
   assert.deepEqual(lastResultOf(run({ note: 'game day', alertsFired: ['PodDown'] })), {
     at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', observed_mttd: '45s', alerts_fired: ['PodDown'],
-    evidence: 'Recorded in the studio by carlos on 2026-11-11: game day',
+    evidence: 'Recorded in the studio by ada on 2026-11-11: game day',
   });
   assert.deepEqual(lastResultOf({ experiment: 'x1', at: '2026-11-11T13:05:00Z', outcome: 'aborted' }), { at: '2026-11-11T13:05:00Z', outcome: 'aborted', evidence: 'Recorded in the studio' });
-  assert.equal(chaosRunWords(run()), 'Passed · 2026-11-11 13:05 UTC · MTTD 45s · prod · by carlos');
+  assert.equal(chaosRunWords(run()), 'Passed · 2026-11-11 13:05 UTC · MTTD 45s · prod · by ada');
   assert.equal(chaosRunWords(run({ outcome: 'fail', mttd: null, environment: null, by: null })), 'Failed · 2026-11-11 13:05 UTC');
 });
 
@@ -94,7 +94,7 @@ test('withStudioRuns: the newest run in the environment is the experiment\'s las
   assert.notEqual(applied, layered);
   const byId = (p) => Object.fromEntries(p.layers.L5.filter((a) => /^CHAOS-/.test(a.id)).map((a) => [a.spec.id, a]));
   assert.deepEqual(byId(applied)['api-network-latency'].spec.last_result, lastResultOf(run()));
-  assert.deepEqual(byId(applied)['api-network-latency']._studioRun, { by: 'carlos', recordedAt: '2026-11-11T14:00:00Z', note: '' });
+  assert.deepEqual(byId(applied)['api-network-latency']._studioRun, { by: 'ada', recordedAt: '2026-11-11T14:00:00Z', note: '' });
   assert.equal(byId(applied)['api-pod-kill'].spec.last_result.outcome, 'fail', 'newer than the repository\'s 2026-11-02 pass');
   assert.equal(byId(applied)['kafka-partition-failure'], byId(layered)['kafka-partition-failure'], 'an experiment with no run is the same artefact');
   assert.equal(byId(layered)['api-network-latency'].spec.last_result, undefined, 'the pack given is not changed');
@@ -114,7 +114,7 @@ test('the grade, the board\'s MTTD and the control room read a studio run: stale
   assert.deepEqual([failed.proof.state, failed.score, failed.proof.failed[0].source], ['failed', 0, 'studio']);
   // The runs the board and the control room read carry where they come from.
   const tiers = declaredByTier(withStudioRuns(layered, runs, { env: 'prod' })).mttx;
-  assert.deepEqual(tiers.runs[0], { experiment: 'api-network-latency', at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', mttd: '45s', studio: true, by: 'carlos' });
+  assert.deepEqual(tiers.runs[0], { experiment: 'api-network-latency', at: '2026-11-11T13:05:00Z', outcome: 'pass', environment: 'prod', mttd: '45s', studio: true, by: 'ada' });
   assert.ok(!('studio' in tiers.runs.find((r) => r.experiment === 'api-pod-kill')), 'the repository\'s run says nothing of the studio');
   assert.deepEqual(tiers.measured, { mttd: '45s', at: '2026-11-11T13:05:00Z', experiment: 'api-network-latency', outcome: 'pass' });
 });

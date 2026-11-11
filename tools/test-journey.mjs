@@ -900,9 +900,9 @@ try {
     const { withStudioRuns } = await import('../studio/chaos-runs.mjs');
     const recentAt = new Date(Date.now() - 3_600_000).toISOString().replace(/\.\d+Z$/, 'Z');
     const studioRuns = [
-      { experiment: 'api-network-latency', at: recentAt, outcome: 'pass', environment: 'prod', mttd: '45s', by: 'carlos', recordedAt: recentAt },
-      { experiment: 'kafka-partition-failure', at: recentAt, outcome: 'pass', mttd: '2m', by: 'carlos', recordedAt: recentAt },
-      { experiment: 'api-pod-kill', at: recentAt, outcome: 'pass', environment: 'staging', mttd: '30s', by: 'carlos', recordedAt: recentAt },
+      { experiment: 'api-network-latency', at: recentAt, outcome: 'pass', environment: 'prod', mttd: '45s', by: 'ada', recordedAt: recentAt },
+      { experiment: 'kafka-partition-failure', at: recentAt, outcome: 'pass', mttd: '2m', by: 'ada', recordedAt: recentAt },
+      { experiment: 'api-pod-kill', at: recentAt, outcome: 'pass', environment: 'staging', mttd: '30s', by: 'ada', recordedAt: recentAt },
     ];
     const withRunsA = withStudioRuns(fileA, studioRuns, { env: 'prod' });
     const runsEngine = computeDiagnosticGrade(withRunsA, fileB, computePostureMatrix(withRunsA, fileB), null, fileDiff, {});
@@ -917,7 +917,7 @@ try {
       assert(r.grade.score === plain.grade.score, 'chaosRuns null or empty: graded as before', { none, grade: r.grade });
     }
     // The definition's own chaosRuns, what the server writes into a service's check: they load and grade the same.
-    offFile('runs-by-file', ['chaosRuns:', ...studioRuns.map((r) => `  - { experiment: ${r.experiment}, at: '${r.at}', outcome: ${r.outcome}${r.environment ? `, environment: ${r.environment}` : ''}, mttd: ${r.mttd}, by: carlos, recordedAt: '${r.recordedAt}' }`)]);
+    offFile('runs-by-file', ['chaosRuns:', ...studioRuns.map((r) => `  - { experiment: ${r.experiment}, at: '${r.at}', outcome: ${r.outcome}${r.environment ? `, environment: ${r.environment}` : ''}, mttd: ${r.mttd}, by: ada, recordedAt: '${r.recordedAt}' }`)]);
     const fromFileRuns = await runJourney(loadJourneyDef('runs-by-file'));
     assert(fromFileRuns.grade.score === recorded.grade.score, 'a check file\'s own chaosRuns is what a run handed none grades with', { file: fromFileRuns.grade, handed: recorded.grade });
     const runsError = (name, why) => `journey ${name}: chaosRuns must be a list of { experiment, at, outcome } — ${why}`;

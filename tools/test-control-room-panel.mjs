@@ -413,8 +413,8 @@ test('Record a chaos run… beside Set targets… where the pack declares an exp
   renderControlRoom(alone.container, model({ declared: true, origin: 'repository', mttdTarget: '5m', mttrTarget: '2h', runs: [], action: null, record: true }), { overview: {} });
   assert.ok(alone.container.innerHTML.includes('<p class="ov-cr__targets"><button type="button" class="og-btn og-btn--text" data-ux-action="cr-record"'), 'the repository\'s targets: Record a chaos run… alone');
   // The MTTD a run recorded in the studio measured, said so; the basis names Record a chaos run… and the repository.
-  const studio = model({ ...mttx, runs: [{ experiment: 'pod-kill', at: '2026-11-08T06:00:00Z', outcome: 'pass', environment: 'prod', mttd: '4m30s', studio: true, by: 'carlos' }] }).kpis.mttd;
-  assert.deepEqual([studio.words, studio.sub, studio.verdict], ['4 min 30 s', 'Measured in a chaos test in prod on 8 Nov, recorded in the studio by carlos.', 'met']);
+  const studio = model({ ...mttx, runs: [{ experiment: 'pod-kill', at: '2026-11-08T06:00:00Z', outcome: 'pass', environment: 'prod', mttd: '4m30s', studio: true, by: 'ada' }] }).kpis.mttd;
+  assert.deepEqual([studio.words, studio.sub, studio.verdict], ['4 min 30 s', 'Measured in a chaos test in prod on 8 Nov, recorded in the studio by ada.', 'met']);
   assert.match(model({ ...mttx, runs: [] }).kpis.mttd.basis, /^A chaos test knows its start\. Record its runs with Record a chaos run…, or in the repository \(\.observability\/pack\.yaml/);
   delete globalThis.document;
 });

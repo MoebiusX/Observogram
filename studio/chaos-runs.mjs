@@ -181,7 +181,7 @@ export function withStudioRuns(layered, runs, { env = null } = {}) {
 
 const OUTCOME_WORDS = { pass: 'Passed', fail: 'Failed', aborted: 'Aborted' };
 
-/** A recorded run in one line: "Passed · 2026-11-11 14:05 UTC · MTTD 45s · prod · by carlos". */
+/** A recorded run in one line: "Passed · 2026-11-11 14:05 UTC · MTTD 45s · prod · by ada". */
 export function chaosRunWords(run) {
   if (!isObj(run)) return '';
   const at = typeof run.at === 'string' ? `${run.at.slice(0, 10)} ${run.at.slice(11, 16)} UTC` : '';

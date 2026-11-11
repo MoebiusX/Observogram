@@ -199,7 +199,7 @@ declared exporters are the service's own.
     MTTD that this environment's newest chaos run recorded — in the
     repository (`last_result.observed_mttd`: from the fault to the slowest
     alert it expected) or in the studio, said so (*recorded in the studio by
-    carlos*) — against the target. *Record a chaos run…* beside *Set
+    ada*) — against the target. *Record a chaos run…* beside *Set
     targets…* opens the chaos run form (*Record a chaos run* below). A failed run is said as failed and an
     aborted one as aborted, with no figure and no verdict. Another
     environment's run is named beside, never used, and a run that names no
