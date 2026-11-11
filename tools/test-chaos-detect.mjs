@@ -588,7 +588,7 @@ test('the Diagnose blocker for Chaos-validated is worded from the proof: none, d
   assert.equal(declared.title, 'No chaos experiment has a recorded run');
   assert.doesNotMatch(`${declared.title} ${declared.why} ${declared.fix}`, /No chaos experiment is declared|only when the pack declares/);
   assert.match(declared.why, /earns a quarter of this check/);
-  assert.match(declared.fix, /^Run the experiments, then record each run in the repository as the experiment’s last_result in \.observability\/pack\.yaml/);
+  assert.match(declared.fix, /^Run the experiments, then record each run on the board \(Record a chaos run… on the MTTD \/ MTTR tile, kept with the service\), or in the repository as the experiment’s last_result in \.observability\/pack\.yaml/);
   assert.match(copyFor([exp('a')]).fix, /^Run the experiments, then record each run as the experiment’s last_result, or let the live check read the chaos run feed\.$/, 'a pack nobody scanned records it where it is');
   assert.equal(copyFor([exp('a', { at: ago(20), outcome: 'pass' })]).title, 'The last chaos pass is too old');
   assert.equal(copyFor([exp('a', { at: ago(1), outcome: 'fail', alerts_fired: [] })]).title, 'A chaos experiment failed its last run');

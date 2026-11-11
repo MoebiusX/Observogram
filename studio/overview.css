@@ -292,6 +292,9 @@ p.ov-scan__sum { cursor: default; }
 /* Set targets… / Change targets…: the way to fill the gap, where it shows. */
 .ov-mttx__set.og-btn--text { grid-column: 2 / -1; justify-self: start; min-height: 26px; padding: 2px 0; font: 600 12.5px/1.3 var(--og-font); }
 .ov-mttx__set:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+/* With Record a chaos run… beside it: one row of text buttons, under the note. */
+.ov-mttx__acts { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 0 18px; }
+.ov-mttx__acts .ov-mttx__set.og-btn--text { grid-column: auto; }
 .ov-form__mins { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .ov-detail { margin: 0; font: 400 12.5px/1.45 var(--og-font); color: var(--og-text-2); }
 .ov-detail__h { margin-right: 4px; font: 600 10.5px/1 var(--og-font); letter-spacing: .06em; text-transform: uppercase; color: var(--og-muted); }
@@ -538,6 +541,16 @@ p.ov-scan__sum { cursor: default; }
 .ov-form__step--targets > .ov-form__f { display: grid; grid-template-columns: minmax(0, 30rem) minmax(0, 1fr); column-gap: 14px; row-gap: 6px; align-items: start; }
 .ov-form__step--targets > .ov-form__f > .ov-form__l, .ov-form__step--targets > .ov-form__f > .ov-form__mins, .ov-form__step--targets > .ov-form__f > .ov-form__err { grid-column: 1 / -1; }
 .ov-form__step--targets > .ov-form__f > .ov-form__mins { max-width: 30rem; }
+/* Record a chaos run…: the answers in a grid that wraps, the alerts that fired and the note across it, the runs recorded under. */
+.ov-form--chaos .ov-form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px 16px; align-items: start; }
+.ov-form__fired { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.ov-form__fired legend { padding: 0; margin-bottom: 6px; width: 100%; }
+.ov-form__check { display: inline-flex; align-items: center; gap: 6px; font: 400 12.5px/1.3 var(--og-font); color: var(--og-text); }
+.ov-form__note { grid-column: 1 / -1; }
+.ov-form__recent { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--og-line); }
+.ov-form__runs { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ov-form__runs li { display: flex; justify-content: space-between; align-items: center; gap: 12px; font: 400 12.5px/1.35 var(--og-font); color: var(--og-text); }
+.ov-form__runs .og-btn--text { min-height: 26px; padding: 2px 0; font: 600 12.5px/1.3 var(--og-font); }
 /* The board's Set targets… form: the Targets answer alone, no step number. */
 .ov-form--targets .ov-form__step--targets { grid-template-columns: minmax(0, 1fr); }
 .ov-form__f { display: grid; gap: 6px; min-width: 0; }

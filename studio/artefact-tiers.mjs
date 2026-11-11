@@ -144,7 +144,8 @@ export function packArtefacts(layered) {
 //               placeholder. `measured`: the newest chaos run recorded in the repository with an
 //               observed MTTD ({ mttd, at, experiment, outcome }), else null — nothing measures MTTR.
 //               `runs`: every chaos experiment's recorded run, newest first ({ experiment, at,
-//               outcome, environment (the run's, else the experiment's, else null), mttd | null }),
+//               outcome, environment (the run's, else the experiment's, else null), mttd | null,
+//               and studio: true, by — for a run recorded in the studio }),
 //               for a reader that must pick the run of one environment and say a failed one as failed
 //   objectives  { total, withoutAlert } — objectives, and those no burn-rate alert names
 //   detail, machinery  { count, families: [{ family, count, words }] } — most first
@@ -171,6 +172,8 @@ export function declaredByTier(layered) {
         experiment: String(a.spec?.id || a.title || ''), at: run.at, outcome: run.outcome,
         environment: typeof run.environment === 'string' && run.environment ? run.environment : (typeof a.spec?.environment === 'string' && a.spec.environment ? a.spec.environment : null),
         mttd: typeof run.observed_mttd === 'string' ? run.observed_mttd : null,
+        // Recorded in the studio (studio/chaos-runs.mjs withStudioRuns): said so, with who recorded it.
+        ...(a._studioRun ? { studio: true, by: a._studioRun.by ?? null } : {}),
       });
     }
     if (isObj(run) && typeof run.observed_mttd === 'string' && typeof run.at === 'string' && Number.isFinite(Date.parse(run.at))

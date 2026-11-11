@@ -1251,6 +1251,10 @@ const gradeOffKeysOf = (service) => (Array.isArray(service?.gradeOff) ? service.
 // A service's set-asides as a check file carries them (journey.mjs validateSetAside): what a run needs.
 const setAsideOfService = (service) => (Array.isArray(service?.setAside) ? service.setAside : [])
   .map((x) => ({ key: x.key, side: x.side, kind: x.kind, ...(x.until ? { until: x.until } : {}), ...(x.label && x.label !== x.key ? { label: x.label } : {}) }));
+// A service's recorded chaos runs as a check file carries them (journey.mjs validateChaosRuns):
+// each run's own fields, a value it does not have left out.
+const chaosRunsOfService = (service) => (Array.isArray(service?.chaosRuns) ? service.chaosRuns : [])
+  .map((r) => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null && v !== undefined && v !== '')));
 
 // The grade criteria a journey is not graded on. A journey of a service with
 // a record (serviceOfJourney) is graded on the record's switches
@@ -1270,16 +1274,25 @@ function setAsideOfJourney(def) {
   return Array.isArray(def?.setAside) ? def.setAside : [];
 }
 
+// The chaos runs recorded in the studio a journey is graded with, by the same rule: the record's
+// for a service's journey, its own `chaosRuns` otherwise.
+function chaosRunsOfJourney(def) {
+  const service = serviceOfJourney(def);
+  if (service) return Array.isArray(service.chaosRuns) ? service.chaosRuns : [];
+  return Array.isArray(def?.chaosRuns) ? def.chaosRuns : [];
+}
+
 // A definition about to be saved, with its service's switches in it (or
 // without the key when none is off): a run that has no record to ask —
 // `packc journey run`, which is what a schedule runs — then grades as the
 // service does. A journey of no service keeps what it carries.
 function withServiceGradeOff(def, service) {
   if (!service) return def;
-  const { gradeOff: _was, setAside: _wasAside, ...rest } = def;
+  const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, ...rest } = def;
   const keys = gradeOffKeysOf(service);
   const aside = setAsideOfService(service);
-  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}) };
+  const runs = chaosRunsOfService(service);
+  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}), ...(runs.length ? { chaosRuns: runs } : {}) };
 }
 
 // A service's switches, written into every check the studio saved for it
@@ -1328,17 +1341,19 @@ function serviceCheckNames(service) {
 function writeGradeOffToChecks(names, service) {
   const keys = gradeOffKeysOf(service);
   const aside = JSON.stringify(setAsideOfService(service));
+  const runs = JSON.stringify(chaosRunsOfService(service));
   for (const name of names) {
     let def;
     try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
     const was = Array.isArray(def.gradeOff) ? def.gradeOff : [];
     const wasAside = JSON.stringify(Array.isArray(def.setAside) ? def.setAside : []);
-    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside) continue;
+    const wasRuns = JSON.stringify(Array.isArray(def.chaosRuns) ? def.chaosRuns : []);
+    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs) continue;
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
     try { saveJourneyDef(name, withServiceGradeOff(rest, service), { banner }); }
-    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria and set-asides (${e.message})\n`); }
+    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides and recorded chaos runs (${e.message})\n`); }
   }
 }
 
@@ -1347,7 +1362,7 @@ function writeGradeOffToChecks(names, service) {
 // service's, and a service made again under the name starts with none.
 function forgetGradeOffOfDeletedService(service) {
   const names = serviceCheckNames(service);
-  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [] });
+  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [] });
 }
 
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
@@ -1380,6 +1395,8 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       // and the differences its grade leaves out (its record's set-asides).
       gradeOff: gradeOffOfJourney(def),
       setAside: setAsideOfJourney(def),
+      // The chaos runs recorded in the studio for its experiments (its record's).
+      chaosRuns: chaosRunsOfJourney(def),
     });
     const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({

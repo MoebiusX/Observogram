@@ -554,7 +554,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.equal(payView.targets, null, 'no targets until they are set');
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
@@ -888,6 +888,64 @@ test('a service\'s MTTD / MTTR targets: set on a create or a patch — a profile
       assert.deepEqual(viewOf().targets.mttr, '240m', 'four hours, as minutes');
       assert.equal(admin.deleteServiceFromApi(db, 'ada', svc.id).service.targets.profile, 'noncritical', 'the deletion\'s view shows them as they were');
       assert.equal(admin.createServiceFromApi(db, 'oscar', { name: 'Pay' }).targets, null, 'a new service of a reused id has no targets');
+    });
+  } finally { close(); }
+});
+
+test('a service\'s recorded chaos runs: the whole list replaces the record\'s — each run normalised and signed, newest first; the same list again writes nothing, a changed run re-signs only itself; one row counting them; every refusal writes nothing; a deletion takes them, and a reused id starts with none', async () => {
+  const { db, close } = await freshStore('chaos-runs');
+  try {
+    runWithOrg('acme', () => {
+      const updates = () => rows(db, 'acme', 'service.update');
+      const svc = admin.createServiceFromApi(db, 'oscar', { name: 'Pay' });
+      assert.deepEqual(svc.chaosRuns, [], 'a new record has none');
+      const viewOf = () => admin.serviceViewOf(db, services.getService(db, svc.id));
+      assert.deepEqual(viewOf().chaosRuns, []);
+      // ada records two: normalised (UTC to the second, the MTTD in whole seconds), signed, newest first.
+      const t0 = Date.now();
+      const first = { experiment: 'pod-kill', at: '2026-11-10T09:00:00+01:00', outcome: 'pass', environment: 'prod', mttd: '90s', alertsFired: ['PodDown'], note: ' game day ' };
+      const second = { experiment: 'latency', at: '2026-11-11T08:00:00Z', outcome: 'fail', environment: null, mttd: null, alertsFired: [], note: '' };
+      const two = admin.updateServiceFromApi(db, 'ada', svc.id, { chaosRuns: [first, second] });
+      assert.deepEqual(two.changed, ['chaosRuns']);
+      assert.deepEqual(two.service.chaosRuns.map((r) => ({ ...r, recordedAt: undefined })), [
+        { experiment: 'latency', at: '2026-11-11T08:00:00Z', outcome: 'fail', environment: null, mttd: null, alertsFired: [], note: '', by: 'ada', recordedAt: undefined },
+        { experiment: 'pod-kill', at: '2026-11-10T08:00:00Z', outcome: 'pass', environment: 'prod', mttd: '1m30s', alertsFired: ['PodDown'], note: 'game day', by: 'ada', recordedAt: undefined },
+      ]);
+      assert.ok(two.service.chaosRuns.every((r) => ISO_TIME.test(r.recordedAt) && Date.parse(r.recordedAt) >= t0));
+      assert.deepEqual(updates().at(-1), ['service.update', 'ada', 'pay', { fields: ['chaosRuns'], chaosRuns: { runs: 2, pass: 1, fail: 1 } }], 'the row counts them, never lists them');
+      assert.deepEqual(viewOf().chaosRuns, two.service.chaosRuns, 'the view carries them as the record holds them');
+      // The list as the view gave it, sent again by oscar: nothing changes, nothing is written.
+      const count = updates().length;
+      const again = admin.updateServiceFromApi(db, 'oscar', svc.id, { chaosRuns: viewOf().chaosRuns });
+      assert.deepEqual([again.changed, updates().length], [[], count]);
+      // oscar adds one and changes the note of another: only those two take his name.
+      const added = { experiment: 'pod-kill', at: '2026-11-11T09:30:00Z', outcome: 'aborted' };
+      const kept = viewOf().chaosRuns;
+      const next = admin.updateServiceFromApi(db, 'oscar', svc.id, { chaosRuns: [added, { ...kept[0] }, { ...kept[1], note: 'second game day' }] }).service.chaosRuns;
+      assert.deepEqual(next.map((r) => [r.experiment, r.at, r.by]), [['pod-kill', '2026-11-11T09:30:00Z', 'oscar'], ['latency', '2026-11-11T08:00:00Z', 'ada'], ['pod-kill', '2026-11-10T08:00:00Z', 'oscar']]);
+      assert.equal(next[1].recordedAt, kept[0].recordedAt, 'the run sent as it was keeps its time');
+      // A refusal writes nothing — not the runs, not the field beside it, not a row.
+      const held = services.getService(db, svc.id);
+      const rowsBefore = updates().length;
+      const future = new Date(Date.now() + 3_600_000).toISOString().replace(/\.\d+Z$/, 'Z');
+      for (const [chaosRuns, way] of [
+        ['pod-kill', admin.WAYS.chaosRuns],
+        [Array.from({ length: 201 }, (_, i) => ({ experiment: 'pod-kill', at: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(), outcome: 'pass' })), admin.WAYS.chaosRuns],
+        [[{ experiment: 'pod-kill', at: future, outcome: 'pass' }], admin.WAYS.chaosRun(`at ${future} is in the future`)],
+        [[{ experiment: 'pod-kill', at: '2026-11-10T08:00:00Z', outcome: 'ok' }], admin.WAYS.chaosRun('outcome is pass, fail, aborted, not "ok"')],
+        [[{ experiment: 'Pod Kill', at: '2026-11-10T08:00:00Z', outcome: 'pass' }], admin.WAYS.chaosRun('experiment "Pod Kill" is not an experiment\'s id')],
+        [[{ experiment: 'pod-kill', at: '2026-11-10T08:00:00Z', outcome: 'pass', mttd: 'fast' }], admin.WAYS.chaosRun('mttd "fast" is not a Duration of at most a week ("45s", "2m30s")')],
+        [[added, { ...added, at: '2026-11-11T10:30:00+01:00' }], admin.WAYS.chaosRunTwice({ experiment: 'pod-kill', at: '2026-11-11T09:30:00Z', environment: null })],
+      ]) {
+        assert.throws(() => admin.updateServiceFromApi(db, 'ada', svc.id, { name: 'Never', chaosRuns }), invalid(way), JSON.stringify(chaosRuns).slice(0, 80));
+      }
+      assert.deepEqual(services.getService(db, svc.id), held, 'the record is as it was');
+      assert.equal(updates().length, rowsBefore, 'and no row was written');
+      // [] forgets them all; then they go with the record, and a reused id starts with none.
+      assert.deepEqual(admin.updateServiceFromApi(db, 'ada', svc.id, { chaosRuns: [] }).service.chaosRuns, []);
+      admin.updateServiceFromApi(db, 'ada', svc.id, { chaosRuns: [added] });
+      assert.equal(admin.deleteServiceFromApi(db, 'ada', svc.id).service.chaosRuns.length, 1, 'the deletion\'s view shows them as they were');
+      assert.deepEqual(admin.createServiceFromApi(db, 'oscar', { name: 'Pay' }).chaosRuns, [], 'a new service of a reused id has none');
     });
   } finally { close(); }
 });

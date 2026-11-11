@@ -29,10 +29,11 @@
 // module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys } from './diagnostic-grade.mjs';
+import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
+import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
@@ -305,7 +306,7 @@ function calibratedNo(crit) {
 // by a recent passing run, failed, declared with only an old pass, declared
 // and never recorded as run — or none, and then what each side could not
 // see, never that recovery is unproven.
-const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository' };
+const PROOF_SOURCE = { measured: 'measured live', recorded: 'recorded in the repository', studio: 'recorded in the studio' };
 function chaosLine(crit, liveUnobserved) {
   const n = Number.isFinite(crit.declared) ? crit.declared : (numbersIn(crit.detail)[0] || 0);
   const exps = `${n} chaos experiment${n === 1 ? '' : 's'}`;
@@ -905,7 +906,7 @@ function measuredMttd(run, src, { runs = [], env = null } = {}) {
   const target = t === null ? '' : src.view ? src.view.mttdWords.replace(/^≤ /, '') : src.mttd;
   const over = t !== null && s > t;
   const unplaced = src && !run.environment ? ' (the run names no environment: no verdict)' : '';
-  return { words: `MTTD ${run.mttd} in a chaos test on ${on}${t === null ? unplaced : over ? `, over the ${target} target` : `, within the ${target} target`}`, met: t !== null && !over, over, elsewhere: '' };
+  return { words: `MTTD ${run.mttd} in a chaos test on ${on}${run.studio ? ', recorded in the studio' : ''}${t === null ? unplaced : over ? `, over the ${target} target` : `, within the ${target} target`}`, met: t !== null && !over, over, elsewhere: '' };
 }
 
 // The way to give a service its targets from where the gap shows (the board's tile, the control room):
@@ -926,6 +927,8 @@ const targetsActionFor = (origin, settable) => (!settable || origin === 'reposit
 //            as failed), set beside the target — over it, the tile is amber, never green
 //   origin   'repository' | 'studio' | null
 //   action   'Set targets…' | 'Change targets…' | null — the tile's button (targetsActionFor)
+//   record   'Record a chaos run…' | null — its other button, where the pack declares an experiment
+//            (chaosExperimentsOf) and the host can open the form (`settable`, as for the targets)
 //   parts  for a link of several families, each one's count ("58 alert rules · 8 burn-rate alerts")
 //   note   alerts: the objectives no burn-rate alert covers; a link with none: that none was found
 export function chainModel({ layered = null, targets = null, env = null, settable = false } = {}) {
@@ -977,6 +980,7 @@ export function chainModel({ layered = null, targets = null, env = null, settabl
       conditions: rec.conditions,
     },
   };
+  mttx.record = settable && chaosExperimentsOf(layered).length ? CHAOS_RECORD_LABEL : null;
   return {
     links, mttx,
     detail: { count: d.detail.count, line: familyList(d.detail.families) },
@@ -990,16 +994,18 @@ export function chainModel({ layered = null, targets = null, env = null, settabl
 // else the studio's, with their words ({ declared, origin: 'studio', mttdTarget, mttrTarget,
 // mttdWords, mttrWords, runs, action }) — measured against, said as the studio's; else the recommendation
 // ({ declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords }, action }), never a verdict.
-// `action`: 'Set targets…' | 'Change targets…' | null, as on the board's tile (targetsActionFor).
+// `action`: 'Set targets…' | 'Change targets…' | null, as on the board's tile (targetsActionFor);
+// `record`: true where Record a chaos run… opens (the pack declares an experiment, and `settable`).
 export function controlRoomMttx({ loaded = false, layered = null, layeredError = null, targets = null, settable = false } = {}) {
   if (!loaded || layeredError || !layered) return { unread: true };
   const m = declaredByTier(layered).mttx;
   const runs = Array.isArray(m.runs) ? m.runs : [];
   const src = targetsSource(m, targets);
-  if (src?.origin === 'repository') return { declared: true, origin: 'repository', mttdTarget: src.mttd, mttrTarget: src.mttr, runs, action: null };
-  if (src) return { declared: true, origin: 'studio', mttdTarget: src.mttd, mttrTarget: src.mttr, mttdWords: src.view.mttdWords, mttrWords: src.view.mttrWords, runs, action: targetsActionFor('studio', settable) };
+  const record = !!settable && chaosExperimentsOf(layered).length > 0;
+  if (src?.origin === 'repository') return { declared: true, origin: 'repository', mttdTarget: src.mttd, mttrTarget: src.mttr, runs, action: null, record };
+  if (src) return { declared: true, origin: 'studio', mttdTarget: src.mttd, mttrTarget: src.mttr, mttdWords: src.view.mttdWords, mttrWords: src.view.mttrWords, runs, action: targetsActionFor('studio', settable), record };
   const rec = recommendedProfile();
-  return { declared: false, runs, recommended: { name: rec.name, mttd: rec.mttd, mttr: rec.mttr, mttdWords: rec.mttdWords, mttrWords: rec.mttrWords }, action: targetsActionFor(null, settable) };
+  return { declared: false, runs, recommended: { name: rec.name, mttd: rec.mttd, mttr: rec.mttr, mttdWords: rec.mttdWords, mttrWords: rec.mttrWords }, action: targetsActionFor(null, settable), record };
 }
 
 // What a run says about the chain, from its record's drift.tiers (a record
@@ -1726,7 +1732,7 @@ export const FORM_DRAFT_TTL_MS = 15 * 60_000;
 const FORM_DRAFT_VALUE_MAX = 2048;
 
 export function formDraft(form, { now = Date.now() } = {}) {
-  if (!form?.open) return null;
+  if (!form?.open || form.chaosRun) return null;
   return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched };
 }
 
@@ -1771,6 +1777,166 @@ export function targetsOnlyPlan(values = {}, { services = [], serviceId = null }
   const targets = targetsFromForm(values);
   const changed = !!existing && !Object.keys(problems).length && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
   return { problems, serviceId: existing ? existing.id : null, patch: changed ? { targets } : null, name: existing?.name || trimmed(values.name), envName: trimmed(values.env) };
+}
+
+// ---------- Record a chaos run… ----------
+//
+// A chaos run's result entered in the studio (studio/chaos-runs.mjs): opened from the board's MTTD /
+// MTTR tile and the control room, on the service list where the service's form lives; Save sends the
+// service's whole list with the new run first (PATCH { chaosRuns }) and checks the service again,
+// so the grade's Chaos-validated, the measured MTTD and the control room read it.
+
+export const CHAOS_RECORD_LABEL = 'Record a chaos run…';
+const SLUG_ID = /^[a-z][a-z0-9_-]*[a-z0-9]$/;
+
+// chaosExperimentsOf(layered) → the experiments a run can be recorded for: the pack's own chaos
+// experiments, scaffolds aside (a library placeholder never ran), each once —
+// [{ id, expectedAlerts, expectedMttd, schedule, environment }]. An id that is not a spec Slug is
+// left out: a run names its experiment by it.
+export function chaosExperimentsOf(layered) {
+  const L5 = Array.isArray(layered?.layers?.L5) ? layered.layers.L5 : [];
+  const seen = new Set();
+  const out = [];
+  for (const a of L5) {
+    if (!a || typeof a !== 'object' || !/^CHAOS-/.test(String(a.id || '')) || isScaffoldArtefact(a)) continue;
+    const id = String(a.spec?.id || a.title || '');
+    if (id.length < 2 || id.length > 64 || !SLUG_ID.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      expectedAlerts: Array.isArray(a.spec?.expected_alerts) ? [...new Set(a.spec.expected_alerts.filter((x) => typeof x === 'string' && x.trim()))] : [],
+      expectedMttd: typeof a.spec?.expected_mttd === 'string' ? a.spec.expected_mttd : null,
+      schedule: typeof a.spec?.schedule === 'string' ? a.spec.schedule : null,
+      environment: typeof a.spec?.environment === 'string' ? a.spec.environment : null,
+    });
+  }
+  return out;
+}
+
+const pad2 = (n) => String(n).padStart(2, '0');
+// The datetime-local value ("2026-11-11T14:05") of `ms` in a zone `tzOffset` minutes behind UTC
+// (Date#getTimezoneOffset: -60 in Paris in winter).
+export function localDateTimeValue(ms, tzOffset = 0) {
+  const d = new Date(ms - tzOffset * 60_000);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}T${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+// A datetime-local value back to a date-time in UTC ("2026-11-11T13:05:00Z"), or null.
+export function isoFromLocal(value, tzOffset = 0) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value ?? '').trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = m.slice(1).map((x) => Number(x || 0));
+  const local = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+  if (local.getUTCMonth() !== mo - 1 || local.getUTCDate() !== d || h > 23 || mi > 59 || s > 59) return null;
+  return new Date(local.getTime() + tzOffset * 60_000).toISOString().replace('.000Z', 'Z');
+}
+
+const FIRED = 'crFired:';
+const firedValues = (experiment) => Object.fromEntries((experiment?.expectedAlerts || []).map((a) => [`${FIRED}${a}`, '1']));
+const withoutFired = (values) => Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith(FIRED)));
+const runsHere = (runs, env) => (Array.isArray(runs) ? runs : []).filter((r) => r && (!env || !r.environment || r.environment === env));
+
+// chaosRunFormOpened(services, { serviceId, env, layered, now, tzOffset }) → the form Record a chaos
+// run… opens: the service's own experiments (chaosExperimentsOf), the first chosen, now as the time,
+// Passed, every expected alert ticked as fired; the service's recorded runs (`runs`) for its list.
+// null for a service that is not a record, or a pack that declares no experiment.
+export function chaosRunFormOpened(services, { serviceId = null, env = null, layered = null, now = Date.now(), tzOffset = 0 } = {}) {
+  const service = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
+  const experiments = chaosExperimentsOf(layered);
+  if (!service || !experiments.length) return null;
+  return {
+    open: true, mode: 'edit', chaosRun: true, serviceId: service.id, envFixed: !!env, experiments, tzOffset,
+    runs: Array.isArray(service.chaosRuns) ? service.chaosRuns : [],
+    values: { name: service.name, env: env || '', crExperiment: experiments[0].id, crAt: localDateTimeValue(now, tzOffset), crOutcome: 'pass', crMttd: '', crNote: '', ...firedValues(experiments[0]) },
+    focus: 'crExperiment', scroll: true, saving: false, error: null,
+  };
+}
+
+// One answer typed or chosen; another experiment brings its own expected alerts, each ticked.
+export function chaosRunFormInput(form, field, value) {
+  if (!form?.chaosRun) return form;
+  let values = { ...form.values, [field]: String(value ?? '') };
+  if (field === 'crExperiment') values = { ...withoutFired(values), ...firedValues((form.experiments || []).find((x) => x.id === value)) };
+  return { ...form, values, error: null };
+}
+
+// What is wrong before Save — { field: sentence }: the experiment, when (not in the future), the
+// outcome, the MTTD as seconds or a duration, the note's length; a run already recorded at that time.
+export function chaosRunProblems(values = {}, { experiments = [], tzOffset = 0, now = Date.now(), runs = [] } = {}) {
+  const out = {};
+  const e = (Array.isArray(experiments) ? experiments : []).find((x) => x.id === values.crExperiment);
+  if (!e) out.crExperiment = 'Choose the experiment that ran.';
+  const at = isoFromLocal(values.crAt, tzOffset);
+  if (!at) out.crAt = 'Say when it ran: a date and a time.';
+  else if (Date.parse(at) > now + CHAOS_RUN_AHEAD_MS) out.crAt = 'It cannot have run in the future.';
+  else if (Date.parse(at) < Date.UTC(2000, 0, 1)) out.crAt = 'Say when it ran: a date from 2000 on.';
+  if (!CHAOS_RUN_OUTCOMES.includes(values.crOutcome)) out.crOutcome = 'Say whether it passed, failed or was aborted.';
+  if (Number.isNaN(parseMttdText(values.crMttd))) out.crMttd = 'Give the MTTD in seconds (45) or as a duration (2m30s), at most a week.';
+  // eslint-disable-next-line no-control-regex
+  if (String(values.crNote ?? '').trim().length > CHAOS_RUN_NOTE_MAX || /[\u0000-\u001f\u007f]/.test(String(values.crNote ?? ''))) out.crNote = `At most ${CHAOS_RUN_NOTE_MAX} characters on one line.`;
+  if (!Object.keys(out).length) {
+    const list = Array.isArray(runs) ? runs : [];
+    const id = chaosRunId({ experiment: e.id, at, environment: trimmed(values.env) || null });
+    if (list.some((r) => chaosRunId(r) === id)) out.crAt = 'A run of this experiment at this time is already recorded.';
+    else if (list.length >= CHAOS_RUNS_MAX) out.crExperiment = `${CHAOS_RUNS_MAX} runs are recorded for this service: forget an old one first.`;
+  }
+  return out;
+}
+
+// chaosRunPlan(form, { services, now }) → what Save does: { problems, serviceId, patch, run, name, envName }
+// — `patch` { chaosRuns } the service's list as the server last gave it with the new run first
+// (the server keeps who recorded each and when), null while there are problems.
+export function chaosRunPlan(form, { services = [], now = Date.now() } = {}) {
+  const v = form?.values || {};
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form?.serviceId) || null;
+  const runs = Array.isArray(existing?.chaosRuns) ? existing.chaosRuns : [];
+  const experiments = Array.isArray(form?.experiments) ? form.experiments : [];
+  const problems = existing ? chaosRunProblems(v, { experiments, tzOffset: form?.tzOffset || 0, now, runs }) : { crExperiment: 'This service is no longer listed: close the form and open it again.' };
+  const name = existing?.name || trimmed(v.name);
+  if (Object.keys(problems).length) return { problems, serviceId: existing?.id ?? null, patch: null, run: null, name, envName: trimmed(v.env) };
+  const e = experiments.find((x) => x.id === v.crExperiment);
+  const s = parseMttdText(v.crMttd);
+  const run = {
+    experiment: e.id, at: isoFromLocal(v.crAt, form.tzOffset || 0), outcome: v.crOutcome,
+    environment: trimmed(v.env) || null,
+    mttd: s === null ? null : mttdDuration(s),
+    alertsFired: e.expectedAlerts.length ? e.expectedAlerts.filter((a) => v[`${FIRED}${a}`] === '1') : null,
+    note: trimmed(v.crNote),
+  };
+  return { problems, serviceId: existing.id, patch: { chaosRuns: [run, ...runs] }, run, name, envName: trimmed(v.env) };
+}
+
+// chaosRunForgetPlan(services, serviceId, runId) → { serviceId, patch: { chaosRuns }, name } — the
+// list without the run (chaosRunId), or null when it is not there.
+export function chaosRunForgetPlan(services, serviceId, runId) {
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
+  const runs = Array.isArray(existing?.chaosRuns) ? existing.chaosRuns : [];
+  const next = runs.filter((r) => chaosRunId(r) !== runId);
+  return existing && next.length !== runs.length ? { serviceId: existing.id, patch: { chaosRuns: next }, name: existing.name } : null;
+}
+
+const OUTCOME_OPTIONS = [['pass', 'Passed — the expected alerts fired and it recovered'], ['fail', 'Failed — an expected alert did not fire, or it did not recover'], ['aborted', 'Aborted — stopped before it said anything']];
+
+// chaosRunFormModel(form, { access, now }) → what the renderer draws: the experiment (its expected
+// MTTD), when, the outcome, the measured MTTD, the expected alerts that fired, a note; Save and
+// Cancel; the runs already recorded here, newest first, each with Forget.
+export function chaosRunFormModel(form, { access = null, now = Date.now() } = {}) {
+  const v = form.values || {};
+  const experiments = Array.isArray(form.experiments) ? form.experiments : [];
+  const chosen = experiments.find((x) => x.id === v.crExperiment) || null;
+  const canWrite = access?.canWrite !== false;
+  const env = trimmed(v.env);
+  return {
+    open: true, mode: 'edit', chaosRun: true, saving: !!form.saving, error: form.error || null, focus: form.focus || null, scroll: !!form.scroll,
+    title: `Record a chaos run · ${v.name}${env ? ` · ${env}` : ''}`,
+    values: { ...v },
+    experiments: experiments.map((x) => ({ id: x.id, label: `${x.id}${x.expectedMttd ? ` — expects MTTD ≤ ${x.expectedMttd}` : ''}`, selected: x.id === v.crExperiment })),
+    outcomes: OUTCOME_OPTIONS.map(([value, label]) => ({ value, label, selected: value === v.crOutcome })),
+    fired: (chosen?.expectedAlerts || []).map((alert) => ({ alert, field: `${FIRED}${alert}`, checked: v[`${FIRED}${alert}`] === '1' })),
+    hint: `Kept with this service${env ? ` for ${env}` : ''} and said as recorded in the studio: the grade's Chaos-validated, the MTTD on the board and the control room read it. A run the repository records later than this one comes first. Save checks the service again, so the grade takes it.`,
+    recent: runsHere(form.runs, env).slice(0, 8).map((r) => ({ id: chaosRunId(r), experiment: r.experiment, words: chaosRunWords(r), note: r.note || '' })),
+    problems: chaosRunProblems(v, { experiments, tzOffset: form.tzOffset || 0, now, runs: form.runs }),
+    canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
 }
 
 // What is missing before the form can be saved — { field: sentence }. The
@@ -1826,6 +1992,7 @@ export function formProblemsNote(problems = {}) {
 //             what it holds in saveService({ run, repoAuth }); one that passes none draws no field
 export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, heldTokens = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
+  if (form.chaosRun) return chaosRunFormModel(form, { access, now });
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;

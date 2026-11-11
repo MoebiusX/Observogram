@@ -182,7 +182,9 @@ Chaos-validated, in full (`chaosProof`, `studio/diagnostic-grade.mjs`):
 - The windows come from the experiment's `schedule`: daily 2 days, weekly 8,
   monthly 35, on-demand and ci 90.
 - A run is the live run feed on Pack B (`mcp.chaos.runs`, measured) or the
-  pack's own `last_result` (recorded in the repository); the live one wins.
+  pack's own `last_result` — recorded in the repository, or in the studio
+  with *Record a chaos run…* (said as the studio's) when newer than the
+  repository's; the live one wins.
 - The scan reads experiments from code (a scenario table in a file with
   `chaos` in its path), from Chaos Mesh and Litmus resources (a Litmus
   `ChaosExperiment` is a template, never declared) and from the repository's
@@ -573,6 +575,15 @@ Belongs here:
     environment gives no verdict (amber, never green), and another
     environment's run is named (*Not measured in prod: a chaos test in
     staging measured MTTD 4m on 1 Nov.*);
+  - **Record a chaos run…** beside it, for a pack that declares an
+    experiment, opens a form on the list (*Record a chaos run · Demo ·
+    prod*): the experiment, when it ran (your time, now), passed / failed /
+    aborted, the measured MTTD (`45`, `2m30s`), the expected alerts that
+    fired, a note. **Save and check again** keeps it with the service and
+    checks again, so Chaos-validated, the tile's MTTD (*MTTD 45s in a chaos
+    test on 11 Nov, recorded in the studio, within the 1 min target*) and the
+    control room read it; the runs recorded here are listed under the form,
+    each with **Forget**;
   - *Under it*, the detail in one line (*18 indicators · 18 objectives · 208
     metrics · 11 backends · 8 alert routes · 5 chaos tests*);
   - behind *The machinery and the layers*, the machinery in one line (*324
