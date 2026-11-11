@@ -205,6 +205,29 @@ export function positiveId(value) {
   return Number.isInteger(n) && n >= 1 && n <= ID_MAX ? n : null;
 }
 
+// The saved check of a service's environment: its journey name.
+export const serviceJourneyName = (slug, env) => `${slug}.${env}`.replace(/[^A-Za-z0-9._-]/g, '_');
+
+// pickServiceEnvironment(db, idParam, envName) → { service, env } | { status, error }
+// The service of a route's :id and the environment a request names (or the
+// only one): what a service's Run and its control room both start from,
+// with the same refusals — 404 no such service or environment, 400 none
+// named among several (or none at all).
+export function pickServiceEnvironment(db, idParam, envName) {
+  const id = positiveId(idParam);
+  const service = id === null ? null : getService(db, id);
+  if (!service) return { status: 404, error: WAYS.noService(idParam) };
+  const envs = listEnvironments(db, service.id);
+  const name = typeof envName === 'string' ? envName.trim() : '';
+  const env = name ? envs.find((e) => e.name === name) : (envs.length === 1 ? envs[0] : null);
+  if (!env) {
+    const error = name ? `${service.name} has no environment "${name}" — add it to the service first`
+      : envs.length ? `name the environment to run: ${envs.map((e) => e.name).join(', ')}` : `${service.name} has no environment yet — add one, with the MCP endpoint that reads it`;
+    return { status: name ? 404 : 400, error };
+  }
+  return { service, env };
+}
+
 // The org's endpoint by id, or the 400 (another org's id is the same 400:
 // never found in this context).
 function parseMcpEndpointId(db, value) {

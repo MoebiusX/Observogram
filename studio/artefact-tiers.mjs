@@ -142,7 +142,10 @@ export function packArtefacts(layered) {
 //   mttx        { declared, mttd, mttr, mttd95, mttr95, scaffold, measured } — the pack's MTTD / MTTR
 //               targets; `declared` only when they are the repository's own, not the scan's
 //               placeholder. `measured`: the newest chaos run recorded in the repository with an
-//               observed MTTD ({ mttd, at, experiment, outcome }), else null — nothing measures MTTR
+//               observed MTTD ({ mttd, at, experiment, outcome }), else null — nothing measures MTTR.
+//               `runs`: every chaos experiment's recorded run, newest first ({ experiment, at,
+//               outcome, environment (the run's, else the experiment's, else null), mttd | null }),
+//               for a reader that must pick the run of one environment and say a failed one as failed
 //   objectives  { total, withoutAlert } — objectives, and those no burn-rate alert names
 //   detail, machinery  { count, families: [{ family, count, words }] } — most first
 export function declaredByTier(layered) {
@@ -150,6 +153,7 @@ export function declaredByTier(layered) {
   const scaffolds = {};
   let baselines = null;
   let measured = null;
+  const runs = [];
   const slos = [];
   const alerted = new Set();
   for (const a of packArtefacts(layered)) {
@@ -162,6 +166,13 @@ export function declaredByTier(layered) {
     if (family === 'slo') slos.push(a);
     if (family === 'burn_rate') for (const r of Array.isArray(a.refs) ? a.refs : []) alerted.add(String(r));
     const run = family === 'chaos' ? a.spec?.last_result : null;
+    if (isObj(run) && typeof run.at === 'string' && Number.isFinite(Date.parse(run.at)) && typeof run.outcome === 'string') {
+      runs.push({
+        experiment: String(a.spec?.id || a.title || ''), at: run.at, outcome: run.outcome,
+        environment: typeof run.environment === 'string' && run.environment ? run.environment : (typeof a.spec?.environment === 'string' && a.spec.environment ? a.spec.environment : null),
+        mttd: typeof run.observed_mttd === 'string' ? run.observed_mttd : null,
+      });
+    }
     if (isObj(run) && typeof run.observed_mttd === 'string' && typeof run.at === 'string' && Number.isFinite(Date.parse(run.at))
       && (!measured || Date.parse(run.at) > Date.parse(measured.at))) {
       measured = { mttd: run.observed_mttd, at: run.at, experiment: String(a.spec?.id || a.title || ''), outcome: String(run.outcome || '') };
@@ -180,6 +191,7 @@ export function declaredByTier(layered) {
     mttd95: typeof b.mttd_target_p95 === 'string' ? b.mttd_target_p95 : null,
     mttr95: typeof b.mttr_target_p95 === 'string' ? b.mttr_target_p95 : null,
     measured,
+    runs: runs.sort((x, y) => Date.parse(y.at) - Date.parse(x.at)),
   };
   const withoutAlert = slos.filter((s) => {
     const name = String(s.defines || '');

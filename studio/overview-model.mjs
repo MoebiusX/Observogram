@@ -1158,7 +1158,7 @@ export function buildOverviewModel(input = {}) {
     diagnostic = null, diagnosticError = null, decision = null, journeys = null, journeysError = null, run = null,
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
     layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
-    listable = false, gradeSwitches = false,
+    listable = false, gradeSwitches = false, controlRoom = false, controlRoomOpen = false,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -1238,8 +1238,22 @@ export function buildOverviewModel(input = {}) {
     // board graded (boardComparison), null while nothing graded it.
     compare: graded && journey ? boardComparison({ journey, run, catalog, pack: picked.pack, off, aside }) : null,
     grade, still, next, primary, productName, layout, board,
+    // The control room (control-room-model.mjs): offered when the host wires
+    // it (`controlRoom`) — a read of the environment's live endpoint, so the
+    // environment must name one and the person must be allowed to read live.
+    ...(controlRoom ? { controlRoom: controlRoomOffer(picked, access, controlRoomOpen) } : {}),
     ...(startHere ? { start: { a: null }, sources: sourcesOf(access) } : {}),
   };
+}
+
+// The control room's button on the board: offered, or why not (the button is
+// then drawn unavailable and says so when pressed).
+export function controlRoomOffer(picked, access, open) {
+  const env = (picked.service?.environments || []).find((e) => e.name === picked.env) || null;
+  if (access?.canWrite === false) return { offered: false, open: false, reason: access.reason || 'Reading live is not open to your role here.' };
+  if (!env) return { offered: false, open: false, reason: `${picked.service?.name || 'This service'} has no environment yet: add one, with the live endpoint that reads it.` };
+  if (!env.mcpEndpoint) return { offered: false, open: false, reason: `${picked.env} has no live endpoint yet: Change on the service list chooses one.` };
+  return { offered: true, open: !!open, reason: null };
 }
 
 // ---------- the service list: Overview's front door ----------

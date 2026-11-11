@@ -86,14 +86,14 @@ import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { WAYS as SERVICE_WAYS, folderRefusal, journeyPackBSource, positiveId, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
+import { folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { controlRoomRoutes } from './routes/control-room.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
 import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
 import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug } from './store/services.mjs';
-import { listEnvironments as listEnvironmentsOf } from './store/environments.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
 import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
@@ -884,6 +884,7 @@ app.use(auditRoutes({ authorize }));
 // live file and no pack; the live jobs — /api/mcp/jobs, a snapshot or a
 // draft (draftFromMcp, below) run in the server's memory, polled by id.
 app.use(liveRoutes({ authorize, draftFromMcp }));
+app.use(controlRoomRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -1418,7 +1419,7 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
 // its vantage (it read nothing). A failed keep never fails the run: the
 // answer carries `livePackError`, and one line goes to stderr.
 const JOURNEY_LIVE_SOURCE = 'journey-live:';
-const serviceJourneyName = (slug, env) => `${slug}.${env}`.replace(/[^A-Za-z0-9._-]/g, '_');
+
 function journeyLiveLabel(def) {
   const service = def.service && def.env ? getServiceBySlug(currentStore(), def.service) : null;
   return service && def.name === serviceJourneyName(service.slug, def.env) ? `${service.name} · ${def.env} · live` : `${def.name} · live`;
@@ -1476,17 +1477,9 @@ function livePacksByJourney() {
 // and the journey.run row.
 app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async (req, res) => {
   const db = currentStore();
-  const id = positiveId(req.params.id);
-  const service = id === null ? null : getService(db, id);
-  if (!service) return res.status(404).json({ ok: false, error: SERVICE_WAYS.noService(req.params.id) });
-  const envs = listEnvironmentsOf(db, service.id);
-  const envName = typeof req.body?.env === 'string' ? req.body.env.trim() : '';
-  const env = envName ? envs.find((e) => e.name === envName) : (envs.length === 1 ? envs[0] : null);
-  if (!env) {
-    const error = envName ? `${service.name} has no environment "${envName}" — add it to the service first`
-      : envs.length ? `name the environment to run: ${envs.map((e) => e.name).join(', ')}` : `${service.name} has no environment yet — add one, with the MCP endpoint that reads it`;
-    return res.status(envName ? 404 : 400).json({ ok: false, error });
-  }
+  const picked = pickServiceEnvironment(db, req.params.id, req.body?.env);
+  if (picked.status) return res.status(picked.status).json({ ok: false, error: picked.error });
+  const { service, env } = picked;
   if (!service.repository) {
     return res.status(409).json({ ok: false, error: `${service.name} names no repository yet — say where its declaration lives: GitHub, Azure DevOps or a folder on the server` });
   }

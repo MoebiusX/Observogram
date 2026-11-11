@@ -120,9 +120,13 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
+import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
+import { createControlRoomDriver } from './control-room-api.mjs';
+import { buildControlRoomModel } from './control-room-model.mjs';
+import { declaredByTier } from './artefact-tiers.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -900,6 +904,7 @@ export function renderMainView() {
   // and syncSettingsEditor draw or clear them).
   syncServiceEditor();
   syncSettingsEditor();
+  syncControlRoom();
   if (state.mode === 'home') {
     if (state.homeVariant === 'gate') renderServiceGate();
     else renderHomeView();
@@ -1989,7 +1994,88 @@ function overviewModel() {
     layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
     listable: serviceListAvailable(), gradeSwitches: true,
+    controlRoom: true, controlRoomOpen: controlRoom.state().open,
   });
+}
+
+// ---------- the control room: the board's live panel ----------
+//
+// control-room-model.mjs keeps the panel's state, control-room-api.mjs reads
+// (POST /api/services/:id/control-room) and repeats the read while it is open,
+// control-room-view.mjs draws it into its own host on <body>: the board
+// repaints on every check, the panel never with it.
+const controlRoom = createControlRoomDriver({
+  onChange: () => drawControlRoom(),
+  visibility: {
+    hidden: () => document.hidden,
+    subscribe: (fn) => { document.addEventListener('visibilitychange', fn); return () => document.removeEventListener('visibilitychange', fn); },
+  },
+});
+function controlRoomHost() {
+  let el = document.getElementById('ov-cr-host');
+  if (!el) { el = document.createElement('div'); el.id = 'ov-cr-host'; document.body.appendChild(el); }
+  return el;
+}
+// The MTTD / MTTR targets the repository states, and the newest chaos run that measured MTTD;
+// { unread } while the service's saved check is not read (loading, failed, never run).
+function controlRoomTargets() {
+  if (!overviewFacts.loaded || overviewFacts.layeredError || !overviewFacts.layered) return { unread: true };
+  const m = declaredByTier(overviewFacts.layered).mttx;
+  // Every recorded chaos run (the model picks this environment's newest and says a failed one as failed).
+  return { declared: m.declared, mttdTarget: m.mttd, mttrTarget: m.mttr, runs: Array.isArray(m.runs) ? m.runs : [] };
+}
+function drawControlRoom() {
+  const st = controlRoom.state();
+  const model = st.open ? buildControlRoomModel({ state: st, serviceName: overviewService()?.name || '', envName: st.env || '', mttx: controlRoomTargets(), now: Date.now() }) : null;
+  // The board makes room for the open panel on a very wide screen (overview.css .ov-cr-open).
+  document.body.classList.toggle('ov-cr-open', !!st.open);
+  if (!st.open && !document.getElementById('ov-cr-host')) return;
+  renderControlRoom(controlRoomHost(), model, { overview: overviewActions });
+  placeUnderHead();
+  const door = document.querySelector('#layer-view [data-ux-action="ov-control-room"]');
+  if (door) door.setAttribute('aria-expanded', st.open ? 'true' : 'false');
+}
+// The panel starts below the board's context bar, its door in sight (control-room-view.mjs
+// placeControlRoom). renderMainView empties the board before it syncs the panel and draws the board
+// after: placed now when the bar is there, and again once the board is drawn (the last value stays
+// meanwhile, so the panel never jumps over the bar).
+function placeUnderHead() {
+  if (!controlRoom.state().open) return;
+  const head = () => document.querySelector('#layer-view .ov-head');
+  if (head()) placeControlRoom(head());
+  requestAnimationFrame(() => { if (controlRoom.state().open && head()) placeControlRoom(head()); });
+}
+window.addEventListener('resize', () => placeUnderHead());
+// Off the board, it closes; on another service or environment, it reads that one — when the board
+// offers it there (the door's own rule: a live endpoint, a role that may read live).
+function syncControlRoom() {
+  const st = controlRoom.state();
+  if (!st.open) return;
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!onOverviewBoard() || !picked.service) { controlRoom.close(); return; }
+  if (!controlRoomOffer(picked, state.access, true).offered) { closeControlRoom(); return; }
+  if (`${picked.service.id}:${picked.env ?? ''}` !== st.key) controlRoom.open(picked.service.id, picked.env);
+  else drawControlRoom();
+}
+function closeControlRoom() {
+  // The focus goes back to the door when it was in the panel (Close, Escape) or would be lost with
+  // it; never taken from where the reader is on the board. The door, offered or not (an environment
+  // that lost its endpoint draws it unavailable).
+  const active = document.activeElement;
+  const inPanel = !active || active === document.body || !!document.getElementById('ov-cr-host')?.contains(active);
+  controlRoom.close();
+  if (!inPanel) return;
+  // Closed from a board repaint (renderMainView syncs the panel before it draws the board): the
+  // door is there once the board is drawn.
+  const door = () => document.querySelector('#layer-view .ov-head__live');
+  if (door()) door().focus({ preventScroll: true });
+  else requestAnimationFrame(() => door()?.focus?.({ preventScroll: true }));
+}
+function toggleControlRoom() {
+  if (controlRoom.state().open) { closeControlRoom(); return; }
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!picked.service || !controlRoomOffer(picked, state.access, false).offered) return;
+  controlRoom.open(picked.service.id, picked.env);
 }
 
 // A criterion switched off, or on again, for the service on the board
@@ -2596,7 +2682,7 @@ async function runOverviewCheck() {
   // The repaint replaced the button the user pressed: keyboard focus goes
   // back to it (or to the next step's button when there is no Check now).
   // Not while a reason is being typed: the next key would press the button.
-  if (state.mode === 'overview' && !document.activeElement?.matches?.('[data-grade-reason]')) {
+  if (state.mode === 'overview' && !document.activeElement?.matches?.('[data-grade-reason]') && !document.getElementById('ov-cr-host')?.contains(document.activeElement)) {
     const back = document.querySelector('#layer-view .ov-check') || document.querySelector('#layer-view .ov-next__btn');
     back?.focus?.({ preventScroll: true });
   }
@@ -2627,6 +2713,9 @@ const overviewActions = {
   upload: (slot) => { overviewStart = startChoose(overviewStart, slot); $('#file-input')?.click(); },
   resetStart: () => { overviewStart = START_IDLE; renderMainView(); },
   explain: explainUnavailable,
+  toggleControlRoom,
+  closeControlRoom,
+  refreshControlRoom: () => controlRoom.refresh(),
   // The service list (renderServiceList) and the board's way back to it.
   backToList: enterOverviewList,
   addService: () => openListForm(null, null),

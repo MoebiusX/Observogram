@@ -3,8 +3,11 @@
 // createMcpClient({ mcpUrl, mcpAuth, timeoutMs, transport, signal, maxAnswerBytes }) returns the
 // { rpc, notify, callTool } trio the fetch-live CLI, the fixture recorder,
 // the live probes and the studio server all drive (tools/fetch-live-pack.mjs
-// re-exports it with the Node-side defaults filled in). Every request —
-// initialize, notifications/initialized, tools/list, tools/call — goes
+// re-exports it with the Node-side defaults filled in), and end(): the
+// session's HTTP DELETE (the transport's "SHOULD" for a client done with a
+// session), sent only when the server gave a session id, its answer
+// ignored, never thrown. Every request — initialize,
+// notifications/initialized, tools/list, tools/call, the DELETE — goes
 // through the single private send() below, which is where the transport
 // hook (docs/MCP_INTEGRATION.md "Transport hook") is applied.
 //
@@ -240,8 +243,10 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     return v;
   };
 
-  async function send(method, params, { notification = false } = {}) {
-    signal?.throwIfAborted();
+  async function send(method, params, { notification = false, terminate = false } = {}) {
+    // The session's end is sent even after the caller's cancel (a read cut at its deadline still
+    // ends its session), on its own timeout.
+    if (!terminate) signal?.throwIfAborted();
     const t = await transportReady;
     const label = `transport hook ${t.hookPath ?? '(inline)'}`;
     const fault = (text, cause) => new TransportHookError(`${label}: ${text}`, { hookPath: t.hookPath, cause });
@@ -295,15 +300,21 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     // name and code, cause kept), only its message changes; a native
     // rejection that holds no secret is rethrown as it was.
     const fetcher = t.fetchImpl || globalThis.fetch;
-    const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
+    const body = terminate ? undefined : JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
     let res;
-    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, redirect: 'manual', signal: requestSignal() }); }
+    try { res = await fetcher(url, { method: terminate ? 'DELETE' : 'POST', headers: reqHeaders, ...(body === undefined ? {} : { body }), redirect: 'manual', signal: terminate ? AbortSignal.timeout(timeoutMs) : requestSignal() }); }
     catch (e) {
       if (!t.fetchImpl && redact(e?.message ?? e) === String(e?.message ?? e)) throw e;
       const err = new Error(redact(e?.message ?? e), { cause: e });
       if (e?.name && e.name !== 'Error') err.name = e.name;
       if (e?.code !== undefined) err.code = e.code;
       throw err;
+    }
+    // The session's end: whatever it answers (405 is allowed), nothing of it is read.
+    if (terminate) {
+      try { await res?.body?.cancel?.(); } catch { /* nothing to release */ }
+      session = null;
+      return undefined;
     }
     if (t.fetchImpl && !(res && typeof res.ok === 'boolean' && typeof res.status === 'number'
         && typeof res.headers?.get === 'function' && typeof res.text === 'function' && typeof res.json === 'function')) {
@@ -395,5 +406,12 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     return redactAnswer(parsedText);
   }
 
-  return { rpc, notify, callTool };
+  // The session's DELETE, once, when there is a session; a failure is not the caller's.
+  async function end() {
+    if (!session) return false;
+    try { await send('session/end', null, { terminate: true }); return true; }
+    catch { session = null; return false; }
+  }
+
+  return { rpc, notify, callTool, end };
 }
