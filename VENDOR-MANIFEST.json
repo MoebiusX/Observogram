@@ -976,8 +976,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/neuron-model.mjs": {
-      "sha256": "82d19ffc0157828951f9cda40b43420af6d8c5ea44cba585603e334505ce1a45",
-      "bytes": 29589,
+      "sha256": "15a221abe517bf1c12592991cd3eb2e62d0cb39d8486dad161e7376d83c11975",
+      "bytes": 29837,
       "exports": [
         "ATTENTION_REASONS",
         "BLAST_FIELDS",

@@ -435,10 +435,10 @@ export function buildEvidenceRows(diagnostic) {
     return { field, exp, obs: c?.detail || '—', pass: !!c?.pass, score: c?.score, informational: informational || c?.applies === false };
   };
   return [
-    row('spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4)', 'multi-modal'),
+    row('spec.telemetry.backends[].signal', 'metrics + logs + traces (≥ 3 of 4); the points follow the kinds declared, of 4', 'multi-modal'),
     row('spec.otel.sdk.propagators', 'includes tracecontext', 'correlated'),
     row('spec.slos[].objective + spec.baselines', '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared', 'calibrated'),
-    row('posture matrix · 4 layers × 10 mechanisms', 'average ≥ 50% observed', 'comprehensive'),
+    row('posture matrix · 4 layers × 10 mechanisms', 'average ≥ 50% observed; the points follow the average', 'comprehensive'),
     row('spec.remediation[]', '≥ 1 remediation runbook declared (informational — not scored)', 'actionable', true),
     row('spec.validation.chaos_experiments[]', '≥ 1 chaos experiment declared', 'chaos-validated'),
     row('requirement derivation graph · fallback repo-vs-live diff / mcp probes',

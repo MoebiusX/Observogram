@@ -37,7 +37,7 @@ import {
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
-import { instrumentGradeFor, GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
+import { instrumentGradeFor, GRADE_CRITERION_KEYS, GRADE_SCHEMA } from '../studio/diagnostic-grade.mjs';
 import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from '../studio/grade-criteria-ui.mjs';
 import {
   offSet, toggleOff, whatIfChanges, whatIfWords, gradeScale, gradeScaleHtml, verdictBarHtml, whatIfBarHtml,
@@ -57,10 +57,12 @@ const services = fixture('services').services;
 const packs = fixture('packs').packs;
 const journeys = fixture('journeys').journeys;
 // The recorded runs carry grade schema 2; the board explains a run of the
-// engine's current schema only (studio/overview-model.mjs GRADE_SCHEMA), so
-// the tests read them re-stamped as schema 4 — a schema-2 run explains
+// engine's current schema only (studio/diagnostic-grade.mjs GRADE_SCHEMA), so
+// the tests read them re-stamped as the current one — a schema-2 run explains
 // nothing, pinned in the gradeWhy test below.
-const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: 4 } });
+// Its score is re-scored too: the seven lines it explains under schema 5 (Multi-modal 0.75, Comprehensive 0.35,
+// the promises 0.84) add up to 4.94 of 7.
+const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: GRADE_SCHEMA, score: Math.round(4.94 / 7 * 1000) / 10 } });
 const recordedRun = fixture('krystaline-run');
 const run = restamp(recordedRun);
 
@@ -77,14 +79,14 @@ const HOUR = 3600e3;
 // The pack-alone diagnostic (computeDiagnosticGrade on Pack A) and the decision (buildAssessmentDecision), minimal.
 const diagnostic = { overall: { instrumentGrade: { letter: 'C', tier: 'c', label: 'Field Grade', blurb: '…' }, verdict: { word: 'Not yet diagnostic-grade' }, audit: { scorePctExact: 43 } } };
 const decision = { causes: [{ title: 'Nothing live has been checked' }, { title: 'Not every signal type is declared' }, { title: 'Whole layers are unobserved' }, { title: 'a fourth' }] };
-// The same diagnostic with the engine's criteria (grade schema 4), as computeDiagnosticGrade writes them for the demo pack alone.
+// The same diagnostic with the engine's criteria (grade schema 5), as computeDiagnosticGrade writes them for the demo pack alone.
 const diagnosticFull = {
-  ...diagnostic, gradeSchema: 4,
+  ...diagnostic, gradeSchema: GRADE_SCHEMA,
   coverage: { criteria: [
-    { key: 'multi-modal', label: 'Multi-modal', pass: true, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
+    { key: 'multi-modal', label: 'Multi-modal', pass: true, score: 0.75, detail: '3 of 4 signals declared as backends (metrics, traces, logs)' },
     { key: 'correlated', label: 'Correlated', pass: true, detail: 'tracecontext propagator declared' },
     { key: 'calibrated', label: 'Calibrated', pass: true, detail: 'MTTD/MTTR baselines + 18 SLOs with explicit objective' },
-    { key: 'comprehensive', label: 'Comprehensive', pass: false, detail: '35% average observed across infra · platform · app · ux' },
+    { key: 'comprehensive', label: 'Comprehensive', pass: false, score: 0.35, detail: '35% average observed across infra · platform · app · ux' },
   ] },
   trust: { criteria: [
     { key: 'chaos-validated', label: 'Chaos-validated', pass: false, detail: 'no chaos experiment declared - the repository scan cannot detect chaos tooling', declared: 0, scaffolds: 0, unobserved: { repository: 'the repository scan has no chaos-experiment detector', live: null }, fromScan: true },
@@ -355,24 +357,25 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
     ['yes', 'Normal is defined with numbers: 18 objectives, with detection and repair baselines.'],
   ];
   const lacks = [
-    ['no', 'Coverage reaches only 35 in 100 across infrastructure, platform, application and user experience.'],
+    // Comprehensive earns its coverage (grade schema 5): 0.35 of a point, short of the bar of 50 — a partly.
+    ['partly', 'Coverage reaches only 35 in 100 across infrastructure, platform, application and user experience; the bar is 50.'],
     ['no', 'No chaos experiment is declared — the repository scan cannot detect chaos tooling.'],
   ];
   const rows = (why) => why.map((w) => [w.ok, w.text]);
   // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
   const live = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }));
-  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85."], ...lacks]);
-  assert.equal(live.points, '4.8 of 7 points. B+ starts at 5.3.');
+  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85."], lacks[1]]);
+  assert.equal(live.points, '4.9 of 7 points. B+ starts at 5.3.', 'Multi-modal 0.75 and Comprehensive 0.35 among them');
   // The repository alone: the two live criteria say so, and score nothing.
   const alone = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: null, now: NOW }));
   assert.deepEqual(rows(alone.why), [...has, ...lacks, ['no', 'Nothing live has been checked, so no promise is confirmed live.'], ['no', 'Never checked against live.']]);
-  assert.equal(alone.points, '3 of 7 points. B starts at 4.4.');
+  assert.equal(alone.points, '3.1 of 7 points. B starts at 4.4.');
   // Against a recording: the words say so.
   const recorded = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey: fileJourney, now: NOW }));
-  assert.deepEqual(rows(recorded.why).slice(3, 5), [['yes', 'Checked against a live recording 2 hours ago.'], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up in the recording; the bar is 85."]]);
+  assert.deepEqual(rows(recorded.why).slice(3, 6), [['yes', 'Checked against a live recording 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up in the recording; the bar is 85."]]);
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
-  assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.8 of 7 points. B starts at 4.4.']);
+  assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.9 of 7 points. B starts at 4.4.']);
   // A Pack B with no refresh time (a pack file): the run records the age as null and the engine scores Fresh = no.
   // Number(null) is 0 — "zero hours old" — which counted a point the engine never gave, so the list no longer added
   // up to the letter and the sanity guard hid it. Null, and no freshness at all, are undated: Fresh says no, the list shows.
@@ -380,17 +383,28 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   for (const [what, freshness] of [['null age', { liveAgeHours: null, refreshedAt: null }], ['no freshness', undefined]]) {
     const undated = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...undatedRun, freshness }, journey: fileJourney, now: NOW }));
     assert.equal(undated.why.length, 7, `${what}: the list is offered`);
-    assert.deepEqual([undated.letter, rows(undated.why).at(-1), undated.points], ['C', ['no', 'The recording does not say when it was taken, so it does not count as recent.'], '3.8 of 7 points. B starts at 4.4.'], what);
+    assert.deepEqual([undated.letter, rows(undated.why).at(-1), undated.points], ['C', ['no', 'The recording does not say when it was taken, so it does not count as recent.'], '3.9 of 7 points. B starts at 4.4.'], what);
   }
-  // Nothing when it would not add up: another grade schema, a score the lines do not reach, drift scored on another construct, a diagnostic without the criteria.
-  for (const [what, over] of [['schema', { grade: { ...run.grade, schema: 1 } }], ['score', { grade: { ...run.grade, score: 30, letter: 'D', letterLabel: 'Consumer Grade' } }], ['construct', { grade: { ...run.grade, driftConstruct: 'diff-buckets' } }]]) {
+  // A run scored under another grade schema is not the letter (schema 5 changed how Multi-modal and Comprehensive
+  // score): the board grades the repository alone, says why, and explains that letter instead.
+  for (const schema of [1, 4]) {
+    const older = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, grade: { ...run.grade, schema } }, journey, now: NOW }));
+    assert.deepEqual([older.basis, older.letter, older.source, older.points], ['repository', 'C', 'Graded from the repository alone: how the grade scores changed since the last live check. Check again to grade against live.', '3.1 of 7 points. B starts at 4.4.'], `schema ${schema}`);
+    // The live check happened; it does not count for this letter — never "never checked".
+    assert.deepEqual(rows(older.why).slice(-2), [['no', 'The last check does not count for this letter, so no promise is confirmed live.'], ['no', 'Checked before, but that check does not count for this letter.']], `schema ${schema}: the live lines`);
+    assert.equal(gradeWhy({ diagnostic: diagnosticFull, run: { ...run, grade: { ...run.grade, schema } }, letter: run.grade.letter, score: run.grade.score, now: NOW }).why.length, 0, `a schema-${schema} run explains nothing`);
+  }
+  // A record that names no schema is not judged by it.
+  assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, grade: { ...run.grade, schema: undefined } }, journey, now: NOW })).basis, 'live');
+  // Nothing when it would not add up: a score the lines do not reach, drift scored on another construct, a diagnostic without the criteria.
+  for (const [what, over] of [['score', { grade: { ...run.grade, score: 30, letter: 'D', letterLabel: 'Consumer Grade' } }], ['construct', { grade: { ...run.grade, driftConstruct: 'diff-buckets' } }]]) {
     const m = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, ...over }, journey, now: NOW }));
     assert.deepEqual([m.why, m.points], [[], ''], what);
   }
   assert.deepEqual(gradeWhy({ diagnostic, run, letter: 'B', score: 69, now: NOW }), { why: [], points: '' }, 'the minimal diagnostic carries no criteria');
   assert.equal(gradeWhy({ diagnostic: diagnosticFull, letter: 'C', score: 43 }).why.length, 7);
   // The top of the ladder names no next band.
-  const allPass = (list) => list.map((c) => ({ ...c, pass: true }));
+  const allPass = (list) => list.map((c) => ({ ...c, pass: true, ...(typeof c.score === 'number' ? { score: 1 } : {}) }));
   const top = gradeWhy({
     diagnostic: { ...diagnosticFull, coverage: { criteria: allPass(diagnosticFull.coverage.criteria) }, trust: { criteria: allPass(diagnosticFull.trust.criteria) } },
     run: { ...run, traceability: { ...run.traceability, integrityPct: 100 }, grade: { ...run.grade, score: 100, letter: 'A+' } }, letter: 'A+', score: 100, now: NOW,
@@ -762,7 +776,7 @@ test('renderOverview: the four pieces, one primary button, the sentences as the 
   // With the engine's criteria: Why this grade, closed — the points line, then a pill and a sentence per criterion; still one primary.
   const full = overviewContainer();
   renderOverview(full, screen({ diagnostic: diagnosticFull }), host);
-  assert.ok(full.innerHTML.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list"><li class="ov-gw ov-gw--yes"><span class="og-pill og-pill--ok ov-gw__pill">Yes</span><span class="ov-gw__text">3 of 4 kinds of signal are collected: metrics, traces, logs.</span></li>'), 'the grade disclosure');
+  assert.ok(full.innerHTML.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.9 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list"><li class="ov-gw ov-gw--yes"><span class="og-pill og-pill--ok ov-gw__pill">Yes</span><span class="ov-gw__text">3 of 4 kinds of signal are collected: metrics, traces, logs.</span></li>'), 'the grade disclosure');
   assert.ok(full.innerHTML.includes('<li class="ov-gw ov-gw--partly"><span class="og-pill og-pill--warn ov-gw__pill">Partly</span>') && full.innerHTML.includes('<li class="ov-gw ov-gw--no"><span class="og-pill og-pill--fail ov-gw__pill">No</span>'));
   assert.equal(countOf(full.innerHTML, 'og-btn--primary'), 1, 'still one primary');
   assert.ok(!html.includes('ov-live__error'), 'no start error: no callout');
@@ -1144,7 +1158,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<div class="ov-grade__label">Industrial grade</div>') && html.includes('<div class="ov-grade__word">Almost diagnostic-grade</div>'));
   assert.ok(html.includes('<div class="ov-rules ov-rules--warn" title="12 of 15 required rules met for a tier 2 service."><div class="ov-rules__n"><b>12</b><span class="ov-rules__of">/ 15</span></div><div class="ov-rules__bar" role="img" aria-label="12 of 15 required rules met"><span style="width:80%"></span></div><span class="ov-rules__text">required rules met · tier 2</span></div>'));
   // The seven rows are behind Why this grade, closed, whatever room the screen has: the reader opens them.
-  assert.ok(html.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.8 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'the seven rows behind a closed disclosure');
+  assert.ok(html.includes('<details class="ux-disclosure ov-grade__why"><summary>Why this grade</summary><div class="ux-disclosure-body"><p class="ov-grade__points og-muted">4.9 of 7 points. B+ starts at 5.3.</p><ul class="ov-gw-list ov-gw-list--open">'), 'the seven rows behind a closed disclosure');
   assert.ok(!html.includes('<details class="ux-disclosure ov-grade__why" open>') && !html.includes('ov-grade__why--open'), 'never opened for the reader');
   assert.equal(countOf(html, '<li class="ov-gw '), 7);
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
@@ -1520,7 +1534,7 @@ test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 o
   assert.equal(g.why.length, 7, 'offered: 3 + 0.85 + 1 = 4.85 of 7 is the letter\'s 69');
   assert.equal(g.why.find((w) => w.text.startsWith('Of the links in the repository'))?.ok, 'yes', 'at the bar the mark is a yes');
   assert.ok(g.why.some((w) => w.text === "Of the links in the repository's 18 promises, 85 in 100 hold up live; the bar is 85."));
-  assert.equal(g.points, '4.9 of 7 points. B+ starts at 5.3.');
+  assert.equal(g.points, '5 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
 });
@@ -1555,7 +1569,7 @@ test('gradeWhy, grade schema 3 (krystaline audit 2026-11-06): the scan\'s defaul
   for (const w of [scanned, why(layered([REAL_BASE, CHAOS(1)]))]) assert.ok(w.every((x) => !/proven|never been/i.test(x.text)), 'no line without a passing run says recovery was or was not proven');
   // A run graded under schema 2 explains nothing on a schema-4 board.
   assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: recordedRun, letter: recordedRun.grade.letter, score: recordedRun.grade.score, now: NOW }), { why: [], points: '' });
-  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, 4);
+  assert.equal(computeOverviewDiagnostic(layered([REAL_BASE])).gradeSchema, GRADE_SCHEMA);
 });
 
 test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never recorded as run, proven <date>, failed or stale, from the engine\'s proof', () => {
@@ -1589,7 +1603,8 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
 // lines are 4.85 of 6.
 const OFF = [{ key: 'chaos-validated', reason: 'No fault injection here', by: 'ada', at: '2026-11-10T09:00:00.000Z' }];
 const atBarRun = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
-const SIX_SCORE = 4.85 / 6 * 100;
+// Six criteria at the bar under grade schema 5: Multi-modal 0.75, Correlated 1, Calibrated 1, Comprehensive 0.35, Drift-free 0.85, Fresh 1.
+const SIX_SCORE = 4.95 / 6 * 100;
 const offRun = { ...atBarRun, grade: { ...atBarRun.grade, score: SIX_SCORE, letter: instrumentGradeFor(SIX_SCORE).letter, letterLabel: instrumentGradeFor(SIX_SCORE).label, off: ['chaos-validated'] } };
 
 test('criteria a service is not graded on: each line names its criterion; the ones off leave the lines and the points and are listed with why, who and when; a run that graded on other criteria is not the letter', () => {
@@ -1604,14 +1619,14 @@ test('criteria a service is not graded on: each line names its criterion; the on
   assert.deepEqual([six.letter, six.basis, six.criteria], [offRun.grade.letter, 'live', 'Graded on 6 of 7 criteria']);
   assert.equal(six.why.length, 6);
   assert.ok(!six.why.some((w) => w.key === 'chaos-validated'), 'the criterion left out is no reason for the letter');
-  assert.equal(six.points, '4.9 of 6 points. A starts above 5.1.', 'the points and the next band are over six');
+  assert.equal(six.points, '5 of 6 points. A starts above 5.1.', 'the points and the next band are over six');
   assert.deepEqual(six.notGraded, [{ key: 'chaos-validated', label: 'Chaos-validated', text: 'Chaos-validated is not graded for this service: No fault injection here', by: 'ada, 10 Nov' }]);
   // Bare keys (no record's reason): listed without one.
   assert.deepEqual(gradeWhy({ diagnostic: diagnosticFull, run: offRun, letter: offRun.grade.letter, score: offRun.grade.score, now: NOW, off: ['chaos-validated'] }).notGraded,
     [{ key: 'chaos-validated', label: 'Chaos-validated', text: 'Chaos-validated is not graded for this service.', by: '' }]);
   // Two off: the engine's order, whatever the record's.
   const two = gradeWhy({ diagnostic: diagnosticFull, run: null, letter: 'D', score: NaN, now: NOW, off: [{ key: 'fresh', reason: 'b' }, { key: 'calibrated', reason: 'a' }] });
-  assert.deepEqual([two.why.length, two.notGraded.map((x) => x.key), two.points.startsWith('2 of 5 points.')], [5, ['calibrated', 'fresh'], true]);
+  assert.deepEqual([two.why.length, two.notGraded.map((x) => x.key), two.points.startsWith('2.1 of 5 points.')], [5, ['calibrated', 'fresh'], true]);
   // What names no criterion, or every one, switches nothing off.
   assert.ok(!('notGraded' in gradeWhy({ diagnostic: diagnosticFull, run: atBarRun, letter: 'B', score: 69, now: NOW, off: ['nope', 7, null] })));
   assert.equal(gradeWhy({ diagnostic: diagnosticFull, run: atBarRun, letter: 'B', score: 69, now: NOW, off: GRADE_CRITERION_KEYS }).why.length, 7, 'all seven named: ignored whole, as the engine does');
@@ -1714,6 +1729,10 @@ test('the service list names a letter over fewer criteria where it names the gra
   // The letter of a run graded on other criteria than the service's now: said, both ways.
   assert.equal(rowOf({}, ['chaos-validated']).last.gradeLabel, "Diagnostic grade · graded before this service's criteria changed");
   assert.equal(rowOf({ gradeOff: ['chaos-validated'] }, []).last.gradeLabel, "Diagnostic grade · on 6 of 7 criteria · graded before this service's criteria changed");
+  // A letter scored under another grade schema (the listing's lastRun.gradeSchema) is said too; the current one, or none named, is not.
+  assert.equal(rowOf({ gradeSchema: 4 }).last.gradeLabel, 'Diagnostic grade · graded before the grade changed how it scores');
+  assert.equal(rowOf({ gradeSchema: GRADE_SCHEMA }).last.gradeLabel, 'Diagnostic grade');
+  assert.equal(rowOf({ gradeSchema: null }).last.gradeLabel, 'Diagnostic grade');
   assert.equal(serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, lastRun)], endpoints: [EP], now: NOW }).rows[0].last.gradeLabel, 'Diagnostic grade', 'a record of no switches and a run of none: as before');
   const c = overviewContainer();
   renderServiceList(c, serviceListModel({ services: [svcRow({ gradeOff: offOf(['chaos-validated']) })], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, gradeOff: ['chaos-validated'] })], endpoints: [EP], now: NOW }), formModel(FORM_CLOSED), { overview: {} });
@@ -2967,7 +2986,7 @@ test('checksTableHtml: one row per check under the three questions — result, w
   assert.ok(html.includes('<span class="diag-check-group-q">Are the right signals in place?</span>') && html.includes('<span class="diag-check-group-q">Can you trust what the signals show?</span>') && html.includes('<span class="diag-check-group-q">Can oncall act on what it sees?</span>'), "the board's questions");
   assert.ok(html.includes('<span class="diag-check-group-note">Nothing live backs this pack.</span>'));
   // A row: its chip, its name and what it asks, what was observed, its points.
-  assert.ok(html.includes('<span class="diag-check-label">Multi-modal</span><span class="diag-check-ask">Are metrics, logs and traces all declared?</span>'));
+  assert.ok(html.includes('<span class="diag-check-label">Multi-modal</span><span class="diag-check-ask">Are metrics, logs, traces and profiles declared?</span>'));
   assert.ok(html.includes('<td class="dc-obs">3 of 4 signals</td>') && html.includes('<td class="dc-points"><span class="dc-earned">25</span><span class="dc-worth"> / 25</span></td>'));
   assert.ok(html.includes('<td class="dc-points"><span class="dc-earned">6</span><span class="dc-worth"> / 25</span></td>') && html.includes('title="Partial credit: 25% of this check.">Partial</span>'), 'part credit, rounded');
   assert.ok(html.includes('<td class="dc-obs">no baselines &lt;b&gt;</td>'), "the engine's words escaped");
@@ -3003,6 +3022,18 @@ test('checkDetailHtml / checkSwitchHtml: a row opened says what failed, why it m
     + '</div>');
   const passed = checkDetailHtml(pass);
   assert.ok(passed.includes('<span class="dcm-key">What it found</span><p>3 of 4 signals</p>') && passed.includes('<span class="dcm-key">Why it matters</span>') && !passed.includes('>Fix<'), 'a passing check has nothing to fix');
+  // Met at its bar, earning part of its point (grade schema 5): said as met, with its cost and its fix.
+  const short = checkDetailHtml({ ...pass, earned: 18.75, worth: 25, title: 'Multi-modal is met, but earns 75% of its point', why: 'It is met at its bar, but its points follow how far it gets, so the rest of the point is still to earn.', fix: 'Declare backends for the missing signal types.', cost: 'Partial credit — costs 6 points of the score' });
+  assert.ok(short.includes('<span class="dcm-key">What it found</span><p class="dcm-title">Multi-modal is met, but earns 75% of its point</p><p>3 of 4 signals</p><p class="dcm-cost">Partial credit — costs 6 points of the score</p>')
+    && short.includes('<span class="dcm-key">Fix</span><p>Declare backends for the missing signal types.</p>') && !short.includes('What failed'), 'met, part of the point: what it found, the cost, the fix — never "what failed"');
+  // Expert (studio/compare-view.mjs, browser-only — read as source): while the pack is short of the audit bar,
+  // a check met at its bar that earns part of its point is a gap, said as met; a met row short of its point
+  // carries the cost and fix; a cost of one point is singular.
+  const cv = readFileSync(new URL('../studio/compare-view.mjs', import.meta.url), 'utf8');
+  assert.ok(cv.includes('.filter(c => !c.pass || (!passes && criterionScore(c) < 1))') && cv.includes("if (c.pass) Object.assign(b, metPartialCopy(c), { tone: 'warn' });"), 'the met-but-short gaps');
+  assert.ok(cv.includes("const short = st === 'pass' && score < 1;") && cv.includes('if (short) Object.assign(b, metPartialCopy(c));'), 'the met-but-short rows');
+  assert.ok(cv.includes("return `${r} point${r === 1 ? '' : 's'}`;"), 'one point, not one points');
+  assert.ok(cv.includes('four earn part of their point by how far they get') && !cv.includes('Most checks pass or fail.'), 'How the grade is calculated names the four');
   const left = checkDetailHtml(off);
   assert.ok(left.includes("<span class=\"dcm-key\">Not graded</span><p>Comprehensive is left out of the grade for this service: stop</p><p class=\"dcm-by\">admin, 10 Nov</p><p>What the pack shows: 48% average observed</p>"));
   assert.ok(checkDetailHtml(CHECK_ROWS.groups[1].rows[1]).includes('<p>Fresh is left out of the grade in this what-if; nothing is saved.</p>'));

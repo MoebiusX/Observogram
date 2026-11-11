@@ -413,6 +413,10 @@ export const GRADE_CRITERIA = Object.freeze([
   Object.freeze({ key: 'fresh', label: 'Fresh', group: 'trust' }),
 ]);
 export const GRADE_CRITERION_KEYS = Object.freeze(GRADE_CRITERIA.map((c) => c.key));
+// The grade's schema: computeDiagnosticGrade's `gradeSchema`, a run record's
+// `grade.schema`. A grade of another schema scored by other rules (see the
+// history beside `gradeSchema` below).
+export const GRADE_SCHEMA = 5;
 
 // The criteria a caller leaves out of a grade, from `opts.off`: keys, or
 // objects with a `key` (a service record's switches), in the engine's order.
@@ -448,6 +452,8 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   }
   const allSignals = ['metrics','logs','traces','profiles'];
   const signalsCount = signalsPresent.size;
+  // Met at three kinds of four; the points follow the kinds (grade schema 5):
+  // a kind more is always worth more, with no cliff at the bar.
   const multiModal = signalsCount >= 3;
 
   const otel = L2.find(a => /^OTEL-/.test(a.id || ''));
@@ -495,7 +501,11 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     }
     totalObserved += (present + evidence) / POSTURE_MECHANISMS_PER_LAYER.length;
   }
-  const avgObservedPct = Math.round((totalObserved / POSTURE_LAYERS.length) * 100);
+  // Met at 50 in 100; the points follow the coverage itself (grade schema 5),
+  // as Drift-free's follow the integrity: 48% observed earns 0.48 of the
+  // point, not nothing, and 70% earns 0.7, not all of it.
+  const observedShare = Math.max(0, Math.min(1, totalObserved / POSTURE_LAYERS.length));
+  const avgObservedPct = Math.round(observedShare * 100);
   const comprehensive = avgObservedPct >= 50;
 
   const healings = (L4.healing || []).concat(
@@ -507,6 +517,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   const coverageCriteria = [
     { key: 'multi-modal',   label: 'Multi-modal',   sub: 'metrics + logs + traces + profiles',
       pass: multiModal,
+      score: signalsCount / allSignals.length,
       detail: `${signalsCount} of ${allSignals.length} signals declared as backends` +
               (signalsCount > 0 ? ' (' + [...signalsPresent].join(', ') + ')' : ''),
     },
@@ -536,6 +547,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     },
     { key: 'comprehensive', label: 'Comprehensive', sub: 'coverage spans all layers',
       pass: comprehensive,
+      score: observedShare,
       detail: `${avgObservedPct}% average observed across infra · platform · app · ux`,
     },
   ];
@@ -774,7 +786,12 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // Still 4 with criteria left out (opts.off, 2026-11-10): the rule of each
     // criterion is the same, and a grade over fewer says so itself —
     // `overall.off` here, `grade.off` on a run record.
-    gradeSchema: 4,
+    // Schema 5 (2026-11-11): Multi-modal and Comprehensive earn points by
+    // how far they get — the kinds of signal of four, the average observed —
+    // and are still met at their bars (3 of 4, 50 in 100). Same 7 criteria;
+    // a pack below a bar gains, one above it short of four kinds or of every
+    // mechanism observed loses.
+    gradeSchema: GRADE_SCHEMA,
     coverage: {
       criteria: coverageListed,
       passed:   coveragePassed,

@@ -139,12 +139,13 @@ Upload one or compare two instead*.
 ## Diagnostic Grade Contract
 
 The Diagnostic Grade is the top-level answer. It is scored from seven
-criteria (grade schema 4), plus one informational operability check:
+criteria (grade schema 5), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
 1. **Multi-modal** - at least three of metrics, logs, traces and profiles are
-   declared as telemetry backends.
+   declared as telemetry backends. It earns partial credit: the kinds declared,
+   of four, are the points (0.75 of a point at three, 0.5 at two).
 2. **Correlated** - a tracecontext propagator is declared, with log
    correlation or a logs backend, so traces and logs can be joined.
 3. **Calibrated** - SLOs have numeric objectives and baselines are declared
@@ -155,6 +156,8 @@ criteria (grade schema 4), plus one informational operability check:
 4. **Comprehensive** - coverage spans the major service layers (the average
    of the posture matrix's four layers: infrastructure, platform,
    application, user experience); met when that average reaches 50 in 100.
+   It earns partial credit: the average is the points (0.48 of a point at 48
+   in 100, 0.7 at 70), so a step short of the bar is not worth nothing.
 
 ### Trust - Can We Trust What The Signals Show?
 
@@ -279,13 +282,17 @@ service's checks grades without them. README, *Differences set aside*.
 
 On Overview, *Why this grade* gives the seven criteria as seven plain lines,
 each with *Yes*, *Partly* or *No*, the yeses first, and the sum with the next
-band (*3.8 of 7 points. B starts at 4.4.*). Five lines read the repository
+band (*3.9 of 7 points. B starts at 4.4.*). Five lines read the repository
 alone; *holds up live* and *checked against live* come from the run that
 graded the letter, or say that nothing live was checked. The list is offered
 only when it adds up to the letter on screen (within two points of a hundred),
 only for a run graded under the current schema, and only when that run scored
-Drift-free on the declared requirement chains; a run recorded under an
-earlier schema explains nothing until the next check.
+Drift-free on the declared requirement chains. A run recorded under an
+earlier grade schema is not the board's letter at all: the board grades the
+repository alone and says *how the grade scores changed since the last live
+check*, its two live lines say that check does not count for this letter, and
+the service's row says *graded before the grade changed how it scores*
+(`lastRun.gradeSchema` in `GET /api/journeys`), until the next check.
 
 ## Pack Roles
 

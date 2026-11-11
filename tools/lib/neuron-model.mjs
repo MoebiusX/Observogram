@@ -72,8 +72,11 @@ function pairedDelta(perJourneyPairs) {
 // the newest run whatever it holds (a gap is the honest latest).
 // The grade's pair: the previous score only when it was graded on the same
 // criteria as the latest (the run record's grade.off — the service's switches
-// at that run); a pair over two sets is no delta.
+// at that run) and under the same grade schema (grade.schema, 1 when a record
+// names none: schema 5 scores Multi-modal and Comprehensive by how far they
+// get); a pair over two sets, or two rules, is no delta.
 const gradeOffOf = (r) => (Array.isArray(r?.grade?.off) ? r.grade.off.filter((k) => typeof k === 'string').slice().sort().join(',') : '');
+const gradeTermsOf = (r) => `${Number(r?.grade?.schema ?? 1)}|${gradeOffOf(r)}`;
 function latestAndPreviousGrade(runs) {
   const sorted = sortRunsOldestFirst(runs);
   const last = sorted.length ? sorted[sorted.length - 1] : null;
@@ -81,7 +84,7 @@ function latestAndPreviousGrade(runs) {
   let previous = null;
   for (let i = sorted.length - 2; i >= 0; i--) {
     const v = gradeOf(sorted[i]);
-    if (v !== null) { previous = gradeOffOf(sorted[i]) === gradeOffOf(last) ? v : null; break; }
+    if (v !== null) { previous = gradeTermsOf(sorted[i]) === gradeTermsOf(last) ? v : null; break; }
   }
   return [latest, previous];
 }

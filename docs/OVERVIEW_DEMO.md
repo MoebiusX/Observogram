@@ -72,8 +72,8 @@ somewhere along that chain, and that is the one thing in this grade that
 moves with drift."*
 
 **1:05 — Why this grade** (open on a tall monitor; on a laptop, open it).
-Seven lines, each a yes, a partly or a no, and the sum: *3.8 of 7 points. B
-starts at 4.4.* Say: *"Three things it has, one nearly, three it lacks. That is
+Seven lines, each a yes, a partly or a no, and the sum: *3.9 of 7 points. B
+starts at 4.4.* Say: *"Three things it has, two nearly, two it lacks. That is
 the whole grade; nobody has to take the letter on trust."* Beside the
 shield, the rules: *11 / 15 required rules met · tier 2* (12 before the crawler's invented health canary stopped passing the synthetic-probe rule).
 
@@ -143,16 +143,18 @@ either way.
   tooling and the live side cannot observe it — not that recovery is unproven.
   The seed's pack (`examples/krystaline-repo-carlos.pack.yaml`) was scanned
   on 2026-06-11, before the scan read chaos (0.8.7): it declares no
-  experiment, and schema 4 grades it as schema 3 did. A fresh scan of
+  experiment, and schema 4 graded it as schema 3 did. Schema 5 (0.8.33) lets
+  its three kinds of signal earn 0.75 of a point and its 35 in 100 coverage
+  0.35 — the coverage line reads *partly* — where they earned 1 and 0. A fresh scan of
   krystalinex-core declares five in-process experiments and reads
   "5 chaos experiments declared, never recorded as run."
 - **"The check found 43 differences and the grade went *up*?"** Yes. The
-  repository alone grades D (2 of 7): with nothing live checked, the two
+  repository alone grades D (2.1 of 7): with nothing live checked, the two
   live criteria score nothing. Checked against production it earns *checked
   against live* in full and 0.84 of *holds up live*. The grade says how well
   the service is observed *and verified*; a declaration nobody has checked
   cannot score on verification. The journey's own gate (85) still fails at
-  55, which Overview reads as *Changed*, never as *Check failed*.
+  56, which Overview reads as *Changed*, never as *Check failed*.
 - **"Why is the Grafana part partial?"** The Grafana behind the public MCP
   answers 401 to the dashboards probe, so the live picture is five probe
   families of six; the screen says *live evidence is partial* in Expert and

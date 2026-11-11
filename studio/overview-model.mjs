@@ -29,7 +29,7 @@
 // module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
+import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, GRADE_SCHEMA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
@@ -229,7 +229,10 @@ const asideKey = (run) => (typeof run?.grade?.setAside?.fingerprint === 'string'
 // them) is not the letter either.
 const runTargetsKey = (run) => targetsTermKey(run?.grade?.targets ?? null);
 const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
-const sameTerms = (run, off, aside, targets = '') => offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '') && runTargetsKey(run) === (targets || '');
+// A run graded under another grade schema (its grade.schema) scored by other rules: its letter is
+// not this engine's either. A record that names no schema is not judged by it.
+const otherSchema = (schema) => schema != null && Number(schema) !== GRADE_SCHEMA;
+const sameTerms = (run, off, aside, targets = '') => !otherSchema(run?.grade?.schema) && offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '') && runTargetsKey(run) === (targets || '');
 export function runGradesBoard(run, pack, off = [], aside = '', targets = '') {
   return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
 }
@@ -256,7 +259,8 @@ export function runGradedPack(run, pack) {
 // ---------- why this grade ----------
 //
 // The seven criteria the engine scores (studio/diagnostic-grade.mjs, grade
-// schema 3: one point each, Drift-free fractional), each as one plain
+// schema 5: one point each, Multi-modal, Comprehensive, Chaos-validated and
+// Drift-free fractional), each as one plain
 // sentence with a yes / partly / no mark, the yeses first. Five read the
 // repository alone and come from the pack-alone diagnostic's criteria; the
 // two that need the other side (Drift-free, Fresh) come from the run that
@@ -264,7 +268,6 @@ export function runGradedPack(run, pack) {
 // list is offered only when it adds up to the letter shown (within two
 // points of a hundred): a run of another schema, or a pack whose own
 // annotations already carry live evidence, explains nothing and shows nothing.
-const GRADE_SCHEMA = 4;
 // The lines' criteria, in the order the two builders below return them.
 const REPOSITORY_LINE_KEYS = ['multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 const LIVE_LINE_KEYS = ['drift-free', 'fresh'];
@@ -289,7 +292,13 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
   const kinds = (String(c['multi-modal'].detail).match(/\(([^)]*)\)/) || [])[1] || '';
   const [objectives = 0] = numbersIn(c.calibrated.detail);
   const [coverage = 0] = numbersIn(c.comprehensive.detail);
-  const line = (crit, yes, no) => ({ ok: crit.pass ? 'yes' : 'no', text: crit.pass ? yes : no });
+  // A criterion the engine scores by how far it gets (its `score`: Multi-modal's kinds of four,
+  // Comprehensive's average observed) counts that, so the lines still add up to the letter:
+  // the mark follows the bar, the points follow the score — short of the bar but above
+  // nothing is a "partly".
+  const line = (crit, yes, no) => (typeof crit.score === 'number'
+    ? { ok: crit.pass ? 'yes' : (crit.score > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, crit.score)), text: crit.pass ? yes : no }
+    : { ok: crit.pass ? 'yes' : 'no', text: crit.pass ? yes : no });
   return [
     line(c['multi-modal'],
       `${got} of ${of} kinds of signal are collected${kinds ? `: ${kinds}` : ''}.`,
@@ -304,8 +313,8 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
         : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
       calibratedNo(c.calibrated)),
     line(c.comprehensive,
-      `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience.`,
-      `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience.`),
+      `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`,
+      `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`),
     chaosLine(c['chaos-validated'], liveUnobserved),
   ];
 }
@@ -433,15 +442,19 @@ export function notGradedLines(off) {
 //   off     the criteria the service is not graded on (its record's gradeOff): they leave the
 //           lines and the points, and are listed as `notGraded` ([{ key, label, text, by }],
 //           absent when none is off) — also when the lines themselves are not offered
-export function gradeWhy({ diagnostic = null, run = null, letter = '', score = null, against = 'against live', where = 'live', now = Date.now(), off = [] } = {}) {
+// `checked`: there was a live check, but it does not count for this letter (it lost its vantage, saw
+// less than the one before, or was graded on other terms): the two live lines say so, never "never checked".
+export function gradeWhy({ diagnostic = null, run = null, letter = '', score = null, against = 'against live', where = 'live', now = Date.now(), off = [], checked = false } = {}) {
   const offKeys = gradeOffKeys(off);
   const left = offKeys.length ? { notGraded: notGradedLines(off) } : {};
   const none = { why: [], points: '', ...left };
-  if (run && run.grade?.schema != null && Number(run.grade.schema) !== GRADE_SCHEMA) return none;
-  if (diagnostic?.gradeSchema != null && Number(diagnostic.gradeSchema) !== GRADE_SCHEMA) return none;
+  if (otherSchema(run?.grade?.schema) || otherSchema(diagnostic?.gradeSchema)) return none;
   const fixed = repositoryGradeLines(diagnostic, Array.isArray(run?.packB?.unobserved) ? run.packB.unobserved : []);
   if (!fixed) return none;
-  const live = run ? liveGradeLines(run, { against, where, now }) : [
+  const live = run ? liveGradeLines(run, { against, where, now }) : checked ? [
+    { ok: 'no', text: 'The last check does not count for this letter, so no promise is confirmed live.' },
+    { ok: 'no', text: 'Checked before, but that check does not count for this letter.' },
+  ] : [
     { ok: 'no', text: 'Nothing live has been checked, so no promise is confirmed live.' },
     { ok: 'no', text: 'Never checked against live.' },
   ];
@@ -516,7 +529,8 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
   const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
-  const whatChanged = offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed'
+  const whatChanged = otherSchema(run?.grade?.schema) ? 'how the grade scores changed'
+    : offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed'
     : asideKey(run) !== (aside || '') ? 'what is set aside changed'
       : !runTargetsKey(run) ? 'the grade has counted the MTTD / MTTR targets set in the studio'
         : !targets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
@@ -533,7 +547,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
     ...criteria,
-    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off }),
+    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off, checked: !!(lost || partial || regraded) }),
   };
 }
 
@@ -1546,6 +1560,7 @@ export function repositoryLine(repository, { now = Date.now() } = {}) {
 // the sign).
 // `off`: the criteria the service is not graded on now (its record's gradeOff);
 // `aside`: the name of its set-asides that hold now (serviceAsideKey).
+// A letter scored under another grade schema (the listing's lastRun.gradeSchema) says so too.
 // A row has no grade to ask whether the targets count now. A run that counted targets differs from a
 // service with other targets or none (the board always grades it again then); a run that names none
 // (before any were set, or its Calibrated did not read them) is not flagged — only a grade can tell.
@@ -1569,6 +1584,7 @@ function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
   // the board grades it again.
   const lastAside = typeof last.setAside?.fingerprint === 'string' ? last.setAside.fingerprint : '';
   const before = !ig ? ''
+    : otherSchema(last.gradeSchema) ? ' · graded before the grade changed how it scores'
     : offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed"
       : lastAside !== (aside || '') ? " · graded before this service's set-asides changed"
         : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';

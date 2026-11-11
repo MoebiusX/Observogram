@@ -1009,6 +1009,8 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
           outcome: lastRun.outcome,
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
+          // The grade schema that score was scored under (studio/diagnostic-grade.mjs GRADE_SCHEMA), null when the record names none.
+          gradeSchema: Number.isInteger(lastRun.grade?.schema) ? lastRun.grade.schema : null,
           // The criteria that score left out (the service's switches at that run): [] when all were graded.
           gradeOff: Array.isArray(lastRun.grade?.off) ? lastRun.grade.off.filter((k) => typeof k === 'string').slice(0, 7) : [],
           // The differences that score left out (the service's set-asides at that run), null when none was asked for.

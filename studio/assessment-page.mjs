@@ -29,7 +29,7 @@ const LABEL = Object.fromEntries(GRADE_CRITERIA.map((c) => [c.key, c.label]));
 
 // What each check asks, in plain words: the line under its name in every row.
 export const CHECK_ASKS = Object.freeze({
-  'multi-modal': 'Are metrics, logs and traces all declared?',
+  'multi-modal': 'Are metrics, logs, traces and profiles declared?',
   correlated: 'Can the signals of one request be joined?',
   calibrated: 'Is normal defined with numbers?',
   comprehensive: 'Is every layer observed?',
@@ -346,14 +346,16 @@ const actionBtn = (row) => (row.actionId && row.actionLabel
 // The row, opened: what failed, why it matters, the fix, and where it was read.
 export function checkDetailHtml(row) {
   const failing = row.state === 'fail' || row.state === 'partial' || row.state === 'also';
+  // Met at its bar, earning part of its point (grade schema 5): its cost and fix, said as met.
+  const short = row.state === 'pass' && row.worth > 0 && row.earned < row.worth && !!row.cost;
   const first = failing
     ? col('What failed', para(row.title, 'dcm-title') + para(row.observed) + para(row.cost, 'dcm-cost'))
     : row.state === 'off'
       ? col('Not graded', para(row.saved ? `${row.label} is left out of the grade for this service: ${row.saved.reason || ''}` : `${row.label} is left out of the grade in this what-if; nothing is saved.`)
         + (row.saved?.by ? para(row.saved.by, 'dcm-by') : '') + para(row.observed ? `What the pack shows: ${row.observed}` : ''))
-      : col('What it found', para(row.observed));
+      : col('What it found', (short ? para(row.title, 'dcm-title') : '') + para(row.observed) + (short ? para(row.cost, 'dcm-cost') : ''));
   const why = row.why ? col('Why it matters', para(row.why)) : '';
-  const fix = failing && (row.fix || row.actionId) ? col('Fix', para(row.fix) + actionBtn(row)) : '';
+  const fix = (failing || short) && (row.fix || row.actionId) ? col('Fix', para(row.fix) + actionBtn(row)) : '';
   const read = row.expected || row.field
     ? col('Expected', para(row.expected) + (row.field ? `<span class="dcm-key dcm-key-2">Read from</span><p><code>${escapeHtml(row.field)}</code></p>` : ''))
     : '';
