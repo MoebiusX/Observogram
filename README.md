@@ -64,7 +64,7 @@ environment, with its repository (GitHub, Azure DevOps, a folder or an
 upload), its live
 endpoint and its last check — the grade letter and how much matches live.
 **Run** scans the repository and checks it against live, **Open** draws the
-service's board and **Change** edits where it is. Services a live draft has
+service's board and **Change** edits where it is declared, where it runs and its MTTD / MTTR targets. Services a live draft has
 seen with no repository yet are counted under the list.
 
 ![Overview's service list: two services, each with its GitHub repository, its live MCP endpoint and its last check](docs/img/overview-services.png)
@@ -95,7 +95,12 @@ three columns, every number the engine's own —
   studio (said so: *Set in the studio (lab default), not in the
   repository*), or *Not declared* with what to aim for — *Recommended: MTTD
   ≤ 1 min · MTTR ≤ 5 min (lab default)* and the other profiles behind a fold
-  — with the MTTD a chaos test measured when one recorded it. Under them the detail
+  — with the MTTD a chaos test measured when one recorded it. **Set
+  targets…** on the tile (**Change targets…** once the studio holds some)
+  opens a form with the *Targets* answer alone, the recommended profile
+  chosen; Save brings the board back with them, and a service with no
+  repository or live endpoint yet still gets them. A chaos run that names no
+  environment gives no verdict, so the tile stays amber. Under them the detail
   in one line (*18 indicators · 18 objectives · 208 metrics · …*); the
   machinery (*324 panels · 39 recording rules · …*) and the stack — user
   experience, application, platform, infrastructure, ten kinds of signal
@@ -176,6 +181,8 @@ declared exporters are the service's own.
     target the repository states — else the one set in the studio, said so
     (*Target 5 min · set in the studio*); with neither, the recommended one,
     with no verdict (*Recommended ≤ 5 min (lab default); none declared*).
+    *Set targets…* / *Change targets…* under the two figures opens the
+    same *Targets* form, and Save or Cancel brings the board back.
   - It is rebuilt from the rule evaluator's own firing history (the `ALERTS`
     series that Prometheus, vmalert or a ruler writes), one incident per
     alert name, in 2-minute steps; an alert that pauses for 5 minutes or

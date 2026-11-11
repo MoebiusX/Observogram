@@ -120,7 +120,8 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx } from './overview-model.mjs';
+  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
+  targetsFormOpened, targetsOnlyPlan } from './overview-model.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
@@ -2019,7 +2020,12 @@ function controlRoomHost() {
 // The MTTD / MTTR targets (the repository's, else the studio's, else the recommendation) and every
 // recorded chaos run; { unread } while the service's saved check is not read (overview-model.mjs controlRoomMttx).
 function controlRoomTargets() {
-  return controlRoomMttx({ loaded: overviewFacts.loaded, layered: overviewFacts.layered, layeredError: overviewFacts.layeredError, targets: overviewService()?.targets ?? null });
+  const service = overviewService();
+  return controlRoomMttx({
+    loaded: overviewFacts.loaded, layered: overviewFacts.layered, layeredError: overviewFacts.layeredError, targets: service?.targets ?? null,
+    // Set targets… / Change targets… where the form can open: the service list, a record, a rank that may change it.
+    settable: serviceListAvailable() && Number.isInteger(service?.id) && state.access?.canWrite !== false,
+  });
 }
 function drawControlRoom() {
   const st = controlRoom.state();
@@ -2157,7 +2163,7 @@ function renderOverviewHost(view, tokenDrafts = null) {
   if (overviewScreen === 'list' && serviceListAvailable()) {
     renderServiceList(view, serviceListModelNow(), serviceFormModelNow(), overviewHost, { drafts: tokenDrafts });
     // The focus hint is for the draw that follows the event, never a later repaint.
-    if (listForm.open && listForm.focus) listForm = { ...listForm, focus: null };
+    if (listForm.open && (listForm.focus || listForm.scroll)) listForm = { ...listForm, focus: null, scroll: false };
     return;
   }
   renderOverview(view, overviewModel(), overviewHost);
@@ -2337,6 +2343,11 @@ async function refreshListFacts() {
   const facts = await loadServiceListFacts();
   if (gen !== listGeneration) return;
   listFacts = { ...facts, loaded: true };
+  // The form is drawn anew with the facts: a select of it that had the focus keeps it (the Targets
+  // answer Set targets… opened on, read again as the list arrives; the endpoint). A text field is
+  // left alone: focusing it again would select what is being typed.
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  if (listForm.open && !listForm.focus && active?.tagName === 'SELECT' && active.dataset?.field && active.closest?.('.ov-form')) listForm = { ...listForm, focus: active.dataset.field };
   if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
 }
 
@@ -2374,11 +2385,77 @@ function enterOverviewList() {
 
 const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) || null;
 
-function openListForm(serviceId = null, env = null) {
+// `focus`: the answer to start on (the board's Set targets… opens on the Targets one); `returnTo`:
+// { serviceId, env } — the board it was opened from, which Save and Cancel bring back.
+function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true } = {}) {
   const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources });
-  const focus = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
-  listForm = { ...opened, focus };
+  const first = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
+  listForm = { ...opened, focus: focus || first, returnTo };
+  if (render) renderMainView();
+}
+
+// The board's or the control room's Set targets… / Change targets…: the service's own form, on the
+// service list where it lives, at its Targets answer; Save or Cancel brings the board back.
+// `from`: 'board' (the tile) or 'control-room' (the panel) — where the focus goes back to.
+function openTargetsForm(from = 'board') {
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!serviceListAvailable() || !Number.isInteger(picked.service?.id)) return;
+  const form = targetsFormOpened(state.services, { serviceId: picked.service.id, env: picked.env || null, endpoints: listFacts.endpoints || [], sources: listFacts.sources });
+  if (!form) return;
+  if (controlRoom.state().open) controlRoom.close();
+  const back = { serviceId: picked.service.id, env: picked.env || null, focus: from === 'control-room' ? '[data-ux-action="ov-control-room"]' : '[data-ux-action="ov-mttx-set"]' };
+  enterOverviewList();
+  listForm = { ...form, returnTo: back };
   renderMainView();
+}
+
+// A form closed (Cancel) or saved: back to the board it was opened from — the focus on the control
+// that opened it once the board is drawn (takeBoardFocus) — else the list.
+let boardFocus = null;
+function afterListForm(returnTo) {
+  if (returnTo && Number.isInteger(returnTo.serviceId)) {
+    boardFocus = returnTo.focus || null;
+    openListService(returnTo.serviceId, returnTo.env);
+    return;
+  }
+  renderMainView();
+}
+function takeBoardFocus() {
+  if (!boardFocus || !onOverviewBoard() || typeof document === 'undefined') return;
+  const el = document.querySelector(`.ov-page ${boardFocus}`);
+  if (!el) return;
+  boardFocus = null;
+  el.focus?.({ preventScroll: true });
+  el.scrollIntoView?.({ block: 'nearest' });
+}
+
+// The targets-only form's Save (Set targets…): its own problems, then PATCH { targets } alone —
+// the rest of the record (a repository not added yet, an environment with no endpoint) is not its to check.
+async function saveTargetsForm(nav) {
+  const plan = targetsOnlyPlan(listForm.values, { services: state.services || [], serviceId: listForm.serviceId });
+  if (Object.keys(plan.problems).length) {
+    listForm = { ...listForm, error: formProblemsNote(plan.problems), focus: Object.keys(plan.problems)[0] };
+    renderMainView();
+    return;
+  }
+  listForm = { ...listForm, saving: true, error: null };
+  renderMainView();
+  try {
+    if (plan.patch) await patchService(plan.serviceId, plan.patch);
+  } catch (e) {
+    await refreshServices();
+    listForm = { ...listForm, saving: false, error: e?.message || String(e) };
+    renderMainView();
+    return;
+  }
+  await refreshServices();
+  const returnTo = listForm.returnTo || null;
+  listForm = FORM_CLOSED;
+  dropListFormDraft();
+  announce(plan.patch ? `${plan.name}${plan.envName ? ` · ${plan.envName}` : ''}: MTTD / MTTR targets saved.` : `${plan.name}: the targets are as they were.`);
+  // The person moved elsewhere while it was saved (another service, Expert): leave them there.
+  if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') { renderMainView(); return; }
+  afterListForm(returnTo);
 }
 
 function listFormInput(field, value, { redraw = false } = {}) {
@@ -2386,7 +2463,7 @@ function listFormInput(field, value, { redraw = false } = {}) {
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
   if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
   // Custom targets: straight to the first of their two minute fields; any other choice keeps the select.
-  if (field === 'targetProfile') listForm = { ...listForm, focus: value === MTTX_CUSTOM ? 'targetMttd' : 'targetProfile' };
+  if (field === 'targetProfile') listForm = { ...listForm, focus: value === MTTX_CUSTOM ? 'targetMttd' : 'targetProfile', scroll: value === MTTX_CUSTOM };
   if (redraw) renderMainView();
 }
 
@@ -2398,6 +2475,8 @@ function listFormInput(field, value, { redraw = false } = {}) {
 // so the Run that follows sends it and so does a later one.
 async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (!listForm.open || listForm.saving) return;
+  const nav = navGeneration;
+  if (listForm.targetsOnly) { await saveTargetsForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
   const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
@@ -2435,13 +2514,17 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
     return;
   }
   await refreshServices();
+  const returnTo = listForm.returnTo || null;
   listForm = FORM_CLOSED;
   dropListFormDraft();
   if (token) repoTokens.set(tokenHost, token);
   await refreshListFacts();
   announce(`${plan.name} · ${plan.envName} saved.`);
   if (run) await runListRow(rowKey(serviceId, plan.envName));
-  else renderMainView();
+  // The person moved elsewhere while it was saved: leave them there.
+  else if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') renderMainView();
+  // Opened from the board: the board again, showing what was saved.
+  else afterListForm(returnTo && returnTo.serviceId === serviceId ? { ...returnTo, env: plan.envName } : null);
 }
 
 // A row's Run: the repository scanned again and checked against live
@@ -2568,9 +2651,12 @@ function openListService(serviceId, env) {
 async function refreshOverviewFacts() {
   const gen = ++overviewGeneration;
   const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  // The board's facts redraw the board; on the list they would only redraw an open form under the
+  // person's hands (its focus, an open dropdown), so the list is drawn again only with no form open.
+  const redraw = () => { if (onOverviewBoard() || (state.mode === 'overview' && !listForm.open)) renderMainView(); takeBoardFocus(); };
   if (!picked.service) {
     overviewFacts = { ...emptyOverviewFacts(), loaded: true };
-    if (state.mode === 'overview') renderMainView();
+    redraw();
     return;
   }
   const facts = await loadOverviewFacts({
@@ -2579,7 +2665,7 @@ async function refreshOverviewFacts() {
   });
   if (gen !== overviewGeneration) return;
   overviewFacts = { ...facts, running: false, startError: null, loaded: true };
-  if (state.mode === 'overview') renderMainView();
+  redraw();
 }
 
 // Enter Overview on a service (the remembered one, else the first with a
@@ -2721,7 +2807,8 @@ const overviewActions = {
   editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
   formInput: listFormInput,
   saveService: saveListForm,
-  closeForm: () => { folderGeneration++; listForm = FORM_CLOSED; dropListFormDraft(); renderMainView(); },
+  closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
+  setTargets: (from) => openTargetsForm(from === 'control-room' ? 'control-room' : 'board'),
   browseFolders: listBrowseFolders,
   openFolder: (path) => { listOpenFolder(path); },
   chooseFolder: (path) => { folderGeneration++; listForm = folderBrowseChosen(listForm, path); renderMainView(); },

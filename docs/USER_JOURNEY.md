@@ -432,7 +432,7 @@ Belongs here:
   side did not answer*, or *Not known* when the checks could not be read;
 - **Run** (*Running… Scanning the repository, then checking live*), **Open →**
   (the board, offered when the service has a pack of its own or a check) and
-  **Change** (where it is declared or where it runs);
+  **Change** (where it is declared, where it runs, its MTTD / MTTR targets);
 - **Add a service**, the one primary button: five numbered answers — *1
   Service*, *2 Environment* (prod by default), *3 Repository — where it is
   declared*, *4 Live — where it runs* (one of the org's endpoints, or *A new
@@ -563,7 +563,16 @@ Belongs here:
     MTTR ≤ 5 min* and the other profiles behind a fold — and the MTTD this
     environment's newest chaos run recorded (*over the 5m target*: amber,
     never green; a failed or aborted run said as such), or *Not measured
-    yet*;
+    yet*; **Set targets…** (with none) or **Change targets…** (the studio's)
+    opens a form on the list with the *Targets* answer alone (*MTTD / MTTR
+    targets · Demo · prod*), the recommended profile chosen when there were
+    none; Save (Enter too, never a Run) patches the targets alone, so a
+    service with no repository or endpoint yet still gets them; Save or
+    Cancel brings the board back, the focus on the button; a repository's own
+    targets have no button (they come first); a chaos run that names no
+    environment gives no verdict (amber, never green), and another
+    environment's run is named (*Not measured in prod: a chaos test in
+    staging measured MTTD 4m on 1 Nov.*);
   - *Under it*, the detail in one line (*18 indicators · 18 objectives · 208
     metrics · 11 backends · 8 alert routes · 5 chaos tests*);
   - behind *The machinery and the layers*, the machinery in one line (*324
@@ -644,7 +653,9 @@ Belongs here:
   - **MTTR** and **MTTD** side by side: the median time an incident took to
     clear over the last 30 days with its incident count and p95, against the
     target the repository states, else the studio's (*· set in the studio*),
-    else the recommendation with no verdict; *too few to say* below five; the history's
+    else the recommendation with no verdict, with *Set targets…* / *Change
+    targets…* under them (the panel closes, the form opens at its Targets
+    answer); *too few to say* below five; the history's
     own read time when it is older than the rest; MTTD measured by this
     environment's newest chaos run recorded in the repository (a failed or
     aborted one said as such, with no figure; another environment's named
