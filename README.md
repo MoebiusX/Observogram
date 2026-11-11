@@ -418,7 +418,9 @@ share one closed row, last, with a switch of its own.
 Load the declared repo pack as **Pack A** and the live production pack as
 **Pack B**. Observogram computes the Assessment (the diagnostic grade):
 
-- **Score**: total criteria passed out of 7
+- **Score**: the points the criteria earn, out of 7 — one each; Multi-modal,
+  Comprehensive, Chaos-validated and Drift-free earn part of theirs by how far
+  they get, so there is no cliff at a bar
 - **Coverage**: four checks for "are we observing the right things?"
 - **Trust**: three checks for "can we trust what the signals show?"
 - **Operability**: one informational check (Actionable — runbooks linked),
@@ -447,13 +449,20 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 4):
+The checks are (grade schema 5):
 
 | Area | Criteria | Scored |
 |---|---|---|
 | Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
 | Trust | Chaos-validated, Drift-free, Fresh | yes |
 | Operability | Actionable | no — informational |
+
+Two coverage checks earn their point by how far they get (grade schema 5):
+Multi-modal the kinds of signal declared, of four (3 of 4 earns 0.75), and
+Comprehensive the average observed across the four layers (48 in 100 earns
+0.48). Each is still met at its bar — three kinds, 50 in 100 — but a step
+short of the bar is no longer worth nothing, and the bar is no longer the
+whole point.
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated (a repository states its own
@@ -1451,7 +1460,11 @@ service can switch a criterion off, with a reason:
   `GET /api/journeys`). A step in a score series beside a change there is a
   change of what was graded, not of the service. A run that graded on other
   criteria than the service's now is not the board's letter: the board grades
-  from the repository alone and says to check again.
+  from the repository alone and says to check again. So is a run scored under
+  an earlier grade schema (`grade.schema`; `lastRun.gradeSchema` in
+  `GET /api/journeys`): the board says *how the grade scores changed*, the
+  row *graded before the grade changed how it scores*, and the fleet's grade
+  delta pairs no two runs of different schemas.
 - **The command line and a schedule.** `packc journey run` — which is what a
   schedule runs — has no service record to ask, so the switches ride in the
   check's file: every check the studio saved for the service (its Run's
@@ -1870,8 +1883,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.32 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.32
+docker build -t observogram:0.8.33 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.33
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1934,7 +1947,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.32
+  observogram:0.8.33
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1942,7 +1955,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.32
+    image: observogram:0.8.33
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

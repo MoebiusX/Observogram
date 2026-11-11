@@ -22,7 +22,7 @@ import { escapeHtml } from './util.mjs';
 // panel.
 export const GLOSSARY = {
   'diagnostic-grade': { term: 'Diagnostic grade', plain: 'Assessment', def: 'A letter grade for how well the pack is backed by evidence and how closely it matches the selected baseline. It combines coverage, trust and the audit gate.' },
-  coverage:     { term: 'Coverage', plain: 'Coverage', def: 'How much of the service the pack observes: the grade’s coverage checks (signal types, correlation, calibration, breadth) that pass.' },
+  coverage:     { term: 'Coverage', plain: 'Coverage', def: 'How much of the service the pack observes: the points the grade’s coverage checks earn (signal types, correlation, calibration, breadth).' },
   trust:        { term: 'Trust', plain: 'Trust', def: 'The share of this pack’s claims backed by live evidence rather than declaration alone.' },
   'audit-gate': { term: 'Audit gate', plain: 'Audit requirement', def: 'The minimum evidence the tier requires. A pack can have live signals and still fail it when required evidence is incomplete.' },
   baseline:     { term: 'Target', plain: 'Selected baseline', def: 'The pack you are comparing against — usually the curated repository pack.' },

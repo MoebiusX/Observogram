@@ -14,6 +14,7 @@ import {
   GRADE_CRITERIA,
   GRADE_CRITERION_KEYS,
   gradeOffKeys,
+  GRADE_SCHEMA,
 } from '../studio/diagnostic-grade.mjs';
 
 function assert(condition, message, details) {
@@ -56,6 +57,8 @@ function baseRepoPack() {
         },
         { id: 'MET-prometheus', title: 'Prometheus metrics', spec: { signal: 'metrics' } },
         { id: 'LOG-loki', title: 'Structured logs', spec: { signal: 'logs' } },
+        // All four kinds: Multi-modal earns its whole point (grade schema 5 scores the kinds of four).
+        { id: 'PRF-pyroscope', title: 'Continuous profiles', spec: { signal: 'profiles' } },
       ],
       L4: {
         healing: [{ id: 'HEAL-latency', title: 'Latency runbook' }],
@@ -161,7 +164,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   assert(result.overall.audit.status === 'PASS', 'high traceability integrity plus fresh live evidence should pass', result.overall);
   assert(result.overall.verdict.word === 'Diagnostic-grade', 'passing verdict should be diagnostic-grade', result.overall.verdict);
-  assert(result.gradeSchema === 4, 'grade schema 4 (schema 2 made Actionable informational operability; 3 scaffolds earn nothing; 4 chaos declared vs proven)', result.gradeSchema);
+  assert(result.gradeSchema === 5 && GRADE_SCHEMA === 5, 'grade schema 5 (schema 2 made Actionable informational operability; 3 scaffolds earn nothing; 4 chaos declared vs proven; 5 Multi-modal and Comprehensive earn by how far they get)', result.gradeSchema);
   assert(result.coverage.passed === 4 && result.coverage.total === 4, 'all four coverage clauses should pass (schema 2)', result.coverage);
   assert(result.overall.total === 7, 'overall total is 7 scored criteria (4 coverage + 3 trust)', result.overall);
   assert(closeTo(result.trust.passed, 2.9), 'trust score should include fractional drift fidelity', result.trust);
@@ -564,7 +567,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   // 1. Calibrated: a scaffold baseline is no baseline.
   const scaffoldOnly = grade(withL5([SCAFFOLD_BASE, REAL_CHAOS]));
   const cal = criterion(scaffoldOnly, 'calibrated');
-  assert(scaffoldOnly.gradeSchema === 4, 'grade schema 4 keeps schema 3\'s rule: scaffolds earn nothing', scaffoldOnly.gradeSchema);
+  assert(scaffoldOnly.gradeSchema === 5, 'grade schema 5 keeps schema 3\'s rule: scaffolds earn nothing', scaffoldOnly.gradeSchema);
   assert(cal.pass === false, 'the scan\'s default baselines (a scaffold) do not make a pack Calibrated', cal);
   assert(cal.detail === 'no MTTD/MTTR baselines declared - the one present is a scaffold (defaults, never measured)', 'Calibrated says the baselines present are a scaffold', cal.detail);
   assert(JSON.stringify(cal.baselines) === JSON.stringify({ declared: 0, scaffolds: 1 }), 'Calibrated counts the scaffold apart', cal.baselines);
@@ -808,7 +811,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(closeTo(one.overall.audit.scorePctExact, 5.9 / 6 * 100) && one.overall.audit.status === 'PASS', 'the score is over the six that apply: 5.9/6 = 98.3%', one.overall.audit);
   assert(same(one.overall.off, ['chaos-validated']), 'overall.off names it', one.overall.off);
   assert(same(Object.keys(one.overall), ['passed', 'total', 'verdict', 'audit', 'instrumentGrade', 'liveDriftFree', 'off']), 'overall gains `off`, after the keys it always had', Object.keys(one.overall));
-  assert(one.gradeSchema === 4, 'the grade schema stays 4: each criterion\'s rule is the same', one.gradeSchema);
+  assert(one.gradeSchema === 5, 'the grade schema stays 5: each criterion\'s rule is the same', one.gradeSchema);
 
   // The case the switch is for: a project that runs no fault injection. Graded
   // on seven it loses a whole point for it and fails the audit; graded on the
@@ -866,6 +869,53 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   const fromKeys = gradeOffKeys(['fresh']);
   fromKeys.push('drift-free');
   assert(GRADE_CRITERION_KEYS.length === 7 && same(gradeOffKeys(['fresh']), ['fresh']), 'gradeOffKeys: the answer is the caller\'s own list');
+}
+
+// ---------- grade schema 5: Multi-modal and Comprehensive earn by how far they get ----------
+// Met at their bars as before (3 kinds of 4, 50 in 100 observed); the points
+// follow the kinds and the coverage, so a step short of the bar is worth
+// almost as much as one on it — no cliff — and the bar is not the whole point.
+{
+  const signals = (kinds) => {
+    const pack = baseRepoPack();
+    pack.layers.L2 = pack.layers.L2.filter((a) => a.id === 'OTEL-node' || kinds.includes(a.spec?.signal));
+    if (!kinds.includes('traces')) pack.layers.L2 = pack.layers.L2.map((a) => (a.id === 'OTEL-node' ? { ...a, spec: { ...a.spec, signal: 'none' } } : a));
+    return pack;
+  };
+  // Every layer observed on the first n mechanisms of ten: n/10 observed, whatever the layer.
+  const posture = (n) => {
+    const cells = {};
+    for (const layer of POSTURE_LAYERS) {
+      POSTURE_MECHANISMS_PER_LAYER.slice(0, n).forEach((m) => { cells[`${layer.key}:${m.key}`] = [{ id: `${layer.key}-${m.key}` }]; });
+    }
+    return { cells };
+  };
+  const grade = (pack, post) => computeDiagnosticGrade(pack, livePack({ 'mcp.refreshedAt': '2026-06-09T11:00:00Z' }), post, 'production-live', traceabilityDiff(0.9), { nowMs });
+
+  // Multi-modal: the kinds of four, met at three.
+  for (const [kinds, pass] of [[['metrics', 'logs', 'traces', 'profiles'], true], [['metrics', 'logs', 'traces'], true], [['metrics', 'logs'], false], [['metrics'], false], [[], false]]) {
+    const c = criterion(grade(signals(kinds), fullPosture()), 'multi-modal');
+    assert(c.pass === pass && closeTo(c.score, kinds.length / 4) && c.detail.startsWith(`${kinds.length} of 4 signals`), `multi-modal with ${kinds.length} kinds: met ${pass}, ${kinds.length}/4 of the point`, c);
+  }
+  const two = grade(signals(['metrics', 'logs']), fullPosture());
+  const three = grade(signals(['metrics', 'logs', 'traces']), fullPosture());
+  assert(closeTo(three.overall.passed - two.overall.passed, 0.25), 'the third kind is worth a quarter of the point, not the whole of it', [two.overall.passed, three.overall.passed]);
+
+  // Comprehensive: the average observed, met at 50 in 100.
+  for (const [n, pass] of [[10, true], [7, true], [5, true], [4, false], [1, false], [0, false]]) {
+    const c = criterion(grade(baseRepoPack(), posture(n)), 'comprehensive');
+    assert(c.pass === pass && closeTo(c.score, n / 10) && c.detail === `${n * 10}% average observed across infra · platform · app · ux`, `comprehensive at ${n * 10}%: met ${pass}, ${n}/10 of the point`, c);
+  }
+  const at40 = grade(baseRepoPack(), posture(4));
+  const at50 = grade(baseRepoPack(), posture(5));
+  assert(closeTo(at50.overall.passed - at40.overall.passed, 0.1), 'from 40 to 50 in 100 is a tenth of the point, not the whole of it', [at40.overall.passed, at50.overall.passed]);
+  assert(closeTo(at40.coverage.passed, 3.4) && at40.coverage.total === 4, 'the coverage sum carries the fraction', at40.coverage);
+  // The fraction is the exact average, not the rounded percent the detail prints: one layer at 4 of 10, the rest at 5
+  // (krystaline's 48, short of the bar, used to earn nothing).
+  const uneven = posture(5);
+  delete uneven.cells[`${POSTURE_LAYERS[0].key}:${POSTURE_MECHANISMS_PER_LAYER[4].key}`];
+  const c = criterion(grade(baseRepoPack(), uneven), 'comprehensive');
+  assert(closeTo(c.score, 0.475) && c.pass === false && c.detail.startsWith('48% average'), 'the score is the exact average (0.475); the detail and the bar read the rounded percent (48, short of 50)', c);
 }
 
 // ---------- the vendoring seam (docs/VENDORING.md) ----------

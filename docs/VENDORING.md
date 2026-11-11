@@ -111,7 +111,7 @@ degraded, broken, unobserved, integrityMean, integrityPct }`, appended last.
 are byte-identical with and without the annotations the ladder reads
 (pinned in `tools/test-traceability-graph.mjs`), and Drift-free still reads
 `rollup.integrityMean` — the switch to `rollup.ladder.integrityMean` is a
-proposal (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`, gradeSchema 4), not
+proposal (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`, gradeSchema 6), not
 applied. Keys are only ever added here, never renamed or removed.
 
 **Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
@@ -134,6 +134,21 @@ pack holds in a family the other could not observe move no weight. The Fresh cri
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
+
+**Grade schema 5 (0.8.33): Multi-modal and Comprehensive earn by how far
+they get.** `computeDiagnosticGrade` returns `gradeSchema: 5` (the new export
+`GRADE_SCHEMA`). Both criteria gain `score` (0..1, read by `criterionScore`):
+Multi-modal the signal kinds declared of four, Comprehensive the exact average
+observed across the posture's four layers (the detail still prints it rounded).
+`pass` keeps its bar (three kinds, 50 in 100). Against schema 4 a pack below a
+bar gains (krystaline's 48% coverage: 0 → 0.48 of a point) and one above it
+short of four kinds or of every mechanism loses (3 kinds: 1 → 0.75). The board
+(`studio/overview-model.mjs`) no longer letters by a run scored under another
+schema: `runGradesBoard` is false for it, the board grades the repository
+alone and says *how the grade scores changed since the last live check*, and a
+service-list row says *graded before the grade changed how it scores* (the
+journeys listing's `lastRun.gradeSchema`, new). A record that names no schema
+is not judged by it.
 
 **Grade schema 4 (0.8.7): Chaos-validated tells declared from proven.**
 `computeDiagnosticGrade` returns `gradeSchema: 4`. A declared experiment earns

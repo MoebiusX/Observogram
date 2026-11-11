@@ -210,7 +210,7 @@ function renderChapters(host, m, projection) {
     </table>`;
   chapters.push({
     id: 'coverage', title: 'Coverage — are we observing the right signals?', open: false,
-    meta: `${d.coverage.passed}/${d.coverage.total} criteria`,
+    meta: `${Number.isInteger(d.coverage.passed) ? d.coverage.passed : d.coverage.passed.toFixed(2)}/${d.coverage.total} criteria`,
     body: critBody(d.coverage.criteria),
   });
   chapters.push({

@@ -838,9 +838,10 @@ test('a service with chaos-validated switched off: its Run and its Check now gra
   assert.deepEqual(run.json.record.grade.off, off, 'the Run\'s record names the criterion left out');
   assert.equal(run.json.record.grade.score, scoreOf(six), 'and its score is the engine\'s over the six that apply');
   assert.notEqual(scoreOf(six), scoreOf(seven), 'which is not the score over seven: the switch moved it');
-  assert.deepEqual([run.json.record.grade.pass, run.json.record.grade.letter, run.json.record.grade.schema], [six.overall.audit.passes, six.overall.instrumentGrade.letter, 4], 'the pass, the letter and the schema are that grade\'s');
+  assert.deepEqual([run.json.record.grade.pass, run.json.record.grade.letter, run.json.record.grade.schema], [six.overall.audit.passes, six.overall.instrumentGrade.letter, 5], 'the pass, the letter and the schema are that grade\'s');
   assert.deepEqual((await newestRecord(NAME)).grade, run.json.record.grade, 'the saved record says the same');
   assert.deepEqual(await listed(), [scoreOf(six), off], 'the listing names what the last score left out');
+  assert.equal((await listedRun(NAME)).gradeSchema, run.json.record.grade.schema, 'and the grade schema it was scored under');
   assert.equal(auditRows('journey.run')[0].gradeScore, scoreOf(six), 'the journey.run row carries that score');
 
   // Check now (POST /api/journeys/:name/run) on the same scan: a new live read, the same switches.

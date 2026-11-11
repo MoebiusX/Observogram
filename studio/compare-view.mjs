@@ -2224,7 +2224,7 @@ export function renderPostureNarrative(posture) {
 // Diagnostic-grade verdict — the CEO question, made answerable.
 //
 // "Is our observability diagnostic-grade?" answered as seven scored
-// pass/fail criteria (grade schema 2) plus one informational row:
+// criteria (grade schema 5), each met at a bar, plus one informational row:
 //
 //   2A — COVERAGE (vs Observability Contract)
 //        "Are we observing the right signals?"
@@ -2233,7 +2233,7 @@ export function renderPostureNarrative(posture) {
 //          1. Multi-modal    — metrics + logs + traces flowing
 //          2. Correlated     — tracecontext + log_correlation
 //          3. Calibrated     — baselines + SLOs w/ numeric objectives
-//          4. Comprehensive  — posture matrix ≥ 50% across layers
+//          4. Comprehensive  — posture matrix ≥ 50% across layers (the points: the average)
 //
 //   2B — TRUST (signal integrity)
 //        "Can we trust what the signals show?"
@@ -2248,8 +2248,10 @@ export function renderPostureNarrative(posture) {
 //        of the overall solution, not diagnostic capability; reclassified
 //        out of the scored grade 2026-06-10 (maintainer-ratified).
 //
-// Overall score (out of 7) → verdict word. Most criteria are binary;
-// drift-free contributes fractional credit equal to weighted fidelity.
+// Overall score (out of 7) → verdict word. Four criteria earn part of their
+// point by how far they get — Multi-modal (kinds of four), Comprehensive (the
+// average observed), Chaos-validated (a quarter for declared), Drift-free (the
+// integrity) — so a criterion met at its bar can still earn less than all of it.
 // Verdict bands are percentages so they survive schema changes:
 //   >85%   → Diagnostic-grade (same bar as the audit PASS stamp)
 //   >=62.5% → Almost diagnostic-grade
@@ -2279,10 +2281,10 @@ const notGradedWords = (off) => notGradedSentence(off);
 // Where each check reads its evidence and what it expects there: the ledger's
 // rows, and "Expected" / "Read from" in a check's opened row.
 const CRITERION_EVIDENCE = Object.freeze({
-  'multi-modal': { field: 'spec.telemetry.backends[].signal', expected: 'metrics + logs + traces (≥ 3 of 4)' },
+  'multi-modal': { field: 'spec.telemetry.backends[].signal', expected: 'metrics + logs + traces (≥ 3 of 4); the points follow the kinds declared, of 4' },
   correlated: { field: 'spec.otel.sdk.propagators', expected: 'includes tracecontext' },
   calibrated: { field: 'spec.slos[].objective + spec.baselines', expected: '≥ 1 SLO with numeric objective · MTTD/MTTR baselines declared, or targets set in the studio (a scaffold does not count)' },
-  comprehensive: { field: 'posture matrix · 4 layers × 10 mechanisms', expected: 'average ≥ 50% observed' },
+  comprehensive: { field: 'posture matrix · 4 layers × 10 mechanisms', expected: 'average ≥ 50% observed; the points follow the average' },
   actionable: { field: 'spec.remediation[]', expected: '≥ 1 remediation runbook declared (informational — not scored)' },
   'chaos-validated': { field: 'spec.validation.chaos_experiments[] · last_result / the live run feed', expected: 'every chaos experiment passed a run within its schedule’s window; declared alone earns a quarter (a scaffold does not count)' },
   'drift-free': { field: 'requirement derivation graph · fallback repo-vs-live diff / mcp probes', expected: 'declared SLO/SLI chains active in live; fallback ≥70% probes when no live pack is loaded' },
@@ -4138,6 +4140,16 @@ const OPERABILITY_WHY = 'Runbooks say how ready the response is, not how well th
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
+const pointsWord = (n) => { const r = Math.round(n); return `${r} point${r === 1 ? '' : 's'}`; };
+// A criterion met at its bar that still earns part of its point (grade schema 5:
+// Multi-modal, Comprehensive; Drift-free above its bar): said as met, never as failed.
+function metPartialCopy(c) {
+  const pct = Math.round(criterionScore(c) * 100);
+  return {
+    title: `${c.label} is met, but earns ${pct}% of its point`,
+    why: 'It is met at its bar, but its points follow how far it gets, so the rest of the point is still to earn.',
+  };
+}
 function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '', remedy = null, serviceTargets = false }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
@@ -4145,8 +4157,8 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     title: copy.title, observed: c.detail || '', why: copy.why, fix: copy.fix,
     tone: lost >= 1 ? 'fail' : 'warn',
     cost: lost >= 1
-      ? `Costs ${Math.round(lost * pointsPerCheck)} points of the score`
-      : `Partial credit — costs ${Math.round(lost * pointsPerCheck)} points of the score`,
+      ? `Costs ${pointsWord(lost * pointsPerCheck)} of the score`
+      : `Partial credit — costs ${pointsWord(lost * pointsPerCheck)} of the score`,
     actionLabel: 'View the check', actionId: `diag-crit:${c.key}`,
     evidenceId: `diag-crit:${c.key}`,
   };
@@ -4252,11 +4264,14 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
       actionId: haveB ? 'diag-goto:diag-compare' : 'diag-goto:diag-evidence',
     });
   }
-  // 1. Scored checks that fail, most points lost first.
+  // 1. Scored checks that fail, most points lost first — and, while the pack
+  //    is short of the audit bar, the checks met at their bar that still earn
+  //    only part of their point (grade schema 5), so a pack met on every check
+  //    yet short of the bar is never left without a gap that says why.
   const prio = (k) => { const i = CRITERION_PRIORITY.indexOf(k); return i < 0 ? 99 : i; };
   const scored = [...(diagnostic.coverage?.criteria || []), ...(diagnostic.trust?.criteria || [])].filter(c => c.applies !== false);
   const failing = scored
-    .filter(c => !c.pass)
+    .filter(c => !c.pass || (!passes && criterionScore(c) < 1))
     .map(c => ({ c, lost: 1 - criterionScore(c) }))
     .sort((x, y) => (y.lost - x.lost) || (prio(x.c.key) - prio(y.c.key)));
   // With nothing live at all, "drift-free" and "fresh" fail for the SAME
@@ -4265,6 +4280,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
     const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets });
+    if (c.pass) Object.assign(b, metPartialCopy(c), { tone: 'warn' });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -4341,7 +4357,10 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     const left = !informational && c.applies === false;
     const score = criterionScore(c);
     const st = informational ? 'info' : left ? 'off' : c.pass ? 'pass' : score > 0 ? 'partial' : 'fail';
-    const b = st === 'fail' || st === 'partial' ? criterionBlocker(c, 1 - score, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets }) : null;
+    // A check met at its bar that earns part of its point carries its cost and fix too, said as met.
+    const short = st === 'pass' && score < 1;
+    const b = st === 'fail' || st === 'partial' || short ? criterionBlocker(c, 1 - score, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel, remedy, serviceTargets }) : null;
+    if (short) Object.assign(b, metPartialCopy(c));
     const elsewhere = b && b.actionId !== `diag-crit:${c.key}`;   // "View the check" is the row itself
     const counts = st === 'pass' || st === 'partial' || st === 'fail';
     return {
@@ -4432,8 +4451,8 @@ function assessmentCalcHtml(diagnostic, ladderHtml) {
     <div class="diag-calc">
       <div class="diag-calc-ladder">${ladderHtml}</div>
       <div class="diag-calc-rules">
-        <p>The <strong>diagnostic grade</strong> is a verification score: the share of ${overall.total} scored checks the pack passes — ${part(diagnostic.coverage, 'coverage')} and ${part(diagnostic.trust, 'trust')}.${left.length ? ` ${escapeHtml(notGradedWords(left))}: ${left.length === 1 ? 'it is' : 'they are'} shown, and left out of the score.` : ''}</p>
-        <p>Most checks pass or fail. “Drift-free” earns partial credit — the requirement chains’ integrity or, without chains, the weighted share of declared artefacts confirmed live (or of live probes that answered) — so it can contribute a fraction of a check.</p>
+        <p>The <strong>diagnostic grade</strong> is a verification score: the points the pack earns of ${overall.total} scored checks, one point each — ${part(diagnostic.coverage, 'coverage')} and ${part(diagnostic.trust, 'trust')}.${left.length ? ` ${escapeHtml(notGradedWords(left))}: ${left.length === 1 ? 'it is' : 'they are'} shown, and left out of the score.` : ''}</p>
+        <p>Each check is met at a bar, and four earn part of their point by how far they get: “Multi-modal” the kinds of signal declared, of four; “Comprehensive” the average observed across the four layers; “Chaos-validated” a quarter for experiments declared, the rest for a recent passing run; “Drift-free” the requirement chains’ integrity or, without chains, the weighted share of declared artefacts confirmed live (or of live probes that answered). A check can be met and still earn less than its whole point.</p>
         <p>Operability (runbooks) is displayed but never scored: it measures response readiness, not diagnostic capability.</p>
         <p>The audit requirement passes above ${audit.threshold}%, exactly where grade A begins, so the letter and the machine PASS/FAIL always agree.</p>
         <p class="diag-calc-this">This pack: ${fmt(overall.passed)} of ${overall.total} checks = ${Math.round(audit.scorePctExact)}% → grade ${escapeHtml(ig.letter)} (${escapeHtml(ig.label)}); audit ${escapeHtml(audit.status)}${overall.verdict?.word ? `; formal verdict “${escapeHtml(overall.verdict.word)}”` : ''}.</p>

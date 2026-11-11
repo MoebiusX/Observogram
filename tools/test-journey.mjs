@@ -90,7 +90,7 @@ try {
   assert(rec.scope.env === 'prod', 'record carries the env scope');
   assert(typeof rec.grade.score === 'number' && typeof rec.grade.pass === 'boolean', 'record carries grade score + pass');
   assert(rec.grade.threshold === 85, 'record states the pass threshold');
-  assert(rec.grade.schema === 4, 'record names the grade schema so score-history steps are explainable', rec.grade);
+  assert(rec.grade.schema === 5, 'record names the grade schema so score-history steps are explainable', rec.grade);
   assert(Array.isArray(rec.packB.unobserved) && rec.packB.unobserved.length === 0, 'a pack file that states no blind family records packB.unobserved as []', rec.packB);
   assert(typeof rec.grade.letter === 'string' && rec.grade.letter.length >= 1, 'record carries the instrument-grade letter', rec.grade);
   assert(typeof rec.conformance.scorePercent === 'number' && rec.conformance.declaredTier === 'tier-1',
@@ -717,7 +717,7 @@ try {
     assert(JSON.stringify(six.grade.off) === JSON.stringify(['chaos-validated']), 'the record names the criterion its score left out', six.grade);
     assert(six.grade.score === pct(onSix) && six.grade.pass === onSix.overall.audit.passes && six.grade.letter === onSix.overall.instrumentGrade.letter,
            'score, pass and letter are the engine\'s over the six that apply', { record: six.grade, engine: onSix.overall });
-    assert(six.grade.schema === 4 && six.grade.threshold === 85 && six.grade.driftConstruct === plain.grade.driftConstruct, 'the schema, the bar and the Drift-free construct are unchanged', six.grade);
+    assert(six.grade.schema === 5 && six.grade.threshold === 85 && six.grade.driftConstruct === plain.grade.driftConstruct, 'the schema, the bar and the Drift-free construct are unchanged', six.grade);
     assert(JSON.stringify(Object.keys(six.grade)) === JSON.stringify(['score', 'pass', 'threshold', 'schema', 'letter', 'letterLabel', 'driftConstruct', 'off']), 'grade.off comes after the keys the record always had', Object.keys(six.grade));
     const sixSaved = readJourneyRuns('graded-on-fewer', { limit: 1 })[0];
     assert(sixSaved.startedAt === six.startedAt && JSON.stringify(sixSaved.grade) === JSON.stringify(six.grade), 'the record on disk says the same', sixSaved.grade);
@@ -809,7 +809,7 @@ try {
     assert(gradeRow(six)[0] === `| Diagnostic grade | ${scoreCell(six.grade)} — on 6 of 7 criteria (not graded: chaos-validated) |`, 'one criterion left out: the row ends with the count and the key', gradeRow(six));
     assert(gradeRow(two)[0] === `| Diagnostic grade | ${scoreCell(two.grade)} — on 5 of 7 criteria (not graded: chaos-validated, fresh) |`, 'two left out: 5 of 7, the keys in the record\'s order', gradeRow(two));
     // To the letter, on a record whose grade is given.
-    const given = (grade) => ({ ...plain, grade: { threshold: 85, schema: 4, driftConstruct: 'requirement-chain', ...grade } });
+    const given = (grade) => ({ ...plain, grade: { threshold: 85, schema: 5, driftConstruct: 'requirement-chain', ...grade } });
     const lettered = { score: 98, pass: true, letter: 'A+', letterLabel: 'Laboratory / Research Grade' };
     assert(gradeRow(given({ ...lettered, off: ['chaos-validated'] }))[0] === '| Diagnostic grade | **A+ · Laboratory / Research Grade · 98%** (PASS, bar 85%) — on 6 of 7 criteria (not graded: chaos-validated) |', 'the row with grade.off, to the letter', gradeRow(given({ ...lettered, off: ['chaos-validated'] })));
     assert(gradeRow(given(lettered))[0] === '| Diagnostic grade | **A+ · Laboratory / Research Grade · 98%** (PASS, bar 85%) |', 'the row without grade.off, to the letter', gradeRow(given(lettered)));
@@ -1705,7 +1705,7 @@ try {
         const keys = Object.keys(n1);
         assert(keys.slice(keys.indexOf('traceability'), keys.indexOf('traceability') + 6).join() === 'traceability,branches,chains,versions,transition,livePack' && keys[keys.length - 1] === 'notify' && keys.indexOf('notify') > keys.indexOf('causes'),
                'notify is the last key, after causes — the pinned key run is untouched', keys);
-        assert(n1.grade.schema === 4, 'grade.schema stays 4 with notify: present');
+        assert(n1.grade.schema === 5, 'grade.schema stays 5 with notify: present');
         const persisted = readJourneyRuns('notified').find(r => r.startedAt === n1.startedAt);
         assert(persisted && JSON.stringify(persisted.notify) === JSON.stringify(n1.notify) && Object.keys(persisted).slice(-2).join() === 'causes,notify', 'the on-disk record carries the same notify (second write), as its last key', persisted && { disk: persisted.notify, mem: n1.notify });
       }
@@ -1720,7 +1720,7 @@ try {
         const sched = await runJourney(loadJourneyDef('sched-twin'));
         const scored = (r) => JSON.stringify({ grade: r.grade, traceability: r.traceability, branches: r.branches, chains: r.chains, drift: r.drift, conformance: r.conformance, outcome: r.outcome, breaches: r.gate.breaches });
         assert(scored(twin) === scored(n1) && scored(sched) === scored(n1), 'grade, traceability, branches, chains, drift, conformance and outcome are identical with and without notify:/schedule:/stackBudget:', { twin: scored(twin).length, n1: scored(n1).length });
-        assert(JSON.stringify(sched.branches) === JSON.stringify(n1.branches) && sched.grade.schema === 4, 'identical inputs record identical branches whatever the delivery keys say');
+        assert(JSON.stringify(sched.branches) === JSON.stringify(n1.branches) && sched.grade.schema === 5, 'identical inputs record identical branches whatever the delivery keys say');
         assert(sched.notify.status === 'sent' && hits.length === 1 && JSON.parse(hits[0].body).journey === 'sched-twin' && !('schedule' in JSON.parse(hits[0].body)), 'on: always posts the first run; the payload carries no definition keys');
         hits.length = 0;
       }

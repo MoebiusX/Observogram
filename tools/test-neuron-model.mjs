@@ -481,3 +481,14 @@ test("the fleet's grade delta pairs a run only with one graded on the same crite
   assert.deepEqual(fleetOf([graded(0, 60, ['fresh']), lost(1), graded(2, 64, ['fresh'])]).grade, { mean: 64, delta: 4, n: 1 });
   assert.deepEqual(fleetOf([graded(0, 60, ['fresh']), graded(1, 50), graded(2, 64, ['fresh'])]).grade.delta, null, 'the run just before was graded on seven');
 });
+
+test("the fleet's grade delta pairs a run only with one scored under the same grade schema (the record's grade.schema, 1 when it names none): a step over two rules is no delta", () => {
+  const scored = (i, score, schema) => run(i, { grade: { score, pass: true, ...(schema === undefined ? {} : { schema }) } });
+  const fleetOf = (runs) => buildNeuronModel({ journeys: [entry('a', runs)], runsByName: { a: runs }, window: 50 }).fleet;
+  // 74 under schema 4, then 77 under schema 5 (Multi-modal and Comprehensive by how far they get): no "+3".
+  assert.deepEqual(fleetOf([scored(0, 74, 4), scored(1, 77, 5)]).grade, { mean: 77, delta: null, n: 1 });
+  assert.deepEqual(fleetOf([scored(0, 70, 5), scored(1, 77, 5)]).grade, { mean: 77, delta: 7, n: 1 });
+  // A record naming no schema is schema 1.
+  assert.deepEqual(fleetOf([scored(0, 60), scored(1, 64, 1)]).grade.delta, 4);
+  assert.equal(fleetOf([scored(0, 60), scored(1, 64, 5)]).grade.delta, null);
+});
