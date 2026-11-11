@@ -7,7 +7,7 @@
 // name (cross-checked here against the names tools/lib/compile.mjs really emits), the SLO — the
 // first tier with a hit wins, an exact slug match never a containment, and no hit is `unresolved`
 // with suggestions that never link. The catalogue is pinned as it stands: 17 remediations across
-// five packs, zero triggers resolve today (docs/DOWNSTREAM.md §14 `catalogue-triggers`), the
+// five packs, zero triggers resolve today (docs/RELIABILITY_WORKFLOW.md `catalogue-triggers`), the
 // three packs without a remediation are unconfigured and empty — the inert proof. States come
 // from the comparison's buckets indexed by each entry's artefact (a real `…@a#01` scaffold key and
 // a `#02` occurrence key never parsed), the unhealthy list from the live side's annotations, and

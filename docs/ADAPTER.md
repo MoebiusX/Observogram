@@ -627,7 +627,7 @@ is refreshed — so a real value never regresses to a scaffold; `--overwrite`
 restores the plain write. `report.scaffolded` and `legacy.scaffoldCount` count
 every `crawler.scaffold.*` key, the six shared-section markers (`otel`,
 `pipelines.*`) included. `npm run pack-conformance -- <pack>` lists the
-placeholders that remain ([`DOWNSTREAM.md`](DOWNSTREAM.md) §11).
+placeholders that remain ([`PACK_CONFORMANCE.md`](PACK_CONFORMANCE.md)).
 
 Conversion contract:
 
@@ -654,7 +654,7 @@ Conversion contract:
   `alerting.routes[0].channels[1]`, `metadata.owners` — matches nothing in
   `sourceOf` and is conformance evidence only: the crawler writes those for
   the values it invents without moving the artefact in Discover or Compare
-  (`tools/lib/pack-conformance.mjs` reads both; `DOWNSTREAM.md` §11.1).
+  (`tools/lib/pack-conformance.mjs` reads both; `PACK_CONFORMANCE.md` §11.1).
 - **Deterministic** — same input, same manifest (timestamps only via
   `opts.now`).
 

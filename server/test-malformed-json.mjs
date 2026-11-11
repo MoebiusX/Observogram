@@ -2,7 +2,7 @@
 /**
  * server/test-malformed-json.mjs — a request body the parsers refuse is
  * answered as JSON on every route, quoting none of it, logging nothing
- * (the follow-up malformed-json-app-wide; docs/DOWNSTREAM.md §16).
+ * (the follow-up malformed-json-app-wide; docs/MCP_SERVER_SETTINGS.md).
  *
  * The app-wide parsers run after authGate and orgContext and before every
  * route's authorize(); Express's default error path answered their errors

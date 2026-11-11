@@ -336,7 +336,7 @@ test('the CLI: refusals, exit codes, --strict, --quiet, --json, determinism', ()
     r = run(crawl, '--strict');
     assert.equal(r.status, 1, 'the crawl pack (placeholder + unmarked rows) fails --strict');
     assert.equal(run(crawl).status, 0);
-    // --strict is "any row fails" (DOWNSTREAM §11.2): one pack per non-placeholder state, each carrying rows of
+    // --strict is "any row fails" (docs/PACK_CONFORMANCE.md §11.2): one pack per non-placeholder state, each carrying rows of
     // that state alone — a strict rule that only counts `placeholder` rows lets all three through.
     const unmarkedOnly = clone(emptyCrawl());
     for (const k of Object.keys(unmarkedOnly.metadata.annotations)) if (k.startsWith('crawler.scaffold.')) delete unmarkedOnly.metadata.annotations[k];

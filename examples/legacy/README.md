@@ -45,7 +45,7 @@ that line:
   projects as **Scaffold**, never Declared. Replace the placeholders with
   real values to earn Declared status — `npm run pack-conformance -- <pack>`
   lists them with the pack path, the field, what it needs and where the
-  value normally comes from (`docs/DOWNSTREAM.md` §11). Re-running the
+  value normally comes from (`docs/PACK_CONFORMANCE.md`). Re-running the
   upconvert with the same `-o` merges into the file and never regresses a
   value you typed (`--overwrite` replaces it).
 - Legacy `GAP` items always convert as scaffolds.

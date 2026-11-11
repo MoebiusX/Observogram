@@ -271,7 +271,7 @@ compares that part, and it compares a per-org name (`OBSERVOGRAM_ORG_<KEY>_…`)
 by the part after the key. Each name it prints is one you set that the
 target's code never mentions: renamed or removed, so look it up in the
 CHANGELOG. A notify hook's own names (`…_NOTIFY_<HOOK>_URL`) print too, since
-the hook's name is yours ([DOWNSTREAM.md](DOWNSTREAM.md) §17).
+the hook's name is yours ([NOTIFY_HOOKS.md](NOTIFY_HOOKS.md)).
 
 ### 6. Run the downstream's own checks
 
