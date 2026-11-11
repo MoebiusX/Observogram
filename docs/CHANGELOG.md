@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.8.28 — 2026-11-11
+
+**Every CHANGELOG entry says what it means for a downstream copy, and one command prints what a refresh has to act on.** A downstream that runs the whole repository refreshes across hundreds of commits at once, and nothing marked which of them asked something of it. Each entry now ends with a `Downstream:` bullet naming its kinds, and `tools/downstream-digest.mjs` prints those bullets for a refresh, by kind, beside the export, setting and golden changes. It also releases `docs/DOWNSTREAM.md`'s feature references, §11–§18, moved to pages of their own.
+
+### Added
+- **The `Downstream:` bullet** (`docs/DOWNSTREAM_REFRESH.md`, step 1). Every `###` entry under `## Unreleased`, and under every release from 0.8.28 on, ends with one bullet, `- **Downstream:** <kinds> — <one sentence>.`, which says what the entry means for a downstream copy. The kinds are `none`, `config` (a setting added, renamed or removed), `api` (a listed module's exports, a route or a response shape), `behaviour` (what a comparison, grade or screen shows) and `one-way` (an upgrade with no way back, such as a store schema move); an entry can name several, separated by commas, and `none` stands alone. The releases before 0.8.28 stay as they were written.
+- **The digest** (`tools/downstream-digest.mjs`, new; a command in `tools/`, not a listed module). `node tools/downstream-digest.mjs --since <commit> [--to <ref>] [--json]`, run in upstream's checkout, prints for one refresh:
+  - the commits in the range;
+  - the `Downstream:` bullets of the CHANGELOG entries added in it, grouped by kind (`one-way`, `config`, `api`, `behaviour`, `none`), and the headings of the entries that carry none under *unclassified*; an entry the copy already held in its `## Unreleased` is not added again;
+  - the export diff of `VENDOR-MANIFEST.json` between the two commits;
+  - the settings that appear or disappear in `server/`, `tools/` and `studio/` (test files and fixtures left out), literal or read through `brandEnv`, compared by the part after `OBSERVOGRAM_` as the runbook's step 5 compares them;
+  - the golden files that moved under `tools/fixtures/golden/`.
+
+  `--json` prints the same as one object. A folder that is not the top of a git checkout, as an export copy is not, is refused with a sentence.
+- **Downstream:** none — the copy runs as before; the runbook's step 1 now runs the digest, and its entries from 0.8.28 on say what each means for a copy.
+
+### Tests
+- `tools/test-changelog-downstream.mjs` (new): the CHANGELOG's entries from 0.8.28 on end with one `Downstream:` bullet of known kinds, the releases before are left as written, each way an entry can break the rule, and the runbook's step 1 documents it.
+- `tools/test-downstream-digest.mjs` (new): over a small repository built with git, the entries classified, already held and unclassified; the exports, the settings (a legacy spelling, a per-org name, test files and fixtures left out) and the goldens (a rename); the command's text, `--json` and refusals.
+- Cut as 0.8.28: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1880 → 1889.
+- **Downstream:** none — tests only.
+
 ### Changed: DOWNSTREAM.md's feature references move to pages of their own
 `docs/DOWNSTREAM.md` keeps the downstream contract, §1–§10: the manifest workflow, the seams and embedding the studio. Its feature references, §11–§18, were 1,500 of its 2,057 lines, and a downstream refreshing its copy had to read past them. They move, text unchanged, each to a page of its own that keeps its section numbers.
 - **The pages:** `docs/PACK_CONFORMANCE.md` (§11), `docs/CANONICAL_PACKS.md` (§12), `docs/PLATFORMS.md` (§13), `docs/RELIABILITY_WORKFLOW.md` (§14), `docs/LIVE_FETCH.md` (§15), `docs/MCP_SERVER_SETTINGS.md` (§16), `docs/NOTIFY_HOOKS.md` (§17) and `docs/EXPORTER_METRICS.md` (§18). A chapter's title is its page's, its `###` sections are `##`, and a reference to another chapter is a link to that page. Nothing else in the text changed.
@@ -12,7 +35,7 @@
 
 ### Tests
 - `tools/test-live-snapshot.mjs` (the live stage table), `tools/test-tap-summary.mjs` (the Windows report command) and `server/test-notify-target-policy.mjs` (the migration's steps, the orgs-file sentence) read the page their text moved to, with the same assertions.
-- Suite total 1880 → 1880.
+- Suite total unchanged (1880): no test added.
 - **Downstream:** none — tests only.
 
 ## 0.8.27 — 2026-11-11
