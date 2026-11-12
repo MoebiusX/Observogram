@@ -65,11 +65,16 @@ per environment in the order a release travels — dev, test, acceptance,
 staging, production, then any other by name. Each cell is that environment:
 its live endpoint (its name; the host beneath, whole on hover), the branch
 its Run reads, the grade letter with how much matches live, when it was last
-checked, **Run** (scans the repository and checks it against live) and
-**Open** (the service's board); an environment the service does not declare
-reads *Not declared*, with **Add**. On the row, **Run all** runs every
-environment one after another, and **Change** edits where it is declared,
-where it runs and its MTTD / MTTR targets; under the matrix, the grade's
+checked, **Run** (scans the repository and checks it against live),
+**Open** (the service's board) and **Change** (that environment's endpoint
+and branch, and the service's repository and targets); an environment the
+service does not declare reads *Not declared*, with **Add**. On the row,
+**Run all** runs every environment one after another, and — for a service
+in two or more environments — **Change** opens the same form with the
+environment as a choice, each choice loading its own endpoint and branch;
+**Add environment** opens the service's own form with the environment to
+name (a name it already has is refused, with the way to change that one) —
+never a second service of the same name; under the matrix, the grade's
 letters and where each starts. Services a live draft has seen with no
 repository yet are counted under the list.
 
@@ -1909,8 +1914,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.35 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.35
+docker build -t observogram:0.8.36 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.36
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1973,7 +1978,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.35
+  observogram:0.8.36
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1981,7 +1986,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.35
+    image: observogram:0.8.36
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

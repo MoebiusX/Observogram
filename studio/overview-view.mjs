@@ -824,10 +824,12 @@ function mxCellHtml(r, col, svc, canWrite) {
     : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}" aria-label="Run ${attr(r.name)} in ${attr(r.env)}">Run</button>`;
   const openBtn = r.open.enabled
     ? `<button type="button" class="og-btn ov-svc__open" data-ux-action="ov-svc-open" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Open ${attr(r.name)} in ${attr(r.env)}">Open</button>` : '';
+  // This environment's own Change: its endpoint and branch (and the service's repository and targets).
+  const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`;
   return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
             <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}</div>
             ${grade}${when}
-            <div class="ov-mx__acts">${runBtn}${openBtn}</div>
+            <div class="ov-mx__acts">${runBtn}${openBtn}${editBtn}</div>
           </div>`;
 }
 
@@ -871,7 +873,12 @@ function mxRowHtml(svc, columns, canWrite) {
   const name = `<span class="ov-svc__name">${escapeHtml(svc.name)}</span>${svc.bare ? `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="">Add an environment</button>` : ''}`;
   const all = svc.runAll.keys.length > 1 || (svc.runAll.running && svc.rows.length > 1)
     ? `<button type="button" class="og-btn ov-mx__all" data-ux-action="ov-svc-run-all" data-keys="${attr(svc.runAll.keys.map(encodeURIComponent).join(','))}"${svc.runAll.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(svc.name)} in every environment">${svc.runAll.running ? 'Running…' : 'Run all'}</button>` : '';
-  const change = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="${attr(first?.env ?? '')}" aria-label="Change ${attr(svc.name)}: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>`;
+  // Add environment: the service's form with the environment to name — never another service of the same name.
+  const addEnv = canWrite && !svc.bare ? `<button type="button" class="ov-svc__edit ov-mx__addenv" data-ux-action="ov-svc-add-env" data-service="${attr(svc.serviceId)}" aria-label="Add an environment to ${attr(svc.name)}">Add environment</button>` : '';
+  // The service's Change: with two or more environments, the form asks which (data-pick); with one, its
+  // cell's own Change is the way (not drawn twice); with none, the way to the form.
+  const pick = Object.keys(svc.cells).length > 1;
+  const change = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="${attr(first?.env ?? '')}"${pick ? ' data-pick="1"' : ''} aria-label="Change ${attr(svc.name)}: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>`;
   const errors = svc.rows.filter((r) => r.error).map((r) => `
         <p class="ov-svc__error ov-mx__note" role="alert">${r.env ? `<b>${escapeHtml(r.env)}:</b> ` : ''}${escapeHtml(r.error)}</p>`).join('');
   // An ask a Run answered (refused, signed in as another) before one only offered.
@@ -885,7 +892,7 @@ function mxRowHtml(svc, columns, canWrite) {
         <div class="ov-mx__svc">${name}</div>
         <div class="ov-mx__repo" data-col="Repository">${mxRepoHtml(svc, first)}${tokenFold}</div>
         ${columns.map((c) => mxCellHtml(svc.cells[c] || null, c, svc, canWrite)).join('')}
-        <div class="ov-mx__rowacts">${all}${change}</div>${notes}
+        <div class="ov-mx__rowacts">${all}${pick || !Object.keys(svc.cells).length ? change : ''}${addEnv}</div>${notes}
       </li>`;
 }
 
@@ -1075,7 +1082,7 @@ function svcFormHtml(f) {
     <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
       <header class="ov-form__head">
         <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
-        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
+        <p class="ov-card__sub">${f.addEnv ? 'Name the environment and choose the MCP endpoint that reads it live; the repository and the targets are the service\'s.' : f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
       </header>
       <ol class="ov-form__steps">
         <li class="ov-form__step">
@@ -1084,7 +1091,7 @@ function svcFormHtml(f) {
         </li>
         <li class="ov-form__step">
           <span class="ov-form__n">2</span>
-          <label class="ov-form__f"><span class="ov-form__l">Environment</span><input class="og-input" data-field="env" value="${attr(v.env)}" placeholder="prod" autocomplete="off"${f.envFixed ? ' readonly' : ''}>${fieldErr(f, 'env', shown)}</label>
+          <label class="ov-form__f"><span class="ov-form__l">Environment</span>${f.envChoices ? `<select class="og-input" data-field="env">${f.envChoices.map((n) => `<option value="${attr(n)}"${n === v.env ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}</select>` : `<input class="og-input" data-field="env" value="${attr(v.env)}" placeholder="prod" autocomplete="off"${f.envFixed ? ' readonly' : ''}>`}${fieldErr(f, 'env', shown)}</label>
         </li>
         <li class="ov-form__step">
           <span class="ov-form__n">3</span>
@@ -1227,7 +1234,10 @@ export function renderServiceList(container, list, form, host = appHost, { draft
   };
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
-    'ov-svc-edit': (ev, el) => ov.editService?.(Number(el.dataset.service), svcEnv(el)),
+    // A host without addEnvironment opens the service's form on no environment: the field to name one.
+    'ov-svc-add-env': (ev, el) => (typeof ov.addEnvironment === 'function' ? ov.addEnvironment(Number(el.dataset.service)) : ov.editService?.(Number(el.dataset.service), null)),
+    // A service's Change (data-pick) opens with its environment as a choice; a cell's, on that environment.
+    'ov-svc-edit': (ev, el) => (el.dataset.pick ? ov.editService?.(Number(el.dataset.service), svcEnv(el), { pick: true }) : ov.editService?.(Number(el.dataset.service), svcEnv(el))),
     // Run sends the token the row's field holds, when it holds one: the field is there to be used.
     'ov-svc-run': (ev, el) => { const repoAuth = authValue(el.dataset.key); return repoAuth ? ov.runService?.(el.dataset.key, { repoAuth }) : ov.runService?.(el.dataset.key); },
     'ov-svc-auth-run': (ev, el) => ov.runService?.(el.dataset.key, { repoAuth: authValue(el.dataset.key) }),

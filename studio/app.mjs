@@ -2408,9 +2408,10 @@ const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) |
 
 // `focus`: the answer to start on (the board's Set targets… opens on the Targets one); `returnTo`:
 // { serviceId, env } — the board it was opened from, which Save and Cancel bring back.
-function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true } = {}) {
-  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources });
-  const first = opened.mode === 'add' ? 'name' : (opened.envFixed ? 'location' : 'env');
+function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true, pick = false, addEnv = false } = {}) {
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources, pick, addEnv });
+  // The service's Change with its environment as a choice: the choice first.
+  const first = opened.mode === 'add' ? 'name' : (opened.envChoices ? 'env' : opened.envFixed ? 'location' : 'env');
   listForm = { ...opened, focus: focus || first, returnTo };
   if (render) renderMainView();
 }
@@ -2544,6 +2545,8 @@ function listFormInput(field, value, { redraw = false } = {}) {
   if (listForm.chaosRun) { listForm = chaosRunFormInput(listForm, field, value); if (redraw) renderMainView(); return; }
   listForm = serviceFormInput(listForm, field, value);
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
+  // Another environment chosen (the service's Change): the focus stays on the choice through the redraw.
+  if (field === 'env' && listForm.envChoices) listForm = { ...listForm, focus: 'env' };
   if (field === 'endpointId' && value === NEW_ENDPOINT) listForm = { ...listForm, focus: 'epUrl' };
   // Custom targets: straight to the first of their two minute fields; any other choice keeps the select.
   if (field === 'targetProfile') listForm = { ...listForm, focus: value === MTTX_CUSTOM ? 'targetMttd' : 'targetProfile', scroll: value === MTTX_CUSTOM };
@@ -2563,7 +2566,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
-  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
+  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null });
   if (Object.keys(problems).length) {
     listForm = { ...listForm, error: formProblemsNote(problems), focus: Object.keys(problems)[0] };
     renderMainView();
@@ -2900,7 +2903,9 @@ const overviewActions = {
   // The service list (renderServiceList) and the board's way back to it.
   backToList: enterOverviewList,
   addService: () => openListForm(null, null),
-  editService: (serviceId, env) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env),
+  editService: (serviceId, env, { pick = false } = {}) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env, { pick }),
+  // Add environment on a service's row: its form, the environment to name.
+  addEnvironment: (serviceId) => openListForm(Number.isInteger(serviceId) ? serviceId : null, null, { addEnv: true }),
   formInput: listFormInput,
   saveService: saveListForm,
   closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },

@@ -518,6 +518,8 @@ p.ov-scan__sum { cursor: default; }
 .ov-mx__when .ov-svc__ic { width: 14px; height: 14px; margin: 0; }
 .ov-mx__acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .ov-mx__acts .og-btn { min-height: 30px; padding: 4px 12px; font-size: 13px; }
+.ov-mx__acts .ov-svc__edit { margin-left: 2px; }
+.ov-mx__addenv { white-space: nowrap; }
 .ov-mx__all { min-height: 30px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
 .ov-mx__row > .ov-svc__error, .ov-mx__row > .ov-svc__auth { grid-column: 1 / -1; margin: 0 14px 12px; }
 .ov-mx__token { margin-top: 8px; }
