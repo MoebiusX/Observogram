@@ -499,7 +499,7 @@ renderServiceList(container, list, formModel(form, { endpoints: facts.endpoints,
 host.overview = {
   ...host.overview,
   addService() { form = { ...formOpened(services, { endpoints: facts.endpoints, sources: facts.sources }), focus: 'name' }; repaint(); },
-  editService(serviceId, env) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints, sources: facts.sources }), focus: 'location' }; repaint(); },
+  editService(serviceId, env, { pick } = {}) { form = { ...formOpened(services, { serviceId, env, endpoints: facts.endpoints, sources: facts.sources, pick }), focus: pick ? 'env' : 'location' }; repaint(); },   // pick: the row's Change of a service in 2+ environments — the environment a choice (form.envChoices)
   formInput(field, value, { redraw } = {}) { form = formInput(form, field, value); if (redraw) repaint(); },
   async saveService({ run, repoAuth }) {        // formProblems(form.values, { sources: facts.sources, original: form.original, uploadStaged: !!form.upload?.staged })
                                                 // first, its note formProblemsNote(problems); then the plan, call by call:

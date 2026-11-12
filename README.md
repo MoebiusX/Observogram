@@ -65,11 +65,14 @@ per environment in the order a release travels — dev, test, acceptance,
 staging, production, then any other by name. Each cell is that environment:
 its live endpoint (its name; the host beneath, whole on hover), the branch
 its Run reads, the grade letter with how much matches live, when it was last
-checked, **Run** (scans the repository and checks it against live) and
-**Open** (the service's board); an environment the service does not declare
-reads *Not declared*, with **Add**. On the row, **Run all** runs every
-environment one after another, and **Change** edits where it is declared,
-where it runs and its MTTD / MTTR targets; under the matrix, the grade's
+checked, **Run** (scans the repository and checks it against live),
+**Open** (the service's board) and **Change** (that environment's endpoint
+and branch, and the service's repository and targets); an environment the
+service does not declare reads *Not declared*, with **Add**. On the row,
+**Run all** runs every environment one after another, and — for a service
+in two or more environments — **Change** opens the same form with the
+environment as a choice, each choice loading its own endpoint and branch;
+under the matrix, the grade's
 letters and where each starts. Services a live draft has seen with no
 repository yet are counted under the list.
 

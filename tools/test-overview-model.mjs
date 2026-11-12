@@ -3454,7 +3454,9 @@ test('renderServiceList: the matrix — a column per environment, Not declared (
   assert.ok(html.includes('<b>92% match</b>') && html.includes('Checked 2 hours ago</span>'));
   assert.ok(html.includes('data-ux-action="ov-svc-run-all" data-keys="1%3Astg,1%3Aprod"') && html.includes('>Run all</button>'), 'Run all on Checkout\'s two environments');
   assert.equal(countOf(html, 'ov-svc-run-all'), 1, 'not on Ledger, with one');
-  assert.ok(html.includes('aria-label="Change Ledger: where it is declared, where it runs, its MTTD / MTTR targets"'));
+  // Ledger, in one environment: its cell's own Change, not a second one on the row.
+  assert.ok(html.includes('aria-label="Change Ledger in prod: its endpoint and branch, the repository, the MTTD / MTTR targets"') && !html.includes('aria-label="Change Ledger: where it is declared'));
+  assert.ok(html.includes('data-pick="1" aria-label="Change Checkout: where it is declared, where it runs, its MTTD / MTTR targets"'), 'Checkout, in two: the row\'s Change asks which');
   // The token: Checkout's offered one folded under its repository; Ledger's, a Run asked for, open, with the error naming prod.
   assert.ok(html.includes('<details class="ov-mx__token"><summary>Your GitHub token…</summary>'), 'offered: folded');
   assert.equal(countOf(html, 'data-auth-input="1:'), 1, 'once for the service, not per environment');
@@ -3485,4 +3487,45 @@ test('renderServiceList: the matrix — a column per environment, Not declared (
   const c3 = overviewContainer();
   renderServiceList(c3, serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW, access: { canWrite: false, reason: 'viewer' } }), formModel(FORM_CLOSED), { overview: {} });
   assert.ok(c3.innerHTML.includes('Not declared</span></div>') && !c3.innerHTML.includes('ov-mx__add'));
+});
+
+// ---------- changing a service in two or more environments ----------
+
+test('a service in two or more environments: each cell has its own Change (that environment\'s form); the row\'s Change opens the form with the environment as a choice, in release order, and choosing another loads its own endpoint and branch — the save is that environment\'s', () => {
+  const EP2 = { id: 8, name: 'stg-mcp', origin: 'https://stg.example.test' };
+  const env = (id, name, ep) => ({ id, serviceId: 1, name, mcpEndpoint: { id: ep.id, name: ep.name, origin: ep.origin } });
+  const svc = svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' }, envRefs: { staging: 'develop' }, environments: [env(11, 'prod', EP), env(12, 'staging', EP2)] });
+  // The row's Change (pick): the choice in release order, opened on the environment it names.
+  const picked = formOpened([svc], { serviceId: 1, env: 'staging', endpoints: [EP, EP2], pick: true });
+  assert.deepEqual([picked.envChoices, picked.values.env, picked.values.endpointId, picked.values.ref], [['staging', 'prod'], 'staging', '8', 'develop']);
+  assert.deepEqual(formModel(picked, { endpoints: [EP, EP2] }).envChoices, ['staging', 'prod']);
+  // prod chosen: its endpoint and the repository's branch; the service's answers stay.
+  const prod = formInput({ ...picked, values: { ...picked.values, targetProfile: picked.values.targetProfile } }, 'env', 'prod');
+  assert.deepEqual([prod.values.env, prod.values.endpointId, prod.values.ref, prod.values.location, prod.envFixed], ['prod', '7', 'main', 'https://github.com/acme/checkout', true]);
+  assert.equal(formModel(prod, { endpoints: [EP, EP2] }).title, 'Checkout · prod');
+  // Saved: prod's own — its branch to envRefs, its environment rebound when its endpoint changes.
+  const saved = savePlan({ ...prod.values, ref: 'hotfix', endpointId: '8' }, { services: [svc], serviceId: 1 });
+  assert.deepEqual([saved.service, saved.env, saved.envName], [{ id: 1, patch: { envRefs: { prod: 'hotfix', staging: 'develop' } } }, { id: 11, bind: true }, 'prod']);
+  // Opened from a cell (no pick), or on a service in one environment: no choice, as before.
+  assert.equal(formOpened([svc], { serviceId: 1, env: 'prod', endpoints: [EP, EP2] }).envChoices, undefined);
+  assert.equal(formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP], pick: true }).envChoices, undefined);
+  // Asked for an environment it does not have: the first choice, loaded.
+  const none = formOpened([svc], { serviceId: 1, env: 'nope', endpoints: [EP, EP2], pick: true });
+  assert.deepEqual([none.values.env, none.values.endpointId, none.envFixed], ['staging', '8', true]);
+
+  // The matrix: each cell's own Change; the row's Change asks (data-pick), and the click says so.
+  const list = serviceListModel({ services: [svc], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP, EP2], now: NOW });
+  const c = overviewContainer();
+  const calls = [];
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { editService: (...a) => calls.push(a) } });
+  const html = c.innerHTML;
+  for (const e of ['staging', 'prod']) assert.ok(html.includes(`<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="1" data-env="${e}" aria-label="Change Checkout in ${e}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`), `${e}'s own Change`);
+  assert.ok(html.includes('data-ux-action="ov-svc-edit" data-service="1" data-env="staging" data-pick="1" aria-label="Change Checkout: where it is declared'), 'the row\'s Change asks');
+  c.click('ov-svc-edit', { service: '1', env: 'prod' });
+  c.click('ov-svc-edit', { service: '1', env: 'staging', pick: '1' });
+  assert.deepEqual(calls, [[1, 'prod'], [1, 'staging', { pick: true }]]);
+  // The form with the choice: a select of the environments, the chosen one selected.
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, formModel(prod, { endpoints: [EP, EP2] }), { overview: {} });
+  assert.ok(c2.innerHTML.includes('<select class="og-input" data-field="env"><option value="staging">staging</option><option value="prod" selected>prod</option></select>'));
 });

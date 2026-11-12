@@ -447,11 +447,14 @@ Belongs here:
   environment) and its host, whole on hover; the branch its Run reads (its
   own, else the repository's); the grade letter with how much matches live
   (*92% match*), *Not checked yet* or *Live did not answer*; *Checked 2
-  hours ago*; **Run** and **Open** (the board, offered when the service has
-  a pack of its own or a check) — or *Not declared* with **Add**;
+  hours ago*; **Run**, **Open** (the board, offered when the service has
+  a pack of its own or a check) and **Change** (that environment's form) —
+  or *Not declared* with **Add**;
 - on the row, **Run all** (two or more environments that can run, one after
-  another) and **Change** (where it is declared, where it runs, its MTTD /
-  MTTR targets); a Run's error under the row, naming its environment;
+  another) and, for a service in two or more environments, **Change**: the
+  form with *Environment* as a choice (in release order), each choice
+  loading that environment's endpoint and branch, the repository and the
+  targets the service's; a Run's error under the row, naming its environment;
 - under the matrix, the grade's letters and where each starts (*A+ ≥ 95% ·
   A > 85% · … · D < 37.5%*), and *Not declared*;
 - **Add a service**, the one primary button: five numbered answers — *1

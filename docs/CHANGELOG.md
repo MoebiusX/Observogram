@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.36 — 2026-11-12
+
+**Every environment of a service can be changed from the Services matrix.** The row's **Change** always opened the first environment's form, and the only way to another was clicking its endpoint's name, which nothing said was a link — so in a service with staging and prod, prod could not be reached.
+
+### Changed
+- **A Change in every cell** (`studio/overview-view.mjs`): beside **Run** and **Open**, each environment's own **Change** — its endpoint and branch, and the service's repository and targets. A service in one environment no longer draws a second **Change** on the row.
+- **The row's Change asks which environment** (`studio/overview-model.mjs` `formOpened({ pick })`, `formInput`, `formModel` `envChoices`; `studio/app.mjs`): for a service in two or more environments, the form opens with *Environment* as a choice in release order (focused); choosing another loads that environment's endpoint and branch — the repository and the targets stay as answered — and the title and the save follow it (`Checkout · prod`, that environment rebound, its branch to `envRefs`). The focus stays on the choice.
+- **Docs.** `README.md` (the services), `docs/USER_JOURNEY.md` (Overview: the Services list), `docs/VENDORING.md` (`editService(serviceId, env, { pick })`).
+- **Downstream:** api, behaviour — `formOpened` takes `pick` and returns `envChoices`, `formModel` returns `envChoices`, `formInput` on `env` loads the chosen environment's endpoint and branch, and the board calls `host.overview.editService(serviceId, env, { pick: true })` from a row's **Change** (a host that ignores the third argument opens the first environment, as before); each cell has its own **Change**.
+
+### Tests
+- `tools/test-overview-model.mjs` +1: the choice in release order and opened on the environment named (or the first), another chosen loading its endpoint and branch with the service's answers kept, the title and the save that environment's, none from a cell or for one environment; each cell's **Change**, the row's asking (and not drawn twice for one environment), the click carrying `{ pick: true }`, the select drawn.
+- Cut as 0.8.36: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1922 → 1923.
+- **Downstream:** none — tests only.
+
 ## 0.8.35 — 2026-11-12
 
 **The Services list is a matrix — a row per service, a column per environment — and each environment reads its own branch.** The list drew one row per service and environment, so a service in three environments was three rows a reader had to line up by eye. It is now one row per service with its repository, and a column per environment in the order a release travels: in each cell, the environment's endpoint, the branch its Run reads, the grade with how much matches live, when it was last checked, Run and Open. Staging and production of one repository often read different branches (develop and main), which is most of why their grades differ, so a service can now name the branch each environment reads.
