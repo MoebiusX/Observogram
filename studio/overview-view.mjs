@@ -811,6 +811,8 @@ function mxCellHtml(r, col, svc, canWrite) {
     ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
     : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
   const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
+  // The live read's scope, where it has one: the environment's own, or the server's snapshot scope.
+  const scope = r.scope ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
   const l = r.last;
   let grade;
   if (r.run.running) grade = '<span class="ov-mx__grade" role="status"><span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">…</span><b>Running…</b></span>';
@@ -830,7 +832,7 @@ function mxCellHtml(r, col, svc, canWrite) {
   // This environment's own Change: its endpoint and branch (and the service's repository and targets).
   const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`;
   return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
-            <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}</div>
+            <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}${scope}</div>
             ${grade}${when}
             <div class="ov-mx__acts">${runBtn}${openBtn}${editBtn}</div>
           </div>`;
@@ -935,6 +937,19 @@ function uploadHtml(f) {
               <span class="ov-form__upload-note og-muted">${escapeHtml(u.note)}</span>` : ''}${u.error ? `
               <span class="ov-form__err" role="alert">${escapeHtml(u.error)}</span>` : ''}
             </div>`;
+}
+
+// The live scope under the endpoint (formModel's `scope`): what of the estate the endpoint serves
+// is this service's — the snapshot scope's five answers, prefilled as the model says, and the hint.
+function scopeHtml(f, v) {
+  const s = f.scope;
+  const fields = s.fields.map((x) => `
+              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
+  return `
+          <div class="ov-form__sub ov-form__scope" role="group" aria-labelledby="ov-form-scope-l">
+            <span class="ov-form__l" id="ov-form-scope-l">Live scope — what of the estate is this service's</span>${fields}
+            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>
+          </div>`;
 }
 
 // A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
@@ -1138,7 +1153,7 @@ function svcFormHtml(f) {
               ${f.endpoints.length ? '' : '<option value="" disabled>No MCP endpoint is registered yet</option>'}${f.endpoints.length && !v.endpointId ? '<option value="" selected disabled>Choose an MCP endpoint</option>' : ''}${eps}${newOpt}${packOpt}
             </select>${liveChosen ? `${packFileHtml(f, 'live')}
             <span class="ov-form__hint og-muted">Each Run checks the repository against this file as it is — no MCP call — until you upload it again.</span>` : ''}${f.newEndpoint.allowed || liveChosen ? '' : `
-            <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}
+            <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}${f.scope?.shown ? scopeHtml(f, v) : ''}
           </div>
         </li>${f.targets ? targetsStepHtml(f, v, shown, 5) : ''}
       </ol>${f.error ? `

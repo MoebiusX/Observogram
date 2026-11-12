@@ -32,6 +32,7 @@ import {
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, LIVE_PACK,
+  scopeFormValues, scopeFromValues, scopeSummary, liveScopeDefaultsOf, SCOPE_FIELDS,
   serviceAsideKey, serviceTargetsKey, studioTargetsCounted, serviceMatrix, envRank,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
@@ -1978,7 +1979,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   const services = [svcRow()];
   // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
   const blank = formOpened(services, { endpoints: [EP] });
-  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '' }], 'a new service starts on the recommended targets');
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '', scopePrefixes: '', scopeFolders: '', scopeExclude: '', scopeGroups: '', scopeDatasource: '' }], 'a new service starts on the recommended targets');
   assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
   assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
   // Opened on a row: its service and environment, the environment fixed.
@@ -2411,6 +2412,79 @@ test('renderServiceList: Pack file\'s chooser in place of the address, the Live 
   assert.ok(!c4.innerHTML.includes('<option value="pack"') && !c4.innerHTML.includes('data-kind="pack"'));
 });
 
+// ---------- an environment's live scope ----------
+
+test('a live scope per environment: the five answers and the compact scope; the form prefilled from the environment\'s own or the server\'s snapshot scope, said so; the save sends the service\'s map only when this environment\'s entry changes; the row says "scoped: …"', () => {
+  assert.deepEqual(SCOPE_FIELDS.map((f) => f.field), ['metricPrefixes', 'folderUids', 'metricExclude', 'ruleGroups', 'datasourceUid']);
+  const scope = { metricPrefixes: ['checkout_', 'http_'], folderUids: ['abc'], metricExclude: ['^go_', '^process_'], ruleGroups: ['checkout'], datasourceUid: 'prom' };
+  const values = scopeFormValues(scope);
+  assert.deepEqual(values, { scopePrefixes: 'checkout_, http_', scopeFolders: 'abc', scopeExclude: '^go_ ^process_', scopeGroups: 'checkout', scopeDatasource: 'prom' });
+  assert.deepEqual(scopeFromValues(values), scope, 'the round trip');
+  assert.deepEqual(scopeFromValues({ scopePrefixes: ' a_,, a_ ,b_ ', scopeExclude: '  ^x,y  ' }), { metricPrefixes: ['a_', 'b_'], metricExclude: ['^x,y'] }, 'commas for lists, white space for patterns; trimmed, deduplicated');
+  assert.equal(scopeFromValues({}), null);
+  assert.equal(scopeSummary(scope), '2 prefixes, 1 folder, 1 rule group, 2 exclude patterns, datasource prom');
+  assert.deepEqual(liveScopeDefaultsOf({ defaults: { metricPrefixes: ['shop_'], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] }, from: 'deployment', errors: [] }), { metricPrefixes: ['shop_'] });
+  assert.equal(liveScopeDefaultsOf({ defaults: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] } }), null);
+  assert.equal(liveScopeDefaultsOf({ defaults: { metricPrefixes: ['shop_'] }, errors: ['OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS[0] "x y" is not a folder uid'] }), null, 'a configured scope that does not parse is offered as none (the Run names the variable)');
+
+  const own = { metricPrefixes: ['checkout_'], folderUids: ['f1', 'f2'] };
+  const row = (liveScope = null, liveScopes = {}) => svcRow({ liveScopes, environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope }] });
+  const DEFAULTS = { metricPrefixes: ['shop_'] };
+
+  // The environment's own: the answers, the hint, the block shown under an endpoint and not for an export.
+  const mine = formOpened([row(own, { prod: own })], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
+  assert.deepEqual([mine.values.scopePrefixes, mine.values.scopeFolders, mine.scopeFrom], ['checkout_', 'f1, f2', 'environment']);
+  const mm = formModel(mine, { endpoints: [EP] }).scope;
+  assert.deepEqual([mm.shown, mm.from, mm.hint], [true, 'environment', "This environment's own scope: each Run reads only 1 prefix, 2 folders of the estate, and the match counts only that."]);
+  assert.equal(formModel(formInput(mine, 'endpointId', LIVE_PACK), { endpoints: [EP] }).scope.shown, false, 'an export of live has no scope');
+  // Unchanged: nothing sent. Changed: the whole map. Cleared: the entry goes (the server's applies).
+  assert.equal(savePlan(mine.values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, null);
+  assert.deepEqual(savePlan(formInput(mine, 'scopeGroups', 'checkout').values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch,
+    { liveScopes: { prod: { metricPrefixes: ['checkout_'], folderUids: ['f1', 'f2'], ruleGroups: ['checkout'] } } });
+  let cleared = mine;
+  for (const f of SCOPE_FIELDS) cleared = formInput(cleared, f.value, '');
+  assert.deepEqual(savePlan(cleared.values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, { liveScopes: {} });
+  assert.equal(formModel(cleared, { endpoints: [EP] }).scope.hint, "Empty: the server's snapshot scope applies.");
+
+  // None of its own: prefilled from the server's, said so; saved as it is, it stays the server's (nothing sent).
+  const prefilled = formOpened([row()], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
+  assert.deepEqual([prefilled.values.scopePrefixes, prefilled.scopeFrom, formModel(prefilled, { endpoints: [EP] }).scope.hint], ['shop_', 'server', "Prefilled from the server's snapshot scope; change it for this environment."]);
+  assert.equal(savePlan(prefilled.values, { services: [row()], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, null);
+  // No scope anywhere: empty, said so; a new service typed with one is created with it.
+  const blank = formInput(formInput(formOpened([], { endpoints: [EP] }), 'name', 'Basket'), 'scopePrefixes', 'basket_');
+  assert.equal(formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP] }).scope.hint, 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.');
+  assert.deepEqual(savePlan({ ...blank.values, location: 'acme/basket' }, { services: [] }).service.create.liveScopes, { prod: { metricPrefixes: ['basket_'] } });
+
+  // A blank Add that names an existing service never takes away a scope it did not draw (scopeKnown false).
+  const added = formInput(formInput(formOpened([row(own, { prod: own })], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Checkout'), 'scopePrefixes', '');
+  assert.equal(savePlan({ ...added.values, location: 'https://github.com/acme/checkout' }, { services: [row(own, { prod: own })], scopeDefaults: DEFAULTS, scopeKnown: false }).service.patch?.liveScopes, undefined);
+  // A rule group with a comma (the API takes one) survives a save that does not touch the scope.
+  const comma = { ruleGroups: ['checkout, slo'] };
+  const kept = formOpened([row(comma, { prod: comma })], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.equal(kept.values.scopeGroups, 'checkout, slo');
+  assert.equal(savePlan(formInput(kept, 'targetProfile', 'financial').values, { services: [row(comma, { prod: comma })], serviceId: 1, targetsTouched: true }).service.patch.liveScopes, undefined, 'untouched: never re-split');
+
+  // The row: the resolved scope in a few words, its own or the server's; none for an unscoped read or an export.
+  const rowOf = (services, defaults) => serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, liveScopeDefaults: defaults }).rows[0].scope;
+  assert.deepEqual(rowOf([row(own, { prod: own })], DEFAULTS), { text: '1 prefix, 2 folders', from: 'environment' });
+  assert.deepEqual(rowOf([row()], DEFAULTS), { text: '1 prefix', from: 'server' });
+  assert.equal(rowOf([row()], null), null);
+});
+
+test('renderServiceList: the live scope under the endpoint — five fields with their values, the hint — and "scoped: …" in the matrix cell', () => {
+  const own = { metricPrefixes: ['checkout_'], folderUids: ['f1', 'f2'] };
+  const services = [svcRow({ liveScopes: { prod: own }, environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: own }] })];
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP] }), { endpoints: [EP] }), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('id="ov-form-scope-l">Live scope — what of the estate is this service\'s</span>'));
+  assert.ok(html.includes('data-field="scopePrefixes" value="checkout_"') && html.includes('data-field="scopeFolders" value="f1, f2"'));
+  for (const f of SCOPE_FIELDS) assert.ok(html.includes(`data-field="${f.value}"`), f.value);
+  assert.ok(html.includes('each Run reads only 1 prefix, 2 folders of the estate'));
+  assert.ok(html.includes('<span class="ov-mx__scope og-muted" title="prod&#39;s own live scope: the Run reads only this of the estate">scoped: 1 prefix, 2 folders</span>'), 'the cell says it');
+});
+
 // ---------- a repository read with the person's own token ----------
 
 test('a Run its host would not read without the person\'s own token asks for it on the row; a refused one says so; the tokens held in the tab are named with a way to forget them; a reader who cannot run is never asked', () => {
@@ -2526,7 +2600,7 @@ test('the form offers the person\'s own token where a row would — GitHub (opti
   assert.equal(authOf('github', { heldTokens: undefined }), null, 'a host that passes no heldTokens takes no token from the form: no field');
   assert.equal(formModel(open('github'), { endpoints: [EP] }).auth, null);
   // The form's values never hold it: nothing typed there is drawn back.
-  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr']);
+  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource']);
   const opened = open('github');
   assert.equal(formInput(opened, 'repoAuth', 'made-up-token'), opened, 'and typing never reaches them: the field is no form value');
 });
@@ -2658,7 +2732,7 @@ test('the form offers Sign in to … before the token where the host offers it, 
   const draft = formDraft(form, { now: NOW });
   assert.deepEqual(draft, { v: 1, at: NOW, serviceId: null, env: null, values: form.values, targetsTouched: false });
   assert.notEqual(draft.values, form.values, 'a copy');
-  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr'], 'the form holds no token, so the draft cannot');
+  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource'], 'the form holds no token, so the draft cannot');
   assert.equal(formDraft(FORM_CLOSED), null);
   const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], now: NOW + 60_000 });
   assert.deepEqual([back.open, back.mode, back.serviceId, back.saving, back.error, back.values], [true, 'add', null, false, null, form.values]);

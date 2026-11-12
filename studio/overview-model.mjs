@@ -1549,6 +1549,75 @@ export const REPOSITORY_KINDS = Object.freeze([
 ]);
 // The Live answer's export of live (server/service-packs.mjs): a pack file in place of the MCP endpoint.
 export const LIVE_PACK = 'pack';
+
+// ---------- an environment's live scope ----------
+//
+// The scope an environment's live read applies (the server's normalizeScope fields; the studio never
+// imports tools/lib, so the list rule is restated): the form's five answers, as typed — prefixes,
+// folder uids and rule groups by commas, exclude patterns by white space — and the compact scope
+// they make ({ metricPrefixes?, folderUids?, datasourceUid?, metricExclude?, ruleGroups? }, or null).
+// The server checks every value; the form only splits them.
+export const SCOPE_FIELDS = Object.freeze([
+  Object.freeze({ value: 'scopePrefixes', field: 'metricPrefixes', label: 'Metric prefixes', placeholder: 'checkout_, http_server_', split: 'comma' }),
+  Object.freeze({ value: 'scopeFolders', field: 'folderUids', label: 'Dashboard / rule folder uids', placeholder: 'abc123, def456', split: 'comma' }),
+  Object.freeze({ value: 'scopeExclude', field: 'metricExclude', label: 'Exclude metric names matching', placeholder: '^go_ ^process_', split: 'space' }),
+  Object.freeze({ value: 'scopeGroups', field: 'ruleGroups', label: 'Rule groups', placeholder: 'checkout, checkout-slo', split: 'comma' }),
+  Object.freeze({ value: 'scopeDatasource', field: 'datasourceUid', label: 'Datasource uid', placeholder: 'prometheus', split: null }),
+]);
+const scopeList = (text, split) => [...new Set(String(text ?? '').split(split === 'space' ? /\s+/ : ',').map((x) => x.trim()).filter(Boolean))];
+
+// A compact scope → the form's five answers.
+export function scopeFormValues(scope) {
+  const s = scope && typeof scope === 'object' ? scope : {};
+  return Object.fromEntries(SCOPE_FIELDS.map((f) => [f.value, f.split === null ? (typeof s[f.field] === 'string' ? s[f.field] : '')
+    : (Array.isArray(s[f.field]) ? s[f.field].join(f.split === 'space' ? ' ' : ', ') : '')]));
+}
+
+// The form's five answers → the compact scope, or null when every answer is empty.
+export function scopeFromValues(values) {
+  const out = {};
+  for (const f of SCOPE_FIELDS) {
+    if (f.split === null) { const v = trimmed(values?.[f.value]); if (v) out[f.field] = v; continue; }
+    const list = scopeList(values?.[f.value], f.split);
+    if (list.length) out[f.field] = list;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Two compact scopes the same (null and {} alike).
+export function sameScope(a, b) {
+  const key = (x) => JSON.stringify(SCOPE_FIELDS.map((f) => (x && x[f.field] !== undefined ? x[f.field] : null)));
+  return key(a) === key(b);
+}
+
+// A scope said in a few words: "2 prefixes, 5 folders" (null for none).
+export function scopeSummary(scope) {
+  if (!scope || typeof scope !== 'object') return null;
+  const n = (list, one, many) => (Array.isArray(list) && list.length ? `${list.length} ${list.length === 1 ? one : many}` : null);
+  const parts = [
+    n(scope.metricPrefixes, 'prefix', 'prefixes'), n(scope.folderUids, 'folder', 'folders'), n(scope.ruleGroups, 'rule group', 'rule groups'),
+    n(scope.metricExclude, 'exclude pattern', 'exclude patterns'), typeof scope.datasourceUid === 'string' && scope.datasourceUid ? `datasource ${scope.datasourceUid}` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+// The server's configured snapshot scope as GET /api/mcp/jobs answers it ({ defaults, from, errors })
+// → compact, or null (none configured, or not readable here).
+// A configured scope with a variable that does not parse is none here: the Run refuses it, naming the
+// variable, unless the environment has a scope of its own.
+export function liveScopeDefaultsOf(answer) {
+  if (!answer || typeof answer !== 'object' || !answer.defaults) return null;
+  if (Array.isArray(answer.errors) && answer.errors.length) return null;
+  return scopeFromValues(scopeFormValues(answer.defaults));
+}
+
+// The scope an environment's read applies and where it comes from: its own, else the server's
+// configured snapshot scope (`defaults`, compact), else none → { scope, from: 'environment' | 'server' | null }.
+export function resolvedScope(own, defaults) {
+  if (own && typeof own === 'object' && Object.keys(own).length) return { scope: own, from: 'environment' };
+  if (defaults && typeof defaults === 'object' && Object.keys(defaults).length) return { scope: defaults, from: 'server' };
+  return { scope: null, from: null };
+}
 const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
 // The org's repository sources (GET /api/repository-sources: { github, ado,
 // path, upload }, a missing kind on; null when not read — every source on,
@@ -1662,6 +1731,8 @@ export function serviceListModel(input = {}) {
     services = null, servicesStatus = null, catalog = [], isLiveAggregatePack = () => false,
     journeys = null, journeysError = null, endpoints = null, access = null, now = Date.now(),
     running = {}, results = {}, showAll = false, heldTokens = [], repoSignIn = null, sources = null,
+    // The server's configured snapshot scope (GET /api/mcp/jobs's scope.defaults, compact), or null.
+    liveScopeDefaults = null,
   } = input;
   const canWrite = access?.canWrite !== false;
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
@@ -1712,6 +1783,8 @@ export function serviceListModel(input = {}) {
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
         repository, live, livePack: exported, last, journey: journey?.name || null, branch,
+        // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from }, or null when unscoped.
+        scope: live && !exported ? (() => { const r = resolvedScope(env?.liveScope ?? null, liveScopeDefaults); return r.scope ? { text: scopeSummary(r.scope), from: r.from } : null; })() : null,
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
@@ -1919,7 +1992,9 @@ export const FORM_CLOSED = Object.freeze({ open: false });
 // `env` or the first; choosing another loads that environment's endpoint and branch (formInput).
 // `addEnv`: Add environment on the service's row — its form with the environment to name (empty),
 // the service's own answers kept; the save adds it (formProblems refuses a name it already has).
-export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null, pick = false, addEnv = false } = {}) {
+// `scopeDefaults`: the server's configured snapshot scope (compact), which prefills an environment
+// with none of its own (form.scopeFrom 'server').
+export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null, pick = false, addEnv = false, scopeDefaults = null } = {}) {
   const s = Array.isArray(services) ? services.find((x) => x && x.id === serviceId) : null;
   const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
   const eps = Array.isArray(endpoints) ? endpoints : [];
@@ -1936,6 +2011,9 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
     // The MTTD / MTTR targets (mttx-targets.mjs): a new service starts on the recommended profile.
     ...targetsFormValues(s?.targets ?? null, { isNew: !s }),
   };
+  // The live scope: this environment's own, else the server's configured one (prefilled), else empty.
+  const scoped = resolvedScope(addEnv ? null : e?.liveScope ?? null, scopeDefaults);
+  Object.assign(values, scopeFormValues(scoped.scope));
   // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
   const r = s?.repository;
   const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
@@ -1944,7 +2022,7 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // The repository as saved: a source switched off since may still be kept as it is.
   // The record as the branch rule reads it (branchIsEnvironments): the form opens on the environment's own
   // branch where the rule makes it the environment's, else on the repository's.
-  const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null, livePack: x?.livePack ? { name: x.livePack.name, uploadedAt: x.livePack.uploadedAt || null } : null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
+  const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null, livePack: x?.livePack ? { name: x.livePack.name, uploadedAt: x.livePack.uploadedAt || null } : null, liveScope: x?.liveScope ?? null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
   values.ref = (branchIsEnvironments(values, record) && ownRefOf(record, values.env)) || r?.ref || '';
   const original = r ? { kind: r.kind, location: r.location || '', ref: values.ref } : null;
   // The environments to choose from, when the service's Change is asked for one of two or more.
@@ -1953,7 +2031,7 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // `defaultRef`: the repository's own branch, which an environment left blank reads.
   const adding = !!addEnv && !!s;
   if (adding) values.env = '';
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
   return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
 }
@@ -1965,6 +2043,9 @@ function chooseEnvironment(form) {
   if (!e) return form;
   const values = { ...form.values, endpointId: e.livePack ? LIVE_PACK : e.endpointId != null ? String(e.endpointId) : form.values.endpointId };
   form = { ...form, packs: { ...(form.packs || {}), live: e.livePack ? { kept: e.livePack } : null } };
+  const scoped = resolvedScope(e.liveScope ?? null, form.scopeDefaults ?? null);
+  Object.assign(values, scopeFormValues(scoped.scope));
+  form = { ...form, scopeFrom: scoped.from };
   values.ref = (branchIsEnvironments(values, form.record) && ownRefOf(form.record, e.name)) || form.record.repository?.ref || '';
   return { ...form, envFixed: true, values, original: form.original ? { ...form.original, ref: values.ref } : form.original };
 }
@@ -2035,12 +2116,12 @@ export function formDraft(form, { now = Date.now() } = {}) {
   return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched };
 }
 
-export function formRestored(services, draft, { endpoints = [], sources = null, now = Date.now() } = {}) {
+export function formRestored(services, draft, { endpoints = [], sources = null, scopeDefaults = null, now = Date.now() } = {}) {
   if (!draft || typeof draft !== 'object' || draft.v !== 1 || !Number.isFinite(draft.at)) return null;
   if (now - draft.at > FORM_DRAFT_TTL_MS || draft.at - now > 60_000) return null;
   const serviceId = draft.serviceId ?? null;
   if (serviceId !== null && !(Array.isArray(services) && services.some((x) => x && x.id === serviceId))) return null;
-  let form = formOpened(services, { serviceId, env: typeof draft.env === 'string' ? draft.env : null, endpoints, sources });
+  let form = formOpened(services, { serviceId, env: typeof draft.env === 'string' ? draft.env : null, endpoints, sources, scopeDefaults });
   const values = draft.values && typeof draft.values === 'object' ? draft.values : {};
   if (values.kind === 'upload') return form;
   for (const field of Object.keys(form.values)) {
@@ -2337,6 +2418,8 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     upload: uploadModel(form, v, { uploads, canWrite, now }),
     // The pack files: the repository's (Pack file) and the Live answer's export.
     // Pack files, opt-in as Upload is (`uploads`): `wired` draws the Live answer's choice, `offered` its button.
+    // The live scope (shown once the Live answer is an MCP endpoint): its fields and where the values came from.
+    scope: scopeModel(form, v),
     packs: { repo: { offered: canWrite && !!uploads, ...packModel(form.packs?.repo, { now }) }, live: { wired: !!uploads, offered: canWrite && !!uploads, chosen: v.endpointId === LIVE_PACK, ...packModel(form.packs?.live, { now }) } },
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
@@ -2528,6 +2611,20 @@ function packModel(p, { now }) {
 }
 const packReady = (p) => !!(p?.staged || p?.kept);
 
+// formModel's `scope`: { shown, from: 'environment' | 'server' | null, hint, fields: [{ value, label, placeholder }] }.
+// `from` is where the values now on the form stand: the server's prefill while they still equal it.
+function scopeModel(form, v) {
+  const shown = !!v.endpointId && v.endpointId !== LIVE_PACK;
+  const typed = scopeFromValues(v);
+  const defaults = form.scopeDefaults || null;
+  const from = typed && defaults && sameScope(typed, defaults) ? 'server' : typed ? 'environment' : null;
+  const hint = from === 'server' ? "Prefilled from the server's snapshot scope; change it for this environment."
+    : typed ? `This environment's own scope: each Run reads only ${scopeSummary(typed)} of the estate, and the match counts only that.`
+      : defaults ? "Empty: the server's snapshot scope applies."
+        : 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.';
+  return { shown, from, hint, fields: SCOPE_FIELDS.map((f) => ({ value: f.value, label: f.label, placeholder: f.placeholder })) };
+}
+
 // formModel's `upload`: { offered, state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, note, error }.
 function uploadModel(form, v, { uploads, canWrite, now }) {
   if (v.kind !== 'upload') return { offered: !!uploads, state: null, text: '', note: '', error: null };
@@ -2570,7 +2667,12 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 // `packs`: the form's pack files ({ repo, live }); a staged one is sent after the record and the
 // environment exist (PUT /api/services/:id/repository-pack, PUT /api/environments/:id/live-pack):
 // `repoPack` / `livePack` { name, text } or null (a kept one is left as it is).
-export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null } = {}) {
+// `scopeDefaults`: the server's configured snapshot scope (compact) — a scope typed equal to it is
+// none of the environment's own (it reads that one anyway); the service's liveScopes map is sent
+// whole (POST, PATCH) only when this environment's entry changes. An export of live has no scope.
+// `scopeKnown`: the form was opened on this service's record (false for a blank Add that names an
+// existing service — its environment's scope was never drawn, so an empty answer leaves it as it is).
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null, scopeDefaults = null, scopeKnown = true } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
   // A pack file is set by its own upload, never named in the record's create or patch — as an upload.
@@ -2610,13 +2712,27 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   // …or a record with none yet: the targets the form showed chosen are the ones it gets.
   const mayRetarget = !!existing && (existing.id === serviceId || targetsTouched === true || !existing.targets);
   const targetsChanged = mayRetarget && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
+  let liveScopes = null;
+  if (!liveExport) {
+    const current = existing?.liveScopes && typeof existing.liveScopes === 'object' ? existing.liveScopes : {};
+    const was = current[envName] ?? null;
+    // Answers exactly as the environment's own scope drew them: that scope, as kept (a rule group with a
+    // comma, say, is never split by a save that did not touch it).
+    const untouched = was && SCOPE_FIELDS.every((f) => String(values?.[f.value] ?? '') === scopeFormValues(was)[f.value]);
+    const typed = untouched ? was : scopeFromValues(values);
+    const own = typed && !sameScope(typed, scopeDefaults) ? typed : null;
+    const next = { ...current };
+    if (own) next[envName] = own; else if (scopeKnown) delete next[envName];
+    if (!sameScope(current[envName] ?? null, next[envName] ?? null)) liveScopes = next;
+  }
   const patchOf = (repo) => {
-    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}) };
+    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}), ...(liveScopes ? { liveScopes } : {}) };
     return Object.keys(p).length ? p : null;
   };
   let service;
-  if (uploading) service = existing ? { id: existing.id, patch: patchOf(null) } : { create: { name, targets } };
-  else service = existing ? { id: existing.id, patch: patchOf(sameRepo(existing.repository) ? null : repository) } : { create: { name, repository, targets } };
+  const scopesOnCreate = liveScopes && Object.keys(liveScopes).length ? { liveScopes } : {};
+  if (uploading) service = existing ? { id: existing.id, patch: patchOf(null) } : { create: { name, targets, ...scopesOnCreate } };
+  else service = existing ? { id: existing.id, patch: patchOf(sameRepo(existing.repository) ? null : repository) } : { create: { name, repository, targets, ...scopesOnCreate } };
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
   return {
     endpoint, service,

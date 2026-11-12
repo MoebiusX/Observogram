@@ -177,6 +177,19 @@ export function normalizeScope(input) {
   return { scope, errors };
 }
 
+// A scope as a journey file and a run record keep it: only the fields set (a
+// normalized scope → { metricPrefixes?, folderUids?, datasourceUid?,
+// metricExclude?, ruleGroups? }), or null when none is.
+export function compactScope(scope) {
+  if (!scope || scopeIsEmpty(scope)) return null;
+  const out = {};
+  for (const key of SCOPE_FIELDS) {
+    const v = scope[key];
+    if (Array.isArray(v) ? v.length : (typeof v === 'string' && v !== '')) out[key] = Array.isArray(v) ? [...v] : v;
+  }
+  return out;
+}
+
 export function scopeIsEmpty(scope) {
   return !scope || ((scope.metricPrefixes || []).length === 0 && (scope.folderUids || []).length === 0 && !scope.datasourceUid
     && (scope.metricExclude || []).length === 0 && (scope.ruleGroups || []).length === 0);

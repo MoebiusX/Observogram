@@ -510,7 +510,7 @@ p.ov-scan__sum { cursor: default; }
 .ov-mx__ep { font: 600 13.5px/1.3 var(--og-font); color: var(--og-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ov-mx__ep:hover { text-decoration: underline; text-underline-offset: 2px; }
 .ov-mx__add:focus-visible, .ov-mx__ep:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
-.ov-mx__host, .ov-mx__ref { font: 400 12px/1.35 var(--og-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-mx__host, .ov-mx__ref, .ov-mx__scope { font: 400 12px/1.35 var(--og-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ov-mx__ref { font-family: var(--og-font-code); font-size: 11.5px; }
 .ov-mx__grade { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .ov-mx__grade b { font: 600 13.5px/1.3 var(--og-font); color: var(--og-text); }
@@ -625,6 +625,9 @@ p.ov-scan__sum { cursor: default; }
 .ov-form__hint { font: 400 12px/1.35 var(--og-font); }
 .ov-form__err { font: 500 12px/1.35 var(--og-font); color: var(--og-fail); }
 .ov-form__sub { display: grid; gap: 8px; margin-top: 4px; padding: 10px; border: 1px dashed var(--og-line-strong); border-radius: 8px; }
+/* The live scope under the endpoint: two answers a row where there is room, the label and the hint across. */
+.ov-form__scope { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.ov-form__scope > .ov-form__l, .ov-form__scope > .ov-form__hint { grid-column: 1 / -1; }
 /* The person's own token for the repository's host, under the address it reads. */
 .ov-form__auth { display: grid; gap: 6px; margin-top: 4px; min-width: 0; }
 .ov-form__auth-ways { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; min-width: 0; }

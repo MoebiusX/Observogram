@@ -111,6 +111,7 @@ import { readRepoFolder } from './repo-folder.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
 import { safeMcpUrl } from './mcp-url-safety.mjs';
+import { compactScope, normalizeScope, scopeAnnotations } from './live-fetch.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
@@ -297,11 +298,25 @@ export function validateChaosRuns(chaosRuns, journeyName = '?') {
 // packB.mcp.endpointId — the org's registered MCP endpoint a server-run
 // journey fetches through (capture writes it beside the url) — is a
 // positive integer when present.
+// packB.mcp.scope — the live read narrowed to one service (the snapshot
+// scope's fields, tools/lib/live-fetch.mjs normalizeScope) — is a valid scope
+// when present; the fetch applies it as a snapshot does (a scoped draft).
 export function validatePackBMcp(mcp, journeyName = '?') {
-  if (!mcp || typeof mcp !== 'object' || mcp.endpointId === undefined) return;
-  if (!Number.isInteger(mcp.endpointId) || mcp.endpointId < 1) {
+  if (!mcp || typeof mcp !== 'object') return;
+  if (mcp.endpointId !== undefined && (!Number.isInteger(mcp.endpointId) || mcp.endpointId < 1)) {
     throw new Error(`journey ${journeyName}: packB.mcp.endpointId must be a positive integer (got ${JSON.stringify(mcp.endpointId)})`);
   }
+  if (mcp.scope !== undefined && mcp.scope !== null) {
+    const { errors } = normalizeScope(mcp.scope);
+    if (errors.length) throw new Error(`journey ${journeyName}: packB.mcp.${errors.join('; ')}`);
+  }
+}
+
+// The live scope a definition's MCP read applies (compact; null: unscoped).
+export function packBScopeOf(def) {
+  const raw = def?.packB?.mcp?.scope;
+  if (raw === undefined || raw === null || def?.packB?.file) return null;
+  return compactScope(normalizeScope(raw).scope);
 }
 
 // Step 5: the notify policy vocabulary, re-exported from the browser-safe
@@ -789,9 +804,18 @@ async function resolvePackB(def, crawlScope = null, live = null) {
   // live path needs it. Composition mirrors the server's draft route.
   const { fetchMcp, buildCanonicalPack } = await import('../fetch-live-pack.mjs');
   try {
-    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth });
+    // A scoped read (packB.mcp.scope): the families the scope narrows are
+    // narrowed as a snapshot narrows them, and the pack says so — the same
+    // observogram.scope.* annotations, which park a declared artefact outside
+    // the scope as not observed rather than missing (tools/lib/diff.mjs).
+    const scope = packBScopeOf(def);
+    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth, ...(scope ? { scope } : {}) });
     const refreshedAt = new Date().toISOString();
     const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: live.safeUrl, ...fetched });
+    if (fetched.liveScope) {
+      canonical.metadata = canonical.metadata || {};
+      canonical.metadata.annotations = { ...(canonical.metadata.annotations || {}), ...scopeAnnotations(fetched.liveScope.scope, fetched.liveScope.learned) };
+    }
     return { canonical, source: `mcp:${live.safeUrl}` };
   } catch (e) {
     // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
@@ -1279,7 +1303,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
         outcome: 'vantage-lost',
         error: String(e.message || e),
         packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(a.scan || scan ? { scan: a.scan || scan } : {}) },
-        packB: { source: `mcp:${liveTarget.safeUrl}` },
+        packB: { source: `mcp:${liveTarget.safeUrl}`, liveScope: packBScopeOf(def) },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
       };
@@ -1418,7 +1442,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // look at (its observogram.unobserved.<kind> annotations), sorted, so a
     // reader of the record alone (the Overview's "Why this grade") can say
     // "the live side cannot observe it" instead of "it does not exist".
-    packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt, unobserved: unobservedKindsOf(b.canonical) },
+    // packB.liveScope: the scope a live read applied (null: the read was unscoped — every record
+    // written before scopes existed has no key, and is read as it always was); a file has none.
+    packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt, unobserved: unobservedKindsOf(b.canonical), ...(liveTarget ? { liveScope: packBScopeOf(def) } : {}) },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
     // schema identifies which scoring construct produced the score, so a
     // step in the gradeScore series is explainable as re-scoring vs reality

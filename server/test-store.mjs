@@ -1419,7 +1419,7 @@ test('services.gradeOff: [] on a new record (no key); updateService round-trips 
       const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments', tier: 'tier-1' });
       assert.deepEqual(svc.gradeOff, [], 'a new record is graded on every criterion');
       assert.equal(column(svc.id), null, 'and no key');
-      assert.deepEqual(Object.keys(svc), ['id', 'orgId', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'livePacks', 'createdAt', 'updatedAt']);
+      assert.deepEqual(Object.keys(svc), ['id', 'orgId', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'livePacks', 'liveScopes', 'createdAt', 'updatedAt']);
 
       // The list round-trips as written, through every read.
       const up = services.updateService(db, 'alice', svc.id, { gradeOff: off });

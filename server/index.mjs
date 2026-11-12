@@ -84,9 +84,10 @@ import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
-import { abortAllLiveJobs } from './live-jobs.mjs';
+import { abortAllLiveJobs, snapshotScopeConfig } from './live-jobs.mjs';
+import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/lib/live-fetch.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { envRefOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { envRefOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
@@ -1316,6 +1317,22 @@ function mttxTargetsOfJourney(def) {
 // without the key when none is off): a run that has no record to ask —
 // `packc journey run`, which is what a schedule runs — then grades as the
 // service does. A journey of no service keeps what it carries.
+// The scope a studio-written check's live read applies, as the service's Run would write it: the
+// environment's own, else the org's configured snapshot scope, else none (a configured scope that does
+// not parse leaves the check as it is — its Run says why). A file Pack B has none.
+function withServiceScope(def, service) {
+  const mcp = def?.packB?.mcp;
+  if (!mcp || def.packB.file || !service) return def;
+  let scope = liveScopeOf(service, def.env);
+  if (!scope) {
+    const configured = snapshotScopeConfig(currentStore(), currentOrg());
+    if (configured.errors.length) return def;
+    scope = compactScope(configured.defaults);
+  }
+  const { scope: _was, ...rest } = mcp;
+  return { ...def, packB: { ...def.packB, mcp: { ...rest, ...(scope ? { scope } : {}) } } };
+}
+
 function withServiceGradeOff(def, service) {
   if (!service) return def;
   const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, mttxTargets: _wasTargets, ...rest } = def;
@@ -1381,11 +1398,12 @@ function writeGradeOffToChecks(names, service) {
     const wasAside = JSON.stringify(Array.isArray(def.setAside) ? def.setAside : []);
     const wasRuns = JSON.stringify(Array.isArray(def.chaosRuns) ? def.chaosRuns : []);
     const wasTargets = JSON.stringify(def.mttxTargets ? { profile: def.mttxTargets.profile, mttd: def.mttxTargets.mttd, mttr: def.mttxTargets.mttr } : null);
-    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs && wasTargets === targets) continue;
+    const scoped = JSON.stringify(withServiceScope(def, service)?.packB?.mcp?.scope ?? null) === JSON.stringify(def.packB?.mcp?.scope ?? null);
+    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs && wasTargets === targets && scoped) continue;
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
-    try { saveJourneyDef(name, withServiceGradeOff(rest, service), { banner }); }
+    try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); }
     catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs and MTTD / MTTR targets (${e.message})\n`); }
   }
 }
@@ -1559,13 +1577,27 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   const endpoint = livePack ? null : getMcpEndpointRow(db, env.mcpEndpointId);
+  // The live read's scope (an MCP read only): the environment's own, else the org's configured
+  // snapshot scope (OBSERVOGRAM_SNAPSHOT_* / the org's own variables), else none. Written into the
+  // check as packB.mcp.scope, so a Check now and the command line read the same.
+  let liveScope = null;
+  if (!livePack) {
+    liveScope = liveScopeOf(service, env.name);
+    if (!liveScope) {
+      const configured = snapshotScopeConfig(db, req.observogramOrg);
+      if (configured.errors.length) {
+        return res.status(409).json({ ok: false, error: `the configured snapshot scope does not parse — ${configured.errors.join('; ')}; fix the variable, or give ${service.name} in ${env.name} its own live scope` });
+      }
+      liveScope = compactScope(configured.defaults);
+    }
+  }
   const name = serviceJourneyName(service.slug, env.name);
   let previous = null;
   try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
   const keep = (k) => (previous && previous[k] !== undefined ? { [k]: previous[k] } : {});
   const def = {
     packA: { file: '' },
-    packB: livePack ? workspacePackSource(livePack.packId) : { mcp: { url: safeMcpUrlOf(endpoint?.url || '') || String(endpoint?.url || ''), endpointId: env.mcpEndpointId } },
+    packB: livePack ? workspacePackSource(livePack.packId) : { mcp: { url: safeMcpUrlOf(endpoint?.url || '') || String(endpoint?.url || ''), endpointId: env.mcpEndpointId, ...(liveScope ? { scope: liveScope } : {}) } },
     env: env.name,
     service: service.slug,
     gate: previous?.gate && typeof previous.gate === 'object' ? previous.gate : { minAlignmentPct: 85 },
@@ -1694,6 +1726,17 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   const live = bAnn['mcp.url'] && livePackKind(canonicalB) !== 'snapshot'
     ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
   if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
+  // A live pack read under a scope (a service's Run): the check re-reads it under the same one.
+  if (live?.mcp && bAnn[LIVE_SCOPE_ANNOTATION]) {
+    let said = null;
+    try { said = JSON.parse(bAnn[LIVE_SCOPE_ANNOTATION]); } catch { /* not a scope: none */ }
+    if (said && typeof said === 'object' && !Array.isArray(said)) {
+      const { appliesTo: _appliesTo, ...fields } = said;
+      const { scope, errors } = normalizeScope(fields);
+      const compact = errors.length ? null : compactScope(scope);
+      if (compact) live.mcp.scope = compact;
+    }
+  }
   packB = live ?? sourceFor(metaB);
 
   const def = {

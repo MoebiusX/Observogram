@@ -130,7 +130,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     // Pointed away from its upload: the copy goes with it.
     if (changed.includes('repository') && before?.repository?.kind === 'upload') deleteUpload(id);
     const view = serviceViewOf(db, service);
-    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets')) onGradeOffChanged?.(view);
+    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets') || changed.includes('liveScopes')) onGradeOffChanged?.(view);
     res.json({ ok: true, service: view, changed });
   }));
 
