@@ -2028,3 +2028,69 @@ test('a service\'s set-asides: its Check now grades and counts without them — 
     forgetChecks([NAME]);
   }
 });
+
+// A branch per environment (envRefs): the service keeps the branch each environment's Run reads where it is not
+// the repository's own; the environment's view names it; a rename takes it along, a deletion takes it away; the
+// Run of each environment reads its own branch.
+test('a branch per environment: POST and PATCH envRefs (the whole map; an empty branch is none), the environment view\'s ref, a refusal writes nothing, a rename and a deletion move it; each environment\'s Run reads its own branch, else the repository\'s', async () => {
+  const made = await call('POST', '/api/services', { name: 'Branchy Shop', repository: { kind: 'github', location: 'acme/branchy-shop', ref: 'main' }, envRefs: { stg: ' develop ', dev: '' } });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.service.id;
+  assert.deepEqual(made.json.service.envRefs, { stg: 'develop' }, 'trimmed; an empty branch is none');
+  assert.deepEqual(auditRows('service.create').find((d) => d?.envRefs)?.envRefs, { stg: 'develop' }, 'the create row names them');
+  for (const name of ['stg', 'prod', 'qa']) assert.equal((await call('POST', `/api/services/${id}/environments`, { name, mcpEndpointId: ids.endpoint })).status, 201);
+  const view = async () => (await call('GET', `/api/services/${id}`)).json.service;
+  assert.deepEqual((await view()).environments.map((e) => [e.name, e.ref]).sort(), [['prod', null], ['qa', null], ['stg', 'develop']]);
+
+  const before = auditRows('service.update').length;
+  for (const [body, why] of [[{ envRefs: { stg: 'has space' } }, /the branch for "stg" is 1–200 characters with no spaces/], [{ envRefs: ['stg'] }, /envRefs is the branch each environment's Run reads/], [{ envRefs: { stg: 7 } }, /the branch for "stg"/]]) {
+    const r = await call('PATCH', `/api/services/${id}`, body);
+    assert.equal(r.status, 400, r.text);
+    assert.match(r.json.error, why);
+  }
+  assert.equal(auditRows('service.update').length, before, 'a refusal writes no row');
+
+  const patched = await call('PATCH', `/api/services/${id}`, { envRefs: { stg: 'develop', qa: 'release/2' } });
+  assert.deepEqual([patched.status, patched.json.changed, patched.json.service.envRefs], [200, ['envRefs'], { stg: 'develop', qa: 'release/2' }]);
+  assert.deepEqual(auditRows('service.update').find((d) => d?.envRefs)?.envRefs, { stg: 'develop', qa: 'release/2' }, 'the row names the branches');
+  assert.deepEqual((await call('PATCH', `/api/services/${id}`, { envRefs: { qa: 'release/2', stg: 'develop' } })).json.changed, [], 'the same map: nothing changes');
+
+  // A rename takes the branch along; a deletion takes it away.
+  const qa = (await view()).environments.find((e) => e.name === 'qa');
+  assert.equal((await call('PATCH', `/api/environments/${qa.id}`, { name: 'uat' })).status, 200);
+  assert.deepEqual((await view()).envRefs, { stg: 'develop', uat: 'release/2' });
+  assert.equal((await call('DELETE', `/api/environments/${qa.id}`)).status, 200);
+  assert.deepEqual((await view()).envRefs, { stg: 'develop' });
+  // An environment named after an inherited property reads no branch of its own.
+  assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'constructor', mcpEndpointId: ids.endpoint })).status, 201);
+  assert.equal((await view()).environments.find((e) => e.name === 'constructor').ref, null);
+
+  // Each environment's Run reads its own branch, else the repository's.
+  const RULES = readFileSync(join(REPO, 'prometheus', 'rules.yml'), 'utf8');
+  const realFetch = globalThis.fetch;
+  const trees = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return realFetch(url, init);
+    if (u.endsWith('/repos/acme/branchy-shop')) return new Response(JSON.stringify({ default_branch: 'main' }));
+    const tree = /\/repos\/acme\/branchy-shop\/git\/trees\/([^?]+)/.exec(u);
+    if (tree) { trees.push(decodeURIComponent(tree[1])); return new Response(JSON.stringify({ tree: [{ type: 'blob', path: 'alerts/api.rules.yml', size: RULES.length }] })); }
+    if (u.includes('/branchy-shop/')) return new Response(RULES);
+    return new Response('', { status: 404 });
+  };
+  delete process.env.GITHUB_TOKEN;
+  try {
+    for (const env of ['stg', 'prod']) {
+      const r = await call('POST', `/api/services/${id}/run`, { env });
+      assert.ok([200, 502].includes(r.status), r.text);
+    }
+    assert.deepEqual(trees, ['develop', 'main'], 'stg read develop, prod the repository\'s main');
+    // Another repository: the branches named for the old one go; a folder names none.
+    const moved = await call('PATCH', `/api/services/${id}`, { repository: { kind: 'github', location: 'acme/branchy-shop-v2', ref: 'main' } });
+    assert.deepEqual([moved.status, moved.json.changed.sort(), moved.json.service.envRefs], [200, ['envRefs', 'repository'], {}]);
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', `/api/services/${id}`);
+    forgetChecks(['branchy-shop.stg', 'branchy-shop.prod']);
+  }
+});

@@ -788,36 +788,58 @@ const SVC_ICONS = {
   path: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
   live: 'M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v8M2 12h0M22 12h0',
+  clock: 'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z',
 };
 const svcIcon = (name) => `<svg class="ov-ic ov-svc__ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${SVC_ICONS[name] || ''}"></path></svg>`;
 const attr = (v) => escapeHtml(String(v ?? ''));
 
-function svcRepoCell(r) {
-  if (!r.repository) {
-    return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Add the repository</button>`;
+// One environment of one service, in its column: the endpoint that reads it live (its name; the
+// host beneath, cut short, whole on hover), the branch its Run reads, the grade with how much
+// matches live, when it was last checked, Run and Open. The endpoint's name opens the form on
+// this environment (its endpoint, its branch). A column the service does not declare says so,
+// with Add for a person who may.
+function mxCellHtml(r, col, svc, canWrite) {
+  if (!r) {
+    const add = canWrite ? ` <button type="button" class="ov-mx__add" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="${attr(col)}" aria-label="Add ${attr(col)} to ${attr(svc.name)}">Add</button>` : '';
+    return `<div class="ov-mx__cell ov-mx__cell--none" data-col="${attr(col)}"><span class="ov-sr">${escapeHtml(col)}: </span><span class="ov-mx__none"><span class="ov-mx__dot" aria-hidden="true"></span>Not declared</span>${add}</div>`;
   }
-  const p = r.repository;
-  return `<span class="ov-svc__place" title="${attr(p.title)}">${svcIcon(p.kind)}<span class="ov-svc__place-text"><span class="ov-svc__kind">${escapeHtml(p.kindText)}</span><span class="ov-svc__loc">${escapeHtml(p.text)}</span>${p.detail ? `<span class="ov-svc__ref">${escapeHtml(p.detail)}</span>` : ''}${p.off ? '<span class="ov-svc__ref">switched off in Settings</span>' : ''}</span></span>`;
-}
-
-function svcLiveCell(r) {
-  if (!r.env) return '<span class="og-muted">—</span>';
-  if (!r.live) {
-    return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
-  }
-  return `<span class="ov-svc__place" title="${attr(r.live.origin)}">${svcIcon('live')}<span class="ov-svc__place-text"><span class="ov-svc__kind">MCP</span><span class="ov-svc__loc">${escapeHtml(r.live.name)}</span>${r.live.origin ? `<span class="ov-svc__ref">${escapeHtml(r.live.origin.replace(/^https?:\/\//, ''))}</span>` : ''}</span></span>`;
-}
-
-function svcLastCell(r) {
+  const host = r.live?.origin ? r.live.origin.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
+  const ep = r.live
+    ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
+    : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
+  const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
   const l = r.last;
-  if (r.run.running) {
-    return '<span class="ov-svc__last-text" role="status"><b>Running…</b><small>Scanning the repository, then checking live</small></span>';
+  let grade;
+  if (r.run.running) grade = '<span class="ov-mx__grade" role="status"><span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">…</span><b>Running…</b></span>';
+  else {
+    const letter = l.letter ? `<span class="ov-svc__letter ov-tone-${attr(l.tone)}" aria-label="Grade ${attr(l.letter)}"${l.gradeLabel ? ` title="${attr(l.gradeLabel)}"` : ''}>${escapeHtml(l.letter)}</span>` : '<span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">–</span>';
+    const what = l.state === 'checked' && l.alignmentPct !== null ? `${Math.round(l.alignmentPct)}% match`
+      : l.state === 'unreachable' ? 'Live did not answer'
+        : l.state === 'never' ? 'Not checked yet' : l.state === 'checked' ? 'Match not known' : l.word;
+    grade = `<span class="ov-mx__grade">${letter}<b>${escapeHtml(what)}</b></span>`;
   }
-  const letter = l.letter ? `<span class="ov-svc__letter ov-tone-${attr(l.tone)}" aria-label="Grade ${attr(l.letter)}"${l.gradeLabel ? ` title="${attr(l.gradeLabel)}"` : ''}>${escapeHtml(l.letter)}</span>` : '<span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">–</span>';
-  const sub = l.state === 'checked' && l.alignmentPct !== null ? `${Math.round(l.alignmentPct)}% matches live`
-    : l.state === 'unreachable' ? (l.ago ? `${l.ago}: the live side did not answer` : 'the live side did not answer')
-      : l.state === 'never' ? 'Run it to check' : '';
-  return `${letter}<span class="ov-svc__last-text"><b>${escapeHtml(l.word)}</b>${sub ? `<small>${escapeHtml(sub)}</small>` : ''}</span>`;
+  const when = !r.run.running && l.ago ? `<span class="ov-mx__when og-muted">${svcIcon('clock')}${escapeHtml(l.state === 'unreachable' ? `Tried ${l.ago}` : `Checked ${l.ago}`)}</span>` : '';
+  const runBtn = r.run.enabled || r.run.running
+    ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(r.name)} in ${attr(r.env)}">${r.run.running ? 'Running…' : 'Run'}</button>`
+    : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}" aria-label="Run ${attr(r.name)} in ${attr(r.env)}">Run</button>`;
+  const openBtn = r.open.enabled
+    ? `<button type="button" class="og-btn ov-svc__open" data-ux-action="ov-svc-open" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Open ${attr(r.name)} in ${attr(r.env)}">Open</button>` : '';
+  return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
+            <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}</div>
+            ${grade}${when}
+            <div class="ov-mx__acts">${runBtn}${openBtn}</div>
+          </div>`;
+}
+
+// The repository column: where it is declared. A GitHub or Azure DevOps repository's branch is
+// each environment's, in its column; a folder says where it is, an upload when it came.
+function mxRepoHtml(svc, first) {
+  if (!svc.repository) {
+    return `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="${attr(first?.env ?? '')}">Add the repository</button>`;
+  }
+  const p = svc.repository;
+  const remote = p.kind === 'github' || p.kind === 'ado';
+  return `<span class="ov-svc__place" title="${attr(p.title)}">${svcIcon(p.kind)}<span class="ov-svc__place-text"><span class="ov-svc__kind">${escapeHtml(p.kindText)}</span><span class="ov-svc__loc">${escapeHtml(p.text)}</span>${!remote && p.detail ? `<span class="ov-svc__ref">${escapeHtml(p.detail)}</span>` : ''}${p.off ? '<span class="ov-svc__ref">switched off in Settings</span>' : ''}</span></span>`;
 }
 
 // The person's own token for a repository its host may not show without it:
@@ -833,31 +855,46 @@ function svcAuthHtml(r) {
           <span class="ov-svc__auth-or og-muted">or</span>` : '';
   return `
         <div class="ov-svc__auth${r.auth.refused ? ' ov-svc__auth--refused' : ''}${r.auth.offered ? ' ov-svc__auth--offered' : ''}" role="group" aria-label="${attr(`Your ${r.auth.label} for ${r.name}`)}">${signIn}
-          <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" autocomplete="one-time-code" spellcheck="false" aria-describedby="${id}"></label>
+          <label class="ov-svc__auth-f"><span class="ov-svc__auth-l">Your ${escapeHtml(r.auth.label)}</span><input class="og-input" type="password" data-auth-input="${attr(r.key)}" data-auth-service="${attr(r.serviceId)}" autocomplete="one-time-code" spellcheck="false" aria-describedby="${id}"></label>
           <button type="button" class="og-btn" data-ux-action="ov-svc-auth-run" data-key="${attr(r.key)}">Run with it</button>
           <span class="ov-svc__auth-note og-muted" id="${id}">${escapeHtml(r.auth.text)}</span>
         </div>`;
 }
 
-function svcRowHtml(r) {
-  const runBtn = r.run.enabled || r.run.running
-    ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''}>${r.run.running ? 'Running…' : 'Run'}</button>`
-    : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}">Run</button>`;
-  const openBtn = r.open.enabled && r.env
-    ? `<button type="button" class="og-btn og-btn--text ov-link ov-svc__open" data-ux-action="ov-svc-open" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Open <span class="ov-link__arrow" aria-hidden="true">→</span></button>` : '';
-  const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)}${r.env ? ` · ${attr(r.env)}` : ''}: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>`;
+// One service: its name, its repository, a cell per environment column, then Run all (two or more
+// environments that can run) and Change; beneath, a Run's error naming its environment, and the
+// token or sign-in ask once for the service — the token is the person's for the host, so one field
+// serves every environment (its Run with it runs the first environment that asked). An ask only
+// offered (no Run asked yet) folds under the repository; one a Run asked for is open, beneath.
+function mxRowHtml(svc, columns, canWrite) {
+  const first = columns.map((c) => svc.cells[c]).find(Boolean) || svc.bare;
+  const name = `<span class="ov-svc__name">${escapeHtml(svc.name)}</span>${svc.bare ? `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="">Add an environment</button>` : ''}`;
+  const all = svc.runAll.keys.length > 1 || (svc.runAll.running && svc.rows.length > 1)
+    ? `<button type="button" class="og-btn ov-mx__all" data-ux-action="ov-svc-run-all" data-keys="${attr(svc.runAll.keys.map(encodeURIComponent).join(','))}"${svc.runAll.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(svc.name)} in every environment">${svc.runAll.running ? 'Running…' : 'Run all'}</button>` : '';
+  const change = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="${attr(first?.env ?? '')}" aria-label="Change ${attr(svc.name)}: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>`;
+  const errors = svc.rows.filter((r) => r.error).map((r) => `
+        <p class="ov-svc__error ov-mx__note" role="alert">${r.env ? `<b>${escapeHtml(r.env)}:</b> ` : ''}${escapeHtml(r.error)}</p>`).join('');
+  // An ask a Run answered (refused, signed in as another) before one only offered.
+  const asked = svc.rows.filter((r) => r.auth);
+  const ask = asked.find((r) => !r.auth.offered) || asked[0] || null;
+  const folded = !!ask && ask.auth.offered && !ask.auth.refused;
+  const notes = `${errors}${ask && !folded ? svcAuthHtml(ask) : ''}`;
+  const tokenFold = folded ? `<details class="ov-mx__token"><summary>Your ${escapeHtml(ask.auth.label)}…</summary>${svcAuthHtml(ask)}</details>` : '';
   return `
-      <li class="ov-svc${r.complete ? '' : ' ov-svc--incomplete'}">
-        <div class="ov-svc__who">
-          <span class="ov-svc__name">${escapeHtml(r.name)}</span>
-          ${r.env ? `<span class="og-pill ov-svc__env">${escapeHtml(r.env)}</span>` : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="">Add an environment</button>`}
-        </div>
-        <div class="ov-svc__cell" data-col="Repository">${svcRepoCell(r)}</div>
-        <div class="ov-svc__cell" data-col="Live">${svcLiveCell(r)}</div>
-        <div class="ov-svc__cell ov-svc__last" data-col="Last check">${svcLastCell(r)}</div>
-        <div class="ov-svc__acts">${runBtn}${openBtn}${editBtn}</div>${r.error ? `
-        <p class="ov-svc__error" role="alert">${escapeHtml(r.error)}</p>` : ''}${r.auth ? svcAuthHtml(r) : ''}
+      <li class="ov-mx__row${svc.complete ? '' : ' ov-mx__row--incomplete'}">
+        <div class="ov-mx__svc">${name}</div>
+        <div class="ov-mx__repo" data-col="Repository">${mxRepoHtml(svc, first)}${tokenFold}</div>
+        ${columns.map((c) => mxCellHtml(svc.cells[c] || null, c, svc, canWrite)).join('')}
+        <div class="ov-mx__rowacts">${all}${change}</div>${notes}
       </li>`;
+}
+
+// The grade's letters and where each starts, under the matrix: the letter is the grade; the
+// match beside it is how much of what the repository declares runs live.
+function mxLegendHtml(legend) {
+  if (!Array.isArray(legend) || !legend.length) return '';
+  const range = (g, i) => (g.from > 0 ? `${g.above ? '>' : '≥'} ${g.from}%` : `< ${legend[i - 1]?.from ?? 0}%`);
+  return `<p class="ov-mx__legend og-muted"><span class="ov-mx__legend-l">Grade, by its score</span>${legend.map((g, i) => `<span class="ov-mx__legend-g"><span class="ov-svc__letter ov-tone-${attr(g.tone)}" aria-hidden="true">${escapeHtml(g.letter)}</span>${escapeHtml(range(g, i))}</span>`).join('')}<span class="ov-mx__legend-g"><span class="ov-mx__dot" aria-hidden="true"></span>Not declared</span><span class="ov-mx__legend-n">The letter comes from the grade's score over its checks; the match beside it is a separate measure — how much of what the repository declares runs live.</span></p>`;
 }
 
 const fieldErr = (f, key, shown) => (shown && f.problems[key] ? `<span class="ov-form__err">${escapeHtml(f.problems[key])}</span>` : '');
@@ -1056,9 +1093,10 @@ function svcFormHtml(f) {
             <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>${f.kind.kind === 'upload' ? uploadHtml(f) : `
             <div class="ov-form__pair">
               <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
-              ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="branch (default)" aria-label="Branch" autocomplete="off" spellcheck="false">`}
+              ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="${attr(f.branch?.placeholder || 'branch (default)')}" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
+            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}
             ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}${auth}
           </div>
         </li>
@@ -1098,12 +1136,14 @@ export function serviceListHtml(list, form, ov = {}) {
         <p class="ov-col__note og-muted">A service is checked in two places: its repository, where what it should have is declared, and its live MCP endpoint, where what it has is read. Add one to start.</p>
       </div>`;
   } else {
+    // One row per service, a column per environment (the model's serviceMatrix).
+    const m = list.matrix || { columns: [], services: [], legend: [] };
     body = `
-      <div class="ov-svcs__table">
-        <div class="ov-svcs__cols" aria-hidden="true"><span>Service</span><span>Repository</span><span>Live</span><span>Last check</span><span></span></div>
-        <ul class="ov-svcs__rows" aria-label="Services">${list.rows.map(svcRowHtml).join('')}
+      <div class="ov-svcs__table ov-mx" style="--ov-envs: ${Math.max(1, m.columns.length)}">
+        <div class="ov-mx__cols" aria-hidden="true"><span>Service</span><span>Repository</span>${m.columns.map((c) => `<span class="ov-mx__colh">${escapeHtml(c)}</span>`).join('')}<span></span></div>
+        <ul class="ov-svcs__rows" aria-label="Services">${m.services.map((svc) => mxRowHtml(svc, m.columns, list.canWrite)).join('')}
         </ul>
-      </div>`;
+      </div>${mxLegendHtml(m.legend)}`;
   }
   const more = list.hidden ? `
       <p class="ov-svcs__more og-muted">${list.hidden} more ${list.hidden === 1 ? 'service was' : 'services were'} seen live with no repository yet. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-all">Show ${list.hidden === 1 ? 'it' : 'them'}</button></p>` : '';
@@ -1123,7 +1163,7 @@ export function serviceListHtml(list, form, ov = {}) {
       <header class="ov-svcs__head">
         <div class="ov-svcs__titles">
           <h1 class="ov-svcs__h" id="ov-svcs-h">Services</h1>
-          <p class="ov-svcs__lede og-muted">Each one is checked where it is declared — its repository — against where it runs, read through its live MCP endpoint.</p>
+          <p class="ov-svcs__lede og-muted">Each one is checked where it is declared — its repository — against where it runs, read through each environment's live MCP endpoint: a row per service, a column per environment.</p>
         </div>
         ${add}
       </header>${tokens}${f ? svcFormHtml(f) : ''}${body}${more}${compare}
@@ -1147,7 +1187,7 @@ export function readTokenDrafts(container) {
     const value = String(el.value ?? '');
     if (!value && !focused) continue;
     const row = el.dataset?.authInput ?? null;
-    out.push({ row, form: row === null ? (el.dataset?.formAuth ?? null) : null, value, focused, start: el.selectionStart ?? null, end: el.selectionEnd ?? null });
+    out.push({ row, service: el.dataset?.authService ?? null, form: row === null ? (el.dataset?.formAuth ?? null) : null, value, focused, start: el.selectionStart ?? null, end: el.selectionEnd ?? null });
   }
   return out.length ? out : null;
 }
@@ -1156,8 +1196,11 @@ function restoreTokenDrafts(container, drafts) {
   if (!Array.isArray(drafts) || !drafts.length) return;
   const fields = [...(container.querySelectorAll?.(TOKEN_FIELDS) || [])];
   for (const d of drafts) {
-    const el = fields.find((x) => (d.row !== null ? x.dataset?.authInput === d.row : x.dataset?.authInput === undefined && x.dataset?.formAuth === d.form));
+    // A row's field by its row; else the service's one field, which may have moved to another environment's row.
+    const el = fields.find((x) => (d.row !== null ? x.dataset?.authInput === d.row : x.dataset?.authInput === undefined && x.dataset?.formAuth === d.form))
+      || (d.service ? fields.find((x) => x.dataset?.authService === d.service) : null);
     if (!el) continue;
+    el.closest?.('details')?.setAttribute?.('open', '');
     el.value = d.value;
     if (!d.focused) continue;
     el.focus?.({ preventScroll: true });
@@ -1173,7 +1216,9 @@ export function renderServiceList(container, list, form, host = appHost, { draft
   restoreTokenDrafts(container, drafts);
   const svcEnv = (el) => (el.dataset.env ? el.dataset.env : null);
   // The token typed on a row (read when Run with it is pressed, never kept by the view).
-  const authInput = (key) => container.querySelector?.(`[data-auth-input="${String(key).replace(/["\\]/g, '')}"]`) || null;
+  // The row's field, else its service's one field (the matrix draws one per service): rowKey is "<serviceId>:<env>".
+  const authInput = (key) => container.querySelector?.(`[data-auth-input="${String(key).replace(/["\\]/g, '')}"]`)
+    || container.querySelector?.(`[data-auth-service="${String(key).split(':')[0].replace(/["\\]/g, '')}"]`) || null;
   const authValue = (key) => String(authInput(key)?.value ?? '').trim();
   // The token typed in the form: read when Save is pressed, sent only when there is one.
   const saveWith = (run) => {
@@ -1186,6 +1231,15 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     // Run sends the token the row's field holds, when it holds one: the field is there to be used.
     'ov-svc-run': (ev, el) => { const repoAuth = authValue(el.dataset.key); return repoAuth ? ov.runService?.(el.dataset.key, { repoAuth }) : ov.runService?.(el.dataset.key); },
     'ov-svc-auth-run': (ev, el) => ov.runService?.(el.dataset.key, { repoAuth: authValue(el.dataset.key) }),
+    // Run all: every environment of the service that can run, in the columns' order.
+    'ov-svc-run-all': (ev, el) => {
+      const keys = String(el.dataset.keys || '').split(',').filter(Boolean).map(decodeURIComponent);
+      // The service's token field, when it holds one: the first Run sends it, and the host keeps it for the rest.
+      const repoAuth = keys.length ? authValue(keys[0]) : '';
+      if (typeof ov.runServices === 'function') return repoAuth ? ov.runServices(keys, { repoAuth }) : ov.runServices(keys);
+      keys.forEach((k, i) => (i === 0 && repoAuth ? ov.runService?.(k, { repoAuth }) : ov.runService?.(k)));
+      return undefined;
+    },
     'ov-svc-forget-token': (ev, el) => ov.forgetRepoToken?.(el.dataset.kind),
     'ov-svc-sign-in': (ev, el) => ov.signInRepoHost?.(el.dataset.kind, el.dataset.key || null),
     'ov-svc-sign-out': (ev, el) => ov.signOutRepoHost?.(el.dataset.kind),

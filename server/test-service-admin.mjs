@@ -445,7 +445,7 @@ test('environments: create (404 service, the texts, the 409, the endpoint of thi
       const view = admin.environmentViewOf(db, prod);
       assert.deepEqual(view, {
         id: prod.id, serviceId: svc.id, name: 'prod', tier: 'tier-1', effectiveTier: 'tier-1', bindings: { region: 'eu' },
-        endpoints: { grafana: 'https://g.example/d/1?orgId=1' }, mcpEndpoint: { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example:8443' },
+        endpoints: { grafana: 'https://g.example/d/1?orgId=1' }, mcpEndpoint: { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example:8443' }, ref: null,
         createdAt: prod.createdAt, updatedAt: prod.updatedAt,
       }, 'the MCP URL itself never: its origin');
       assert.deepEqual([admin.environmentViewOf(db, staging).effectiveTier, admin.environmentViewOf(db, staging).mcpEndpoint], ['tier-2', null], "the service's tier when the environment sets none");
@@ -554,7 +554,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.equal(payView.targets, null, 'no targets until they are set');
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);

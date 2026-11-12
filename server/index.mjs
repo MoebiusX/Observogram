@@ -86,7 +86,7 @@ import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { envRefOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
@@ -1495,7 +1495,9 @@ function livePacksByJourney() {
 //   1. the targets — the environment's endpoint resolved as a journey's
 //      Pack B is (a refusal scans nothing and sends nothing), the folder
 //      rule read again for a folder repository;
-//   2. the scan — the repository read now (server/repo-sources.mjs) and
+//   2. the scan — the repository read now (server/repo-sources.mjs), at the
+//      environment's own branch where the service names one (its envRefs),
+//      else the repository's, and
 //      crawled under the service's slug and the environment's name, so the
 //      scan is the service's own pack; registered under one label per
 //      service and environment, so the next Run replaces it;
@@ -1559,6 +1561,9 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   // sign-in, else none (a public repository).
   const t0 = Date.now();
   const remote = service.repository.kind === 'github' || service.repository.kind === 'ado';
+  // The branch this environment reads: its own where the service names one, else the repository's.
+  const envRef = envRefOf(service, env.name);
+  const repository = envRef ? { ...service.repository, ref: envRef } : service.repository;
   let credential = null;
   if (remote) {
     // The Azure DevOps sign-in is Entra ID's, for Azure DevOps Services only.
@@ -1568,7 +1573,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   let read;
   try {
-    read = await fetchRepositoryFiles(service.repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() }, readUpload: () => readUpload(service.id), credential });
+    read = await fetchRepositoryFiles(repository, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() }, readUpload: () => readUpload(service.id), credential });
   } catch (e) {
     const status = [400, 403, 404].includes(e.status) ? e.status : (e.status === 401 ? 403 : 502);
     const message = redactToken(e.message, credential?.token);
@@ -1586,7 +1591,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   // What read it rides on the scan (`access`: the kind of access, never its
   // value), so the record says whether the person's own was needed.
-  const access = remote ? repositoryAccess(service.repository, credential) : null;
+  const access = remote ? repositoryAccess(repository, credential) : null;
   const withAccess = (report) => (access ? { ...report, access } : report);
   let scan = withAccess(scanReport(read));
   if (!scan.files) {

@@ -2915,6 +2915,9 @@ const overviewActions = {
   pickRepositoryZip: () => listPickWithInput({ folder: false }),
   dropRepository: listDropRepository,
   runService: (key, opts) => runListRow(key, opts),
+  // Run all: the service's environments one after another, in the columns' order (one scan at a time).
+  // The token typed in the service's field rides on the first Run; runListRow keeps it for the tab's next ones.
+  runServices: async (keys, { repoAuth = '' } = {}) => { for (const [i, key] of (Array.isArray(keys) ? keys : []).entries()) await runListRow(key, i === 0 && repoAuth ? { repoAuth } : {}); },
   forgetRepoToken: (kind) => { repoTokens.delete(kind); renderMainView(); announce('The token is forgotten: the next Run of that host asks for it again.'); },
   signInRepoHost,
   signOutRepoHost,

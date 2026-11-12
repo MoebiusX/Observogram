@@ -428,24 +428,32 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
 
 ### Overview: the Services list
 
-Overview's front door. One row per service and environment, in the columns
-*Service · Repository · Live · Last check*, the rows a person can run first.
-Each one is checked where it is declared — its repository — against where it
-runs, read through its live MCP endpoint.
+Overview's front door. One row per service, a column per environment —
+*Service · Repository · dev · stg · prod*, the environments in the order a
+release travels (dev, test, acceptance, staging, production, then any other
+by name) whatever order they were declared in — the services a person can run
+first. Each one is checked where it is declared — its repository — against
+where it runs, read through each environment's live MCP endpoint.
 
 Belongs here:
 
-- the service's name and its environment as a pill;
+- the service's name (*Add an environment* when it has none);
 - the repository: its kind (*GitHub · Azure DevOps · Folder · Upload*) over
-  `owner/repo`, `project/repo` or the folder's name, the branch or the full
-  path beneath; an upload's name with *uploaded 2 days ago · 12 files*;
-- the live endpoint: *MCP* over the endpoint's name and host;
-- the last check: the grade letter, *Checked 2 hours ago*, how much matches
-  live — or *Never checked · Run it to check*, *Unreachable* with *the live
-  side did not answer*, or *Not known* when the checks could not be read;
-- **Run** (*Running… Scanning the repository, then checking live*), **Open →**
-  (the board, offered when the service has a pack of its own or a check) and
-  **Change** (where it is declared, where it runs, its MTTD / MTTR targets);
+  `owner/repo`, `project/repo` or the folder's name, the full path beneath a
+  folder; an upload's name with *uploaded 2 days ago · 12 files*; a token
+  field offered before any Run folds under it as *Your GitHub token…* — one
+  a Run asked for is open under the row, once for the service;
+- each environment's cell: the endpoint's name (it opens **Change** on that
+  environment) and its host, whole on hover; the branch its Run reads (its
+  own, else the repository's); the grade letter with how much matches live
+  (*92% match*), *Not checked yet* or *Live did not answer*; *Checked 2
+  hours ago*; **Run** and **Open** (the board, offered when the service has
+  a pack of its own or a check) — or *Not declared* with **Add**;
+- on the row, **Run all** (two or more environments that can run, one after
+  another) and **Change** (where it is declared, where it runs, its MTTD /
+  MTTR targets); a Run's error under the row, naming its environment;
+- under the matrix, the grade's letters and where each starts (*A+ ≥ 95% ·
+  A > 85% · … · D < 37.5%*), and *Not declared*;
 - **Add a service**, the one primary button: five numbered answers — *1
   Service*, *2 Environment* (prod by default), *3 Repository — where it is
   declared*, *4 Live — where it runs* (one of the org's endpoints, or *A new
@@ -458,7 +466,9 @@ Belongs here:
   **Save** or **Cancel**. A name that keys an existing record completes it,
   never a second one;
 - the Repository answer's kinds: GitHub or Azure DevOps with an optional
-  branch and, under the address, *Your GitHub token* (*optional*: a public
+  branch — on a service that has its repository, the branch of the
+  environment being changed (*The branch stg reads. Left blank, it reads the
+  repository's (main).*) — and, under the address, *Your GitHub token* (*optional*: a public
   repository needs none) or *Your Azure DevOps token* — the person's own,
   sent with the Run that **Save and run** starts and kept for the tab by
   **Save**, not drawn where this tab already holds that host's token or the
