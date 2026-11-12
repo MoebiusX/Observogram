@@ -44,8 +44,10 @@ import { rankOf } from '../authz.mjs';
 import {
   WAYS, createEnvironmentFromApi, createMcpEndpointFromApi, createServiceFromApi, deleteEnvironmentFromApi, deleteMcpEndpointFromApi,
   deleteServiceFromApi, environmentViewOf, listServiceViews, mcpEndpointViewOf, repositorySourceRefusal, repositorySourcesView,
-  serviceViewOf, setRepositorySourcesFromApi, updateEnvironmentFromApi, updateMcpEndpointFromApi, updateServiceFromApi,
+  serviceViewOf, setLivePack, setRepositoryPack, setRepositorySourcesFromApi, updateEnvironmentFromApi, updateMcpEndpointFromApi, updateServiceFromApi,
 } from '../service-admin.mjs';
+import { packSlug } from '../../tools/lib/slug.mjs';
+import { livePackRecord, repositoryPackRecord } from '../service-packs.mjs';
 import { AdminRefusal } from '../identity-admin.mjs';
 import { currentStore } from '../store/db.mjs';
 import { getEnvironment, listEnvironments } from '../store/environments.mjs';
@@ -91,7 +93,10 @@ const serviceSummary = (s) => ({ id: s.id, slug: s.slug, name: s.name, tier: s.t
 // `onServiceDeleting(service)`: called before a DELETE, with the service as
 // it is; the function it returns runs once the delete went through (the
 // server takes the switches out of the checks that were the service's).
-export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceDeleting = null }) {
+// `readPackUpload(body)` → { name, canonical, bytes } and `registerPack(req, canonical, source, label, { environments })` → its
+// id: the server's own pack reader and register (server/index.mjs), for a pack file uploaded in place of
+// the repository or of live (server/service-packs.mjs).
+export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceDeleting = null, readPackUpload = null, registerPack = null }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
   const router = express.Router({ caseSensitive: true });
 
@@ -158,6 +163,50 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     const repository = saveUpload(current.id, upload);
     const { service } = setUploadedRepository(db, actor, current.id, repository);
     res.json({ ok: true, service: serviceViewOf(db, service), upload: repository });
+  }));
+
+  // A pack file in place of the repository (Overview's Pack file, server/service-packs.mjs):
+  // { name, text } — an export of the declared pack, YAML or JSON. Read and validated, named after
+  // the service (its name and bindings.service, as a scan names its pack, so registering links it as this service's own),
+  // registered, and the record points at it: { kind: 'pack', location: name, packId, uploadedAt,
+  // bytes }; each Run uses it as it is. The org's Upload switch governs it (409, before the body
+  // is read). An uploaded repository's copy goes with it.
+  router.put('/api/services/:id/repository-pack', authorize('PUT /api/services/:id/repository-pack'), handler((req, res, { db, actor }) => {
+    const current = pathService(req, res, db);
+    if (!current) return;
+    const off = repositorySourceRefusal(db, 'pack');
+    if (off) throw new AdminRefusal(off, 'conflict');
+    const upload = readPackUpload(bodyOf(req));
+    // The pack as this service's: its name and its bindings' service (what registering links by), as a scan writes them.
+    const md = upload.canonical.metadata || {};
+    // The spec's slug, as a scan writes it (packSlug: a slug that starts with a digit, or is longer, is made one).
+    const slug = packSlug(current.slug, `svc-${current.slug}`);
+    const canonical = { ...upload.canonical, metadata: { ...md, name: slug, bindings: { ...(md.bindings || {}), service: slug } } };
+    // Registered without the environments it declares: this service's are the ones a person added.
+    const packId = registerPack(req, canonical, 'repository:pack', `${current.name} · repository · ${upload.name}`, { environments: false });
+    const { service } = setRepositoryPack(db, actor, current.id, repositoryPackRecord({ name: upload.name, packId, bytes: upload.bytes }));
+    if (current.repository?.kind === 'upload') deleteUpload(current.id);
+    res.json({ ok: true, service: serviceViewOf(db, service), repository: service.repository });
+  }));
+
+  // An export of live in place of an environment's MCP endpoint (Overview's Live answer, A pack
+  // file): { name, text } — read, validated and registered as the environment's live side; the
+  // endpoint is unbound (one or the other), and each Run checks against the export until another
+  // is uploaded or an endpoint chosen. DELETE takes it away (the environment then needs an endpoint).
+  router.put('/api/environments/:id/live-pack', authorize('PUT /api/environments/:id/live-pack'), handler((req, res, { db, actor }) => {
+    const env = pathEnvironment(req, res, db);
+    if (!env) return;
+    const service = getService(db, env.serviceId);
+    const upload = readPackUpload(bodyOf(req));
+    const packId = registerPack(req, upload.canonical, 'live:pack', `${service.name} · ${env.name} · live export · ${upload.name}`);
+    const { environment } = setLivePack(db, actor, env.id, livePackRecord({ name: upload.name, packId, bytes: upload.bytes }));
+    res.json({ ok: true, environment: environmentViewOf(db, environment) });
+  }));
+  router.delete('/api/environments/:id/live-pack', authorize('DELETE /api/environments/:id/live-pack'), handler((req, res, { db, actor }) => {
+    const env = pathEnvironment(req, res, db);
+    if (!env) return;
+    const { environment } = setLivePack(db, actor, env.id, null);
+    res.json({ ok: true, environment: environmentViewOf(db, environment) });
   }));
 
   // The folders a service's repository can be picked from (Overview's

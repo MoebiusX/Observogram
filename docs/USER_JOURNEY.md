@@ -97,8 +97,8 @@ Open the studio
 Overview: Services          one row per service and environment:
   |                         its repository, its live MCP endpoint, its last check
   |-- Add a service         1 Service · 2 Environment
-  |                         3 Repository (GitHub · Azure DevOps · Folder · Upload)
-  |                         4 Live (an MCP endpoint of the org, or a new one)
+  |                         3 Repository (GitHub · Azure DevOps · Folder · Upload · Pack file)
+  |                         4 Live (an MCP endpoint of the org, a new one, or a pack file exported from live)
   |                         5 Targets (MTTD / MTTR: a profile, custom minutes, or none)
   |-- Save and run, or Run on a row
   v
@@ -486,7 +486,14 @@ Belongs here:
   *Use this folder*, *Close* — drawn only where the server would take a folder
   from this reader); **Upload**, *Choose a folder*, *Choose a .zip* or a drop,
   read in the browser by the scan's rule and sent with Save, each Run scanning
-  the kept copy again;
+  the kept copy again; **Pack file**, *Choose a pack file* — a pack exported
+  from the repository (YAML or JSON), checked by the server when Save sends
+  it and used by each Run as it is, with no scan;
+- the Live answer's last choice, *A pack file — an export of live…*: *Choose
+  a pack file*, sent with Save in place of the MCP endpoint (one or the
+  other — choosing an endpoint again drops the export); each Run checks
+  against it with no MCP call, and the matrix cell says *Live export* and the
+  file's name and age where the endpoint and its host would be;
 - the toast a Run ends with: *… checked: 200 of 396 files from … (196 past the
   file cap, 62 recognised as nothing), grade …, …% matches live.*;
 - a missing answer marked where it goes once a save was tried; the server's
@@ -1026,7 +1033,8 @@ The path a person takes today, end to end:
    (`npm run demo` starts a populated studio on port 8010:
    [`OVERVIEW_DEMO.md`](OVERVIEW_DEMO.md).)
 2. **Add a service**: the service, the environment, the repository (GitHub,
-   Azure DevOps, a Folder or an Upload), the live MCP endpoint. A Folder is
+   Azure DevOps, a Folder, an Upload or a Pack file exported from it), the
+   live MCP endpoint or a pack file exported from live. A Folder is
    taken only under the folders `OBSERVOGRAM_REPO_ROOTS` lists or, where it
    lists none, on the server's own machine while it runs without sign-in on
    loopback; **Browse…** shows only what the server would take. Press **Save
@@ -1037,7 +1045,8 @@ The path a person takes today, end to end:
    there from the start. Or **Sign in to GitHub** (or Azure DevOps), in the
    form or on the row, where the server offers it.
 4. Read the toast: the files read, of how many, from where, what was left
-   out, the grade and how much matches live.
+   out, the grade and how much matches live (for a Pack file: *the pack file
+   …*, which is read as it is, then the grade and the match).
 5. Press **Open →**. On the board, read what the scan left out under
    *Layers*; the grade and *Why this grade*; the four counts and the
    promises; the status strip, which names any probe family the live side

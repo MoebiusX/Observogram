@@ -1033,6 +1033,9 @@ const EXPECTED_CLASS = Object.freeze({
   'DELETE /api/services/:id': 'operator',
   'GET /api/repository-folders': 'operator',
   'PUT /api/services/:id/repository-upload': 'operator',
+  'PUT /api/services/:id/repository-pack': 'operator',
+  'PUT /api/environments/:id/live-pack': 'operator',
+  'DELETE /api/environments/:id/live-pack': 'operator',
   'POST /api/services/:id/environments': 'operator',
   'POST /api/services/:id/run': 'operator',
   'POST /api/services/:id/control-room': 'operator',
@@ -1552,6 +1555,10 @@ const PROBES = Object.freeze({
   'GET /api/repository-folders': ['GET', '/api/repository-folders'],
   // An upload to an unknown service: 404 before the body is read — nothing is kept.
   'PUT /api/services/:id/repository-upload': ['PUT', '/api/services/999999/repository-upload'],
+  // A pack file to an unknown service or environment: 404 before the body is read — nothing registered.
+  'PUT /api/services/:id/repository-pack': ['PUT', '/api/services/999999/repository-pack'],
+  'PUT /api/environments/:id/live-pack': ['PUT', '/api/environments/999999/live-pack'],
+  'DELETE /api/environments/:id/live-pack': ['DELETE', '/api/environments/999999/live-pack'],
   'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
   'POST /api/services/:id/run': ['POST', '/api/services/999999/run'],
   'POST /api/services/:id/control-room': ['POST', '/api/services/999999/control-room'],

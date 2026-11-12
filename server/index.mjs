@@ -86,10 +86,11 @@ import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs } from './live-jobs.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { envRefOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { envRefOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
 import { fetchRepositoryFiles } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
+import { PACK_UPLOAD_WAYS, parsePackUpload } from './service-packs.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
 import { clearRepoLink, readRepoLink, repoSignInOffered } from './repo-sign-in.mjs';
 import { isAdoServices } from './ado-crawl.mjs';
@@ -247,8 +248,19 @@ function workspacePackRef(source) {
   return rec ? { id: m[1], label: rec.label || rec.canonical?.metadata?.name || m[1] } : null;
 }
 
-function registerUploadedPack(req, canonical, source, label) {
-  return registerPack(currentStore(), actorOf(req), { canonical, source, label });
+function registerUploadedPack(req, canonical, source, label, { environments = true } = {}) {
+  return registerPack(currentStore(), actorOf(req), { canonical, source, label, environments });
+}
+
+// A pack file uploaded in place of a repository or of live (server/service-packs.mjs): read as
+// POST /api/validate reads a pack — JSON or YAML, a pre-v1.2 layered one upconverted — and
+// validated against the spec's schema; the AdminRefusal (400) otherwise.
+function readPackUpload(body) {
+  return parsePackUpload(body, {
+    read: (text) => (/^\s*[{[]/.test(text) ? JSON.parse(text) : parseYaml(text)),
+    upconvert: (pack) => (isLegacyLayeredPack(pack) ? upconvertLegacyPack(pack, { now: new Date().toISOString() }).canonical : pack),
+    validate: (canonical) => validateCanonical(canonical, SCHEMA),
+  });
 }
 
 function uploadedMeta(id) {
@@ -829,7 +841,7 @@ app.use(identityRoutes({ authorize }));
 // server/routes/services.mjs: the request's org's service records under
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
-app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService }));
+app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService, readPackUpload, registerPack: registerUploadedPack }));
 
 // The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
 // a reviewer's trusted | suspect | failed record per artefact of a
@@ -1501,8 +1513,11 @@ function livePacksByJourney() {
 //      crawled under the service's slug and the environment's name, so the
 //      scan is the service's own pack; registered under one label per
 //      service and environment, so the next Run replaces it;
+//      A pack file in place of the repository (its kind 'pack',
+//      server/service-packs.mjs) is no scan: the pack as uploaded is Pack A;
 //   3. the check, saved — the journey `<slug>.<env>`: the scan as Pack A,
-//      the endpoint as Pack B; an existing one keeps its gate, schedule,
+//      the endpoint as Pack B (or the environment's export of live, its
+//      livePack, as a file: no MCP call); an existing one keeps its gate, schedule,
 //      notify and budget — and run, as POST /api/journeys/:name/run runs it,
 //      which keeps the live side it read as `<service> · <env> · live`.
 // Body: { env } (may be left out when the service has one environment).
@@ -1526,9 +1541,14 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   if (!service.repository) {
     return res.status(409).json({ ok: false, error: `${service.name} names no repository yet — say where its declaration lives: GitHub, Azure DevOps or a folder on the server` });
   }
-  if (env.mcpEndpointId === null || env.mcpEndpointId === undefined) {
-    return res.status(409).json({ ok: false, error: `${service.name} in ${env.name} has no live target yet — choose the MCP endpoint that reads it` });
+  // The live side: the environment's MCP endpoint, or the export of live uploaded in its place.
+  const livePack = livePackOf(service, env.name);
+  if ((env.mcpEndpointId === null || env.mcpEndpointId === undefined) && !livePack) {
+    return res.status(409).json({ ok: false, error: `${service.name} in ${env.name} has no live target yet — choose the MCP endpoint that reads it, or upload an export of live` });
   }
+  // A pack file (either side) the server no longer holds: said, before anything is read.
+  if (livePack && !uploadsMap().has(livePack.packId)) return res.status(409).json({ ok: false, error: PACK_UPLOAD_WAYS.gone(livePack.name) });
+  if (service.repository.kind === 'pack' && !uploadsMap().has(service.repository.packId)) return res.status(409).json({ ok: false, error: PACK_UPLOAD_WAYS.gone(service.repository.location) });
   // A source the org switched off (Settings → Repository sources): refused
   // before the folder rule, any repository read, any MCP call or any row.
   const sourceOff = repositorySourceRefusal(db, service.repository.kind);
@@ -1538,14 +1558,14 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
     if (why) return res.status(403).json({ ok: false, error: why });
   }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
-  const endpoint = getMcpEndpointRow(db, env.mcpEndpointId);
+  const endpoint = livePack ? null : getMcpEndpointRow(db, env.mcpEndpointId);
   const name = serviceJourneyName(service.slug, env.name);
   let previous = null;
   try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
   const keep = (k) => (previous && previous[k] !== undefined ? { [k]: previous[k] } : {});
   const def = {
     packA: { file: '' },
-    packB: { mcp: { url: safeMcpUrlOf(endpoint?.url || '') || String(endpoint?.url || ''), endpointId: env.mcpEndpointId } },
+    packB: livePack ? workspacePackSource(livePack.packId) : { mcp: { url: safeMcpUrlOf(endpoint?.url || '') || String(endpoint?.url || ''), endpointId: env.mcpEndpointId } },
     env: env.name,
     service: service.slug,
     gate: previous?.gate && typeof previous.gate === 'object' ? previous.gate : { minAlignmentPct: 85 },
@@ -1554,6 +1574,27 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   // 1. The targets, before anything is read or sent.
   const targets = journeyRunTargets(req, { ...def, name });
   if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
+  // 3. The check, saved and run — on the scan below, or on the pack file in place of the repository.
+  const check = async (packId, label, scan) => {
+    def.packA = workspacePackSource(packId);
+    let saved;
+    try {
+      // The switches as they are now, read again: a PATCH may have changed them while the repository was read.
+      saved = saveJourneyDef(name, withServiceGradeOff(def, getService(currentStore(), service.id) || service), { banner: serviceCheckBanner(service.slug, env.name) });
+    } catch (e) { return res.status(400).json({ ok: false, error: e.message, ...(scan ? { scan } : {}) }); }
+    auditAfter(req, {
+      action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
+      detail: { via: 'service', service: bounded(service.slug), env: bounded(env.name), packA: packId, live: !livePack },
+    }, { tag: 'journey' });
+    let runDef;
+    try { runDef = loadJourneyDef(saved.name, { allowPath: false }); }
+    catch (e) { return res.status(500).json({ ok: false, error: e.message, ...(scan ? { scan } : {}) }); }
+    return executeJourneyRun(req, res, runDef, targets, { pack: { id: packId, label }, journey: saved.name, ...(scan ? { scan } : {}) });
+  };
+  if (service.repository.kind === 'pack') {
+    process.stderr.write(`[service-run] ${service.slug}/${env.name}: the pack file ${service.repository.location} as the repository → ${service.repository.packId}${livePack ? `, against the export of live ${livePack.name}` : ''}\n`);
+    return check(service.repository.packId, `${service.name} · repository · ${service.repository.location}`, null);
+  }
   // 2. The scan — a GitHub or Azure DevOps repository read as the person
   // who asked (server/repo-auth.mjs): their own token, sent with this Run
   // and used for this read only, else their sign-in to the host
@@ -1611,20 +1652,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
   process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.skipped ? `, ${scan.skipped} not read` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
   // 3. The check, saved and run.
-  def.packA = workspacePackSource(packId);
-  let saved;
-  try {
-    // The switches as they are now, read again: a PATCH may have changed them while the repository was read.
-    saved = saveJourneyDef(name, withServiceGradeOff(def, getService(currentStore(), service.id) || service), { banner: serviceCheckBanner(service.slug, env.name) });
-  } catch (e) { return res.status(400).json({ ok: false, error: e.message, scan }); }
-  auditAfter(req, {
-    action: 'journey.capture', targetKind: 'journey', targetId: bounded(saved.name),
-    detail: { via: 'service', service: bounded(service.slug), env: bounded(env.name), packA: packId, live: true },
-  }, { tag: 'journey' });
-  let runDef;
-  try { runDef = loadJourneyDef(saved.name, { allowPath: false }); }
-  catch (e) { return res.status(500).json({ ok: false, error: e.message, scan }); }
-  await executeJourneyRun(req, res, runDef, targets, { pack: { id: packId, label }, journey: saved.name, scan });
+  await check(packId, label, scan);
 });
 
 // POST /api/journeys/capture — "save this comparison as a journey". The

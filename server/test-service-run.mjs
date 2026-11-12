@@ -676,7 +676,7 @@ test('POST /api/services/:id/run refuses before it reads anything: no service, n
   assert.deepEqual([noEnv.status, noEnv.json.error], [400, 'Shop API has no environment yet — add one, with the MCP endpoint that reads it']);
   assert.equal((await call('POST', `/api/services/${ids.shop}/environments`, { name: 'prod' })).status, 201);
   const noEndpoint = await run(ids.shop, { env: 'prod' });
-  assert.deepEqual([noEndpoint.status, noEndpoint.json.error], [409, 'Shop API in prod has no live target yet — choose the MCP endpoint that reads it']);
+  assert.deepEqual([noEndpoint.status, noEndpoint.json.error], [409, 'Shop API in prod has no live target yet — choose the MCP endpoint that reads it, or upload an export of live']);
   const envId = (await call('GET', `/api/services/${ids.shop}`)).json.service.environments[0].id;
   assert.equal((await call('PATCH', `/api/environments/${envId}`, { mcpEndpointId: ids.endpoint })).status, 200);
   const unknownEnv = await run(ids.shop, { env: 'staging' });
@@ -1750,7 +1750,8 @@ test('repository sources: every source on until one is switched off — GET /api
   // The studio says a source switched off in the server's words (studio/overview-model.mjs sourceOffText), and labels it alike.
   const { sourceOffText, REPOSITORY_KINDS: FORM_KINDS } = await import('../studio/overview-model.mjs');
   for (const kind of REPOSITORY_SOURCES) assert.equal(sourceOffText(kind), WAYS.repositorySourceOff(REPOSITORY_SOURCE_LABEL[kind]), `the studio's sentence for ${kind} is the server's`);
-  assert.deepEqual(Object.fromEntries(FORM_KINDS.map((k) => [k.kind, k.label])), { ...REPOSITORY_SOURCE_LABEL }, 'the form\'s labels are the server\'s');
+  // Pack file is no switch of its own: the Upload switch governs it (repositorySourceRefusal).
+  assert.deepEqual(Object.fromEntries(FORM_KINDS.filter((k) => k.kind !== 'pack').map((k) => [k.kind, k.label])), { ...REPOSITORY_SOURCE_LABEL }, 'the form\'s labels are the server\'s');
   const r = await call('GET', '/api/repository-sources');
   assert.deepEqual([r.status, r.json], [200, { ok: true, sources: ALL_ON }]);
   assert.deepEqual(REPOSITORY_SOURCES, ['github', 'ado', 'path', 'upload']);
@@ -2092,5 +2093,111 @@ test('a branch per environment: POST and PATCH envRefs (the whole map; an empty 
     globalThis.fetch = realFetch;
     await call('DELETE', `/api/services/${id}`);
     forgetChecks(['branchy-shop.stg', 'branchy-shop.prod']);
+  }
+});
+
+// A pack file in place of either side (server/service-packs.mjs): an export of the declared pack for the
+// repository, an export of live for an environment's MCP endpoint — each Run then uses them as they are.
+test('pack files as the two sides: PUT repository-pack (named after the service, no stray service; refusals, POST/PATCH never name one, the Upload switch) and PUT / DELETE live-pack (one or the other with the endpoint); a Run on both — no scan, no MCP call — graded on the files', async () => {
+  const made = await call('POST', '/api/services', { name: 'Packed Shop', repository: { kind: 'github', location: 'acme/packed-shop' } });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.service.id;
+  const env = await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint });
+  assert.equal(env.status, 201, env.text);
+  const envId = env.json.environment.id;
+  const DECLARED = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
+  const LIVE = readFileSync(join(ROOT, 'examples', 'production-curated.pack.yaml'), 'utf8');
+  const servicesBefore = (await call('GET', '/api/services')).json.services.length;
+  try {
+    // Refusals: no body, no name, not a pack, not valid; nothing registered or changed.
+    for (const [body, why] of [[{}, /expected \{ name, text \}/], [{ name: '', text: DECLARED }, /name the pack file/], [{ name: 'x.yaml', text: '   ' }, /the pack file is empty/], [{ name: 'x.yaml', text: '{ not json' }, /could not be read as YAML or JSON/], [{ name: 'x.yaml', text: 'kind: Something\nmetadata:\n  name: x\n' }, /is not a valid pack/]]) {
+      const r = await call('PUT', `/api/services/${id}/repository-pack`, body);
+      assert.equal(r.status, 400, r.text);
+      assert.match(r.json.error, why);
+    }
+    assert.equal((await call('GET', `/api/services/${id}`)).json.service.repository.kind, 'github', 'a refusal changes nothing');
+    // POST and PATCH never name a pack file.
+    const named = await call('PATCH', `/api/services/${id}`, { repository: { kind: 'pack', location: 'x.yaml' } });
+    assert.deepEqual([named.status, /PUT \/api\/services\/:id\/repository-pack/.test(named.json.error)], [400, true]);
+
+    // The declared side: registered, named after the service (no stray service), the record pointed at it.
+    // It declares qa too, which this service does not have: no environment is made for it.
+    assert.ok(DECLARED.includes('environments: [prod]'));
+    const repo = await call('PUT', `/api/services/${id}/repository-pack`, { name: 'skeleton.pack.yaml', text: DECLARED.replace('environments: [prod]', 'environments: [prod, qa]') });
+    assert.equal(repo.status, 200, repo.text);
+    assert.deepEqual(repo.json.service.environments.map((e) => e.name), ['prod'], 'the environments it declares are not made');
+    const r = repo.json.service.repository;
+    assert.deepEqual([r.kind, r.location, r.ref, typeof r.packId, typeof r.uploadedAt, r.bytes > 0], ['pack', 'skeleton.pack.yaml', null, 'string', 'string', true]);
+    const after = (await call('GET', '/api/services')).json.services;
+    assert.equal(after.length, servicesBefore, 'the pack, named demo-skeleton, made no second service');
+    assert.deepEqual(after.find((x) => x.id === id).packs.map((p) => [p.id, p.role]), [[r.packId, 'primary']], 'it is this service\'s own pack');
+
+    // The live side: the export kept for prod, the endpoint unbound.
+    const live = await call('PUT', `/api/environments/${envId}/live-pack`, { name: 'prod-live.pack.yaml', text: LIVE });
+    assert.equal(live.status, 200, live.text);
+    assert.deepEqual([live.json.environment.mcpEndpoint, live.json.environment.livePack.name], [null, 'prod-live.pack.yaml']);
+
+    // The Run on both files: no scan (no repository read), no MCP call; the record's two sides are the files.
+    const run = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    assert.equal(run.json.scan, undefined, 'no scan');
+    assert.ok(String(run.json.record.packB.source).endsWith(`${live.json.environment.livePack.packId}.pack.yaml`), `Pack B is the export's file: ${run.json.record.packB.source}`);
+    assert.ok(String(run.json.record.packA.source).endsWith(`${r.packId}.pack.yaml`), 'Pack A is the declared pack file');
+    assert.ok(Number.isFinite(run.json.record.grade.score), 'graded');
+
+    // An endpoint chosen again: the export goes (one or the other); DELETE then has nothing to take.
+    const rebound = await call('PATCH', `/api/environments/${envId}`, { mcpEndpointId: ids.endpoint });
+    assert.equal(rebound.status, 200, rebound.text);
+    assert.equal((await call('GET', `/api/environments/${envId}`)).json.environment.livePack, null);
+    const none = await call('DELETE', `/api/environments/${envId}/live-pack`);
+    assert.deepEqual([none.status, none.json.error], [409, 'prod has no export of live to take away']);
+    // …and one uploaded again goes with DELETE.
+    assert.equal((await call('PUT', `/api/environments/${envId}/live-pack`, { name: 'again.pack.yaml', text: LIVE })).status, 200);
+    const gone = await call('DELETE', `/api/environments/${envId}/live-pack`);
+    assert.deepEqual([gone.status, gone.json.environment.livePack], [200, null]);
+
+    // One file in two environments is one pack (its id is its content): a new prod export under the
+    // same file name replaces prod's label, never the pack stg still stands on.
+    const stg = await call('POST', `/api/services/${id}/environments`, { name: 'stg' });
+    assert.equal(stg.status, 201, stg.text);
+    const stgLive = await call('PUT', `/api/environments/${stg.json.environment.id}/live-pack`, { name: 'live.yaml', text: LIVE });
+    assert.equal((await call('PUT', `/api/environments/${envId}/live-pack`, { name: 'live.yaml', text: LIVE })).json.environment.livePack.packId, stgLive.json.environment.livePack.packId, 'the same pack');
+    assert.equal((await call('PUT', `/api/environments/${envId}/live-pack`, { name: 'live.yaml', text: DECLARED })).status, 200);
+    const stgRun = await call('POST', `/api/services/${id}/run`, { env: 'stg' });
+    assert.equal(stgRun.status, 200, `stg's export is still on the server: ${stgRun.text}`);
+    forgetChecks(['packed-shop.stg']);
+
+    // The org's Upload switch: a pack file in place of the repository is an upload.
+    assert.equal((await switchSources({ upload: false })).status, 200);
+    const off = await call('PUT', `/api/services/${id}/repository-pack`, { name: 'skeleton.pack.yaml', text: DECLARED });
+    assert.equal(off.status, 409, off.text);
+    assert.equal((await switchSources({ upload: true })).status, 200);
+  } finally {
+    await call('DELETE', `/api/services/${id}`);
+    forgetChecks(['packed-shop.prod']);
+  }
+});
+
+// A service slug the spec's pack name does not take (it starts with a digit): the repository pack is
+// named as a scan names it (packSlug), so it stays a valid pack and the Run checks it.
+test('a pack file for a service whose slug starts with a digit: named svc-…, and the Run on it graded', async () => {
+  const made = await call('POST', '/api/services', { name: '2FA Gate' });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.service.id;
+  assert.equal(made.json.service.slug, '2fa-gate');
+  try {
+    const env = await call('POST', `/api/services/${id}/environments`, { name: 'prod' });
+    const DECLARED = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
+    const LIVE = readFileSync(join(ROOT, 'examples', 'production-curated.pack.yaml'), 'utf8');
+    assert.equal((await call('PUT', `/api/services/${id}/repository-pack`, { name: 'gate.pack.yaml', text: DECLARED })).status, 200);
+    assert.equal((await call('PUT', `/api/environments/${env.json.environment.id}/live-pack`, { name: 'live.pack.yaml', text: LIVE })).status, 200);
+    const run = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    assert.ok(Number.isFinite(run.json.record.grade.score), 'graded');
+  } finally {
+    await call('DELETE', `/api/services/${id}`);
+    const stray = (await call('GET', '/api/services')).json.services.find((s) => s.slug === 'svc-2fa-gate');
+    if (stray) await call('DELETE', `/api/services/${stray.id}`);
+    forgetChecks(['2fa-gate.prod']);
   }
 });

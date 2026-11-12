@@ -31,7 +31,7 @@ import {
   REPOSITORY_KINDS, NEW_ENDPOINT, FORM_CLOSED, repositoryLine, rowKey, serviceListModel, formOpened, formInput, formProblems, formProblemsNote, formModel, savePlan, sourceOffText, ALL_SOURCES_OFF,
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed,
+  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, LIVE_PACK,
   serviceAsideKey, serviceTargetsKey, studioTargetsCounted, serviceMatrix, envRank,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
@@ -1921,7 +1921,7 @@ test('repositoryLine: GitHub as owner/repo with its branch, Azure DevOps as proj
     { kind: 'path', kindText: 'Folder', text: 'checkout', ref: null, detail: 'C:\\src\\shop\\checkout', title: 'C:\\src\\shop\\checkout' });
   assert.equal(repositoryLine(null), null);
   assert.equal(repositoryLine({ kind: 'github' }), null);
-  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path', 'upload'], 'Upload is offered only by a host that wires it (the uploads option of formModel)');
+  assert.deepEqual(REPOSITORY_KINDS.map((k) => k.kind), ['github', 'ado', 'path', 'upload', 'pack'], 'Upload and Pack file are offered only by a host that wires uploads (the uploads option of formModel)');
 });
 
 test('serviceListModel: one row per service and environment with its two places and its last check; what is missing says so; the rows a person can run first', () => {
@@ -1950,7 +1950,7 @@ test('serviceListModel: one row per service and environment with its two places 
   assert.deepEqual([searchStaging.last.state, searchStaging.last.word, searchStaging.last.letter], ['unreachable', 'Unreachable', null]);
   assert.deepEqual([basket.run.enabled, basket.run.reason, basket.open.enabled], [false, "Say where Basket's repository is first.", true], 'its own pack opens the board');
   assert.deepEqual([ledger.env, ledger.run.reason, ledger.last.word], [null, 'Add an environment to Ledger first.', 'Never checked']);
-  assert.deepEqual([searchProd.run.reason, searchProd.journey], ['Choose the live MCP endpoint for prod first.', null], 'a check of staging is not prod\'s');
+  assert.deepEqual([searchProd.run.reason, searchProd.journey], ['Choose the live MCP endpoint for prod, or upload an export of live, first.', null], 'a check of staging is not prod\'s');
   // showAll draws the hidden one; running and a refusal ride on their row.
   const all = serviceListModel({ services, servicesStatus: { kind: 'ok' }, catalog, isLiveAggregatePack, journeys, endpoints: [EP], now: NOW, showAll: true,
     running: { '1:prod': true }, results: { '5:staging': { error: '502: the live side did not answer' } } });
@@ -2004,7 +2004,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   assert.deepEqual(formModel(FORM_CLOSED), { open: false });
   // The save plan: a new service, an endpoint by id, its environment created.
   const fresh = savePlan({ ...blank.values, name: 'Basket', location: 'acme/basket', ref: 'main' }, { services });
-  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' }, targets: { profile: 'lab' } } }, env: { create: { name: 'prod' } }, upload: null, envName: 'prod', name: 'Basket' });
+  assert.deepEqual(fresh, { endpoint: { id: 7 }, service: { create: { name: 'Basket', repository: { kind: 'github', location: 'acme/basket', ref: 'main' }, targets: { profile: 'lab' } } }, env: { create: { name: 'prod' } }, upload: null, repoPack: null, livePack: null, envName: 'prod', name: 'Basket' });
   // The targets: the dropdown, custom minutes and their problems, a change patched alone, none sent as null.
   const tm = formModel(blank, { endpoints: [{ id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' }] }).targets;
   assert.deepEqual([tm.options.map((o) => [o.value, o.selected]), tm.custom], [[['lab', true], ['financial', false], ['degradation', false], ['noncritical', false], ['custom', false], ['', false]], false]);
@@ -2248,7 +2248,7 @@ const READ = { name: 'shop-main', files: { 'shop-main/prometheus/rules.yaml': 'g
 test('Upload is offered only by a host that wires it (uploads); its row says what was uploaded and when; a form on an upload remembers it', () => {
   const blank = formOpened([svcRow()], { endpoints: [EP] });
   assert.deepEqual(formModel(blank).kinds.map((k) => k.kind), ['github', 'ado', 'path'], 'no uploads option: the form as before');
-  assert.deepEqual(formModel(blank, { uploads: true }).kinds.map((k) => k.kind), ['github', 'ado', 'path', 'upload']);
+  assert.deepEqual(formModel(blank, { uploads: true }).kinds.map((k) => k.kind), ['github', 'ado', 'path', 'upload', 'pack']);
   assert.deepEqual(repositoryLine(uploadRow().repository, { now: NOW }), { kind: 'upload', kindText: 'Upload', text: 'ledger-main.zip', ref: null, detail: 'uploaded 2 days ago · 12 files', title: `ledger-main.zip, uploaded ${UPLOADED_AT}` });
   const row = serviceListModel({ services: [uploadRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows[0];
   assert.deepEqual([row.repository.kindText, row.repository.detail, row.run.enabled], ['Upload', 'uploaded 2 days ago · 12 files', true], 'an uploaded repository runs like any other');
@@ -2322,6 +2322,93 @@ test('renderServiceList: Upload\'s block in place of the address — the two but
   const c3 = overviewContainer();
   renderServiceList(c3, list, formModel(formOpened([uploadRow()], { serviceId: 5, env: 'prod', endpoints: [EP] }), { endpoints: [EP], now: NOW }), { overview: {} });
   assert.ok(!c3.innerHTML.includes('Choose a folder') && c3.innerHTML.includes('data-upload-drop="off"') && c3.innerHTML.includes('ledger-main.zip · uploaded 2 days ago · 12 files.'), 'no uploads: the words alone, no drop target');
+});
+
+// ---------- pack files in place of either side ----------
+
+const packRow = () => svcRow({
+  id: 6, slug: 'basket', name: 'Basket',
+  repository: { kind: 'pack', location: 'basket.pack.yaml', ref: null, packId: 'p-repo', uploadedAt: UPLOADED_AT, bytes: 900 },
+  environments: [{ id: 12, serviceId: 6, name: 'prod', mcpEndpoint: null, livePack: { packId: 'p-live', name: 'prod-live.pack.yaml', uploadedAt: UPLOADED_AT, bytes: 1000 } }],
+});
+const PACK_TEXT = 'apiVersion: observogram.io/v1\nkind: ObservabilityPack\n';
+
+test('pack files: a row on a pack file and an export of live can run (nothing else asked); a form opened on one keeps both and sends nothing new; staging chooses Pack file or the Live answer\'s export, and Save sends each after the record', () => {
+  const list = serviceListModel({ services: [packRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, uploads: true });
+  const row = list.rows.find((r) => r.serviceId === 6);
+  assert.deepEqual([row.live, row.livePack, row.run.enabled, row.complete], [null, { name: 'prod-live.pack.yaml', ago: '2 days ago' }, true, true], 'the export stands in for the endpoint');
+  assert.equal(repositoryLine(packRow().repository).kindText, 'Pack file');
+  const noLive = svcRow({ environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: null }] });
+  assert.equal(serviceListModel({ services: [noLive], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows[0].run.reason, 'Choose the live MCP endpoint for prod, or upload an export of live, first.');
+
+  // Opened on both files: kept, nothing missing, nothing sent again.
+  const kept = formOpened([packRow()], { serviceId: 6, env: 'prod', endpoints: [EP] });
+  assert.deepEqual([kept.values.kind, kept.values.endpointId], ['pack', LIVE_PACK]);
+  assert.deepEqual(formProblems(kept.values, { packs: kept.packs }), {});
+  const km = formModel(kept, { endpoints: [EP], uploads: true, now: NOW });
+  assert.deepEqual([km.packs.repo.state, km.packs.live.state, km.packs.live.chosen], ['kept', 'kept', true]);
+  assert.equal(km.packs.live.text, 'prod-live.pack.yaml, uploaded 2 days ago — kept; choose another to replace it');
+  const keptPlan = savePlan(kept.values, { services: [packRow()], serviceId: 6, packs: kept.packs });
+  assert.deepEqual([keptPlan.service, keptPlan.env, keptPlan.endpoint, keptPlan.repoPack, keptPlan.livePack], [{ id: 6, patch: null }, { id: 12, bind: false }, { livePack: true }, null, null]);
+
+  // A new service on two files: each staged, then sent after the record and the environment.
+  let f = formInput(formInput(formOpened([svcRow()], { endpoints: [EP] }), 'name', 'Shop'), 'env', 'stg');
+  assert.deepEqual(formProblems({ ...f.values, kind: 'pack', endpointId: LIVE_PACK }, { packs: f.packs || null }), { location: 'Choose the pack file exported from the repository.', endpointId: 'Choose the pack file exported from live.' });
+  f = packReading(f, 'repo', 'shop.pack.yaml');
+  assert.equal(formModel(f, { endpoints: [EP], uploads: true }).packs.repo.text, 'Reading shop.pack.yaml…');
+  f = packStaged(f, 'repo', { name: 'shop.pack.yaml', text: PACK_TEXT, bytes: 60 });
+  assert.deepEqual([f.values.kind, f.values.location, f.focus], ['pack', 'shop.pack.yaml', 'pack-repo']);
+  assert.equal(formInput(f, 'kind', 'github').values.location, '', "leaving Pack file: its file's name is no address");
+  assert.equal(formInput(formInput(f, 'kind', 'github'), 'kind', 'pack').values.location, 'shop.pack.yaml', "and back: the staged file's name again");
+  assert.equal(formInput(formInput(f, 'kind', 'upload'), 'kind', 'pack').values.location, 'shop.pack.yaml', 'by way of Upload too');
+  f = packStaged(packReading(f, 'live', 'stg-live.json'), 'live', { name: 'stg-live.json', text: '{"kind":"ObservabilityPack"}', bytes: 28 });
+  assert.deepEqual([f.values.endpointId, f.focus, formModel(f, { endpoints: [EP], uploads: true }).packs.live.text], [LIVE_PACK, 'pack-live', 'stg-live.json — read, sent with Save']);
+  assert.deepEqual(formProblems(f.values, { packs: f.packs }), {});
+  const plan = savePlan(f.values, { services: [svcRow()], packs: f.packs });
+  assert.deepEqual([plan.service.create.repository, plan.env, plan.endpoint], [undefined, { create: { name: 'stg' } }, { livePack: true }], 'no repository named, no endpoint bound');
+  assert.deepEqual([plan.repoPack, plan.livePack], [{ name: 'shop.pack.yaml', text: PACK_TEXT }, { name: 'stg-live.json', text: '{"kind":"ObservabilityPack"}' }]);
+
+  // An endpoint chosen again: the export is not sent (the server drops the one kept).
+  const back = savePlan({ ...f.values, endpointId: String(EP.id) }, { services: [svcRow()], packs: f.packs });
+  assert.deepEqual([back.endpoint, back.livePack], [{ id: EP.id }, null]);
+  // An empty file, a failed read, a closed form.
+  assert.equal(packStaged(f, 'live', { name: 'x.yaml', text: '  ' }).packs.live.error, 'X.yaml is empty.');
+  assert.equal(formModel(packFailed(f, 'repo', new Error('the file could not be read')), { endpoints: [EP], uploads: true }).packs.repo.error, 'The file could not be read.');
+  for (const step of [(x) => packReading(x, 'repo', 'a'), (x) => packStaged(x, 'live', { name: 'a', text: 'b' }), (x) => packFailed(x, 'repo', 'c')]) assert.equal(step(FORM_CLOSED), FORM_CLOSED);
+  assert.equal(packReading(f, 'elsewhere', 'a'), f, 'only the two sides');
+});
+
+test('renderServiceList: Pack file\'s chooser in place of the address, the Live answer\'s "A pack file — an export of live…" with its chooser, both proxied to pickPackFile; the matrix cell names the export in place of the endpoint', () => {
+  const list = serviceListModel({ services: [packRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, uploads: true });
+  const calls = [];
+  const host = { overview: { pickPackFile: (side) => calls.push(side) } };
+  const c = overviewContainer();
+  renderServiceList(c, list, formModel(formOpened([packRow()], { serviceId: 6, env: 'prod', endpoints: [EP] }), { endpoints: [EP], uploads: true, now: NOW }), host);
+  const html = c.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'Save and run stays the one primary');
+  assert.ok(/data-kind="pack" aria-pressed="true">/.test(html), 'the Pack file kind pressed');
+  assert.ok(!html.includes('data-field="location"') && !html.includes('data-field="ref"'), 'no address and no branch for a pack file');
+  assert.ok(html.includes('data-ux-action="ov-form-pack-repo">Choose another pack file</button>') && html.includes('data-ux-action="ov-form-pack-live">Choose another pack file</button>'));
+  assert.ok(html.includes('<option value="pack" selected>A pack file — an export of live…</option>'));
+  assert.ok(html.includes('data-field-focus="pack-repo" tabindex="-1">basket.pack.yaml, uploaded 2 days ago — kept; choose another to replace it</span>'));
+  assert.ok(html.includes('no MCP call'), 'the export is said to stand in for the MCP call');
+  c.click('ov-form-pack-repo');
+  c.click('ov-form-pack-live');
+  assert.deepEqual(calls, ['repo', 'live']);
+  // The matrix: Live export and the file in place of the endpoint and its host; the repository a Pack file.
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, formModel(FORM_CLOSED), host);
+  assert.ok(c2.innerHTML.includes('Live export</button><span class="ov-mx__host og-muted" title="prod-live.pack.yaml">prod-live.pack.yaml · uploaded 2 days ago</span>'));
+  assert.ok(c2.innerHTML.includes('<span class="ov-svc__kind">Pack file</span>'));
+  assert.ok(!c2.innerHTML.includes('Choose the MCP endpoint</button>'), 'nothing asked of a row on an export');
+  // A form on an endpoint offers the export without its chooser until it is chosen.
+  const c3 = overviewContainer();
+  renderServiceList(c3, list, formModel(formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP] }), { endpoints: [EP], uploads: true }), host);
+  assert.ok(c3.innerHTML.includes('<option value="pack">A pack file — an export of live…</option>') && !c3.innerHTML.includes('ov-form-pack-live'));
+  // A host that wires no uploads: no export of live offered, as no Pack file kind.
+  const c4 = overviewContainer();
+  renderServiceList(c4, list, formModel(formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP] }), { endpoints: [EP] }), host);
+  assert.ok(!c4.innerHTML.includes('<option value="pack"') && !c4.innerHTML.includes('data-kind="pack"'));
 });
 
 // ---------- a repository read with the person's own token ----------
@@ -2809,14 +2896,14 @@ test('the form under the org\'s repository sources: a source switched off is not
   const blank = formOpened([svcRow()], { endpoints: [EP], sources: OFF });
   assert.equal(blank.original, null, 'a new service has no saved repository');
   const add = formModel(blank, { uploads: true, sources: OFF });
-  assert.deepEqual(add.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['ado', true, false], ['path', false, false], ['upload', false, false]], 'GitHub not offered');
+  assert.deepEqual(add.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['ado', true, false], ['path', false, false], ['upload', false, false], ['pack', false, false]], 'GitHub not offered');
   assert.equal(add.sourcesNote, 'Switched off in Settings → Repository sources: GitHub.');
   assert.equal(formModel(blank, { uploads: true }).sourcesNote, null, 'no sources read: no note');
   // Opened on a GitHub service while GitHub is off: its own kind stays, marked, with the server's sentence as its hint.
   const edit = formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP], sources: OFF });
   assert.deepEqual(edit.original, { kind: 'github', location: 'https://github.com/acme/checkout', ref: '' });
   const em = formModel(edit, { uploads: true, sources: OFF });
-  assert.deepEqual(em.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', true, true], ['ado', false, false], ['path', false, false], ['upload', false, false]]);
+  assert.deepEqual(em.kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', true, true], ['ado', false, false], ['path', false, false], ['upload', false, false], ['pack', false, false]]);
   assert.equal(em.kind.hint, `${sourceOffText('github')}. A service kept on it as it is still saves its other changes.`);
   assert.equal(em.problems.kind, undefined, 'kept exactly as saved: it saves (the endpoint, say)');
   // Changed: caught before any call, in the server's words.
@@ -2825,7 +2912,7 @@ test('the form under the org\'s repository sources: a source switched off is not
   assert.equal(formModel(formInput(edit, 'ref', 'main'), { sources: OFF }).problems.kind, CAUGHT, 'a branch is part of the repository');
   // Another kind chosen, by mistake or to look: the record's own stays offered, to be chosen again and kept.
   const away = formInput(edit, 'kind', 'ado');
-  assert.deepEqual(formModel(away, { uploads: true, sources: OFF }).kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', false, true], ['ado', true, false], ['path', false, false], ['upload', false, false]]);
+  assert.deepEqual(formModel(away, { uploads: true, sources: OFF }).kinds.map((k) => [k.kind, k.selected, k.off ?? false]), [['github', false, true], ['ado', true, false], ['path', false, false], ['upload', false, false], ['pack', false, false]]);
   const back = formInput(formInput(away, 'kind', 'github'), 'location', edit.values.location);
   assert.equal(formModel(back, { sources: OFF }).problems.kind, undefined, 'chosen again with its address: kept, it saves');
   assert.equal(formProblems({ ...blank.values, kind: 'github', name: 'B', location: 'https://github.com/acme/b' }, { sources: OFF }).kind, CAUGHT, 'a new service on it');

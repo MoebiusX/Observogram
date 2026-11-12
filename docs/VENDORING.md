@@ -583,6 +583,30 @@ The server's half is `PUT /api/services/:id/repository-upload` (README, the
 services API). The studio's wiring is `listReadRepository`,
 `listPickRepositoryFolder` and `listDropRepository` in `studio/app.mjs`.
 
+**Pack files** stand in for either side: the **Pack file** kind (a pack
+exported from the repository, offered with Upload, `uploads: true`) and the
+Live answer's *A pack file — an export of live…* (the value `LIVE_PACK`). The
+file is read as text in the browser and checked by the server:
+
+```js
+import { packReading, packStaged, packFailed } from './overview-model.mjs';
+import { putRepositoryPack, putLivePack } from './services-api.mjs';
+
+host.overview.pickPackFile = async (side) => {    // side: 'repo' | 'live'
+  const file = await yourFilePicker('.yaml,.yml,.json');
+  form = packReading(form, side, file.name); repaint();
+  try { form = packStaged(form, side, { name: file.name, text: await file.text(), bytes: file.size }); }
+  catch (e) { form = packFailed(form, side, e); }
+  repaint();
+};
+// Save: formProblems(values, { …, packs: form.packs }) and savePlan(values, { …, packs: form.packs });
+// with plan.endpoint.livePack the environment is created with no mcpEndpointId; then
+// if (plan.repoPack) await putRepositoryPack(serviceId, plan.repoPack);
+// if (plan.livePack) await putLivePack(envId, plan.livePack);
+```
+
+The studio's wiring is `listPickPackFile` in `studio/app.mjs`.
+
 **A repository read as the person who runs it.** A GitHub or Azure DevOps
 repository is read with the person's own token (README, *Whose access reads
 a repository*); the server's own only where it has no sign-in. A Run its host

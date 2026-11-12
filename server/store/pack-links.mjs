@@ -48,7 +48,9 @@ export function planPackServices(entry, canonical) {
   };
 }
 
-export function linkPack(db, actor, { packId, entry, canonical, via }) {
+// `environments: false` (a service's own repository pack, Overview's Pack file): the environments the
+// pack declares are not created — that service's environments are the ones a person added.
+export function linkPack(db, actor, { packId, entry, canonical, via, environments: makeEnvironments = true }) {
   if (!LINK_VIAS.includes(via)) throw new TypeError(`observogram store: a pack is linked via one of ${LINK_VIAS.join(', ')}, not ${JSON.stringify(via)}`);
   const plan = planPackServices(entry, canonical);
   const reason = via === 'register' || via === 'replace' ? 'relabelled' : 'replan';
@@ -70,7 +72,7 @@ export function linkPack(db, actor, { packId, entry, canonical, via }) {
         service = createService(db, actor, { slug: key, name: String(name).trim().slice(0, TEXT_MAX) || key }, { detail: { via, pack: packId } });
         result.services.push(key);
       }
-      for (const env of plan.environments) {
+      for (const env of makeEnvironments ? plan.environments : []) {
         if (getEnvironmentByName(db, service.id, env)) continue;
         createEnvironment(db, actor, { serviceId: service.id, name: env }, { detail: { via, pack: packId } });
         result.environments.push(`${key}/${env}`);

@@ -119,6 +119,8 @@ export const WAYS = Object.freeze({
   setAsideTwice: (side, key) => `${key} is set aside twice on the ${side} side`,
   repositoryKind: (x) => `a repository's kind is github, ado or path, not ${JSON.stringify(x)}`,
   repositoryUploadNamed: 'an uploaded repository is set by uploading its files (PUT /api/services/:id/repository-upload), not named here',
+  repositoryPackNamed: 'a pack file in place of the repository is set by uploading it (PUT /api/services/:id/repository-pack), not named here',
+  noLivePack: (env) => `${env} has no export of live to take away`,
   repositoryGithub: (x) => `${JSON.stringify(x)} is not a GitHub repository — https://github.com/<owner>/<repo>, or <owner>/<repo>`,
   repositoryAdo: (x) => `${JSON.stringify(x)} is not an Azure DevOps repository — https://dev.azure.com/<org>/<project>/_git/<repo>`,
   repositoryPath: (x) => `${JSON.stringify(x)} is not a folder path on the server — give its full path (C:\\src\\shop, /srv/src/shop)`,
@@ -314,6 +316,7 @@ export function parseRepository(value, { caller = null } = {}) {
   if (!isPlainObject(value) || Object.keys(value).some((k) => !['kind', 'location', 'ref'].includes(k))) invalid(WAYS.repository);
   const { kind } = value;
   if (kind === 'upload') invalid(WAYS.repositoryUploadNamed);
+  if (kind === 'pack') invalid(WAYS.repositoryPackNamed);
   if (!REPOSITORY_KINDS.includes(kind)) invalid(WAYS.repositoryKind(kind));
   const location = typeof value.location === 'string' ? value.location.trim() : '';
   if (!location || location.length > URL_MAX) {
@@ -469,6 +472,8 @@ export function repositorySourcesView(db) {
 // Why `kind` may not be used in the request's org now — the sentence — or
 // '' when it may (on, or not a source this rule knows).
 export function repositorySourceRefusal(db, kind) {
+  // A pack file in place of the repository comes from the person's machine: the Upload switch.
+  if (kind === 'pack') kind = 'upload';
   if (!REPOSITORY_SOURCES.includes(kind)) return '';
   return repositorySourcesView(db)[kind] ? '' : WAYS.repositorySourceOff(REPOSITORY_SOURCE_LABEL[kind]);
 }
@@ -614,19 +619,70 @@ export function updateEnvironmentFromApi(db, actor, id, patch = {}) {
     }
     const environment = updateEnvironment(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
     if (changed.includes('name')) moveEnvRef(db, actor, current.serviceId, current.name, next.name);
+    // An MCP endpoint chosen: the export of live it stood in for goes (one or the other).
+    if (changed.includes('mcpEndpointId') && next.mcpEndpointId !== null) {
+      const service = getService(db, current.serviceId);
+      const name = changed.includes('name') ? next.name : current.name;
+      if (livePackOf(service, name)) {
+        const map = { ...service.livePacks };
+        delete map[name];
+        updateService(db, actor, service.id, { livePacks: map });
+      }
+    }
     return { environment, changed };
   });
 }
 
-// An environment's branch follows its name: to the new one on a rename, gone with it on a
-// delete (`to` null). Nothing to move writes nothing.
+// An environment's branch and its live export follow its name: to the new one on a rename,
+// gone with it on a delete (`to` null). Nothing to move writes nothing.
+const byName = ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0);
+function movedMap(map, from, to) {
+  if (!map || typeof map !== 'object' || !Object.hasOwn(map, from)) return null;
+  const entries = Object.entries(map).filter(([name]) => name !== from && name !== to);
+  if (to) entries.push([to, map[from]]);
+  return Object.fromEntries(entries.sort(byName));
+}
 function moveEnvRef(db, actor, serviceId, from, to) {
   const service = getService(db, serviceId);
-  const refs = service?.envRefs || {};
-  if (!Object.hasOwn(refs, from)) return;
-  const entries = Object.entries(refs).filter(([name]) => name !== from && name !== to);
-  if (to) entries.push([to, refs[from]]);
-  updateService(db, actor, serviceId, { envRefs: Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
+  const envRefs = movedMap(service?.envRefs, from, to);
+  const livePacks = movedMap(service?.livePacks, from, to);
+  if (!envRefs && !livePacks) return;
+  updateService(db, actor, serviceId, { ...(envRefs ? { envRefs } : {}), ...(livePacks ? { livePacks } : {}) });
+}
+
+// An environment's export of live, own entry only (never an inherited name), or null.
+export function livePackOf(service, envName) {
+  const map = service?.livePacks;
+  return map && typeof map === 'object' && Object.hasOwn(map, envName) && map[envName] && typeof map[envName].packId === 'string' ? map[envName] : null;
+}
+
+// A pack file in place of the service's repository (server/service-packs.mjs repositoryPackRecord):
+// the record points at it. → { service, changed }.
+export function setRepositoryPack(db, actor, serviceId, repository) {
+  return atomic(db, () => {
+    const current = getService(db, serviceId);
+    if (!current) missing(WAYS.noService(serviceId));
+    return { service: updateService(db, actor, serviceId, { repository }), changed: ['repository'] };
+  });
+}
+
+// An export of live in place of an environment's MCP endpoint (service-packs.mjs livePackRecord):
+// kept on the service by the environment's name, and the endpoint unbound — one or the other.
+// `record` null takes the export away (the environment then needs an endpoint again).
+// → { environment, service }.
+export function setLivePack(db, actor, envId, record) {
+  return atomic(db, () => {
+    const env = getEnvironment(db, envId);
+    if (!env) missing(WAYS.noEnvironment(envId));
+    const service = getService(db, env.serviceId);
+    const map = { ...(service.livePacks || {}) };
+    if (record) map[env.name] = record;
+    else if (!Object.hasOwn(map, env.name)) refuse(WAYS.noLivePack(env.name));
+    else delete map[env.name];
+    const updated = updateService(db, actor, service.id, { livePacks: Object.fromEntries(Object.entries(map).sort(byName)) });
+    const environment = record && env.mcpEndpointId !== null ? updateEnvironment(db, actor, envId, { mcpEndpointId: null }) : env;
+    return { environment, service: updated };
+  });
 }
 
 // → { environment: EnvironmentView (as it was) }.
@@ -725,6 +781,8 @@ function environmentView(env, service, endpoint) {
     bindings: env.bindings, endpoints: env.endpoints, mcpEndpoint: mcpEndpointSummary(endpoint),
     // The branch its Run reads where it is not the repository's own (the service's envRefs), else null.
     ref: envRefOf(service, env.name),
+    // The export of live it is checked against in place of an MCP endpoint, else null.
+    livePack: livePackOf(service, env.name),
     createdAt: env.createdAt, updatedAt: env.updatedAt,
   };
 }

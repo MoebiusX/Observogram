@@ -445,7 +445,7 @@ test('environments: create (404 service, the texts, the 409, the endpoint of thi
       const view = admin.environmentViewOf(db, prod);
       assert.deepEqual(view, {
         id: prod.id, serviceId: svc.id, name: 'prod', tier: 'tier-1', effectiveTier: 'tier-1', bindings: { region: 'eu' },
-        endpoints: { grafana: 'https://g.example/d/1?orgId=1' }, mcpEndpoint: { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example:8443' }, ref: null,
+        endpoints: { grafana: 'https://g.example/d/1?orgId=1' }, mcpEndpoint: { id: ep.id, name: 'prod-mcp', origin: 'https://mcp.acme.example:8443' }, ref: null, livePack: null,
         createdAt: prod.createdAt, updatedAt: prod.updatedAt,
       }, 'the MCP URL itself never: its origin');
       assert.deepEqual([admin.environmentViewOf(db, staging).effectiveTier, admin.environmentViewOf(db, staging).mcpEndpoint], ['tier-2', null], "the service's tier when the environment sets none");

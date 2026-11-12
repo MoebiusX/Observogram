@@ -787,6 +787,7 @@ const SVC_ICONS = {
   ado: 'M4 7 14 3l6 3v12l-6 3-10-4 10 1V6L7 9v7l-3-1Z',
   path: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z',
   upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
+  pack: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Zm0 0v5h5M9 13h6M9 17h6',
   live: 'M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v8M2 12h0M22 12h0',
   clock: 'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z',
 };
@@ -804,7 +805,9 @@ function mxCellHtml(r, col, svc, canWrite) {
     return `<div class="ov-mx__cell ov-mx__cell--none" data-col="${attr(col)}"><span class="ov-sr">${escapeHtml(col)}: </span><span class="ov-mx__none"><span class="ov-mx__dot" aria-hidden="true"></span>Not declared</span>${add}</div>`;
   }
   const host = r.live?.origin ? r.live.origin.replace(/^https?:\/\//, '').replace(/\/$/, '') : '';
-  const ep = r.live
+  const ep = r.livePack
+    ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: upload the export of live again, or choose an MCP endpoint">${svcIcon('pack')}Live export</button><span class="ov-mx__host og-muted" title="${attr(r.livePack.name)}">${escapeHtml(r.livePack.name)}${r.livePack.ago ? ` · uploaded ${escapeHtml(r.livePack.ago)}` : ''}</span>`
+    : r.live
     ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
     : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
   const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
@@ -934,6 +937,23 @@ function uploadHtml(f) {
             </div>`;
 }
 
+// A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
+// export of live): Choose a pack file, the state as the model words it (packs[side]).
+function packFileHtml(f, side) {
+  const p = f.packs?.[side] || {};
+  const off = f.saving || p.state === 'reading' || !p.offered ? ' disabled' : '';
+  const state = p.state === 'reading' ? ' role="status"' : '';
+  return `
+            <div class="ov-form__upload ov-form__pack${p.state ? ` ov-form__upload--${attr(p.state)}` : ''}">
+              <div class="ov-form__upload-acts">
+                <button type="button" class="og-btn" data-ux-action="ov-form-pack-${side}"${off}>${p.state === 'kept' || p.state === 'staged' ? 'Choose another pack file' : 'Choose a pack file'}</button>
+                <span class="ov-form__upload-drop og-muted">.yaml or .json</span>
+              </div>
+              <span class="ov-form__upload-state"${state} data-field-focus="pack-${side}" tabindex="-1">${escapeHtml(p.text || '')}</span>${p.error ? `
+              <span class="ov-form__err" role="alert">${escapeHtml(p.error)}</span>` : ''}
+            </div>`;
+}
+
 const UP_ICON = '<svg class="ov-ic ov-folders__up-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>';
 
 // The folders on the server: Up, where the panel is, the folders inside (a
@@ -1057,6 +1077,9 @@ function svcFormHtml(f) {
   const kinds = f.kinds.map((k) => `<button type="button" class="og-btn ov-form__kind" data-ux-action="ov-form-kind" data-kind="${attr(k.kind)}" aria-pressed="${k.selected ? 'true' : 'false'}">${svcIcon(k.kind)}${escapeHtml(k.label)}${k.off ? '<span class="og-muted"> · off</span>' : ''}</button>`).join('');
   const eps = f.endpoints.map((e) => `<option value="${attr(e.id)}"${e.selected ? ' selected' : ''}>${escapeHtml(e.name)}${e.origin ? ` — ${escapeHtml(e.origin.replace(/^https?:\/\//, ''))}` : ''}</option>`).join('');
   const newOpt = `<option value="new"${f.newEndpoint.selected ? ' selected' : ''}${f.newEndpoint.allowed ? '' : ' disabled'}>A new MCP endpoint…${f.newEndpoint.allowed ? '' : ' (not here)'}</option>`;
+  // The export of live in place of an endpoint: the option's value is the model's LIVE_PACK.
+  const liveChosen = !!f.packs?.live?.chosen;
+  const packOpt = f.packs?.live?.wired || liveChosen ? `<option value="pack"${liveChosen ? ' selected' : ''}>A pack file — an export of live…</option>` : '';
   const newFields = f.newEndpoint.selected ? `
           <div class="ov-form__sub">
             <label class="ov-form__f"><span class="ov-form__l">Endpoint URL</span><input class="og-input" data-field="epUrl" value="${attr(v.epUrl)}" placeholder="https://mcp.example.com/mcp" autocomplete="off" spellcheck="false">${fieldErr(f, 'epUrl', shown)}</label>
@@ -1097,13 +1120,13 @@ function svcFormHtml(f) {
           <span class="ov-form__n">3</span>
           <div class="ov-form__f">
             <span class="ov-form__l">Repository — where it is declared</span>
-            <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>${f.kind.kind === 'upload' ? uploadHtml(f) : `
+            <div class="og-seg ov-form__kinds" role="group" aria-label="Where the repository is">${kinds}</div>${f.kind.kind === 'upload' ? uploadHtml(f) : f.kind.kind === 'pack' ? packFileHtml(f, 'repo') : `
             <div class="ov-form__pair">
               <input class="og-input ov-form__loc" data-field="location" value="${attr(v.location)}" placeholder="${attr(f.kind.placeholder)}" aria-label="${attr(f.kind.label)} location" autocomplete="off" spellcheck="false">
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="${attr(f.branch?.placeholder || 'branch (default)')}" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
-            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}
+            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' && f.kind.kind !== 'pack' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}
             ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}${auth}
           </div>
         </li>
@@ -1112,8 +1135,9 @@ function svcFormHtml(f) {
           <div class="ov-form__f">
             <span class="ov-form__l">Live — where it runs</span>
             <select class="og-input" data-field="endpointId" aria-label="The MCP endpoint that reads it live">
-              ${f.endpoints.length ? '' : '<option value="" disabled>No MCP endpoint is registered yet</option>'}${f.endpoints.length && !v.endpointId ? '<option value="" selected disabled>Choose an MCP endpoint</option>' : ''}${eps}${newOpt}
-            </select>${f.newEndpoint.allowed ? '' : `
+              ${f.endpoints.length ? '' : '<option value="" disabled>No MCP endpoint is registered yet</option>'}${f.endpoints.length && !v.endpointId ? '<option value="" selected disabled>Choose an MCP endpoint</option>' : ''}${eps}${newOpt}${packOpt}
+            </select>${liveChosen ? `${packFileHtml(f, 'live')}
+            <span class="ov-form__hint og-muted">Each Run checks the repository against this file as it is — no MCP call — until you upload it again.</span>` : ''}${f.newEndpoint.allowed || liveChosen ? '' : `
             <span class="ov-form__hint og-muted">${escapeHtml(f.newEndpoint.reason)}</span>`}${fieldErr(f, 'endpointId', shown)}${newFields}
           </div>
         </li>${f.targets ? targetsStepHtml(f, v, shown, 5) : ''}
@@ -1271,6 +1295,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-folders-close': () => ov.closeFolders?.(),
     'ov-form-upload-folder': () => ov.pickRepositoryFolder?.(),
     'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
+    'ov-form-pack-repo': () => ov.pickPackFile?.('repo'),
+    'ov-form-pack-live': () => ov.pickPackFile?.('live'),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });
@@ -1309,14 +1335,16 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     // The field the host asks for (the form just opened, the kind or the endpoint just changed);
     // 'folders' is the panel's first folder, else its first live button (a listing just drawn);
     // 'upload' (or the location, which Upload has none of) is Upload's state, else its first button.
-    const uploading = !!formEl.querySelector('.ov-form__upload');
+    const uploading = !!formEl.querySelector('.ov-form__upload:not(.ov-form__pack)');
     // 'kind' (a save stopped by a source switched off) is the chosen kind's button.
     const want = form?.focus === 'kind'
       ? (formEl.querySelector('.ov-form__kind[aria-pressed="true"]') || formEl.querySelector('.ov-form__kind'))
       : form?.focus === 'folders'
       ? (formEl.querySelector('.ov-folders__item:not([disabled])') || formEl.querySelector('.ov-folders button:not([disabled])'))
+      : form?.focus === 'pack-repo' || form?.focus === 'pack-live'
+      ? (formEl.querySelector(`[data-field-focus="${form.focus}"]`) || formEl.querySelector(`[data-ux-action="ov-form-${form.focus}"]`))
       : (form?.focus === 'upload' || (form?.focus === 'location' && uploading))
-        ? (form.focus === 'upload' ? formEl.querySelector('[data-field-focus="upload"]') : null) || formEl.querySelector('.ov-form__upload button:not([disabled])')
+        ? (form.focus === 'upload' ? formEl.querySelector('[data-field-focus="upload"]') : null) || formEl.querySelector('.ov-form__upload:not(.ov-form__pack) button:not([disabled])')
         : form?.focus ? formEl.querySelector(`[data-field="${form.focus}"]`) : null;
     if (want) {
       want.focus({ preventScroll: true });

@@ -1544,7 +1544,11 @@ export const REPOSITORY_KINDS = Object.freeze([
   Object.freeze({ kind: 'path', label: 'Folder', placeholder: 'C:\\src\\my-service  or  /srv/src/my-service', hint: 'A folder the server can read: its full path on the server.' }),
   // Offered only by a host that wires it (formModel's `uploads`): the files come from the person's own machine.
   Object.freeze({ kind: 'upload', label: 'Upload', placeholder: '', hint: 'A folder or a .zip from your machine. Its files are kept for this service and each Run scans them again; upload again when they change.' }),
+  // A pack file in place of the repository (server/service-packs.mjs): an export of the declared pack, used as it is.
+  Object.freeze({ kind: 'pack', label: 'Pack file', placeholder: '', hint: 'An exported pack (YAML or JSON) from your machine, used as the declaration as it is: each Run checks it against live without a scan. Upload it again when it changes.' }),
 ]);
+// The Live answer's export of live (server/service-packs.mjs): a pack file in place of the MCP endpoint.
+export const LIVE_PACK = 'pack';
 const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
 // The org's repository sources (GET /api/repository-sources: { github, ado,
 // path, upload }, a missing kind on; null when not read — every source on,
@@ -1552,7 +1556,7 @@ const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.lab
 // the server's words (server/service-admin.mjs WAYS.repositorySourceOff).
 export const sourceOffText = (kind) => `${KIND_LABEL[kind] || kind} is switched off in Settings → Repository sources — an org admin can switch it back on`;
 export const ALL_SOURCES_OFF = 'Every repository source is switched off in Settings → Repository sources — an org admin can switch one on.';
-const sourceOff = (sources, kind) => !!sources && typeof sources === 'object' && sources[kind] === false;
+const sourceOff = (sources, kind) => !!sources && typeof sources === 'object' && sources[kind === 'pack' ? 'upload' : kind] === false;
 export const NEW_ENDPOINT = 'new';
 
 const lastSegments = (p, n) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).slice(-n).join('/');
@@ -1563,6 +1567,10 @@ const decoded = (s) => { try { return decodeURIComponent(s); } catch { return s;
 export function repositoryLine(repository, { now = Date.now() } = {}) {
   if (!repository || typeof repository !== 'object' || !repository.location) return null;
   const { kind, location, ref = null } = repository;
+  if (kind === 'pack') {
+    const ago = repository.uploadedAt ? agoText(repository.uploadedAt, now) : '';
+    return { kind, kindText: KIND_LABEL[kind], text: location, ref: null, detail: ago ? `uploaded ${ago}` : 'uploaded', title: repository.uploadedAt ? `${location}, uploaded ${repository.uploadedAt}` : location };
+  }
   if (kind === 'upload') {
     const ago = repository.uploadedAt ? agoText(repository.uploadedAt, now) : '';
     const count = Number.isFinite(repository.files) ? `${repository.files} file${repository.files === 1 ? '' : 's'}` : '';
@@ -1685,6 +1693,8 @@ export function serviceListModel(input = {}) {
       const key = rowKey(s.id, env?.name ?? null);
       const ep = env?.mcpEndpoint ? (endpointById.get(env.mcpEndpoint.id) || env.mcpEndpoint) : null;
       const live = ep ? { id: ep.id, name: ep.name, origin: ep.origin || '' } : null;
+      // The export of live uploaded in place of the endpoint (one or the other): its file and when.
+      const exported = env?.livePack && typeof env.livePack.name === 'string' ? { name: env.livePack.name, ago: env.livePack.uploadedAt ? agoText(env.livePack.uploadedAt, now) : '' } : null;
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
@@ -1694,20 +1704,20 @@ export function serviceListModel(input = {}) {
       if (!why && !env) why = `Add an environment to ${s.name} first.`;
       else if (!why && !repository) why = `Say where ${s.name}'s repository is first.`;
       else if (!why && off) why = `${sourceOffText(s.repository.kind)}.`;
-      else if (!why && !live) why = `Choose the live MCP endpoint for ${env.name} first.`;
+      else if (!why && !live && !exported) why = `Choose the live MCP endpoint for ${env.name}, or upload an export of live, first.`;
       // The branch this environment's Run reads (a GitHub or Azure DevOps repository): its own, else the repository's.
       const remoteRepo = s.repository?.kind === 'github' || s.repository?.kind === 'ado';
       const ownRef = env ? ownRefOf(s, env.name) : null;
       const branch = remoteRepo ? { name: ownRef || s.repository.ref || null, own: !!ownRef } : null;
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
-        repository, live, last, journey: journey?.name || null, branch,
+        repository, live, livePack: exported, last, journey: journey?.name || null, branch,
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
         // What the host answered the last Run, else the offer a row that can run starts with.
         auth: authAsk(results[key]?.repoAuth, canWrite, signIn) || (!why && !busy ? authOffer(s.repository, { canWrite, repoSignIn: signIn, held, lastAccess: journey?.lastRun?.repositoryAccess || null }) : null),
-        complete: !!(env && repository && live),
+        complete: !!(env && repository && (live || exported)),
       });
     }
   }
@@ -1914,7 +1924,8 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
   const eps = Array.isArray(endpoints) ? endpoints : [];
   let endpointId = '';
-  if (e?.mcpEndpoint?.id != null) endpointId = String(e.mcpEndpoint.id);
+  if (e?.livePack) endpointId = LIVE_PACK;
+  else if (e?.mcpEndpoint?.id != null) endpointId = String(e.mcpEndpoint.id);
   else if (eps.length === 1) endpointId = String(eps[0].id);
   else if (!eps.length) endpointId = NEW_ENDPOINT;
   const values = {
@@ -1928,10 +1939,12 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
   const r = s?.repository;
   const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
+  // The pack files kept: the repository's and this environment's export of live (packs: { repo, live }).
+  const packs = { repo: r?.kind === 'pack' ? { kept: { name: r.location, uploadedAt: r.uploadedAt || null } } : null, live: e?.livePack ? { kept: { name: e.livePack.name, uploadedAt: e.livePack.uploadedAt || null } } : null };
   // The repository as saved: a source switched off since may still be kept as it is.
   // The record as the branch rule reads it (branchIsEnvironments): the form opens on the environment's own
   // branch where the rule makes it the environment's, else on the repository's.
-  const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
+  const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null, livePack: x?.livePack ? { name: x.livePack.name, uploadedAt: x.livePack.uploadedAt || null } : null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
   values.ref = (branchIsEnvironments(values, record) && ownRefOf(record, values.env)) || r?.ref || '';
   const original = r ? { kind: r.kind, location: r.location || '', ref: values.ref } : null;
   // The environments to choose from, when the service's Change is asked for one of two or more.
@@ -1940,7 +1953,7 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // `defaultRef`: the repository's own branch, which an environment left blank reads.
   const adding = !!addEnv && !!s;
   if (adding) values.env = '';
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, original, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
   return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
 }
@@ -1950,7 +1963,8 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
 function chooseEnvironment(form) {
   const e = form.record?.environments?.find((x) => x.name === form.values.env);
   if (!e) return form;
-  const values = { ...form.values, endpointId: e.endpointId != null ? String(e.endpointId) : form.values.endpointId };
+  const values = { ...form.values, endpointId: e.livePack ? LIVE_PACK : e.endpointId != null ? String(e.endpointId) : form.values.endpointId };
+  form = { ...form, packs: { ...(form.packs || {}), live: e.livePack ? { kept: e.livePack } : null } };
   values.ref = (branchIsEnvironments(values, form.record) && ownRefOf(form.record, e.name)) || form.record.repository?.ref || '';
   return { ...form, envFixed: true, values, original: form.original ? { ...form.original, ref: values.ref } : form.original };
 }
@@ -1975,10 +1989,11 @@ export function branchIsEnvironments(values, record) {
   return names.size > 1 || !!ownRefOf(record, env);
 }
 
-// The first source switched on, a folder or an address before Upload; GitHub when every one is off.
+// The first source switched on, a folder or an address before Upload (and a pack file after it);
+// GitHub when every one is off.
 function firstSourceOn(sources) {
   const on = REPOSITORY_KINDS.filter((k) => !sourceOff(sources, k.kind));
-  return (on.find((k) => k.kind !== 'upload') || on[0] || REPOSITORY_KINDS[0]).kind;
+  return (on.find((k) => k.kind !== 'upload' && k.kind !== 'pack') || on.find((k) => k.kind === 'upload') || on[0] || REPOSITORY_KINDS[0]).kind;
 }
 
 // One field typed into: the state with that value (only known fields). A
@@ -1990,8 +2005,13 @@ export function formInput(form, field, value) {
   // The targets answered by the person (not the form's own start): only then may a save change a record's.
   if (field.startsWith('target')) next.targetsTouched = true;
   if (field === 'kind' && next.browse) next.browse = null;
-  if (field === 'kind' && (form.values.kind === 'upload') !== (next.values.kind === 'upload')) {
-    next.values.location = next.values.kind === 'upload' ? (form.upload?.staged?.name || form.uploaded?.name || '') : '';
+  // Upload's and Pack file's location is a file's name, no address: leaving either clears it, and
+  // coming to one takes its file's.
+  const named = (k) => k === 'upload' || k === 'pack';
+  if (field === 'kind' && form.values.kind !== next.values.kind && (named(form.values.kind) || named(next.values.kind))) {
+    const p = form.packs?.repo;
+    next.values.location = next.values.kind === 'upload' ? (form.upload?.staged?.name || form.uploaded?.name || '')
+      : next.values.kind === 'pack' ? (p?.staged?.name || p?.kept?.name || '') : '';
   }
   // Another of the service's environments chosen: its own endpoint and branch.
   if (field === 'env' && Array.isArray(form.envChoices)) return chooseEnvironment(next);
@@ -2225,7 +2245,8 @@ export function chaosRunFormModel(form, { access = null, now = Date.now() } = {}
 // only a repository kept exactly as saved (`original`; an upload with
 // nothing new staged) may stay on one.
 // `taken`: Add environment's — the names the service already has, each refused (it has its own Change).
-export function formProblems(values = {}, { sources = null, original = null, uploadStaged = false, taken = null } = {}) {
+// `packs`: the form's pack files ({ repo, live }) — Pack file and the Live answer's export each need theirs.
+export function formProblems(values = {}, { sources = null, original = null, uploadStaged = false, taken = null, packs = null } = {}) {
   const out = {};
   if (!trimmed(values.name)) out.name = 'Name the service.';
   if (!trimmed(values.env)) out.env = 'Name the environment, e.g. prod.';
@@ -2233,14 +2254,17 @@ export function formProblems(values = {}, { sources = null, original = null, upl
   if (!REPOSITORY_KINDS.some((k) => k.kind === values.kind)) out.kind = 'Choose where the repository is.';
   else if (sourceOff(sources, values.kind)) {
     const kept = !!original && original.kind === values.kind
-      && (values.kind === 'upload' ? !uploadStaged : trimmed(values.location) === original.location && trimmed(values.ref) === original.ref);
+      && (values.kind === 'upload' ? !uploadStaged : values.kind === 'pack' ? !packs?.repo?.staged : trimmed(values.location) === original.location && trimmed(values.ref) === original.ref);
     if (!kept) out.kind = REPOSITORY_KINDS.every((k) => sourceOff(sources, k.kind)) ? ALL_SOURCES_OFF : `${sourceOffText(values.kind)}: choose another source.`;
   }
-  if (!trimmed(values.location)) {
+  if (values.kind === 'pack') {
+    if (!packReady(packs?.repo)) out.location = 'Choose the pack file exported from the repository.';
+  } else if (!trimmed(values.location)) {
     out.location = values.kind === 'path' ? "Give the folder's full path on the server."
       : values.kind === 'upload' ? 'Choose a folder or a .zip to upload.' : "Give the repository's address.";
   }
-  if (!trimmed(values.endpointId)) out.endpointId = 'Choose the MCP endpoint that reads it live.';
+  if (!trimmed(values.endpointId)) out.endpointId = 'Choose the MCP endpoint that reads it live, or a pack file exported from live.';
+  else if (values.endpointId === LIVE_PACK && !packReady(packs?.live)) out.endpointId = 'Choose the pack file exported from live.';
   if (values.endpointId === NEW_ENDPOINT) {
     if (!trimmed(values.epUrl)) out.epUrl = "Give the MCP endpoint's URL.";
     if (!trimmed(values.epName)) out.epName = 'Name the endpoint.';
@@ -2279,14 +2303,15 @@ export function formModel(form, { endpoints = null, register = null, access = nu
   const canWrite = access?.canWrite !== false;
   const newAllowed = register ? register.allowed !== false : true;
   const offered = REPOSITORY_KINDS
-    .filter((k) => (k.kind !== 'upload' || uploads || v.kind === 'upload') && (!sourceOff(sources, k.kind) || k.kind === v.kind || k.kind === form.original?.kind))
+    .filter((k) => ((k.kind !== 'upload' && k.kind !== 'pack') || uploads || v.kind === k.kind) && (!sourceOff(sources, k.kind) || k.kind === v.kind || k.kind === form.original?.kind))
     .map((k) => {
       if (!sourceOff(sources, k.kind)) return { ...k, hint: repositoryHint(k, repoSignIn) };
       // The record's own source, switched off since: it may be kept as it is (and chosen again, to keep it).
       const own = form.original?.kind === k.kind;
       return { ...k, off: true, hint: `${sourceOffText(k.kind)}.${own ? ' A service kept on it as it is still saves its other changes.' : ''}` };
     });
-  const switchedOff = REPOSITORY_KINDS.filter((k) => sourceOff(sources, k.kind)).map((k) => k.label);
+  // A pack file is no switch of its own (it follows Upload's): the switches are named, not the kinds.
+  const switchedOff = REPOSITORY_KINDS.filter((k) => k.kind !== 'pack' && sourceOff(sources, k.kind)).map((k) => k.label);
   return {
     open: true, mode: form.mode, saving: !!form.saving, error: form.error || null, focus: form.focus || null, scroll: !!form.scroll,
     // Opened from the board's Set targets… (targetsFormOpened): the Targets answer alone, saved alone.
@@ -2310,6 +2335,9 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     auth: formAuth(v, { canWrite, repoSignIn, heldTokens, sources }),
     browse: browseModel(form, v, folders, canWrite),
     upload: uploadModel(form, v, { uploads, canWrite, now }),
+    // The pack files: the repository's (Pack file) and the Live answer's export.
+    // Pack files, opt-in as Upload is (`uploads`): `wired` draws the Live answer's choice, `offered` its button.
+    packs: { repo: { offered: canWrite && !!uploads, ...packModel(form.packs?.repo, { now }) }, live: { wired: !!uploads, offered: canWrite && !!uploads, chosen: v.endpointId === LIVE_PACK, ...packModel(form.packs?.live, { now }) } },
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
     // The MTTD / MTTR targets: the dropdown, the custom minutes when chosen, and what they mean.
@@ -2318,7 +2346,7 @@ export function formModel(form, { endpoints = null, register = null, access = nu
       custom: v.targetProfile === MTTX_CUSTOM,
       hint: "Kept with this service: the board and the control room measure against them, said as set in the studio, while the repository states none of its own (a repository's own come first). Change them at any time.",
     },
-    problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged, taken: form.addEnv ? (form.record?.environments || []).map((e) => e.name) : null }),
+    problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged, taken: form.addEnv ? (form.record?.environments || []).map((e) => e.name) : null, packs: form.packs || null }),
     canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
   };
 }
@@ -2469,6 +2497,37 @@ export function uploadFailed(form, error) {
   return { ...form, upload: { error: sentenceOf(error) }, focus: 'upload' };
 }
 
+// A pack file picked on the form — `side` 'repo' (in place of the repository) or 'live' (an export of
+// live in place of the MCP endpoint): reading, then staged ({ name, text, bytes }) or failed. Staging the
+// repository's chooses the Pack file kind; the live one, the Live answer's export.
+const PACK_SIDES = ['repo', 'live'];
+export function packReading(form, side, name) {
+  if (!form?.open || !PACK_SIDES.includes(side)) return form;
+  return { ...form, packs: { ...(form.packs || {}), [side]: { ...(form.packs?.[side] || {}), reading: String(name || 'the file'), error: null } }, error: null };
+}
+export function packStaged(form, side, file) {
+  if (!form?.open || !PACK_SIDES.includes(side)) return form;
+  const text = typeof file?.text === 'string' ? file.text : '';
+  if (!text.trim()) return packFailed(form, side, `${file?.name || 'That file'} is empty`);
+  const staged = { name: String(file.name || 'pack.yaml'), text, bytes: Number(file.bytes) || text.length };
+  const packs = { ...(form.packs || {}), [side]: { kept: form.packs?.[side]?.kept || null, staged } };
+  const values = side === 'repo' ? { ...form.values, kind: 'pack', location: staged.name } : { ...form.values, endpointId: LIVE_PACK };
+  return { ...form, packs, values, error: null, focus: side === 'repo' ? 'pack-repo' : 'pack-live' };
+}
+export function packFailed(form, side, error) {
+  if (!form?.open || !PACK_SIDES.includes(side)) return form;
+  return { ...form, packs: { ...(form.packs || {}), [side]: { kept: form.packs?.[side]?.kept || null, error: sentenceOf(error) } }, focus: side === 'repo' ? 'pack-repo' : 'pack-live' };
+}
+// The form's pack file of a side, as drawn: { state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, error }.
+function packModel(p, { now }) {
+  if (p?.reading) return { state: 'reading', text: `Reading ${p.reading}…`, error: null };
+  if (p?.staged) return { state: 'staged', text: `${p.staged.name} — read, sent with Save`, error: null };
+  if (p?.error) return { state: 'failed', text: '', error: p.error };
+  if (p?.kept) return { state: 'kept', text: `${p.kept.name}${p.kept.uploadedAt ? `, uploaded ${agoText(p.kept.uploadedAt, now)}` : ''} — kept; choose another to replace it`, error: null };
+  return { state: 'empty', text: 'No file chosen yet.', error: null };
+}
+const packReady = (p) => !!(p?.staged || p?.kept);
+
 // formModel's `upload`: { offered, state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, note, error }.
 function uploadModel(form, v, { uploads, canWrite, now }) {
   if (v.kind !== 'upload') return { offered: !!uploads, state: null, text: '', note: '', error: null };
@@ -2508,10 +2567,15 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 // the form completes it, never a second one. An Upload never names its
 // repository: the service is created without one (or left as it is) and the
 // upload points it at its copy; `upload` is the staged files (form.upload.staged).
-export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false } = {}) {
+// `packs`: the form's pack files ({ repo, live }); a staged one is sent after the record and the
+// environment exist (PUT /api/services/:id/repository-pack, PUT /api/environments/:id/live-pack):
+// `repoPack` / `livePack` { name, text } or null (a kept one is left as it is).
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
-  const uploading = values.kind === 'upload';
+  // A pack file is set by its own upload, never named in the record's create or patch — as an upload.
+  const uploading = values.kind === 'upload' || values.kind === 'pack';
+  const liveExport = values.endpointId === LIVE_PACK;
   const list = Array.isArray(services) ? services.filter(Boolean) : [];
   const existing = list.find((s) => s.id === serviceId) || list.find((s) => s.slug === keyOf(name)) || null;
   // The branch answered is this environment's when the record already reads this same GitHub or
@@ -2536,7 +2600,8 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
     // Another repository: the branches named for the old one go (the server clears them too).
     envRefs = {};
   }
-  const endpoint = values.endpointId === NEW_ENDPOINT
+  const endpoint = liveExport ? { livePack: true }
+    : values.endpointId === NEW_ENDPOINT
     ? { create: { name: trimmed(values.epName), url: trimmed(values.epUrl), ...(trimmed(values.epToken) ? { readTokenEnv: trimmed(values.epToken) } : {}) } }
     : { id: Number(values.endpointId) };
   const sameRepo = (r) => !!r && r.kind === repository.kind && r.location === repository.location && (r.ref || '') === (repository.ref || '');
@@ -2555,8 +2620,11 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
   return {
     endpoint, service,
-    env: env ? { id: env.id, bind: !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
-    upload: uploading && upload?.files ? { name: upload.name, files: upload.files, skipped: Array.isArray(upload.skipped) ? upload.skipped : [] } : null,
+    // An export of live: no endpoint to bind (its upload unbinds the one there).
+    env: env ? { id: env.id, bind: !liveExport && !(endpoint.id !== undefined && env.mcpEndpoint?.id === endpoint.id) } : { create: { name: envName } },
+    upload: values.kind === 'upload' && upload?.files ? { name: upload.name, files: upload.files, skipped: Array.isArray(upload.skipped) ? upload.skipped : [] } : null,
+    repoPack: values.kind === 'pack' && packs?.repo?.staged ? { name: packs.repo.staged.name, text: packs.repo.staged.text } : null,
+    livePack: liveExport && packs?.live?.staged ? { name: packs.live.staged.name, text: packs.live.staged.text } : null,
     envName, name,
   };
 }

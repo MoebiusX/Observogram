@@ -493,6 +493,10 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     // An upload to the other org's service: unknown here, and nothing is kept in either org.
     'PUT /api/services/:id/repository-upload': [`/api/services/${serviceId}/repository-upload`, { name: 'shop.zip', files: { 'rules.yaml': 'groups: []' } }, is404('PUT /api/services/:id/repository-upload')],
     'POST /api/services/:id/environments': [`/api/services/${serviceId}/environments`, { name: 'staging' }, is404('POST /api/services/:id/environments')],
+    // A pack file to the other org's service or environment: unknown here, nothing registered in either org.
+    'PUT /api/services/:id/repository-pack': [`/api/services/${serviceId}/repository-pack`, { name: 'shop.pack.yaml', text: 'kind: ObservabilityPack' }, is404('PUT /api/services/:id/repository-pack')],
+    'PUT /api/environments/:id/live-pack': [`/api/environments/${environmentId}/live-pack`, { name: 'live.pack.yaml', text: 'kind: ObservabilityPack' }, is404('PUT /api/environments/:id/live-pack')],
+    'DELETE /api/environments/:id/live-pack': [`/api/environments/${environmentId}/live-pack`, undefined, is404('DELETE /api/environments/:id/live-pack')],
     // A service's Run: the other org's service is unknown here — no repository read, no MCP call (the sweep counts the fake's calls).
     'POST /api/services/:id/run': [`/api/services/${serviceId}/run`, { env: 'prod' }, is404('POST /api/services/:id/run')],
     'POST /api/services/:id/control-room': [`/api/services/${serviceId}/control-room`, { env: 'prod' }, is404('POST /api/services/:id/control-room')],

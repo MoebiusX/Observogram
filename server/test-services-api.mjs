@@ -206,7 +206,7 @@ const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
 const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
-const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'ref', 'createdAt', 'updatedAt'];
+const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'ref', 'livePack', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
   assert.ok(ISO.test(s.createdAt) && ISO.test(s.updatedAt), 'timestamps');
@@ -602,7 +602,7 @@ test('POST /api/services/:id/environments: an environment (201) as the view, its
   ids.prod = json.environment.id;
   assert.deepEqual(stamped(json.environment), {
     id: ids.prod, serviceId: ids.checkout, name: 'prod', tier: null, effectiveTier: 'tier-1',
-    bindings: { region: 'eu-west-1', cluster: 'prod-a' }, endpoints, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T',
+    bindings: { region: 'eu-west-1', cluster: 'prod-a' }, endpoints, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T',
   });
   assert.deepEqual(rows, [['environment.create', 'oscar', 'acme', 'checkout-service/prod', null]]);
   // Its own tier overrides the service's; the defaults are {} and {}.
@@ -610,7 +610,7 @@ test('POST /api/services/:id/environments: an environment (201) as the view, its
   ids.staging = staging.json.environment.id;
   assert.deepEqual(stamped(staging.json.environment), {
     id: ids.staging, serviceId: ids.checkout, name: 'staging', tier: 'tier-3', effectiveTier: 'tier-3',
-    bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T',
+    bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T',
   });
   assert.deepEqual(staging.rows, [['environment.create', 'ada', 'acme', 'checkout-service/staging', null]]);
   // A service without a tier: effectiveTier null (graded by the pack).
@@ -673,7 +673,7 @@ test('GET /api/services/:id/environments and GET /api/environments/:id: the view
     ok: true,
     environment: {
       id: ids.prod, serviceId: ids.checkout, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: { region: 'eu-west-1', cluster: 'prod-a' },
-      endpoints: { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1', runbook: 'http://wiki.example/checkout' }, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T',
+      endpoints: { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1', runbook: 'http://wiki.example/checkout' }, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T',
     },
     service: { id: ids.checkout, slug: 'checkout-service', name: 'Checkout', tier: 'tier-1' },
   });
@@ -693,7 +693,7 @@ test('PATCH /api/environments/:id: name, tier, bindings, endpoints, mcpEndpointI
   assert.deepEqual(json.changed, ['name', 'tier', 'bindings', 'endpoints']);   // mcpEndpointId: null on an unbound environment differs in nothing
   assert.deepEqual(stamped(json.environment), {
     id: ids.prod, serviceId: ids.checkout, name: 'production', tier: 'tier-2', effectiveTier: 'tier-2',
-    bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T',
+    bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T',
   });
   // The row names the environment as it was and the fields written (API names, as the create rows and `changed`).
   assert.deepEqual(rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['name', 'tier', 'bindings', 'endpoints'] }]]);
@@ -722,7 +722,7 @@ test('DELETE /api/environments/:id: the view as it was, one row; gone afterwards
   const { json, rows } = await ok(K, 'oscar', `/api/environments/${ids.staging}`);
   assert.deepEqual(stamped(json.deleted), {
     id: ids.staging, serviceId: ids.checkout, name: 'staging', tier: 'tier-3', effectiveTier: 'tier-3',
-    bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T',
+    bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T',
   });
   assert.deepEqual(rows, [['environment.delete', 'oscar', 'acme', 'checkout-service/staging', null]]);
   await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.staging}`, 404, `no environment ${ids.staging}`);
@@ -1156,7 +1156,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
     deleted: {
       id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
-      environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T' }],
+      environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
     },
     environments: 1, packLinks: 0, waivers: 0,
@@ -1196,7 +1196,7 @@ test('a register writes the service, environment and link rows by the person reg
   assert.deepEqual(stamped(demo), {
     id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
-    environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T' }],
+    environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
   });
   // A record is a record: its tier is set on the row the register created.
@@ -1530,7 +1530,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
     deleted: {
       id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
-      environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, createdAt: 'T', updatedAt: 'T' }],
+      environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
     },
     environments: 1, packLinks: 1, waivers: 0,
