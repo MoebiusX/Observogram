@@ -72,7 +72,9 @@ service does not declare reads *Not declared*, with **Add**. On the row,
 **Run all** runs every environment one after another, and — for a service
 in two or more environments — **Change** opens the same form with the
 environment as a choice, each choice loading its own endpoint and branch;
-under the matrix, the grade's
+**Add environment** opens the service's own form with the environment to
+name (a name it already has is refused, with the way to change that one) —
+never a second service of the same name; under the matrix, the grade's
 letters and where each starts. Services a live draft has seen with no
 repository yet are counted under the list.
 

@@ -1907,7 +1907,9 @@ export const FORM_CLOSED = Object.freeze({ open: false });
 // `pick`: the service's own Change (the matrix's row), not one environment's — a service in two or
 // more environments opens with the environment as a choice (`envChoices`, in release order), on
 // `env` or the first; choosing another loads that environment's endpoint and branch (formInput).
-export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null, pick = false } = {}) {
+// `addEnv`: Add environment on the service's row — its form with the environment to name (empty),
+// the service's own answers kept; the save adds it (formProblems refuses a name it already has).
+export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null, pick = false, addEnv = false } = {}) {
   const s = Array.isArray(services) ? services.find((x) => x && x.id === serviceId) : null;
   const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
   const eps = Array.isArray(endpoints) ? endpoints : [];
@@ -1936,9 +1938,11 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   const names = record ? record.environments.map((x) => x.name).filter((n) => typeof n === 'string' && n) : [];
   const envChoices = pick && names.length > 1 ? [...names].sort((a, b) => (envRank(a) - envRank(b)) || a.localeCompare(b)) : null;
   // `defaultRef`: the repository's own branch, which an environment left blank reads.
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null, original, defaultRef: r?.ref || '', record, ...(envChoices ? { envChoices } : {}) };
+  const adding = !!addEnv && !!s;
+  if (adding) values.env = '';
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, original, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
-  return envChoices && !e ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
+  return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
 }
 
 // The environment chosen on a form that offers the choice: that environment's own endpoint and
@@ -2220,10 +2224,12 @@ export function chaosRunFormModel(form, { access = null, now = Date.now() } = {}
 // A source switched off (`sources`) is refused here too, before any call:
 // only a repository kept exactly as saved (`original`; an upload with
 // nothing new staged) may stay on one.
-export function formProblems(values = {}, { sources = null, original = null, uploadStaged = false } = {}) {
+// `taken`: Add environment's — the names the service already has, each refused (it has its own Change).
+export function formProblems(values = {}, { sources = null, original = null, uploadStaged = false, taken = null } = {}) {
   const out = {};
   if (!trimmed(values.name)) out.name = 'Name the service.';
   if (!trimmed(values.env)) out.env = 'Name the environment, e.g. prod.';
+  else if (Array.isArray(taken) && taken.includes(trimmed(values.env))) out.env = `${trimmed(values.name)} already has ${trimmed(values.env)} — change it with its own Change.`;
   if (!REPOSITORY_KINDS.some((k) => k.kind === values.kind)) out.kind = 'Choose where the repository is.';
   else if (sourceOff(sources, values.kind)) {
     const kept = !!original && original.kind === values.kind
@@ -2286,7 +2292,9 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     // Opened from the board's Set targets… (targetsFormOpened): the Targets answer alone, saved alone.
     targetsOnly: !!form.targetsOnly,
     title: form.targetsOnly ? `MTTD / MTTR targets · ${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}`
+      : form.addEnv ? `Add an environment to ${v.name}`
       : form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',
+    addEnv: !!form.addEnv,
     nameFixed: form.mode === 'edit', envFixed: !!form.envFixed,
     // The service's environments to choose from (the row's Change), or null: a field to type in.
     envChoices: Array.isArray(form.envChoices) ? form.envChoices : null,
@@ -2310,7 +2318,7 @@ export function formModel(form, { endpoints = null, register = null, access = nu
       custom: v.targetProfile === MTTX_CUSTOM,
       hint: "Kept with this service: the board and the control room measure against them, said as set in the studio, while the repository states none of its own (a repository's own come first). Change them at any time.",
     },
-    problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged }),
+    problems: formProblems(v, { sources, original: form.original ?? null, uploadStaged: !!form.upload?.staged, taken: form.addEnv ? (form.record?.environments || []).map((e) => e.name) : null }),
     canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
   };
 }

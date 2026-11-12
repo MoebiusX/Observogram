@@ -3529,3 +3529,41 @@ test('a service in two or more environments: each cell has its own Change (that 
   renderServiceList(c2, list, formModel(prod, { endpoints: [EP, EP2] }), { overview: {} });
   assert.ok(c2.innerHTML.includes('<select class="og-input" data-field="env"><option value="staging">staging</option><option value="prod" selected>prod</option></select>'));
 });
+
+test('Add environment on a service\'s row: the service\'s own form with the environment to name — never a second service of the same name; the service\'s answers kept; a name it already has refused; the save adds it', () => {
+  const svc = svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' } });
+  const opened = formOpened([svc], { serviceId: 1, endpoints: [EP], addEnv: true });
+  assert.deepEqual([opened.mode, opened.addEnv, opened.envFixed, opened.values.env, opened.values.name, opened.values.location, opened.values.ref, opened.values.endpointId], ['edit', true, false, '', 'Checkout', 'https://github.com/acme/checkout', 'main', String(EP.id)]);
+  const m = formModel(opened, { endpoints: [EP] });
+  assert.deepEqual([m.title, m.addEnv, m.nameFixed, m.envFixed, m.envChoices], ['Add an environment to Checkout', true, true, false, null]);
+  // A name it already has: refused, with the way to change that one; an empty one asked for; a new one fine.
+  const taken = ['prod'];
+  assert.equal(formProblems({ ...opened.values, env: 'prod' }, { taken }).env, 'Checkout already has prod — change it with its own Change.');
+  assert.equal(formProblems({ ...opened.values, env: '' }, { taken }).env, 'Name the environment, e.g. prod.');
+  assert.equal(formProblems({ ...opened.values, env: 'staging' }, { taken }).env, undefined);
+  assert.equal(formProblems({ ...opened.values, env: 'prod' }).env, undefined, 'without taken (any other form): as before');
+  assert.equal(formModel({ ...opened, values: { ...opened.values, env: 'prod' } }, { endpoints: [EP] }).problems.env, 'Checkout already has prod — change it with its own Change.', 'the form says so where the name goes');
+  // The save: the environment created on the same record, nothing else changed.
+  const plan = savePlan({ ...opened.values, env: 'staging' }, { services: [svc], serviceId: 1 });
+  assert.deepEqual([plan.service, plan.env, plan.envName], [{ id: 1, patch: null }, { create: { name: 'staging' } }, 'staging']);
+  // The row: Add environment for a writer; the click reaches addEnvironment, else the service's form on no environment.
+  const list = serviceListModel({ services: [svc, svcRow({ id: 4, slug: 'ledger', name: 'Ledger', environments: [] })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const c = overviewContainer();
+  const calls = [];
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { addEnvironment: (id) => calls.push(['add-env', id]) } });
+  assert.ok(c.innerHTML.includes('<button type="button" class="ov-svc__edit ov-mx__addenv" data-ux-action="ov-svc-add-env" data-service="1" aria-label="Add an environment to Checkout">Add environment</button>'));
+  assert.ok(!c.innerHTML.includes('data-ux-action="ov-svc-add-env" data-service="4"'), 'a service with none: its own Add an environment, not a second');
+  c.click('ov-svc-add-env', { service: '1' });
+  const c2 = overviewContainer();
+  renderServiceList(c2, list, formModel(FORM_CLOSED), { overview: { editService: (...a) => calls.push(['edit', ...a]) } });
+  c2.click('ov-svc-add-env', { service: '1' });
+  assert.deepEqual(calls, [['add-env', 1], ['edit', 1, null]]);
+  const viewer = serviceListModel({ services: [svc], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, access: { canWrite: false, reason: 'viewer' } });
+  const c3 = overviewContainer();
+  renderServiceList(c3, viewer, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(!c3.innerHTML.includes('ov-svc-add-env'), 'not for a reader who may not');
+  // The form drawn: its title and the sentence under it.
+  const c4 = overviewContainer();
+  renderServiceList(c4, list, m, { overview: {} });
+  assert.ok(c4.innerHTML.includes('>Add an environment to Checkout</h2>') && c4.innerHTML.includes('Name the environment and choose the MCP endpoint that reads it live'));
+});

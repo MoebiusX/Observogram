@@ -2408,8 +2408,8 @@ const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) |
 
 // `focus`: the answer to start on (the board's Set targets… opens on the Targets one); `returnTo`:
 // { serviceId, env } — the board it was opened from, which Save and Cancel bring back.
-function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true, pick = false } = {}) {
-  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources, pick });
+function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true, pick = false, addEnv = false } = {}) {
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources, pick, addEnv });
   // The service's Change with its environment as a choice: the choice first.
   const first = opened.mode === 'add' ? 'name' : (opened.envChoices ? 'env' : opened.envFixed ? 'location' : 'env');
   listForm = { ...opened, focus: focus || first, returnTo };
@@ -2566,7 +2566,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
-  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged });
+  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null });
   if (Object.keys(problems).length) {
     listForm = { ...listForm, error: formProblemsNote(problems), focus: Object.keys(problems)[0] };
     renderMainView();
@@ -2904,6 +2904,8 @@ const overviewActions = {
   backToList: enterOverviewList,
   addService: () => openListForm(null, null),
   editService: (serviceId, env, { pick = false } = {}) => openListForm(Number.isInteger(serviceId) ? serviceId : null, env, { pick }),
+  // Add environment on a service's row: its form, the environment to name.
+  addEnvironment: (serviceId) => openListForm(Number.isInteger(serviceId) ? serviceId : null, null, { addEnv: true }),
   formInput: listFormInput,
   saveService: saveListForm,
   closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },

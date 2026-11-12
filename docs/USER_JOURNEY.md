@@ -454,7 +454,11 @@ Belongs here:
   another) and, for a service in two or more environments, **Change**: the
   form with *Environment* as a choice (in release order), each choice
   loading that environment's endpoint and branch, the repository and the
-  targets the service's; a Run's error under the row, naming its environment;
+  targets the service's; **Add environment** (*Add an environment to
+  Checkout*: the service's form, the environment's name and its endpoint to
+  answer, a name it already has refused — *Checkout already has prod —
+  change it with its own Change.*); a Run's error under the row, naming its
+  environment;
 - under the matrix, the grade's letters and where each starts (*A+ ≥ 95% ·
   A > 85% · … · D < 37.5%*), and *Not declared*;
 - **Add a service**, the one primary button: five numbered answers — *1

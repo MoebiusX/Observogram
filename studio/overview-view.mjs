@@ -873,6 +873,8 @@ function mxRowHtml(svc, columns, canWrite) {
   const name = `<span class="ov-svc__name">${escapeHtml(svc.name)}</span>${svc.bare ? `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(svc.serviceId)}" data-env="">Add an environment</button>` : ''}`;
   const all = svc.runAll.keys.length > 1 || (svc.runAll.running && svc.rows.length > 1)
     ? `<button type="button" class="og-btn ov-mx__all" data-ux-action="ov-svc-run-all" data-keys="${attr(svc.runAll.keys.map(encodeURIComponent).join(','))}"${svc.runAll.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(svc.name)} in every environment">${svc.runAll.running ? 'Running…' : 'Run all'}</button>` : '';
+  // Add environment: the service's form with the environment to name — never another service of the same name.
+  const addEnv = canWrite && !svc.bare ? `<button type="button" class="ov-svc__edit ov-mx__addenv" data-ux-action="ov-svc-add-env" data-service="${attr(svc.serviceId)}" aria-label="Add an environment to ${attr(svc.name)}">Add environment</button>` : '';
   // The service's Change: with two or more environments, the form asks which (data-pick); with one, its
   // cell's own Change is the way (not drawn twice); with none, the way to the form.
   const pick = Object.keys(svc.cells).length > 1;
@@ -890,7 +892,7 @@ function mxRowHtml(svc, columns, canWrite) {
         <div class="ov-mx__svc">${name}</div>
         <div class="ov-mx__repo" data-col="Repository">${mxRepoHtml(svc, first)}${tokenFold}</div>
         ${columns.map((c) => mxCellHtml(svc.cells[c] || null, c, svc, canWrite)).join('')}
-        <div class="ov-mx__rowacts">${all}${pick || !Object.keys(svc.cells).length ? change : ''}</div>${notes}
+        <div class="ov-mx__rowacts">${all}${pick || !Object.keys(svc.cells).length ? change : ''}${addEnv}</div>${notes}
       </li>`;
 }
 
@@ -1080,7 +1082,7 @@ function svcFormHtml(f) {
     <form class="ov-form og-panel" aria-labelledby="ov-form-h" novalidate>
       <header class="ov-form__head">
         <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
-        <p class="ov-card__sub">${f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
+        <p class="ov-card__sub">${f.addEnv ? 'Name the environment and choose the MCP endpoint that reads it live; the repository and the targets are the service\'s.' : f.mode === 'edit' ? 'Change where it is declared, where it runs or its targets. Each Run reads both places again.' : 'Five answers, then Run: the repository is scanned and checked against live, now and whenever you run it again.'}</p>
       </header>
       <ol class="ov-form__steps">
         <li class="ov-form__step">
@@ -1232,6 +1234,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
   };
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
+    // A host without addEnvironment opens the service's form on no environment: the field to name one.
+    'ov-svc-add-env': (ev, el) => (typeof ov.addEnvironment === 'function' ? ov.addEnvironment(Number(el.dataset.service)) : ov.editService?.(Number(el.dataset.service), null)),
     // A service's Change (data-pick) opens with its environment as a choice; a cell's, on that environment.
     'ov-svc-edit': (ev, el) => (el.dataset.pick ? ov.editService?.(Number(el.dataset.service), svcEnv(el), { pick: true }) : ov.editService?.(Number(el.dataset.service), svcEnv(el))),
     // Run sends the token the row's field holds, when it holds one: the field is there to be used.
