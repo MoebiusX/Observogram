@@ -3,7 +3,8 @@
 // render(container, model, host) (docs/UI_CONVENTIONS.md §3): the model is
 // studio/overview-model.mjs buildOverviewModel(...) — pure, already worded —
 // and the actions ride on host.overview: selectService(id), selectEnv(name),
-// checkNow(), openDiscover(compare), openDiagnose(compare), openRemediate(compare)
+// checkNow(), openDiscover(compare), openDiagnose(compare), openRemediate(compare),
+// openRules(compare) (Expert's Conformance: the specification's rules)
 // (compare: the model's — the live pack the board's check graded, or null), openNeuron(),
 // expert(), retry(), backToList() (a host with the service list), and with no
 // service yet scan(), live(), upload(slot), resetStart(), explain(reason). The
@@ -14,9 +15,9 @@
 // Two layouts of the same model. The board (model.layout 'board') is three
 // columns under Expert's own words — Discover · Diagnose · Remediate — each
 // a picture of the machine: the stack's four layers with the kinds of signal
-// on each, the grade as a shield with its seven criteria behind a click and
-// the specification's rules, the live fidelity as a ring with four counts and
-// the promises that hold, the delta as three counts and the one next step.
+// on each, the grade as a shield with its seven criteria behind a click, the live
+// fidelity as a ring with four counts and the promises that hold, the delta as
+// three counts, the specification's rules not met and the one next step.
 // The simple layout is the three sentences alone. Should the board ever fail
 // to draw, the simple layout is drawn instead and the error logged: the
 // screen never goes blank.
@@ -388,8 +389,9 @@ function discoverColHtml(L, S = null, C = null) {
 
 // Diagnose — one status strip for the whole column (what was graded against
 // what, when, and which probe families could not be read), then two groups:
-// A, are the right signals in place — the letter as a shield, the required
-// rules, the seven criteria behind "Why this grade"; B, can you trust what
+// A, are the right signals in place — the letter as a shield and the seven
+// criteria behind "Why this grade" (the grade alone: the specification's
+// rules are Remediate's, things to add, never a second verdict here); B, can you trust what
 // the signals show — the alignment as a ring, the four counts, the promises
 // that hold, and the still-true row with its Check button.
 function statusStripHtml(g, s, f) {
@@ -417,11 +419,19 @@ function statusStripHtml(g, s, f) {
   return `<div class="ov-status ov-status--${tone}" role="status"><span class="ov-status__dot" aria-hidden="true"></span><span class="ov-status__text">${spans}</span></div>`;
 }
 
+// Remediate's rules: what the specification requires of the service's tier and
+// the pack does not declare — the count, the first three by the clause's own
+// words (the rest counted), and the way to all of them in Expert's Conformance.
+const RULES_SHOWN = 3;
 function rulesHtml(r) {
   if (!r) return '';
-  if (r.unknown) return `<div class="ov-rules ov-rules--unknown"><span class="ov-rules__text og-muted">${escapeHtml(r.sentence)}</span></div>`;
-  const short = escapeHtml(`${r.passed} of ${r.total} required rules met`);
-  return `<div class="ov-rules ov-rules--${escapeHtml(r.tone)}" title="${escapeHtml(r.sentence)}"><div class="ov-rules__n"><b>${r.passed}</b><span class="ov-rules__of">/ ${r.total}</span></div><div class="ov-rules__bar" role="img" aria-label="${short}"><span style="width:${Math.max(0, Math.min(100, r.pct))}%"></span></div><span class="ov-rules__text">required rules met${r.tier ? ` · tier ${escapeHtml(r.tier)}` : ''}</span></div>`;
+  const head = '<h3 class="ov-rules__h">Required by the specification</h3>';
+  if (r.unknown) return `<div class="ov-rules ov-rules--unknown">${head}<p class="ov-col__note og-muted">${escapeHtml(r.sentence)}</p></div>`;
+  const shown = r.missing.slice(0, RULES_SHOWN);
+  const more = r.missing.length - shown.length;
+  const list = shown.length ? `<ul class="ov-rules__list">${shown.map((m) => `<li>${escapeHtml(m)}</li>`).join('')}${more ? `<li class="ov-rules__more og-muted">and ${more} more</li>` : ''}</ul>` : '';
+  const link = r.unmet ? '<button type="button" class="og-btn og-btn--text ov-link ov-rules__link" data-ux-action="ov-open-rules">See the rules in Expert <span class="ov-link__arrow" aria-hidden="true">→</span></button>' : '';
+  return `<div class="ov-rules ov-rules--${escapeHtml(r.tone)}">${head}<p class="ov-col__note">${escapeHtml(r.sentence)}</p>${list}${link}</div>`;
 }
 
 const ringTone = (pct) => (pct === null ? 'neutral' : pct >= 85 ? 'ok' : pct >= 50 ? 'warn' : 'fail');
@@ -494,7 +504,7 @@ const cardHeadHtml = (badge, id, question, sub) => `
           <div class="ov-card__titles"><h2 class="ov-card__h" id="${id}">${question}</h2><p class="ov-card__sub">${sub}</p></div>
         </header>`;
 
-function diagnoseColHtml(g, rules, f, s, primary, serviceId = null) {
+function diagnoseColHtml(g, f, s, primary, serviceId = null) {
   // The source line under the shield repeats the status strip when the
   // letter is the live one; it stays for the other sources, which it explains.
   const source = g.source && g.basis !== 'live' ? `<div class="ov-grade__src og-muted">${escapeHtml(g.source)}</div>` : '';
@@ -511,7 +521,6 @@ function diagnoseColHtml(g, rules, f, s, primary, serviceId = null) {
             <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}
             ${source}
           </div>
-          ${rulesHtml(rules)}
         </div>
         ${boardWhyHtml(g, serviceId)}
       </section>
@@ -534,7 +543,7 @@ const CHANGE_SHORT = { add: 'declared, not live', update: 'live, not as declared
 const changePartsHtml = (i) => (Array.isArray(i.parts) && i.parts.length
   ? `<ul class="ov-change__parts" aria-label="${attr(`${i.label} by link`)}">${i.parts.map((p) => `<li${p.value ? ' class="is-some"' : ''}>${iconHtml(p.key, 'ov-change__pic')}<span class="ov-change__pname">${escapeHtml(p.name)}</span><span class="ov-change__pn">${p.unread ? '<span class="og-muted" title="not read live" aria-hidden="true">–</span><span class="ov-sr">not read live</span>' : p.value}</span></li>`).join('')}</ul>`
   : `<span class="ov-change__note og-muted">${escapeHtml(CHANGE_SHORT[i.key] || i.note)}</span>`);
-function remediateColHtml(c, n, primary) {
+function remediateColHtml(c, n, primary, rules = null) {
   const items = c
     ? (c.known
       ? `<div class="ov-changes">${c.items.map((i) => `<div class="ov-change ov-change--${escapeHtml(i.tone)}" title="${escapeHtml(i.note)}">${iconHtml(CHANGE_ICON[i.key] || 'add', 'ov-change__ic')}<span class="ov-change__l">${escapeHtml(i.label)}</span><span class="ov-change__n">${i.value === null ? '<span aria-hidden="true">–</span><span class="ov-sr">not read live</span>' : i.value}</span>${changePartsHtml(i)}</div>`).join('')}</div>${c.sentence ? `<p class="ov-col__note og-muted">${escapeHtml(c.sentence)}</p>` : ''}${c.beyond ? `<p class="ov-col__note ov-beyond og-muted">${escapeHtml(c.beyond)}</p>` : ''}`
@@ -547,6 +556,7 @@ function remediateColHtml(c, n, primary) {
         <p class="ov-card__sub">Between the repository and live</p>
       </header>
       ${items}
+      ${rulesHtml(rules)}
       ${nextRowHtml(n, primary)}
       ${footHtml('ov-open-remediate', 'Open in Remediate')}
     </section>`;
@@ -558,8 +568,8 @@ function boardBodyHtml(model) {
     ${stagesHtml()}
     <div class="ov-board">
       ${discoverColHtml(b.layers, b.scan, b.chain)}
-      ${diagnoseColHtml(model.grade, b.rules, b.fidelity, model.still, model.primary, model.service?.id ?? null)}
-      ${remediateColHtml(b.changes, model.next, model.primary)}
+      ${diagnoseColHtml(model.grade, b.fidelity, model.still, model.primary, model.service?.id ?? null)}
+      ${remediateColHtml(b.changes, model.next, model.primary, b.rules)}
     </div>`;
 }
 
@@ -707,6 +717,7 @@ export function renderOverview(container, model, host = appHost) {
     'ov-open-discover': () => ov.openDiscover?.(model.compare || null),
     'ov-next-diagnose': () => ov.openDiagnose?.(model.compare || null),
     'ov-open-remediate': () => ov.openRemediate?.(model.compare || null),
+    'ov-open-rules': () => ov.openRules?.(model.compare || null),
     'ov-next-neuron': () => ov.openNeuron?.(),
     'ov-expert': () => ov.expert?.(),
     'ov-retry': () => ov.retry?.(),

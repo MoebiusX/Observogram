@@ -74,8 +74,11 @@ moves with drift."*
 **1:05 — Why this grade** (open on a tall monitor; on a laptop, open it).
 Seven lines, each a yes, a partly or a no, and the sum: *3.9 of 7 points. B
 starts at 4.4.* Say: *"Three things it has, two nearly, two it lacks. That is
-the whole grade; nobody has to take the letter on trust."* Beside the
-shield, the rules: *11 / 15 required rules met · tier 2* (12 before the crawler's invented health canary stopped passing the synthetic-probe rule).
+the whole grade; nobody has to take the letter on trust."* The
+specification's required rules are not beside the shield: they are in
+Remediate, as things to add (*4 of the 15 rules the specification requires of
+a tier 2 service are not met.*, the first three as what to do — *Add a recording rule for each SLO* —, *See the rules in
+Expert*).
 
 **1:15 — press Open in Remediate** (bottom of the right column). Expert's
 Remediate, on this service. Say: *"Everything you saw last time is one click

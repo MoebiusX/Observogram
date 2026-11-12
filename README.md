@@ -107,9 +107,10 @@ three columns, every number the engine's own —
   each — behind *The machinery and the layers*.
 - **Diagnose — Are the right signals in place?** The diagnostic grade as a
   letter in a shield with its ladder name (*Industrial grade*), whether it
-  was graded against live or from the repository alone, the specification's
-  required rules as a bar, and the seven criteria behind the letter as one
-  plain sentence each with a yes, a partly or a no. **Can you trust what the
+  was graded against live or from the repository alone, and the seven
+  criteria behind the letter as one plain sentence each with a yes, a partly
+  or a no — the grade alone: the specification's required rules are not part
+  of it, and are listed in Remediate. **Can you trust what the
   signals show?** The chain against live, a row per link (*Exporters 21/21 ·
   Alerts 66/66 · Dashboards 7 not read live*), the chain's alignment as a
   ring, the promises that hold end to end, and one of four
@@ -128,6 +129,12 @@ three columns, every number the engine's own —
   step with one button, in the same words (*Fix the 1 exporter and 2 alerts
   the live side does differently.*). A link live could not read is said so,
   never "matches" (*Not read live, so not compared: the 7 dashboards.*).
+  Under them, *Required by the specification*: the rules the specification
+  requires of the service's tier that the pack does not meet (*11 of the 25
+  rules the specification requires of a tier 1 service are not met.*), the
+  first three as what to do (*Set otel.semconv to 1.27.0*), and **See the
+  rules in Expert** (Conformance). With live in agreement, the next step says
+  those rules are what is left to add.
 
 ![The Overview board for one service: the chain it declares, its grade and its chain against live, and the changes to apply](docs/img/overview-board.png)
 
@@ -1883,8 +1890,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.33 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.33
+docker build -t observogram:0.8.34 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.34
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1947,7 +1954,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.33
+  observogram:0.8.34
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1955,7 +1962,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.33
+    image: observogram:0.8.34
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

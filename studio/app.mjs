@@ -2819,6 +2819,8 @@ function openOverviewView(view, compare = null) {
 const openOverviewDiscover = (compare) => openOverviewView('layers', compare);
 const openOverviewDiagnose = (compare) => openOverviewView('compare', compare);
 const openOverviewRemediate = (compare) => openOverviewView('compile', compare);
+// Remediate's "See the rules in Expert": the specification's rules for the service's pack.
+const openOverviewRules = (compare) => openOverviewView('conformance', compare);
 
 // "See the differences": Expert's Neuron on this service's journey — the
 // run whose numbers Overview showed, one click away.
@@ -2880,6 +2882,7 @@ const overviewActions = {
   openDiscover: openOverviewDiscover,
   openDiagnose: openOverviewDiagnose,
   openRemediate: openOverviewRemediate,
+  openRules: openOverviewRules,
   openNeuron: openOverviewNeuron,
   expert: enterExpert,
   retry: async () => { await refreshServices(); await refreshOverviewFacts(); },

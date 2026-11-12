@@ -35,6 +35,7 @@ import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } 
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
+import { CLAUSE_FIX } from './clause-fixes.mjs';
 
 export const UI_MODE_KEY = 'studioUiMode.v1';
 export const UI_MODES = Object.freeze(['overview', 'expert']);
@@ -732,7 +733,9 @@ export function nextActionModel(input = {}) {
   return next;
 }
 
-function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now() } = {}) {
+// `rulesLeft`: the specification's rules Remediate lists as not met (rulesModel's `missing`): with
+// live in agreement, the next step says those are what is left, never "nothing to do".
+function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now(), rulesLeft = 0 } = {}) {
   const live = journeyIsLive(journey);
   if (grade?.basis === 'none' || grade?.basis === 'error') {
     return { sentence: 'Open Expert mode to register or repair the pack.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
@@ -784,6 +787,7 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     if (extra) {
       return { sentence: `Nothing is missing live. ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that the repository does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: [], primary: true };
     }
+    if (rulesLeft > 0) return { sentence: `Live matches what the repository declares; the ${rulesLeft === 1 ? 'rule' : `${rulesLeft} rules`} the specification requires, above, ${rulesLeft === 1 ? 'is' : 'are'} what is left to add.`, button: null, why: [], primary: false };
     return { sentence: 'Nothing to do right now: live matches what the repository declares.', button: null, why: [], primary: false };
   }
   // changed
@@ -1153,28 +1157,48 @@ function chainLive(run) {
   return { links, pct: compared ? Math.round(matched / compared * 100) : null, beyond };
 }
 
-// ---------- the board: the specification's rules ----------
+// ---------- the board: the specification's rules, in Remediate ----------
 
-// rulesModel(conformance, { error }) → { passed, total, pct, tier, met, unknown, sentence, tone } | null
+// The rules the specification requires of the service's tier are not part of
+// the grade — a second figure beside the letter read as a second verdict on
+// the same thing — so the board lists them where they are things to do: in
+// Remediate, each unmet rule something to add to the pack.
+//
+// rulesModel(conformance, { error }) → { passed, total, pct, tier, met, unknown, unmet, missing, waived, sentence, tone } | null
 //   conformance  GET /api/packs/:id/conformance — the pack against the
 //                specification's clauses for its declared tier (`tier` in the
 //                body is an object; the string is `declaredTier` or `tier.graded`)
 //   error        the read's failure sentence, when it failed: the line then
 //                says the rules could not be read — not that none apply
+//   unmet        the required rules not met (total − passed)
+//   missing      [text] — those rules in the specification's order, each as the thing to do
+//                (studio/clause-fixes.mjs, Expert's Conformance's own words), else its clause's
+//                description — never its id (a layer code); a waived one is left out (`waived` counts them)
 export function rulesModel(conformance, { error = null } = {}) {
   const must = conformance?.must;
   const passed = Number(must?.passed) || 0, total = Number(must?.total) || 0;
   if (!total) {
-    if (!conformance && error) return { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, sentence: 'The required rules could not be read.', tone: 'neutral' };
+    if (!conformance && error) return { passed: 0, total: 0, pct: 0, tier: '', met: false, unknown: true, unmet: 0, missing: [], waived: 0, sentence: 'The rules the specification requires could not be read.', tone: 'neutral' };
     return null;
   }
   const pct = Math.round(passed / total * 100);
   const rawTier = conformance.declaredTier || (conformance.tier && typeof conformance.tier === 'object' ? conformance.tier.graded : conformance.tier) || '';
   const tier = String(rawTier).replace(/^tier-/i, '').trim();
   const met = conformance.conformant === true;
+  const unmet = Math.max(0, total - passed);
+  const waivedIds = new Set(Object.entries(conformance.waivers?.clauses || {}).filter(([, w]) => w && w.status === 'waived').map(([id]) => id));
+  const failing = (Array.isArray(conformance.clauses) ? conformance.clauses : [])
+    .filter((c) => c && c.applies && c.severity === 'MUST' && c.pass === false && typeof c.id === 'string');
+  const missing = failing.filter((c) => !waivedIds.has(c.id))
+    .map((c) => CLAUSE_FIX[c.id]?.action || (typeof c.description === 'string' ? c.description.trim() : ''))
+    .filter(Boolean);
+  const waived = failing.filter((c) => waivedIds.has(c.id)).length;
+  const whose = `the specification requires${tier ? ` of a tier ${tier} service` : ''}`;
   return {
-    passed, total, pct, tier, met, unknown: false,
-    sentence: `${passed} of ${total} required rules met${tier ? ` for a tier ${tier} service` : ''}.`,
+    passed, total, pct, tier, met, unknown: false, unmet, missing, waived,
+    sentence: unmet
+      ? `${unmet} of the ${total} rules ${whose} ${unmet === 1 ? 'is' : 'are'} not met${waived ? ` (${waived} of them waived)` : ''}.`
+      : `All ${total} rules ${whose} are met.`,
     tone: met ? 'ok' : (pct >= 50 ? 'warn' : 'fail'),
   };
 }
@@ -1451,7 +1475,9 @@ export function buildOverviewModel(input = {}) {
   // start's cards are the way in, not "Open Expert mode". (A member-only row,
   // whose one pack is a live aggregate's, stays Expert's to show.)
   const startHere = startable && picked.how === 'none';
-  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now });
+  // The specification's rules not met, which Remediate lists (read before the next step, which names them when live agrees).
+  const rules = picked.how === 'primary' && !pending ? rulesModel(conformance, { error: conformanceError }) : null;
+  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now, rulesLeft: rules && !rules.unknown ? rules.missing.length : 0 });
   // One primary button on the screen: the next step's when it has one, else
   // the still-true panel's Check button; none over the start.
   const primary = startHere ? null : (next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null));
@@ -1467,7 +1493,7 @@ export function buildOverviewModel(input = {}) {
     layers: graded ? layersModel({ cells, layered, unkinded }) : null,
     // What the last Run's scan read and left out (null: no record says).
     scan: graded && journey ? scanModel({ run }) : null,
-    rules: graded ? rulesModel(conformance, { error: conformanceError }) : null,
+    rules,
     fidelity: graded ? fidelity : null,
     changes: graded ? changesModel({ fidelity }) : null,
   };
