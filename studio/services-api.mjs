@@ -149,6 +149,18 @@ export async function uploadServiceRepository(id, { name, files, skipped = [] },
   return fetchFn(`/api/services/${enc(id)}/repository-upload`, jsonBody('PUT', { name, files, skipped }));
 }
 
+// PUT /api/services/:id/repository-pack { name, text } → { service, repository } — a pack file
+// exported from the repository, kept in its place (operator): each Run uses it as it is, no scan.
+export async function putRepositoryPack(id, { name, text }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(id)}/repository-pack`, jsonBody('PUT', { name, text }));
+}
+
+// PUT /api/environments/:id/live-pack { name, text } → { environment } — a pack file exported from
+// live, kept in place of the environment's MCP endpoint (operator; the endpoint is unbound).
+export async function putLivePack(envId, { name, text }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/environments/${enc(envId)}/live-pack`, jsonBody('PUT', { name, text }));
+}
+
 // POST /api/services/:id/run { env, repoAuth? } → { record, pack, journey, scan } — the repository
 // scanned and checked against live. `repoAuth` is the person's own GitHub or Azure DevOps token,
 // for this read only. A 502 (the repository or the live side did not answer) throws its sentence

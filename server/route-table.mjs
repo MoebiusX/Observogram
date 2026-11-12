@@ -220,6 +220,11 @@ export const ROUTES = Object.freeze({
   // A service's repository uploaded from the person's own machine
   // (server/repository-uploads.mjs): the copy kept, the record pointed at it.
   'PUT /api/services/:id/repository-upload': { class: 'operator', audit: ['service.update'] },
+  // A pack file in place of the repository, or of an environment's live side (server/service-packs.mjs):
+  // the pack registered (its rows), the record pointed at it; the environment's endpoint unbound.
+  'PUT /api/services/:id/repository-pack': { class: 'operator', audit: [...PACK_REGISTER, 'service.update'] },
+  'PUT /api/environments/:id/live-pack': { class: 'operator', audit: [...PACK_REGISTER, 'service.update', 'environment.update'] },
+  'DELETE /api/environments/:id/live-pack': { class: 'operator', audit: ['service.update'] },
   // A service's Run (server/index.mjs): its repository scanned and
   // registered as its pack, its check saved and run against the
   // environment's MCP endpoint — the live MCP API's posture, as every

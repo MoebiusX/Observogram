@@ -35,6 +35,11 @@
 // repository's own (`repository.ref`): { [environment name]: branch } as
 // parseEnvRefs wrote it, {} for none. Kept the same way, under
 // env_refs:<orgId>:<serviceId>.
+//
+// livePacks is the export of live an environment is checked against in
+// place of its MCP endpoint (server/service-packs.mjs): { [environment
+// name]: { packId, name, uploadedAt, bytes } }, {} for none. Kept the same
+// way, under live_packs:<orgId>:<serviceId>.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -48,6 +53,7 @@ export const setAsideKey = (orgId, serviceId) => `set_aside:${orgId}:${serviceId
 export const targetsKey = (orgId, serviceId) => `mttx_targets:${orgId}:${serviceId}`;
 export const chaosRunsKey = (orgId, serviceId) => `chaos_runs:${orgId}:${serviceId}`;
 export const envRefsKey = (orgId, serviceId) => `env_refs:${orgId}:${serviceId}`;
+export const livePacksKey = (orgId, serviceId) => `live_packs:${orgId}:${serviceId}`;
 
 export function rowToService(r) {
   if (!r) return null;
@@ -111,6 +117,18 @@ function storedEnvRefs(db, orgId, serviceId) {
   return value;
 }
 
+// A map of environment names to live exports: each { packId, name } strings at least.
+const isLivePackMap = (x) => !!x && typeof x === 'object' && !Array.isArray(x)
+  && Object.values(x).every((v) => !!v && typeof v === 'object' && !Array.isArray(v) && typeof v.packId === 'string' && v.packId !== '' && typeof v.name === 'string');
+
+// The stored live exports by environment, or {} when there are none; damage is named, as above.
+function storedLivePacks(db, orgId, serviceId) {
+  const key = livePacksKey(orgId, serviceId);
+  const value = getMetaJson(db, key, {});
+  if (!isLivePackMap(value)) throw new Error(`observogram store: schema_meta ${key} is not a map of live exports`);
+  return value;
+}
+
 // The service as the callers read it: the row, and its switches, set-asides, targets and recorded chaos runs beside it.
 function withGradeOff(db, service) {
   if (!service) return null;
@@ -118,7 +136,7 @@ function withGradeOff(db, service) {
   return {
     ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id),
     targets: storedTargets(db, service.orgId, service.id), chaosRuns: storedChaosRuns(db, service.orgId, service.id),
-    envRefs: storedEnvRefs(db, service.orgId, service.id), createdAt, updatedAt,
+    envRefs: storedEnvRefs(db, service.orgId, service.id), livePacks: storedLivePacks(db, service.orgId, service.id), createdAt, updatedAt,
   };
 }
 
@@ -161,6 +179,12 @@ function envRefsJson(envRefs) {
   return Object.keys(envRefs).length ? JSON.stringify(envRefs) : null;
 }
 
+// A map of environment names to live exports (the admin module owns their shape); none is no key.
+function livePacksJson(livePacks) {
+  if (!isLivePackMap(livePacks)) throw new TypeError('observogram store: livePacks is { [environment]: { packId, name, uploadedAt, bytes } }');
+  return Object.keys(livePacks).length ? JSON.stringify(livePacks) : null;
+}
+
 // null, or a plain object (the admin module owns its shape).
 function repositoryJson(repository) {
   if (repository === null || repository === undefined) return null;
@@ -191,6 +215,20 @@ export function getServiceBySlug(db, slug) {
   return withGradeOff(db, rowToService(prepare(db, 'SELECT * FROM services WHERE org_id = ? AND slug = ?').get(org, slug)));
 }
 
+// The packs a service of the org stands on as they are (Overview's pack files): each `pack`
+// repository's packId and each environment's export of live. The registry never evicts or
+// replaces one of them (server/pack-registry.mjs registerPack). A damaged record pins nothing.
+export function pinnedPackIds(db) {
+  const org = requireOrg(REPO);
+  const out = new Set();
+  for (const r of prepare(db, 'SELECT id, repository FROM services WHERE org_id = ?').all(org)) {
+    const repo = fromJson(r.repository ?? null, null);
+    if (repo?.kind === 'pack' && typeof repo.packId === 'string') out.add(repo.packId);
+    try { for (const v of Object.values(storedLivePacks(db, org, r.id))) out.add(v.packId); } catch { /* damaged: pins nothing */ }
+  }
+  return out;
+}
+
 export function listServices(db) {
   const org = requireOrg(REPO);
   return prepare(db, 'SELECT * FROM services WHERE org_id = ? ORDER BY slug').all(org).map((r) => withGradeOff(db, rowToService(r)));
@@ -215,6 +253,7 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     putMeta(db, targetsKey(org, row.id), targetsJson(targets));
     putMeta(db, chaosRunsKey(org, row.id), null);
     putMeta(db, envRefsKey(org, row.id), envRefsJson(envRefs));
+    putMeta(db, livePacksKey(org, row.id), null);
     // The targets as they start, the same shape an update's row names: the profile and the two durations.
     // …and the branches by environment it starts with, when it names any.
     const created = {
@@ -241,8 +280,9 @@ export function updateService(db, actor, id, patch) {
   const targets = patch.targets === undefined ? undefined : targetsJson(patch.targets);
   const chaosRuns = patch.chaosRuns === undefined ? undefined : chaosRunsJson(patch.chaosRuns);
   const envRefs = patch.envRefs === undefined ? undefined : envRefsJson(patch.envRefs);
+  const livePacks = patch.livePacks === undefined ? undefined : livePacksJson(patch.livePacks);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs'])];
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs']), ...(patch.livePacks === undefined ? [] : ['livePacks'])];
   // The row names the criteria now off, so the audit says what the grade stopped counting,
   // and how many differences are set aside on each side (the list itself can be long).
   const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
@@ -256,6 +296,8 @@ export function updateService(db, actor, id, patch) {
     ...(patch.chaosRuns === undefined ? {} : { chaosRuns: { runs: patch.chaosRuns.length, pass: patch.chaosRuns.filter((x) => x.outcome === 'pass').length, fail: patch.chaosRuns.filter((x) => x.outcome === 'fail').length } }),
     // The branches by environment as they now are.
     ...(patch.envRefs === undefined ? {} : { envRefs: patch.envRefs }),
+    // The live exports by environment: each one's file name (the pack ids are the pack rows').
+    ...(patch.livePacks === undefined ? {} : { livePacks: Object.fromEntries(Object.entries(patch.livePacks).map(([env, p]) => [env, p.name])) }),
   };
   return atomic(db, () => {
     const current = rowOf(db, org, id);
@@ -266,6 +308,7 @@ export function updateService(db, actor, id, patch) {
     if (targets !== undefined) putMeta(db, targetsKey(org, id), targets);
     if (chaosRuns !== undefined) putMeta(db, chaosRunsKey(org, id), chaosRuns);
     if (envRefs !== undefined) putMeta(db, envRefsKey(org, id), envRefs);
+    if (livePacks !== undefined) putMeta(db, livePacksKey(org, id), livePacks);
     prepare(db, `UPDATE services SET ${sql ? `${sql}, ` : ''}updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
     writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail });
@@ -283,13 +326,14 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     if (!row) throw notFound('service', id);
     // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {} }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, livePacks: {} }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
     putMeta(db, setAsideKey(org, id), null);
     putMeta(db, targetsKey(org, id), null);
     putMeta(db, chaosRunsKey(org, id), null);
     putMeta(db, envRefsKey(org, id), null);
+    putMeta(db, livePacksKey(org, id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });

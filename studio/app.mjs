@@ -54,7 +54,7 @@ import {
   packForService, newestPack, serviceChipModel, servicesSelectModel, discoverEmptyNote, buildPrefillFromService, verdictKey, buildHandoffPlan, buildDefineOriginNote, buildExitRefusal,
   buildServiceEditorModel, buildServicePatch, serviceSaveStatus,
 } from './services-model.mjs';
-import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord, uploadServiceRepository } from './services-api.mjs';
+import { loadOrgs, loadServices, loadService, patchService, verdictLoader, requestJson, createServiceRecord, runServiceRecord, uploadServiceRepository, putRepositoryPack, putLivePack } from './services-api.mjs';
 import { filesFromEntries, filesFromFileList, filesFromFolderHandle, filesFromZip, gitignoreOfFileList, isZipName, walkDropped } from './repository-files.mjs';
 import { pingMcp, readLiveJobs, startLiveJob, pollLiveJob, cancelLiveJob } from './live-api.mjs';
 import {
@@ -120,7 +120,7 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
+  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
   targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
@@ -2309,6 +2309,46 @@ function listPickWithInput({ folder }) {
   input.click();
 }
 
+// A pack file in place of either side (overview-model.mjs packReading / packStaged / packFailed):
+// side 'repo', an export of the declared pack; 'live', an export of live. Read here as text, staged
+// on the form and sent with Save (PUT /api/services/:id/repository-pack, PUT
+// /api/environments/:id/live-pack), where the server reads and validates it. A read that finishes
+// after another pick of the same side, after the form closed, or once the form is another service's
+// (or, for an export of live, another environment's), is dropped.
+const packGeneration = { repo: 0, live: 0 };
+
+function listPickPackFile(side) {
+  if (!listForm.open || !(side in packGeneration)) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.hidden = true;
+  input.accept = '.yaml,.yml,.json,application/json,application/yaml,text/yaml';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0] || null;
+    input.remove();
+    if (!file || !listForm.open) return;
+    const gen = ++packGeneration[side];
+    // Whose file it is: this form's service (and, for an export of live, its environment).
+    const ownerOf = (f) => `${f.record ? 'opened' : 'new'}|${f.serviceId ?? ''}|${side === 'live' ? f.values?.env ?? '' : ''}`;
+    const owner = ownerOf(listForm);
+    const record = listForm.record;
+    listForm = packReading(listForm, side, file.name);
+    renderMainView();
+    let next;
+    try {
+      const text = await file.text();
+      next = (form) => packStaged(form, side, { name: file.name, text, bytes: file.size });
+    } catch (e) {
+      next = (form) => packFailed(form, side, e);
+    }
+    if (gen !== packGeneration[side] || !listForm.open || listForm.record !== record || ownerOf(listForm) !== owner) return;
+    listForm = next(listForm);
+    renderMainView();
+  });
+  document.body.appendChild(input);
+  input.click();
+}
+
 function listPickRepositoryFolder() {
   if (typeof window.showDirectoryPicker !== 'function') { listPickWithInput({ folder: true }); return; }
   window.showDirectoryPicker({ id: 'observogram-upload', mode: 'read' }).then(
@@ -2566,7 +2606,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
-  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null });
+  const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null, packs: listForm.packs || null });
   if (Object.keys(problems).length) {
     listForm = { ...listForm, error: formProblemsNote(problems), focus: Object.keys(problems)[0] };
     renderMainView();
@@ -2574,7 +2614,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   }
   listForm = { ...listForm, saving: true, error: null };
   renderMainView();
-  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched });
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched, packs: listForm.packs || null });
   let serviceId = plan.service.id ?? null;
   try {
     let endpointId = plan.endpoint.id;
@@ -2585,8 +2625,20 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
     }
     if (plan.service.create) serviceId = (await createServiceRecord(plan.service.create)).id;
     else if (plan.service.patch) await patchService(serviceId, plan.service.patch);
-    if (plan.env.create) await createEnvironment(serviceId, { name: plan.envName, mcpEndpointId: endpointId });
+    // An export of live has no endpoint: the environment is made without one and the export sent below.
+    let envId = plan.env.id ?? null;
+    if (plan.env.create) envId = (await createEnvironment(serviceId, { name: plan.envName, ...(plan.endpoint.livePack ? {} : { mcpEndpointId: endpointId }) }))?.id ?? null;
     else if (plan.env.bind) await patchEnvironment(plan.env.id, { mcpEndpointId: endpointId });
+    // The pack files after the record and the environment exist: each is read and checked by the server;
+    // one sent is kept on the form, so a retry after a later refusal does not send it again.
+    if (plan.repoPack) {
+      await putRepositoryPack(serviceId, plan.repoPack);
+      listForm = { ...listForm, packs: { ...(listForm.packs || {}), repo: { kept: { name: plan.repoPack.name, uploadedAt: new Date().toISOString() } } } };
+    }
+    if (plan.livePack && envId !== null) {
+      await putLivePack(envId, plan.livePack);
+      listForm = { ...listForm, packs: { ...(listForm.packs || {}), live: { kept: { name: plan.livePack.name, uploadedAt: new Date().toISOString() } } } };
+    }
     // Upload last: the record exists, and the copy points it at the files.
     if (plan.upload) {
       await uploadServiceRepository(serviceId, plan.upload);
@@ -2634,7 +2686,9 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   listRunning = { ...listRunning, [key]: true };
   listResults = { ...listResults, [key]: null };
   renderMainView();
-  announce(`Running ${row.name} · ${row.env}: scanning the repository, then checking live…`);
+  // A pack file is read as it is (no scan); an export of live stands in for the MCP read.
+  const packed = row.repository?.kind === 'pack';
+  announce(`Running ${row.name} · ${row.env}: ${packed ? 'reading the pack file' : 'scanning the repository'}, then ${row.livePack ? 'comparing it with the export of live' : 'checking live'}…`);
   let error = null;
   let need = null;
   let out = null;
@@ -2656,7 +2710,8 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   const scan = out?.scan;
   const of = Number(scan?.candidates) > Number(scan?.files) ? ` of ${scan.candidates}` : '';
   const lost = scanLossText(scan);
-  toast(`${row.name} · ${row.env} checked: ${scan?.files ?? '?'}${of} files from ${scan?.source || 'the repository'}${lost ? ` (${lost})` : ''}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
+  const read = scan ? `${scan.files ?? '?'}${of} files from ${scan.source || 'the repository'}${lost ? ` (${lost})` : ''}` : `the pack file${row.repository?.text ? ` ${row.repository.text}` : ''}`;
+  toast(`${row.name} · ${row.env} checked: ${read}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
 }
 
 // Signing in to a repository host (server/repo-sign-in.mjs): a window of the
@@ -2918,6 +2973,7 @@ const overviewActions = {
   closeFolders: listFolderClose,
   pickRepositoryFolder: listPickRepositoryFolder,
   pickRepositoryZip: () => listPickWithInput({ folder: false }),
+  pickPackFile: (side) => listPickPackFile(side),
   dropRepository: listDropRepository,
   runService: (key, opts) => runListRow(key, opts),
   // Run all: the service's environments one after another, in the columns' order (one scan at a time).

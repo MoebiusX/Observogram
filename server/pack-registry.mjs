@@ -46,6 +46,7 @@ import {
 import { atomic, currentStore, nowIso } from './store/db.mjs';
 import { addPack, clampPackText, clearPacks as clearPackRows, getPack, listPacks, removePack, touchMany, upsertPack } from './store/packs.mjs';
 import { linkPack } from './store/pack-links.mjs';
+import { pinnedPackIds } from './store/services.mjs';
 import { SYSTEM } from './store/identity.mjs';
 import { currentOrg, runWithOrg } from './org-context.mjs';
 import { applyVerdictCarry, planVerdictCarry } from './verdict-admin.mjs';
@@ -158,7 +159,13 @@ export function packVersionChains(db = currentStore()) {
   return versionChains([...uploads].map(([id, rec]) => ({ id, canonical: rec.canonical })));
 }
 
-export function registerPack(db, actor, { canonical, source, label }) {
+// `environments: false`: the environments the pack declares are not created (linkPack).
+// The ids pinned by the org's services; none where no org is current (a boot step).
+function pinnedIds(db) {
+  try { return pinnedPackIds(db); } catch { return new Set(); }
+}
+
+export function registerPack(db, actor, { canonical, source, label, environments = true }) {
   // The clamp runs first, so the dedup below compares the cut label with the
   // cut labels in the map (a rehydrated map holds the rows' cut labels). A
   // 201-character label or a long `library:` source is cut, never refused.
@@ -169,7 +176,11 @@ export function registerPack(db, actor, { canonical, source, label }) {
   // The quick-start dedup: an older entry whose friendly label collides with
   // the new one is replaced — a second "KrystalineX (repo scan)" replaces
   // the first instead of accumulating clones in the picker.
-  const replaced = label ? [...uploads].filter(([otherId, rec]) => rec.label === label && otherId !== id).map(([otherId]) => otherId) : [];
+  // A pack a service stands on as it is (a pack file in place of its repository or of live:
+  // store/services.mjs pinnedPackIds) is neither replaced nor evicted — its id is its content, so
+  // another environment or the other side may hold the same one under another label.
+  const pinned = pinnedIds(db);
+  const replaced = label ? [...uploads].filter(([otherId, rec]) => rec.label === label && otherId !== id && !pinned.has(otherId)).map(([otherId]) => otherId) : [];
   // The eviction: the oldest ids (insertion order) that the insert of `id`
   // pushes beyond the cap — never `id` itself, never one already replaced,
   // and never a saved version: a pack the UPDATE journey saved as the next
@@ -181,7 +192,7 @@ export function registerPack(db, actor, { canonical, source, label }) {
   const evicted = [];
   for (const otherId of uploads.keys()) {
     if (evicted.length >= sizeAfter - MAX_UPLOADS) break;
-    if (otherId === id || replaced.includes(otherId) || kept.has(otherId)) continue;
+    if (otherId === id || replaced.includes(otherId) || kept.has(otherId) || pinned.has(otherId)) continue;
     evicted.push(otherId);
   }
   const entry = catalogEntryOf(id, { label, source }, canonical, listEnvironments(canonical));
@@ -196,7 +207,7 @@ export function registerPack(db, actor, { canonical, source, label }) {
     }
     const { pack: row } = upsertPack(db, actor, { id, label, source });
     for (const plan of plans) applyVerdictCarry(db, actor, { toPackId: id, plan });
-    linkPack(db, actor, { packId: id, entry, canonical, via: 'register' });
+    linkPack(db, actor, { packId: id, entry, canonical, via: 'register', environments });
     for (const otherId of evicted) {
       if (getPack(db, otherId)) removePack(db, actor, otherId, { action: 'pack.evict', detail: { cap: MAX_UPLOADS } });
     }
