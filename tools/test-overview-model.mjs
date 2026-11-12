@@ -32,7 +32,7 @@ import {
   formDraft, formRestored, FORM_DRAFT_TTL_MS,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed,
-  serviceAsideKey, serviceTargetsKey, studioTargetsCounted,
+  serviceAsideKey, serviceTargetsKey, studioTargetsCounted, serviceMatrix, envRank,
 } from '../studio/overview-model.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
@@ -2048,9 +2048,10 @@ test('renderServiceList: the rows, one primary button (Add a service, or Save an
   assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary: Add a service');
   assert.ok(html.includes('Add a service</button>'));
   assert.ok(html.includes('Check&lt;img onerror=x&gt;out') && !html.includes('<img'), 'the name is escaped');
-  assert.ok(html.includes('<span class="ov-svc__letter ov-tone-ok" aria-label="Grade A" title="Diagnostic grade">A</span><span class="ov-svc__last-text"><b>Checked 2 hours ago</b><small>92% matches live</small></span>'), 'the letter and the match, the sign the renderer\'s');
+  assert.ok(html.includes('<span class="ov-mx__grade"><span class="ov-svc__letter ov-tone-ok" aria-label="Grade A" title="Diagnostic grade">A</span><b>92% match</b></span>'), 'the letter and the match, the sign the renderer\'s');
+  assert.ok(html.includes('Checked 2 hours ago</span>'), 'when it was checked');
   assert.ok(html.includes('data-ux-action="ov-svc-run" data-key="1:prod"'));
-  assert.ok(html.includes('data-ux-action="ov-explain" aria-disabled="true" data-reason="Add an environment to Ledger first."'), 'a row that cannot run explains why');
+  assert.ok(html.includes('<span class="ov-svc__name">Ledger</span><button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="4" data-env="">Add an environment</button>'), 'a service with no environment: nothing to run, the way to one');
   assert.ok(html.includes('Upload one or compare two instead'), 'the host offers packs in hand');
   assert.ok(html.includes('aria-label="Change Ledger: where it is declared, where it runs, its MTTD / MTTR targets" title="Where it is declared, where it runs, its MTTD / MTTR targets">Change</button>'), 'Change says it holds the targets too');
   c.click('ov-svc-run', { key: '1:prod' });
@@ -2401,7 +2402,7 @@ test('renderServiceList: the offered field is on the row before any Run, and Run
   renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { runService: (...args) => calls.push(args) } });
   const html = c.innerHTML;
   assert.ok(html.includes('<div class="ov-svc__auth ov-svc__auth--offered" role="group" aria-label="Your GitHub token for Checkout">'), 'the field, marked as the offer');
-  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" autocomplete="one-time-code" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
+  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" data-auth-service="1" autocomplete="one-time-code" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
   assert.ok(html.includes('A private repository reads with your own GitHub token — sent with this tab&#39;s Runs only and never kept on the server. A public one needs none.'));
   assert.ok(!html.includes('ov-svc__error'), 'and no error beside it: nothing has failed');
   assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Add a service');
@@ -2482,11 +2483,11 @@ test('renderServiceList: the form\'s token field — a password input with nothi
   const doc = {};
   const typing = field({ formAuth: 'github' }, 'made-up-1', { selectionStart: 3, selectionEnd: 5, ownerDocument: doc });
   doc.activeElement = typing;
-  const page = { querySelectorAll: (sel) => (sel === FIELDS ? [field({ authInput: '1:prod' }, 'made-up-2'), field({ authInput: '2:prod' }, ''), typing] : []) };
+  const page = { querySelectorAll: (sel) => (sel === FIELDS ? [field({ authInput: '1:prod', authService: '1' }, 'made-up-2'), field({ authInput: '2:prod', authService: '2' }, ''), typing] : []) };
   const drafts = readTokenDrafts(page);
   assert.deepEqual(drafts, [
-    { row: '1:prod', form: null, value: 'made-up-2', focused: false, start: 9, end: 9 },
-    { row: null, form: 'github', value: 'made-up-1', focused: true, start: 3, end: 5 },
+    { row: '1:prod', service: '1', form: null, value: 'made-up-2', focused: false, start: 9, end: 9 },
+    { row: null, service: null, form: 'github', value: 'made-up-1', focused: true, start: 3, end: 5 },
   ], 'an empty field that is not being typed in is no draft');
   assert.equal(readTokenDrafts(overviewContainer()), null, 'no field, no drafts');
   assert.equal(readTokenDrafts(null), null);
@@ -2658,7 +2659,7 @@ test('renderServiceList: the row\'s token field (a password input, Run with it) 
   renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { runService: (key, opts) => calls.push(['run', key, opts]), forgetRepoToken: (kind) => calls.push(['forget', kind]) } });
   const html = c.innerHTML;
   assert.ok(html.includes('<div class="ov-svc__auth" role="group" aria-label="Your GitHub token for Checkout">'));
-  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" autocomplete="one-time-code" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
+  assert.ok(html.includes('<input class="og-input" type="password" data-auth-input="1:prod" data-auth-service="1" autocomplete="one-time-code" spellcheck="false" aria-describedby="ov-auth-1-prod">'), 'a password field, nothing pre-filled');
   assert.ok(html.includes('data-ux-action="ov-svc-auth-run" data-key="1:prod">Run with it</button>'));
   assert.ok(html.includes('Your GitHub token is sent with this tab&#39;s Runs of GitHub repositories; it is never kept on the server. <button type="button" class="ov-start__expert" data-ux-action="ov-svc-forget-token" data-kind="github">Forget it</button>'));
   assert.equal(countOf(html, 'og-btn--primary'), 1, 'still one primary: Add a service');
@@ -3370,4 +3371,118 @@ test('the differences to set aside on the page: asideChanges tells a what-if fro
   assert.ok(!setAsideListHtml({ declared: [row('metric::{"name":"<b>"}', 'declared', 'L2')] }).includes('<b>'), 'labels escaped');
   assert.equal(setAsideWords({ kind: 'not-this-service' }), "Not this service's");
   assert.equal(setAsideWords({ kind: 'in-development', until: null }), 'Under development');
+});
+
+// ---------- the service list as a matrix: a row per service, a column per environment ----------
+
+test('serviceMatrix: the environments as columns in the order a release travels (dev, test, acceptance, staging, production, then the rest by name); a cell per service and environment; a service with none; Run all over what can run, in the columns\' order; the legend in numbers', () => {
+  assert.deepEqual(['prod', 'canary', 'stg', 'dev', 'uat', 'qa', 'Production', 'blue'].sort((a, b) => (envRank(a) - envRank(b)) || a.localeCompare(b)), ['dev', 'qa', 'uat', 'stg', 'prod', 'Production', 'blue', 'canary']);
+  const env = (id, name) => ({ id, serviceId: 0, name, mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } });
+  const services = [
+    svcRow({ id: 1, slug: 'checkout', name: 'Checkout', environments: [env(11, 'prod'), env(12, 'stg')] }),
+    svcRow({ id: 2, slug: 'ledger', name: 'Ledger', environments: [env(21, 'dev'), env(22, 'prod')] }),
+    svcRow({ id: 3, slug: 'blank', name: 'Blank', environments: [] }),
+  ];
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW });
+  const m = list.matrix;
+  assert.deepEqual(m, serviceMatrix(list), 'the list carries its matrix');
+  assert.deepEqual(m.columns, ['dev', 'stg', 'prod']);
+  assert.deepEqual(m.services.map((x) => [x.name, Object.keys(x.cells).sort(), !!x.bare, x.runAll.keys]), [
+    ['Checkout', ['prod', 'stg'], false, ['1:stg', '1:prod']],
+    ['Ledger', ['dev', 'prod'], false, ['2:dev', '2:prod']],
+    ['Blank', [], true, []],
+  ], 'the runnable first, then by name; Run all in the columns\' order');
+  assert.equal(m.services[0].cells.prod, list.rows.find((r) => r.key === '1:prod'), 'a cell is the list\'s row');
+  assert.deepEqual(m.legend.map((g) => [g.letter, g.from, g.above]), [['A+', 95, false], ['A', 85, true], ['B+', 75, false], ['B', 62.5, false], ['C', 37.5, false], ['D', 0, false]]);
+  assert.equal(serviceMatrix({ kind: 'loading', rows: [] }), null);
+});
+
+test('the branch each environment reads: its own (envRefs), else the repository\'s, said on the row; none for a folder; the form opens on it, says whose it is, and a save on the same repository writes it to envRefs — the repository\'s own, or blank, is no branch of its own; a new service or a new repository takes it as the repository\'s', () => {
+  const env = (id, name) => ({ id, serviceId: 1, name, mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } });
+  const svc = svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' }, envRefs: { stg: 'develop' }, environments: [env(11, 'prod'), env(12, 'stg')] });
+  const rows = serviceListModel({ services: [svc], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows;
+  assert.deepEqual(rows.map((r) => [r.env, r.branch]), [['prod', { name: 'main', own: false }], ['stg', { name: 'develop', own: true }]]);
+  const folder = serviceListModel({ services: [svcRow({ repository: { kind: 'path', location: '/srv/checkout', ref: null } })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows[0];
+  assert.equal(folder.branch, null, 'a folder has no branch');
+  // The form on stg opens on stg's branch, and says whose it is.
+  const stg = formOpened([svc], { serviceId: 1, env: 'stg', endpoints: [EP] });
+  assert.deepEqual([stg.values.ref, stg.defaultRef], ['develop', 'main']);
+  assert.deepEqual(formModel(stg, { endpoints: [EP] }).branch, { placeholder: 'branch (main)', note: "The branch stg reads. Left blank, it reads the repository's (main)." });
+  assert.equal(formOpened([svc], { serviceId: 1, env: 'prod', endpoints: [EP] }).values.ref, 'main');
+  assert.deepEqual(formModel(formOpened([svc], { endpoints: [EP] }), { endpoints: [EP] }).branch, { placeholder: 'branch (default)', note: '' }, 'a new service: the repository\'s');
+  // Saves.
+  const plan = (values) => savePlan({ ...stg.values, ...values }, { services: [svc], serviceId: 1 }).service;
+  assert.deepEqual(plan({ ref: 'release/3' }), { id: 1, patch: { envRefs: { stg: 'release/3' } } }, 'another branch for stg: envRefs, the repository untouched');
+  assert.deepEqual(plan({ ref: 'main' }), { id: 1, patch: { envRefs: {} } }, 'the repository\'s own: no branch of its own');
+  assert.deepEqual(plan({ ref: '' }), { id: 1, patch: { envRefs: {} } }, 'blank: the same');
+  assert.deepEqual(plan({ ref: 'develop' }), { id: 1, patch: null }, 'unchanged: nothing sent');
+  assert.deepEqual(savePlan({ ...stg.values, env: 'qa', ref: 'qa-branch' }, { services: [svc], serviceId: 1 }).service, { id: 1, patch: { envRefs: { stg: 'develop', qa: 'qa-branch' } } }, 'a new environment on the record: its own branch');
+  assert.deepEqual(plan({ location: 'https://github.com/acme/checkout-v2', ref: 'trunk' }), { id: 1, patch: { repository: { kind: 'github', location: 'https://github.com/acme/checkout-v2', ref: 'trunk' }, envRefs: {} } }, 'another repository: the branch is its own, and the old one\'s branches by environment go');
+  assert.deepEqual(savePlan({ ...formOpened([], { endpoints: [EP] }).values, name: 'New', location: 'acme/new', ref: 'main', endpointId: String(EP.id) }, { services: [svc] }).service.create.repository, { kind: 'github', location: 'acme/new', ref: 'main' }, 'a new service: the repository\'s');
+  // A service in one environment keeps one branch, the repository's: the form changes it, as before.
+  const one = svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' } });
+  const oneForm = formOpened([one], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.deepEqual([oneForm.values.ref, formModel(oneForm, { endpoints: [EP] }).branch.note], ['main', '']);
+  assert.deepEqual(savePlan({ ...oneForm.values, ref: 'release' }, { services: [one], serviceId: 1 }).service, { id: 1, patch: { repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'release' } } });
+  // The note follows the rule: a location edited is another repository, and its branch is the repository's.
+  assert.equal(formModel({ ...stg, values: { ...stg.values, location: 'https://github.com/acme/other' } }, { endpoints: [EP] }).branch.note, '');
+  // An environment named after an inherited property reads no branch of its own.
+  const odd = svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' }, envRefs: {}, environments: [env(11, 'prod'), env(13, 'constructor')] });
+  assert.equal(formOpened([odd], { serviceId: 1, env: 'constructor', endpoints: [EP] }).values.ref, 'main');
+  assert.deepEqual(serviceListModel({ services: [odd], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows.find((r) => r.env === 'constructor').branch, { name: 'main', own: false });
+});
+
+test('renderServiceList: the matrix — a column per environment, Not declared (with Add for a writer), the endpoint (its name opens the form on that environment, its host whole on hover), the branch, the grade and when, Run and Open; Run all and Change on the row; a token offered folds under the repository, one a Run asked for is open, once per service; the legend; one primary', () => {
+  const env = (id, name, sid = 1) => ({ id, serviceId: sid, name, mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } });
+  const services = [
+    svcRow({ repository: { kind: 'github', location: 'https://github.com/acme/checkout', ref: 'main' }, envRefs: { stg: 'develop' }, environments: [env(11, 'prod'), env(12, 'stg')] }),
+    svcRow({ id: 2, slug: 'ledger', name: 'Ledger', environments: [env(21, 'prod', 2)] }),
+  ];
+  const journeys = [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 })];
+  const results = { '2:prod': { error: '502: the live side did not answer', repoAuth: { kind: 'github', label: 'GitHub token', refused: true } } };
+  const list = serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW, results });
+  const c = overviewContainer();
+  const calls = [];
+  renderServiceList(c, list, formModel(FORM_CLOSED), { overview: { runService: (k) => calls.push(['run', k]), runServices: (ks) => calls.push(['all', ks]), editService: (id, e) => calls.push(['edit', id, e]) } });
+  const html = c.innerHTML;
+  assert.equal(countOf(html, 'og-btn--primary'), 1, 'one primary: Add a service');
+  assert.ok(html.includes('<div class="ov-mx__cols" aria-hidden="true"><span>Service</span><span>Repository</span><span class="ov-mx__colh">stg</span><span class="ov-mx__colh">prod</span><span></span></div>'), 'stg before prod, whatever the declaration order');
+  assert.ok(html.includes('style="--ov-envs: 2"'));
+  assert.ok(html.includes('<div class="ov-mx__cell ov-mx__cell--none" data-col="stg"><span class="ov-sr">stg: </span><span class="ov-mx__none"><span class="ov-mx__dot" aria-hidden="true"></span>Not declared</span> <button type="button" class="ov-mx__add" data-ux-action="ov-svc-edit" data-service="2" data-env="stg" aria-label="Add stg to Ledger">Add</button></div>'), 'Ledger declares no stg');
+  assert.ok(html.includes('<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="1" data-env="stg" title="Change Checkout in stg: its endpoint and branch">prod-mcp</button><span class="ov-mx__host og-muted" title="https://mcp.example.test">mcp.example.test</span>'));
+  assert.ok(html.includes('<span class="ov-mx__ref og-muted" title="The branch stg reads">develop</span>') && html.includes('<span class="ov-mx__ref og-muted" title="The repository&#39;s branch">main</span>'));
+  assert.ok(html.includes('<b>92% match</b>') && html.includes('Checked 2 hours ago</span>'));
+  assert.ok(html.includes('data-ux-action="ov-svc-run-all" data-keys="1%3Astg,1%3Aprod"') && html.includes('>Run all</button>'), 'Run all on Checkout\'s two environments');
+  assert.equal(countOf(html, 'ov-svc-run-all'), 1, 'not on Ledger, with one');
+  assert.ok(html.includes('aria-label="Change Ledger: where it is declared, where it runs, its MTTD / MTTR targets"'));
+  // The token: Checkout's offered one folded under its repository; Ledger's, a Run asked for, open, with the error naming prod.
+  assert.ok(html.includes('<details class="ov-mx__token"><summary>Your GitHub token…</summary>'), 'offered: folded');
+  assert.equal(countOf(html, 'data-auth-input="1:'), 1, 'once for the service, not per environment');
+  assert.ok(html.includes('<p class="ov-svc__error ov-mx__note" role="alert"><b>prod:</b> 502: the live side did not answer</p>') && html.includes('ov-svc__auth--refused'));
+  assert.ok(html.includes('<p class="ov-mx__legend og-muted"><span class="ov-mx__legend-l">Grade, by its score</span>') && html.includes('≥ 95%</span>') && html.includes('&gt; 85%</span>') && html.includes('&lt; 37.5%</span>'));
+  assert.ok(html.includes('the match beside it is a separate measure'), 'the thresholds are the score\'s, not the match\'s');
+  // Each cell names its environment to a screen reader; a check with no match never says the time twice.
+  assert.ok(html.includes('<span class="ov-sr">prod: </span><div class="ov-mx__where">'));
+  c.click('ov-svc-run-all', { keys: '1%3Astg,1%3Aprod' });
+  c.click('ov-svc-edit', { service: '2', env: 'stg' });
+  assert.deepEqual(calls, [['all', ['1:stg', '1:prod']], ['edit', 2, 'stg']]);
+  // The service's one field is read by any of its Runs: stg's, though the field is keyed to the environment that asked.
+  const typed = [];
+  const field = { value: ' my-token ', dataset: { authInput: '1:prod', authService: '1' } };
+  const c4 = overviewContainer();
+  renderServiceList(c4, list, formModel(FORM_CLOSED), { overview: { runService: (k, o) => typed.push([k, o]), runServices: (ks, o) => typed.push([ks, o]) } });
+  c4.querySelector = (sel) => (sel === '[data-auth-service="1"]' ? field : null);
+  c4.click('ov-svc-run', { key: '1:stg' });
+  c4.click('ov-svc-run-all', { keys: '1%3Astg,1%3Aprod' });
+  assert.deepEqual(typed, [['1:stg', { repoAuth: 'my-token' }], [['1:stg', '1:prod'], { repoAuth: 'my-token' }]]);
+  // A host without runServices: one Run after another.
+  const c2 = overviewContainer();
+  const runs = [];
+  renderServiceList(c2, list, formModel(FORM_CLOSED), { overview: { runService: (k) => runs.push(k) } });
+  c2.click('ov-svc-run-all', { keys: '1%3Astg,1%3Aprod' });
+  assert.deepEqual(runs, ['1:stg', '1:prod']);
+  // A reader without the write rank: no Add.
+  const c3 = overviewContainer();
+  renderServiceList(c3, serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW, access: { canWrite: false, reason: 'viewer' } }), formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c3.innerHTML.includes('Not declared</span></div>') && !c3.innerHTML.includes('ov-mx__add'));
 });

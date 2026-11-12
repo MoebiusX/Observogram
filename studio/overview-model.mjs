@@ -1695,9 +1695,13 @@ export function serviceListModel(input = {}) {
       else if (!why && !repository) why = `Say where ${s.name}'s repository is first.`;
       else if (!why && off) why = `${sourceOffText(s.repository.kind)}.`;
       else if (!why && !live) why = `Choose the live MCP endpoint for ${env.name} first.`;
+      // The branch this environment's Run reads (a GitHub or Azure DevOps repository): its own, else the repository's.
+      const remoteRepo = s.repository?.kind === 'github' || s.repository?.kind === 'ado';
+      const ownRef = env ? ownRefOf(s, env.name) : null;
+      const branch = remoteRepo ? { name: ownRef || s.repository.ref || null, own: !!ownRef } : null;
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
-        repository, live, last, journey: journey?.name || null,
+        repository, live, last, journey: journey?.name || null, branch,
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
@@ -1709,7 +1713,64 @@ export function serviceListModel(input = {}) {
   }
   // The rows a person can run first, then the ones still missing a place; by name, then environment.
   listed.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)) || String(a.env || '').localeCompare(String(b.env || '')));
-  return { kind: 'list', error: null, rows: listed, hidden, canWrite, reason, empty: listed.length === 0, tokens, accounts };
+  // The same rows as a matrix (serviceMatrix): what the list draws.
+  return { kind: 'list', error: null, rows: listed, matrix: serviceMatrix({ kind: 'list', rows: listed }), hidden, canWrite, reason, empty: listed.length === 0, tokens, accounts };
+}
+
+// ---------- the service list as a matrix ----------
+//
+// One row per service, a column per environment, in the order a release
+// travels — dev, test, acceptance, staging, production — whatever order they
+// were declared in; a name none of those is goes after them, by name. Each
+// cell is the list's row for that service and environment (its endpoint, its
+// branch, its grade and last check, Run and Open); a service that does not
+// declare a column's environment has none there.
+const ENV_ORDER = [
+  /^(dev|devel|develop|development|local|sandbox)$/,
+  /^(test|testing|qa|sit|int|integration)$/,
+  /^(uat|acc|acceptance)$/,
+  /^(stg|stage|staging|preprod|pre-prod|perf)$/,
+  /^(prd|prod|production|live)$/,
+];
+export function envRank(name) {
+  const n = String(name || '').trim().toLowerCase();
+  const i = ENV_ORDER.findIndex((re) => re.test(n));
+  return i < 0 ? ENV_ORDER.length : i;
+}
+
+// serviceMatrix(list) → { columns, services, legend } | null — `list` is serviceListModel's
+// (kind 'list'); columns the environments in release order; each service { serviceId, name, slug,
+// repository, cells: { [env]: row }, bare (its row when it declares no environment, else null),
+// rows, complete, runAll: { keys, running } } — runAll's keys the rows that can run now, in the
+// columns' order; legend the grade's letters, best first, each with the score it starts at
+// (`from`, a number: the renderer writes the sign; `above` when the score must exceed it) — the
+// last starts at 0 and reads as below the one before it.
+export function serviceMatrix(list) {
+  if (!list || list.kind !== 'list') return null;
+  const byOrder = (a, b) => (envRank(a) - envRank(b)) || String(a).localeCompare(String(b));
+  const columns = [...new Set(list.rows.map((r) => r.env).filter((e) => typeof e === 'string' && e))].sort(byOrder);
+  const services = new Map();
+  for (const r of list.rows) {
+    let svc = services.get(r.serviceId);
+    if (!svc) {
+      svc = { serviceId: r.serviceId, name: r.name, slug: r.slug, repository: r.repository, cells: {}, bare: null, rows: [] };
+      services.set(r.serviceId, svc);
+    }
+    if (r.env) svc.cells[r.env] = r; else svc.bare = r;
+    svc.rows.push(r);
+  }
+  const out = [...services.values()].map((svc) => {
+    const ordered = columns.map((c) => svc.cells[c]).filter(Boolean);
+    return {
+      ...svc,
+      complete: svc.rows.some((r) => r.complete),
+      runAll: { keys: ordered.filter((r) => r.run.enabled).map((r) => r.key), running: ordered.some((r) => r.run.running) },
+    };
+  });
+  // The services a person can run first, then the ones still missing a place; by name.
+  out.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)));
+  const legend = INSTRUMENT_GRADE_SCALE.filter((g) => g.minPct !== null).map((g) => ({ letter: g.letter, from: g.minPct, above: !!g.exclusiveMin, tone: GRADE_TONE[g.tier] || 'neutral' }));
+  return { columns, services: out, legend };
 }
 
 // The repository hosts whose token a person gives as their own.
@@ -1853,7 +1914,8 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   else if (!eps.length) endpointId = NEW_ENDPOINT;
   const values = {
     name: s?.name || '', env: e?.name || env || (s ? '' : 'prod'),
-    kind: s?.repository?.kind || firstSourceOn(sources), location: s?.repository?.location || '', ref: s?.repository?.ref || '',
+    // The branch is the environment's own where the service names one (its envRefs), else the repository's.
+    kind: s?.repository?.kind || firstSourceOn(sources), location: s?.repository?.location || '', ref: '',
     endpointId, epName: '', epUrl: '', epToken: '',
     // The MTTD / MTTR targets (mttx-targets.mjs): a new service starts on the recommended profile.
     ...targetsFormValues(s?.targets ?? null, { isNew: !s }),
@@ -1862,8 +1924,33 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   const r = s?.repository;
   const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
   // The repository as saved: a source switched off since may still be kept as it is.
-  const original = r ? { kind: r.kind, location: r.location || '', ref: r.ref || '' } : null;
-  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null, original };
+  // The record as the branch rule reads it (branchIsEnvironments): the form opens on the environment's own
+  // branch where the rule makes it the environment's, else on the repository's.
+  const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
+  values.ref = (branchIsEnvironments(values, record) && ownRefOf(record, values.env)) || r?.ref || '';
+  const original = r ? { kind: r.kind, location: r.location || '', ref: values.ref } : null;
+  // `defaultRef`: the repository's own branch, which an environment left blank reads.
+  return { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e, values, saving: false, error: null, uploaded, upload: null, original, defaultRef: r?.ref || '', record };
+}
+
+// A service's own branch for an environment (its envRefs' own entry, never an inherited name), or null.
+const ownRefOf = (record, envName) => {
+  const refs = record?.envRefs;
+  return refs && typeof refs === 'object' && Object.hasOwn(refs, envName) && typeof refs[envName] === 'string' && refs[envName] ? refs[envName] : null;
+};
+
+// Whether the form's branch answer is the environment's own (the service's envRefs) rather than the
+// repository's: the record reads this same GitHub or Azure DevOps repository, and the service has —
+// with this environment — two or more environments, or already names a branch for this one. A
+// service in one environment keeps one branch, the repository's, as before.
+export function branchIsEnvironments(values, record) {
+  const was = record?.repository;
+  const env = trimmed(values?.env);
+  if (!was || !env || (values.kind !== 'github' && values.kind !== 'ado')) return false;
+  if (was.kind !== values.kind || was.location !== trimmed(values.location)) return false;
+  const names = new Set((record.environments || []).map((e) => e?.name).filter(Boolean));
+  names.add(env);
+  return names.size > 1 || !!ownRefOf(record, env);
 }
 
 // The first source switched on, a folder or an address before Upload; GitHub when every one is off.
@@ -2181,6 +2268,11 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     title: form.targetsOnly ? `MTTD / MTTR targets · ${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}`
       : form.mode === 'edit' ? `${v.name}${v.env && form.envFixed ? ` · ${v.env}` : ''}` : 'Add a service',
     nameFixed: form.mode === 'edit', envFixed: !!form.envFixed,
+    // The branch answer on a service that has its repository: the environment's own (savePlan),
+    // left blank the repository's.
+    branch: form.mode === 'edit' && branchIsEnvironments(v, form.record)
+      ? { placeholder: `branch (${form.defaultRef || 'default'})`, note: `The branch ${trimmed(v.env) || 'this environment'} reads. Left blank, it reads the repository's${form.defaultRef ? ` (${form.defaultRef})` : ' default branch'}.` }
+      : { placeholder: 'branch (default)', note: '' },
     values: { ...v },
     kinds: offered.map((k) => ({ ...k, selected: k.kind === v.kind })),
     kind: offered.find((k) => k.kind === v.kind) || offered[0],
@@ -2390,9 +2482,30 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
   const uploading = values.kind === 'upload';
-  const repository = { kind: values.kind, location: trimmed(values.location), ...(trimmed(values.ref) ? { ref: trimmed(values.ref) } : {}) };
   const list = Array.isArray(services) ? services.filter(Boolean) : [];
   const existing = list.find((s) => s.id === serviceId) || list.find((s) => s.slug === keyOf(name)) || null;
+  // The branch answered is this environment's when the record already reads this same GitHub or
+  // Azure DevOps repository: the repository keeps its own branch (the one an environment left blank
+  // reads) and the answer goes to the service's envRefs — one that is the repository's, or blank,
+  // is no branch of its own. A new repository, or a new service, takes it as the repository's.
+  const typedRef = trimmed(values.ref);
+  const was = existing?.repository || null;
+  const perEnv = branchIsEnvironments(values, existing);
+  const repository = perEnv
+    ? { kind: was.kind, location: was.location, ...(was.ref ? { ref: was.ref } : {}) }
+    : { kind: values.kind, location: trimmed(values.location), ...(typedRef ? { ref: typedRef } : {}) };
+  let envRefs = null;
+  if (perEnv) {
+    const current = existing.envRefs && typeof existing.envRefs === 'object' ? existing.envRefs : {};
+    const next = { ...current };
+    if (typedRef && typedRef !== (was.ref || '')) next[envName] = typedRef;
+    else delete next[envName];
+    const key = (m) => JSON.stringify(Object.keys(m).sort().map((k) => [k, m[k]]));
+    if (key(next) !== key(current)) envRefs = next;
+  } else if (was && existing.envRefs && Object.keys(existing.envRefs).length && (was.kind !== values.kind || was.location !== trimmed(values.location))) {
+    // Another repository: the branches named for the old one go (the server clears them too).
+    envRefs = {};
+  }
   const endpoint = values.endpointId === NEW_ENDPOINT
     ? { create: { name: trimmed(values.epName), url: trimmed(values.epUrl), ...(trimmed(values.epToken) ? { readTokenEnv: trimmed(values.epToken) } : {}) } }
     : { id: Number(values.endpointId) };
@@ -2403,7 +2516,7 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   const mayRetarget = !!existing && (existing.id === serviceId || targetsTouched === true || !existing.targets);
   const targetsChanged = mayRetarget && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
   const patchOf = (repo) => {
-    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}) };
+    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}) };
     return Object.keys(p).length ? p : null;
   };
   let service;

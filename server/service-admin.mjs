@@ -72,6 +72,9 @@ const URL_MAX = 2000;
 const ID_MAX = 9007199254740991;
 
 // Every way out a refusal names (the API's routes; no CLI manages these).
+// The environments a service may name a branch for, at most.
+const ENV_REFS_MAX = 50;
+
 export const WAYS = Object.freeze({
   serviceName: 'a service name is 1–200 characters',
   slug: (x) => `${JSON.stringify(x)} is not a service slug (lowercase letters, digits and -, as the catalogue keys services: ${JSON.stringify(normalizeServiceKey(x))})`,
@@ -120,6 +123,8 @@ export const WAYS = Object.freeze({
   repositoryAdo: (x) => `${JSON.stringify(x)} is not an Azure DevOps repository — https://dev.azure.com/<org>/<project>/_git/<repo>`,
   repositoryPath: (x) => `${JSON.stringify(x)} is not a folder path on the server — give its full path (C:\\src\\shop, /srv/src/shop)`,
   repositoryRef: 'a branch is 1–200 characters with no spaces',
+  envRefs: `envRefs is the branch each environment's Run reads where it is not the repository's own — { [environment name]: branch }, {} for none, at most ${ENV_REFS_MAX}`,
+  envRef: (name) => `the branch for ${JSON.stringify(name)} is 1–200 characters with no spaces`,
   repositoryFolderRoots: (x) => `${JSON.stringify(x)} is not under a folder this server reads repositories from (OBSERVOGRAM_REPO_ROOTS)`,
   repositoryFolderPosture: "a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS on the server, or from the server's own machine while it runs without sign-in on loopback — list the folder there, or give a GitHub or Azure DevOps repository",
   repositorySourceOff: (label) => `${label} is switched off in Settings → Repository sources — an org admin can switch it back on`,
@@ -247,6 +252,34 @@ function parseMcpEndpointId(db, value) {
 
 export const REPOSITORY_KINDS = Object.freeze(['github', 'ado', 'path']);
 const REF_RE = /^[^\s~^:?*[\\]{1,200}$/;
+
+// The branch each environment's Run reads, where it is not the repository's own:
+// { [environment name]: branch } (each branch the repository's rule, trimmed), {} for none.
+// The whole map is sent; a name with an empty branch is left out (it reads the repository's).
+export function parseEnvRefs(value) {
+  if (!isPlainObject(value)) invalid(WAYS.envRefs);
+  const entries = Object.entries(value);
+  if (entries.length > ENV_REFS_MAX) invalid(WAYS.envRefs);
+  const out = [];
+  for (const [name, ref] of entries) {
+    const env = String(name).trim();
+    if (!env || env.length > 200) invalid(WAYS.envRefs);
+    if (ref === null || ref === '') continue;
+    if (typeof ref !== 'string' || !REF_RE.test(ref.trim())) invalid(WAYS.envRef(env));
+    out.push([env, ref.trim()]);
+  }
+  // By name, so the same map is the same whatever order it came in; the last of a name twice wins.
+  return Object.fromEntries([...new Map(out)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// The branch an environment of `service` reads where it is not the repository's own — a GitHub or
+// Azure DevOps repository's only, by the map's own entry (never an inherited name) — else null.
+export function envRefOf(service, envName) {
+  const kind = service?.repository?.kind;
+  if (kind !== 'github' && kind !== 'ado') return null;
+  const refs = service?.envRefs;
+  return refs && typeof refs === 'object' && Object.hasOwn(refs, envName) && typeof refs[envName] === 'string' && refs[envName] ? refs[envName] : null;
+}
 
 // The folders the server reads repositories from: OBSERVOGRAM_REPO_ROOTS,
 // split on commas and on the platform's path-list delimiter, absolute ones only.
@@ -474,11 +507,12 @@ function changedFields(current, next) {
 
 // `caller` (mcpCallerOf(req)) decides whether a folder repository may be
 // named; a repository of a source the org switched off is refused (409).
-export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets } = {}, { caller = null } = {}) {
+export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets, envRefs } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
     targets: targets === undefined ? null : parseTargets(targets, { actor }),
+    envRefs: envRefs === undefined ? {} : parseEnvRefs(envRefs),
   };
   if (namedSource(repository)) refuseSourceOff(db, namedSource(repository));
   fields.repository = parseRepository(repository, { caller }) ?? null;
@@ -515,6 +549,10 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.setAside !== undefined) next.setAside = parseSetAside(patch.setAside, { current: current.setAside, actor });
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
+    if (patch.envRefs !== undefined) next.envRefs = parseEnvRefs(patch.envRefs);
+    // Another repository (another kind or address): the branches named for the old one are not its own.
+    if (next.repository !== undefined && patch.envRefs === undefined && Object.keys(current.envRefs || {}).length
+      && (next.repository?.kind !== current.repository?.kind || next.repository?.location !== current.repository?.location)) next.envRefs = {};
     const changed = changedFields(current, next);
     if (changed.includes('repository') && next.repository) refuseSourceOff(db, next.repository.kind);
     if (!changed.length) return { service: current, changed };
@@ -575,8 +613,20 @@ export function updateEnvironmentFromApi(db, actor, id, patch = {}) {
       if (clash) refuse(WAYS.environmentExists(clash, getService(db, current.serviceId).slug));
     }
     const environment = updateEnvironment(db, actor, id, Object.fromEntries(changed.map((k) => [k, next[k]])));
+    if (changed.includes('name')) moveEnvRef(db, actor, current.serviceId, current.name, next.name);
     return { environment, changed };
   });
+}
+
+// An environment's branch follows its name: to the new one on a rename, gone with it on a
+// delete (`to` null). Nothing to move writes nothing.
+function moveEnvRef(db, actor, serviceId, from, to) {
+  const service = getService(db, serviceId);
+  const refs = service?.envRefs || {};
+  if (!Object.hasOwn(refs, from)) return;
+  const entries = Object.entries(refs).filter(([name]) => name !== from && name !== to);
+  if (to) entries.push([to, refs[from]]);
+  updateService(db, actor, serviceId, { envRefs: Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) });
 }
 
 // → { environment: EnvironmentView (as it was) }.
@@ -586,6 +636,7 @@ export function deleteEnvironmentFromApi(db, actor, id) {
     if (!current) missing(WAYS.noEnvironment(id));
     const view = environmentViewOf(db, current);
     deleteEnvironment(db, actor, id);
+    moveEnvRef(db, actor, current.serviceId, current.name, null);
     return { environment: view };
   });
 }
@@ -672,6 +723,8 @@ function environmentView(env, service, endpoint) {
   return {
     id: env.id, serviceId: env.serviceId, name: env.name, tier: env.tier, effectiveTier: env.tier ?? service.tier ?? null,
     bindings: env.bindings, endpoints: env.endpoints, mcpEndpoint: mcpEndpointSummary(endpoint),
+    // The branch its Run reads where it is not the repository's own (the service's envRefs), else null.
+    ref: envRefOf(service, env.name),
     createdAt: env.createdAt, updatedAt: env.updatedAt,
   };
 }
@@ -692,6 +745,8 @@ function serviceView(service, environments, links) {
     // The chaos runs recorded in the studio (studio/chaos-runs.mjs), newest first: [{ experiment, at, outcome,
     // environment, mttd, alertsFired, note, by, recordedAt }], [] for none.
     chaosRuns: Array.isArray(service.chaosRuns) ? service.chaosRuns : [],
+    // The branch each environment's Run reads where it is not the repository's own: { [environment]: branch }, {} for none.
+    envRefs: service.envRefs && typeof service.envRefs === 'object' ? service.envRefs : {},
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

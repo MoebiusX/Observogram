@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.8.35 — 2026-11-12
+
+**The Services list is a matrix — a row per service, a column per environment — and each environment reads its own branch.** The list drew one row per service and environment, so a service in three environments was three rows a reader had to line up by eye. It is now one row per service with its repository, and a column per environment in the order a release travels: in each cell, the environment's endpoint, the branch its Run reads, the grade with how much matches live, when it was last checked, Run and Open. Staging and production of one repository often read different branches (develop and main), which is most of why their grades differ, so a service can now name the branch each environment reads.
+
+### Changed
+- **The matrix** (`studio/overview-model.mjs` `serviceMatrix`, `envRank` (new), `studio/overview-view.mjs`, `studio/overview.css`): the columns *Service · Repository · dev · stg · prod*. The environments run dev, test, acceptance, staging, production, then any other by name, whatever order they were declared in. Each cell holds:
+  - the endpoint's name, which opens **Change** on that environment, with its host beneath (whole on hover);
+  - the branch (its own, else the repository's);
+  - the letter with *92% match*, *Not checked yet* or *Live did not answer*;
+  - *Checked 2 hours ago*, **Run** and **Open**.
+
+  A column the service does not declare reads *Not declared*, with **Add** for a person who may change it. On the row, **Run all** (two or more environments that can run, one after another: `host.overview.runServices(keys)`, new — without it the view starts each Run) and **Change**. A Run's error sits under the row, naming its environment. A token field offered before any Run folds under the repository (*Your GitHub token…*); one a Run asked for is open under the row, once for the service, and every Run of the service — **Run all** too — sends what it holds (a typed token outlives a repaint by its service). Each cell names its environment to a screen reader. Many environments scroll sideways. Under the matrix, *Grade, by its score*: the letters with where each starts, from the engine's scale (*A+ ≥ 95% · A > 85% · B+ ≥ 75% · B ≥ 62.5% · C ≥ 37.5% · D < 37.5%*), and that the match is a separate measure. A narrow screen draws each service as a card, an undeclared environment on one line. `serviceListModel` carries the matrix (`matrix`) and each row its `branch` (`{ name, own }`, null for a folder or an upload); `readTokenDrafts` names each draft's `service`.
+- **A branch per environment** (`server/store/services.mjs`, `server/service-admin.mjs` `parseEnvRefs` (new), `server/index.mjs`):
+  - a service's `envRefs`, `{ [environment name]: branch }`, set on `POST` and `PATCH /api/services/:id` as the whole map. A name with an empty branch is none; the map is sorted by name, so the same map in another order changes nothing; at most 50.
+  - It is kept beside the record under `schema_meta` `env_refs:<org>:<id>`, with no schema step, and goes with the service's deletion. The `service.update` row names the map.
+  - The service's view carries `envRefs`, and each environment's view its `ref` (`null`: the repository's; always `null` for a folder or an upload). Renaming an environment takes its branch along; deleting one takes it away; another repository (another kind or address) clears them all. A branch is looked up by the map's own entry, so an environment named after an inherited property (`constructor`) reads none.
+  - A service's Run reads the environment's branch, else the repository's.
+- **The form** (`studio/overview-model.mjs` `formOpened`, `formModel`, `savePlan`, `branchIsEnvironments` (new)): on a service that already has its repository and two or more environments (or a branch already named for this one), the branch answer is the environment's own. The form opens on it and says so (*The branch stg reads. Left blank, it reads the repository's (main).*), and the save writes it to `envRefs`. The repository's own branch, or a blank answer, is no branch of its own. On a new service, a service in one environment, or a new repository, the answer is the repository's branch, as before; a new repository also drops the old one's branches by environment.
+- **Docs.** `README.md` (the services and their picture, `docs/img/overview-services.png`, taken again; a branch per environment), `docs/USER_JOURNEY.md` (Overview: the Services list), `docs/VENDORING.md` (`serviceMatrix`, `envRank`, `runServices`).
+- **Downstream:** api, behaviour — the service record, its view and `POST` / `PATCH /api/services/:id` gain `envRefs`, an environment's view gains `ref` and a service's Run reads the environment's branch; `studio/overview-model.mjs` exports `serviceMatrix`, `envRank` and `branchIsEnvironments`, `serviceListModel` returns `matrix` and each row `branch`, `formModel` returns `branch`, the board calls a new, optional `host.overview.runServices(keys)`, and the Services list draws a matrix in place of a row per service and environment.
+
+### Tests
+- `server/test-service-run.mjs` +1: `envRefs` on POST and PATCH (trimmed, an empty branch none, the same map in another order no change, three refusals and no row), the environments' `ref`, a rename and a deletion moving it, each environment's Run reading its own branch (stg read *develop*, prod the repository's *main*, against a stubbed GitHub), an environment named `constructor` reading none, the create row naming them, and another repository clearing them.
+- `tools/test-overview-model.mjs` +3 (with the review's fixes: a service in one environment keeps one branch, the note follows the rule, an inherited name, the service's one token field read by any of its Runs and Run all): `serviceMatrix` and `envRank` (the release order, the cells, a service with none, Run all's keys, the legend in numbers), the branch on each row, the form and every save case, and the rendered matrix (the columns, *Not declared* with and without **Add**, the endpoint, branch, grade and when, **Run all** through the host or one Run after another, the token folded or open once per service, the legend). The list's render test reads the matrix's markup.
+- `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling from 6,800,000 to 6,950,000 bytes (the studio's own code reached 6,809,288; no dependency). The tests that pin a service's and an environment's view exactly read `envRefs` and `ref`.
+- Cut as 0.8.35: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
+- Suite total 1918 → 1922.
+- **Downstream:** none — tests only.
+
 ## 0.8.34 — 2026-11-11
 
 **The grade card shows the grade alone; the specification's required rules move to Remediate.** Beside the letter, the board drew *14 / 25 required rules met · tier 1* with a bar of its own — a second verdict on the same card, which the grade does not count, so a B+ and a 56% seemed to disagree. The rules are things to add to the pack, so they are now listed where the changes are.

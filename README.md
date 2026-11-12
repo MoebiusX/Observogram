@@ -59,15 +59,21 @@ it starts from the services. A service is checked in two places: where it is
 declared, its **repository**, and where it runs, read through its **live MCP
 endpoint**.
 
-**1. The services.** Overview opens on the list: one row per service and
-environment, with its repository (GitHub, Azure DevOps, a folder or an
-upload), its live
-endpoint and its last check — the grade letter and how much matches live.
-**Run** scans the repository and checks it against live, **Open** draws the
-service's board and **Change** edits where it is declared, where it runs and its MTTD / MTTR targets. Services a live draft has
-seen with no repository yet are counted under the list.
+**1. The services.** Overview opens on the list: one row per service, with
+its repository (GitHub, Azure DevOps, a folder or an upload), and a column
+per environment in the order a release travels — dev, test, acceptance,
+staging, production, then any other by name. Each cell is that environment:
+its live endpoint (its name; the host beneath, whole on hover), the branch
+its Run reads, the grade letter with how much matches live, when it was last
+checked, **Run** (scans the repository and checks it against live) and
+**Open** (the service's board); an environment the service does not declare
+reads *Not declared*, with **Add**. On the row, **Run all** runs every
+environment one after another, and **Change** edits where it is declared,
+where it runs and its MTTD / MTTR targets; under the matrix, the grade's
+letters and where each starts. Services a live draft has seen with no
+repository yet are counted under the list.
 
-![Overview's service list: two services, each with its GitHub repository, its live MCP endpoint and its last check](docs/img/overview-services.png)
+![Overview's service list as a matrix: a row per service with its GitHub repository, a column per environment with its live MCP endpoint, branch, grade and last check, and the grade's letters beneath](docs/img/overview-services.png)
 
 **2. Add a service.** Five numbered answers — the service, the environment,
 the repository, the live endpoint (one of the org's, or a new one) and its
@@ -1152,9 +1158,9 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | Method | Path | Who | Body | What it does |
 |---|---|---|---|---|
 | `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`) and `packs` (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets? }` | a service record (201); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs? }` | a service record (201); `envRefs` the branch each environment's Run reads where it is not the repository's ([a branch per environment](#a-services-run)); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets` | `changed` lists the fields that differed (none: no audit row); `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets`, `envRefs` | `changed` lists the fields that differed (none: no audit row); `envRefs` is the whole map (another repository clears it), and a rename of an environment (`PATCH /api/environments/:id`) takes its branch along; `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; the live MCP API's posture; see [A service's Run](#a-services-run) |
 | `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, alerts, scrape, timing, families, absent, calls, readAt, cached }`, each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
@@ -1354,6 +1360,19 @@ repository, the live endpoint, the MTTD / MTTR targets) and **Run** on every row
 | `ado` | `https://dev.azure.com/<org>/<project>/_git/<repo>`, `https://<org>.visualstudio.com/<project>/_git/<repo>`, or an Azure DevOps Server's `…/<collection>/<project>/_git/<repo>` (`?version=GB<branch>` names a branch) | as the person who runs it ([whose access](#whose-access-reads-a-repository)): their own personal access token with Code (Read); a token is sent only to Azure DevOps Services or to a Server origin listed in `OBSERVOGRAM_ADO_ORIGINS` — any other host is refused when the record is written |
 | `path` | a folder's full path on the server, typed or picked with **Browse…** (`GET /api/repository-folders`, the same rule) | the server's own file system, under the org's part of the workspace; taken only under a folder listed in `OBSERVOGRAM_REPO_ROOTS` (comma-separated), or — none listed — from the server's own machine while it runs without sign-in on loopback |
 | `upload` | the folder's or the `.zip`'s name (set by `PUT /api/services/:id/repository-upload`, never named in POST or PATCH) | the copy the person uploaded from their own machine — no server-held token reads anything; each Run scans the copy again, so it is as current as its last upload |
+
+**A branch per environment.** A GitHub or Azure DevOps repository's `ref`
+is the branch an environment reads unless the service names another for it:
+`envRefs`, `{ [environment name]: branch }` on `POST` and `PATCH
+/api/services/:id` (the whole map; a name with an empty branch is none),
+kept beside the record with no schema step. The service's view carries
+`envRefs` and each environment's view its own `ref` (`null`: the
+repository's); a rename of the environment takes its branch along, a
+deletion takes it away, and each environment's **Run** reads its own. In
+*Add a service* and **Change**, the branch answered on a service that has
+its repository is that environment's (*The branch stg reads. Left blank, it
+reads the repository's (main).*); on a new service, or a new repository, it
+is the repository's.
 
 **Repository sources.** Each organisation chooses which of the four kinds
 above its services may use. Settings → **Repository sources** has one
@@ -1890,8 +1909,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.34 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.34
+docker build -t observogram:0.8.35 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.35
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -1954,7 +1973,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.34
+  observogram:0.8.35
 ```
 
 Or put them in a compose file's `environment:`:
@@ -1962,7 +1981,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.34
+    image: observogram:0.8.35
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -3882,9 +3901,9 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
 | `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository?, targets? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile }`, `{ profile: custom, mttd, mttr }` or `null` |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile }`, `{ profile: custom, mttd, mttr }` or `null` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — and `targets` — the MTTD / MTTR targets the studio keeps for it (`changed` lists what differed; nothing → no audit row) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — `targets` — the MTTD / MTTR targets the studio keeps for it — and `envRefs` — the branch each environment's Run reads where it is not the repository's; an environment's view gives its own as `ref` (`changed` lists what differed; nothing → no audit row) |
 | `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }` |
 | `POST` | `/api/services/:id/control-room` | Overview's control room, `{ env? }`: the environment's live endpoint read now, scoped to what the service's repository declares → its alerts, its targets, MTTR from its alerts' history, the known metric families of its scrape jobs |
 | `DELETE` | `/api/services/:id` | Removes the service with its environments, pack links and waivers (the packs stay registered; registering a pack that names the service re-creates it); the body counts `environments`, `packLinks` and `waivers` |
