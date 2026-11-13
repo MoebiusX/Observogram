@@ -454,12 +454,15 @@ test('scopeOfPack: what a repository declares — its scrape jobs and its alert 
     metadata: { name: 'shop', version: '0.1.0', annotations: { 'crawler.discovered.scrape_jobs': 'shop,shop-db', 'crawler.discovered.scrape_jobs_count': '2' } },
     spec: { alerting: { rules: [{ name: 'ShopSlow', expr: 'x > 1', severity: 'warning' }, { name: 'ShopDown', expr: 'up{job="shop"} == 0', severity: 'critical' }] } },
   };
-  assert.deepEqual(scopeOfPack(pack), { jobs: ['shop', 'shop-db'], alerts: ['ShopDown', 'ShopSlow'] }, 'its jobs and its rules by name, sorted');
-  assert.deepEqual(scopeOfPack({ apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { name: 'empty', version: '0.1.0' }, spec: {} }), { jobs: [], alerts: [] });
+  assert.deepEqual(scopeOfPack(pack), { jobs: ['shop', 'shop-db'], alerts: ['ShopDown', 'ShopSlow'], slos: [] }, 'its jobs and its rules by name, sorted');
+  assert.deepEqual(scopeOfPack({ apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { name: 'empty', version: '0.1.0' }, spec: {} }), { jobs: [], alerts: [], slos: [] });
   // Every alert name the scan read: the burn-rate ones folded into the policy, and a repository's with no
   // recording rules (alerting.rules then keeps none), from its crawler.discovered.alert_names.
   const tier3 = { ...pack, metadata: { ...pack.metadata, annotations: { ...pack.metadata.annotations, 'crawler.discovered.alert_names': '["ShopBurnFast","ShopDown"]', 'crawler.discovered.alert_names_count': '2' } }, spec: {} };
-  assert.deepEqual(scopeOfPack(tier3), { jobs: ['shop', 'shop-db'], alerts: ['ShopBurnFast', 'ShopDown'] });
+  assert.deepEqual(scopeOfPack(tier3), { jobs: ['shop', 'shop-db'], alerts: ['ShopBurnFast', 'ShopDown'], slos: [] });
+  // Its SLOs, by the series its repository records them under (tools/lib/control-room.mjs slosOfPack).
+  const withSlo = { ...pack, spec: { ...pack.spec, slis: [{ id: 'shop_availability', type: 'ratio', good: 'g', total: 't' }], slos: [{ id: 'shop_availability_99_9', sli: 'shop_availability', objective: 0.999, window: '30d' }], queries: { recording_rules: [{ name: 'shop:shop_availability:ratio_5m', expr: 'ref:slis.shop_availability' }] } } };
+  assert.deepEqual(scopeOfPack(withSlo).slos, [{ id: 'shop_availability_99_9', sli: 'shop_availability', objective: 0.999, window: '30d', objectiveSource: 'repository', series: { name: 'shop:shop_availability:ratio_5m', unit: 'ratio', better: 'higher', role: 'good', window: '5m' }, budget: null }]);
 });
 
 test('declaredScopeOf on a saved check: its Pack A\'s jobs and every alert name its scan read; a check whose pack cannot be read, and an environment never run, said apart', async () => {

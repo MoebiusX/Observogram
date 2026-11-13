@@ -214,7 +214,26 @@ the panel reads nothing and says *Run it first* (a saved check that cannot
 be read says *Run it again*). An alert that no rule of the repository names
 and that carries none of its jobs is not counted, however often it fires.
 
-![The control room beside the Overview board: the status, MTTR as the median over 71 incidents in the last 22 days, MTTD not measured in prod, what it found, the exporters and the active alerts](docs/img/control-room.png)
+The panel leads with what a service is held to: **MTTR and MTTD**, then its
+**SLIs and SLOs**, one row each — the SLI's value now, its objective and
+window, and its error budget left. These are read live from the series the
+repository's own recording rules write, by name (`slo:availability:composite_1h`,
+`slo:availability:error_budget_remaining`); nothing is computed from an SLI
+the scan only inferred. Where the scan inferred the SLI, its objective is
+the scan's default and is said so (*(default)*), and the SLI is not judged
+against it; the row's colour is then the budget's, when the repository
+records one. A share of good or of errors is judged against the objective,
+a threshold SLI's value against its own threshold (shown beside the
+objective, *≤ 85%*) — never against the objective, which is the share of
+samples on the good side of it. A budget recorded for an SLI with two SLOs
+is no one row's and is not shown; on a store several services write, a
+series that keeps its job label counts only on the service's own jobs. Several series of one name are said as their range, never
+averaged; an SLO its repository records no series for says so. The rest —
+the alert status in a small card above them, then, folded under *More from the live side*,
+the exporters, the active alerts and the known metrics — is secondary at
+that level.
+
+![The control room: the alert status in a small card, MTTR as the median over 83 incidents in the last 24 days against its target, MTTD not measured in prod, then the SLIs and SLOs with each one's value now, objective and error budget left](docs/img/control-room.png)
 
 - **MTTR and MTTD first.**
   - *MTTR* is the median time an incident took to clear over the last 30
@@ -1167,7 +1186,7 @@ org is never found (404, or 400 for `mcpEndpointId`).
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets`, `envRefs`, `liveScopes` | `changed` lists the fields that differed (none: no audit row); `envRefs` and `liveScopes` are each the whole map (another repository clears `envRefs`), and a rename of an environment (`PATCH /api/environments/:id`) takes its branch and its scope along; a scope that does not parse is 400 naming its environment and field, before anything is kept; `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
 | `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; a `pack` repository is used as it is (no scan, no `scan`) and an environment's export of live in place of the endpoint (no MCP call); the live read applies the environment's scope, else the org's configured snapshot scope (409 when that does not parse), else none — saved as `packB.mcp.scope` and said as `record.packB.liveScope` (`null`: unscoped); the live MCP API's posture; see [A service's Run](#a-services-run) |
-| `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, alerts, scrape, timing, families, absent, calls, readAt, cached }`, each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
+| `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, slos, alerts, scrape, timing, families, absent, calls, readAt, cached }` (`slos`: each SLO's SLI now and its error budget left, read from the repository's own recorded series by name, `{ outcome, rows: [{ id, sli, objective, window, objectiveSource, now, budget }], cut }`, at most 8), each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
 | `PUT` | `/api/services/:id/repository-pack` | operator | `{ name, text }` — the pack file's name and its text, YAML or JSON | a pack exported from the repository in its place (Overview's **Pack file**): read, a pre-v1.2 layered pack upconverted, validated against the spec's schema, named after the service and registered as its pack — `service.repository` is `{ kind: pack, location: <name>, ref: null, packId, uploadedAt, bytes }`; each Run uses it as it is, with no scan, until another is uploaded; 400 with the reason for a file that is not a valid pack, 16 MB at most; the org's Upload switch governs it (409); POST and PATCH never name one (400) |
@@ -1961,8 +1980,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.38 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.38
+docker build -t observogram:0.8.39 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.39
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2025,7 +2044,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.38
+  observogram:0.8.39
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2033,7 +2052,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.38
+    image: observogram:0.8.39
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONTROL_ROOM_CLOSED, CONTROL_ROOM_INTERVAL_MS, controlRoomOpened, controlRoomReading, controlRoomAnswered, controlRoomFailed, controlRoomDue,
-  durationWords, durationSeconds, buildControlRoomModel,
+  durationWords, durationSeconds, buildControlRoomModel, slosOf,
 } from '../studio/control-room-model.mjs';
 import { createControlRoomDriver, loadControlRoom } from '../studio/control-room-api.mjs';
 import { renderControlRoom, formatValue, boundWords, placeControlRoom } from '../studio/control-room-view.mjs';
@@ -612,3 +612,87 @@ test('loadControlRoom posts the environment, and fresh only when asked', async (
   await loadControlRoom('7/x', null, { fetchFn, fresh: true });
   assert.deepEqual(seen, [['/api/services/3/control-room', 'POST', '{"env":"prod"}'], ['/api/services/7%2Fx/control-room', 'POST', '{"fresh":true}']]);
 });
+
+// The SLIs and SLOs beside MTTD / MTTR; the rest of the live side folded under them.
+const SLOS = {
+  outcome: 'data', reason: null, cut: 3, rows: [
+    { id: 'slo_availability_99', sli: 'slo_availability', objective: 0.99, window: '30d', objectiveSource: 'default',
+      now: { name: 'slo:availability:composite_1h', unit: 'ratio', better: 'higher', role: 'good', window: '1h', outcome: 'data', value: 0.9993, min: 0.9993, max: 0.9993, n: 1 },
+      budget: { name: 'slo:availability:error_budget_remaining', outcome: 'data', value: 0.42, min: 0.42, max: 0.42, n: 1 } },
+    { id: 'checkout_errors_99_9', sli: 'checkout_errors', objective: 0.999, window: '30d', objectiveSource: 'repository',
+      now: { name: 'shop:checkout_errors:error_ratio_5m', unit: 'ratio', better: 'lower', role: 'errors', window: '5m', outcome: 'data', value: null, min: 0.0004, max: 0.003, n: 2 }, budget: null },
+    { id: 'slo_http_requests_99', sli: 'slo_http_requests', objective: 0.99, window: '30d', objectiveSource: 'default',
+      now: { name: 'slo:http_requests:error_ratio_5m', unit: 'ratio', better: 'lower', role: 'errors', window: '5m', outcome: 'data', value: 0.2, min: 0.2, max: 0.2, n: 1 }, budget: null },
+    { id: 'p99_99', sli: 'checkout_latency', objective: 0.99, window: '7d', objectiveSource: 'repository',
+      now: { name: 'shop:checkout_latency:value_5m', unit: 'seconds', better: 'lower', role: 'latency', window: '5m', outcome: 'empty', reason: 'no series of this name answers live', value: null, min: null, max: null, n: 0 }, budget: null },
+    { id: 'spent_99', sli: 'slo_latency', objective: 0.99, window: '30d', objectiveSource: 'default', now: null,
+      budget: { name: 'slo:latency:error_budget_remaining', outcome: 'data', value: -0.25, min: -0.25, max: -0.25, n: 1 } },
+    { id: 'not_read_99', sli: 'slo_queue', objective: 0.99, window: '30d', objectiveSource: 'repository',
+      now: { name: 'q:x:ratio_5m', unit: 'ratio', better: 'higher', role: 'good', window: '5m', outcome: 'not-attempted', reason: 'the read ran out of time', value: null, min: null, max: null, n: 0 }, budget: null },
+  ],
+};
+
+test('the SLIs and SLOs: each one\'s value now as read (a range across several series), its objective (a default said so), its budget left; the tone the budget\'s, else the SLI\'s against an objective the repository states — never against a default', () => {
+  const m = slosOf(SLOS);
+  assert.deepEqual(m.rows.map((r) => [r.title, r.tone]), [
+    ['availability', 'warn'], ['checkout errors', 'bad'], ['http requests', 'none'], ['checkout latency', 'none'], ['latency', 'bad'], ['queue', 'none'],
+  ], 'a budget under half warns, spent is red; the worst of two series past 0.1 % errors is red; a 20 % error ratio against a default objective is not judged');
+  assert.deepEqual(m.rows[0].objective, { value: 0.99, window: '30 days', isDefault: true });
+  assert.deepEqual(m.rows[3].now, { state: 'empty', note: 'shop:checkout_latency:value_5m answers nothing live' });
+  assert.deepEqual(m.rows[4].now, { state: 'none', note: 'its repository records no series for it' });
+  assert.deepEqual(m.rows[5].now, { state: 'not-read', note: 'Not read: the read ran out of time' });
+  assert.equal(m.cut, 3);
+  assert.deepEqual(slosOf({ outcome: 'data', rows: [], cut: 0, reason: 'its repository declares no SLO' }), { rows: [], unrecorded: [], note: 'Its repository declares no SLO.', cut: 0 });
+  // An SLO its repository records nothing for has no row: named on one line.
+  const bare = slosOf({ outcome: 'data', cut: 0, rows: [{ id: 'cart_99', sli: 'cartadditemhighlatency', objective: 0.99, window: '30d', objectiveSource: 'default', now: null, budget: null }, SLOS.rows[0]] });
+  assert.deepEqual([bare.rows.map((r) => r.title), bare.unrecorded, bare.note], [['availability'], ['cartadditemhighlatency'], '']);
+  const none = slosOf({ outcome: 'data', cut: 0, rows: [{ id: 'cart_99', sli: 'cart', objective: 0.99, window: '30d', objectiveSource: 'default', now: null, budget: null }] });
+  assert.deepEqual([none.rows, none.unrecorded, none.note], [[], ['cart'], 'Its repository records no series for any of them, so none can be read live.']);
+  assert.deepEqual(slosOf({ outcome: 'failed', reason: 'boom' }), { rows: [], note: 'The SLOs were not read: boom.', cut: 0 });
+  assert.equal(slosOf(undefined), null, 'an older server: no section');
+});
+
+test('renderControlRoom: the status, MTTR and MTTD, then the SLIs and SLOs; the alerts, exporters and known metrics folded under "More from the live side", its summary counting what fires; an older server draws no SLO section', () => {
+  globalThis.document = { activeElement: null };
+  const { container } = panelHost();
+  const m = buildControlRoomModel({ state: controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer({ slos: SLOS }), { now: NOW }), serviceName: 'Demo', envName: 'prod', mttx, now: NOW });
+  renderControlRoom(container, m, { overview: {} });
+  const html = container.innerHTML;
+  const at = (x) => html.indexOf(x);
+  assert.ok(at('ov-cr__status') < at('ov-cr__kpis') && at('ov-cr__kpis') < at('ov-cr__slos') && at('ov-cr__slos') < at('ov-cr__fold'), 'status, MTTR / MTTD, the SLOs, then the fold');
+  assert.ok(at('ov-cr__fold') < at('ov-cr__alerts') && at('ov-cr__fold') < at('ov-cr__fams'), 'the alerts and the families inside the fold');
+  assert.ok(html.includes('<details class="ov-cr__fold" data-cr-open="more">'), 'closed until opened, and kept open across redraws once opened');
+  assert.ok(html.includes('<span class="ov-cr__h">More from the live side</span><span class="ov-cr__muted">1 alert firing · exporters · 2 known metric families</span>'));
+  assert.ok(html.includes('<li class="ov-cr__slo ov-cr__slo--warn">'));
+  assert.ok(html.includes('<span class="ov-cr__slo-now">99.9% over 1 h</span>'));
+  assert.ok(html.includes('<span class="ov-cr__slo-obj ov-cr__muted">Objective 99% over 30 days (default)</span>'));
+  assert.ok(html.includes('<span class="ov-cr__slo-obj ov-cr__muted">Objective 99.9% over 30 days</span>'), 'the repository\'s own objective, unmarked');
+  assert.ok(html.includes('<span class="ov-cr__slo-budget">42% of its error budget left</span>'));
+  assert.ok(html.includes('<span class="ov-cr__slo-now">0.04%–0.3% errors across 2 series over 5 min</span>'), 'a range, never one averaged number; judged against its objective, said exactly');
+  // The fold's line counts every firing alert the status counted, not only the listed rows.
+  assert.ok(m.more.detail.startsWith('1 alert firing'));
+  // A threshold SLI is judged against its threshold, never its objective; its bound beside the objective; no "errors".
+  const disk = slosOf({ outcome: 'data', cut: 0, rows: [{ id: 'disk_99', sli: 'disk', objective: 0.99, window: '30d', objectiveSource: 'repository',
+    now: { name: 'node:disk:value_5m', unit: 'ratio', better: 'lower', role: 'value', threshold: 0.85, window: '5m', outcome: 'data', value: 0.5, min: 0.5, max: 0.5, n: 1 }, budget: null }] });
+  assert.deepEqual([disk.rows[0].tone, disk.rows[0].judged], ['good', true], 'a disk half full under its 85 % ceiling is fine');
+  const { container: c4 } = panelHost();
+  renderControlRoom(c4, buildControlRoomModel({ state: controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer({ slos: { outcome: 'data', cut: 0, rows: [disk.rows.length && { id: 'disk_99', sli: 'disk', objective: 0.99, window: '30d', objectiveSource: 'repository', now: { name: 'node:disk:value_5m', unit: 'ratio', better: 'lower', role: 'value', threshold: 0.85, window: '5m', outcome: 'data', value: 0.5, min: 0.5, max: 0.5, n: 1 }, budget: { name: 'b', outcome: 'data', value: null, min: 0, max: 0.6, n: 2 } }] } }), { now: NOW }), serviceName: 'Demo', envName: 'prod', mttx, now: NOW }), { overview: {} });
+  assert.ok(c4.innerHTML.includes('<span class="ov-cr__slo-now">50% over 5 min</span>'), 'a value, not "errors"');
+  assert.ok(c4.innerHTML.includes('Objective 99% over 30 days, ≤ 85%</span>'));
+  assert.ok(c4.innerHTML.includes('<span class="ov-cr__slo-budget">Error budget across 2 series: spent to 60% left</span>'), 'several budgets as their range; none left is spent');
+  assert.ok(c4.innerHTML.includes('<li class="ov-cr__slo ov-cr__slo--bad">'), 'the lowest budget (spent) colours the row');
+  assert.ok(html.includes('<span class="ov-cr__slo-budget">Error budget spent, 25% over</span>'));
+  assert.ok(html.includes('<span class="ov-cr__slo-now ov-cr__slo-now--note ov-cr__muted">its repository records no series for it</span>'), 'a note takes the row\'s width');
+  assert.ok(html.includes("Read live from the series its repository's own recording rules write. A default objective is the scan's: the repository states none, so the SLI is not judged against it. 3 more not read."));
+  // Several series that read alike are one value, said so.
+  const alike = { ...SLOS, cut: 0, rows: [{ ...SLOS.rows[1], now: { ...SLOS.rows[1].now, min: 0, max: 0, n: 2 } }] };
+  const { container: c3 } = panelHost();
+  renderControlRoom(c3, buildControlRoomModel({ state: controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer({ slos: alike }), { now: NOW }), serviceName: 'Demo', envName: 'prod', mttx, now: NOW }), { overview: {} });
+  assert.ok(c3.innerHTML.includes('<span class="ov-cr__slo-now">0% errors in each of 2 series over 5 min</span>'));
+  assert.ok(!c3.innerHTML.includes('A default objective'), 'no default, no note on it');
+  // An older server: no slos key, no section; the fold all the same.
+  const { container: c2 } = panelHost();
+  renderControlRoom(c2, buildControlRoomModel({ state: openState(), serviceName: 'Demo', envName: 'prod', mttx, now: NOW }), { overview: {} });
+  assert.ok(!c2.innerHTML.includes('ov-cr__slos') && c2.innerHTML.includes('ov-cr__fold'));
+});
+

@@ -8,7 +8,9 @@
 // next read's wait). The renderer (control-room-view.mjs) formats units and
 // times; the host (app.mjs) drives the reads (control-room-api.mjs).
 //
-// Headline first: MTTR and MTTD, the numbers people ask for, each saying
+// Headline first: MTTR and MTTD and the service's SLIs and SLOs — at this
+// level the rest (the alerts listed, the exporters, the known metrics) is
+// secondary and folded under them. MTTR and MTTD, the numbers people ask for, each saying
 // what it measures, over what, on how many incidents — or why there is no
 // number. A figure is never shown that the read did not support: too few
 // incidents is said as too few, a part not read is said as not read, quiet
@@ -433,6 +435,97 @@ function familiesOf(families, absent, { scoped = false } = {}) {
   };
 }
 
+// ---------- the SLIs and SLOs ----------
+
+// An SLI id in words: "slo_http_requests" → "http requests", "checkout_latency" → "checkout latency".
+const sliWords = (id) => String(id || '').replace(/^slo_/, '').replace(/_+/g, ' ').trim() || String(id || '');
+// A spec window in words: "30d" → "30 days", "5m" → "5 min".
+const windowWords = (w) => { const s = durationSeconds(w); return s === null ? String(w || '') : durationWords(s); };
+
+// The SLOs as the answer reads them (tools/lib/control-room.mjs, the slos part) → { rows, note, cut }.
+// Each row: { id, title, objective: { value, window, isDefault }, now, budget, tone } — `now` and
+// `budget` the values as read ({ value | min, max, n, unit, better, window }) or their state
+// ({ state: 'none' | 'empty' | 'not-read', note }); the view formats the numbers. The tone is the
+// budget's (the repository's own judgment: left · low · spent), else the SLI against its objective
+// where both are the repository's own and the direction is known; never against a default objective.
+export function slosOf(slos) {
+  if (!isObj(slos)) return null;
+  if (slos.outcome === 'failed' || slos.outcome === 'not-attempted') {
+    return { rows: [], note: `The SLOs were not read${slos.reason ? `: ${slos.reason}` : ''}.`, cut: 0 };
+  }
+  const read = (x, { unit = '', better = null, window = null, role = 'value', threshold = null } = {}) => {
+    if (!isObj(x)) return null;
+    if (x.outcome === 'data') {
+      const one = num(x.value);
+      return { state: 'data', value: one, min: one === null ? num(x.min) : null, max: one === null ? num(x.max) : null, n: num(x.n) || 1, unit, better, role, threshold, window: window ? windowWords(window) : '' };
+    }
+    if (x.outcome === 'empty') return { state: 'empty', note: `${x.name} answers nothing live` };
+    return { state: 'not-read', note: `Not read: ${x.reason || 'no answer'}` };
+  };
+  const rows = (Array.isArray(slos.rows) ? slos.rows : []).filter(isObj).map((r) => {
+    const objective = num(r.objective);
+    const isDefault = r.objectiveSource === 'default';
+    const role = ['errors', 'good', 'latency', 'value'].includes(r.now?.role) ? r.now.role : 'value';
+    const now = isObj(r.now)
+      ? read(r.now, { unit: String(r.now.unit || ''), better: ['higher', 'lower'].includes(r.now.better) ? r.now.better : null, window: r.now.window, role, threshold: num(r.now.threshold) })
+      : { state: 'none', note: 'its repository records no series for it' };
+    const budget = isObj(r.budget) ? read(r.budget, { unit: 'ratio', better: 'higher' }) : null;
+    let tone = 'none';
+    // judged: the tone came from the SLI against its bound — the view then says the value exactly.
+    let judged = false;
+    if (budget?.state === 'data') {
+      // The lowest budget of several series stands for the row; none left (0 or under) is spent.
+      const b = budget.value ?? budget.min;
+      tone = b === null ? 'none' : b <= 0 ? 'bad' : b < 0.5 ? 'warn' : 'good';
+    } else if (!isDefault && now?.state === 'data' && now.better) {
+      // The worst of several series stands for the SLI. A share of good or of errors is judged against the
+      // objective; a recorded value (a threshold SLI) against its own threshold — never against the objective,
+      // which is the share of samples on the good side of that threshold.
+      const v = now.value ?? (now.better === 'higher' ? now.min : now.max);
+      const bound = role === 'good' && now.unit === 'ratio' && objective !== null ? objective
+        : role === 'errors' && now.unit === 'ratio' && objective !== null ? 1 - objective
+          : role !== 'good' && role !== 'errors' && now.threshold !== null ? now.threshold : null;
+      if (v !== null && bound !== null) {
+        const ok = now.better === 'higher' ? v >= bound : v <= bound;
+        tone = ok ? 'good' : 'bad';
+        judged = true;
+      }
+    }
+    return {
+      id: String(r.id || ''), title: sliWords(r.sli || r.id),
+      objective: { value: objective, window: r.window ? windowWords(r.window) : '', isDefault },
+      now, budget, tone, judged,
+    };
+  });
+  const cut = num(slos.cut) || 0;
+  // An SLO its repository records nothing for (no series of its SLI, no budget) has no row: one line names them.
+  const shown = rows.filter((r) => !(r.now?.state === 'none' && !r.budget));
+  const unrecorded = rows.filter((r) => r.now?.state === 'none' && !r.budget).map((r) => r.title);
+  const declares = rows.length || cut;
+  return {
+    rows: shown,
+    unrecorded,
+    note: shown.length ? '' : !declares
+      ? (slos.reason ? `${slos.reason[0].toUpperCase()}${slos.reason.slice(1)}.` : 'Its repository declares no SLO.')
+      : 'Its repository records no series for any of them, so none can be read live.',
+    cut,
+  };
+}
+
+// The fold under the headline: what it holds, said on its summary line, the firing count first — every
+// firing alert the status counted (the listed rows stop at a dozen).
+function moreOf(status, alerts, scrape, families) {
+  const parts = [];
+  const c = status?.counts;
+  const counted = c ? ['critical', 'warning', 'other', 'info'].reduce((n, k) => n + (num(c[k]) || 0), 0) : null;
+  const firing = counted ?? (Array.isArray(alerts?.rows) ? alerts.rows : []).filter((r) => r?.state === 'firing').length;
+  parts.push(firing ? `${plural(firing, 'alert')} firing` : 'alerts');
+  parts.push('exporters');
+  if (families?.rows?.length) parts.push(plural(families.rows.length, 'known metric family', 'known metric families'));
+  else parts.push('known metrics');
+  return { label: 'More from the live side', detail: parts.join(' · ') };
+}
+
 // The strip's word on the next read: as the driver will do it.
 function nextOf(state, intervalMs = CONTROL_ROOM_INTERVAL_MS) {
   if (state.stopped) return 'reads stopped: Refresh tries again';
@@ -477,7 +570,9 @@ function scopeWords(scope, { name, endpoint }) {
 //           repository's pack is not read; `action` ('Set targets…' | 'Change targets…')
 //           becomes the panel's `targets` button; `record` (true) its Record a chaos run… button
 //   → null when closed, else { title, scope, reading, stopped, error, readAt, cached, endpoint, next,
-//      status, kpis: { mttr, mttd }, targets, insights, scrape, alerts, families, calls }
+//      status, kpis: { mttr, mttd }, targets, insights, slos, more, scrape, alerts, families, calls }
+//   slos     slosOf(answer.slos) — the SLIs and SLOs beside MTTD and MTTR — or null (an older server)
+//   more     { label, detail } — the fold that holds the scrape, the alerts and the families
 //   targets  { label, aria } — Set targets… / Change targets… under the two figures — or null
 //   record   { label, aria } — Record a chaos run… beside it, when the pack declares an experiment — or null
 export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName = '', envName = '', mttx = null, now = Date.now() } = {}) {
@@ -494,7 +589,7 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
   const endpoint = String(a?.endpoint?.name || a?.endpoint?.origin || '');
   // Every figure but the declared exporters is the endpoint's, whatever else it reads.
   const scope = a ? scopeWords(a.scope, { name, endpoint }) : '';
-  return {
+  const model = {
     key: state.key, title, scope, reading: !!state.reading, first, stopped: !!state.stopped,
     error: state.error ? { text: state.error, final: !!state.stopped } : null,
     readAt: a?.readAt || null, cached: !!a?.cached,
@@ -514,6 +609,9 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
     scrape: a ? scrapeOf(a.scrape) : null,
     alerts: a ? alertRowsOf(a.alerts, a.timing, serverNow, a.readAt) : { rows: [], more: 0 },
     families: a ? familiesOf(a.families, a.absent, { scoped: a.scope?.kind === 'service' }) : { rows: [], note: '', absent: '' },
+    slos: a ? slosOf(a.slos) : null,
     calls: a?.calls || null,
   };
+  model.more = moreOf(model.status, model.alerts, model.scrape, model.families);
+  return model;
 }

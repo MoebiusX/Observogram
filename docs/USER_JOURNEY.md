@@ -717,9 +717,10 @@ Belongs here:
     shares one of these jobs (an exporter or a collector they all use) is
     counted on it too.*) — or, before its first Run there, that nothing is
     read until it has been run;
-  - the status word (*Critical · Warning · Firing · Quiet · Not known*), its
-    sentence and the firing counts by severity — *Not known* when nothing
-    of the service's fires and the store holds no history of its alerts;
+  - the status word (*Critical · Warning · Firing · Quiet · Not known*) in
+    a small card, its sentence and the firing counts by severity — *Not
+    known* when nothing of the service's fires and the store holds no
+    history of its alerts;
   - **MTTR** and **MTTD** side by side: the median time an incident took to
     clear over the last 30 days with its incident count and p95, against the
     target the repository states, else the studio's (*· set in the studio*),
@@ -731,11 +732,19 @@ Belongs here:
     aborted one said as such, with no figure; another environment's named
     beside), or *Not measured in prod: an alert knows when it fired, not when
     the fault began*; each with *How it is measured*;
+  - **SLIs and SLOs**, one row each: the SLI's value now (*100% over 1 h*,
+    *0.3% errors over 5 min*, a range across several series), its objective
+    and window (*(default)* where the scan inferred it), its error budget
+    left where the repository records one, the row's edge in the budget's
+    colour — read from the repository's own recorded series, the ones that
+    say most first, at most 8 (*10 more not read*);
   - what it found (a critical incident, a flapping alert, an alert still
-    open, never an info heartbeat), the exporters up (and the declared ones),
-    the active alerts, and one closed row per known metric family with its
-    numbers (the worst first, *red* or *amber* in a word) and a 6-hour line;
-  - the families the endpoint does not expose, named once;
+    open, never an info heartbeat);
+  - folded under *More from the live side* (its line counting what fires):
+    the exporters up (and the declared ones), the active alerts, and one
+    closed row per known metric family with its numbers (the worst first,
+    *red* or *amber* in a word) and a 6-hour line, and the families the
+    endpoint does not expose, named once;
 - the simple layout, the three sentences alone, as the fallback
   (`&layout=simple`), drawn by the renderer itself should the board fail, and
   for a service without a pack of its own (one only a live draft has seen),

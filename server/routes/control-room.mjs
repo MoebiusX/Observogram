@@ -49,7 +49,7 @@ import { readFileSync } from 'node:fs';
 import express from 'express';
 import { adapt } from '../../tools/lib/adapter.mjs';
 import { annotationList } from '../../tools/lib/traceability.mjs';
-import { cleanError, controlRoomFamilies, openControlRoom, readControlRoom } from '../../tools/lib/control-room.mjs';
+import { cleanError, controlRoomFamilies, openControlRoom, readControlRoom, slosOfPack } from '../../tools/lib/control-room.mjs';
 import { loadJourneyDef, readJourneyPackA } from '../../tools/lib/journey.mjs';
 import { isTransportHookError } from '../../tools/lib/mcp-client.mjs';
 import { mcpTransport } from '../../tools/mcp-transport.mjs';
@@ -152,7 +152,7 @@ export function declaredScopeOf(service, env) {
   return { scope: null, why: UNREADABLE(service.name) };
 }
 
-// A pack's scope: its declared (never a scaffold's) scrape jobs and the names of every alert rule it
+// A pack's scope: its declared (never a scaffold's) scrape jobs, its SLOs' recorded series and the names of every alert rule it
 // declares — the operational ones (alerting.rules) and every name the scan read, burn-rate alerts and a
 // repository's with no recording rules included (its crawler.discovered.alert_names annotation).
 export function scopeOfPack(canonical) {
@@ -168,7 +168,8 @@ export function scopeOfPack(canonical) {
       if (/^RULE-/.test(id) && typeof a.spec?.name === 'string' && a.spec.name.trim()) alerts.add(a.spec.name.trim());
     }
   }
-  return { jobs: [...jobs].sort(), alerts: [...alerts].sort() };
+  // Its SLOs, by the series its repository records them under (tools/lib/control-room.mjs slosOfPack).
+  return { jobs: [...jobs].sort(), alerts: [...alerts].sort(), slos: slosOfPack(canonical) };
 }
 const scopeDigest = (scope) => createHash('sha256').update(JSON.stringify(scope || null)).digest('hex').slice(0, 16);
 const NEVER_RUN = (name, env) => `${name} has never been run in ${env}, so nothing live is known to be its own yet — Run it first`;
@@ -326,7 +327,7 @@ export function controlRoomRoutes({ authorize }) {
           if (read.timing?.outdated) timings.delete(timingKey);
         }
         // Cut at the deadline with nothing read: no answer at all, with what the endpoint did say when it said something.
-        if (passed.signal.aborted && !['alerts', 'scrape', 'timing', 'families'].some((p) => READ(read[p]))) {
+        if (passed.signal.aborted && !['alerts', 'scrape', 'timing', 'families', 'slos'].some((p) => READ(read[p]))) {
           const said = ['alerts', 'scrape', ...(timingKept ? [] : ['timing']), 'families'].map((p) => read[p]).find((p) => p?.outcome === 'failed')?.reason;
           return failure(said ? `${deadlineWords()} (before that: ${said})` : deadlineWords());
         }

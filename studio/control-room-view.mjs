@@ -192,6 +192,56 @@ function familyHtml(f) {
         </details>`;
 }
 
+// One SLO: its SLI in words, the value now (a range across several series), its objective (a default
+// said so), and its error budget left where the repository records one. A state that is no number is
+// said in words, never drawn as a zero.
+function sliNowWords(now, { exact = false } = {}) {
+  if (!now) return '';
+  if (now.state !== 'data') return now.note;
+  // Judged against a bound: said exactly, so a value just past it never reads as the bound itself.
+  const f = (v) => (exact ? exactWords(v, now.unit) : formatValue(v, now.unit));
+  const errors = now.role === 'errors' ? ' errors' : '';
+  // Several series that read alike are one value; apart, their range — never an average.
+  const one = now.value !== null ? now.value : f(now.min) === f(now.max) ? now.min : null;
+  const value = one !== null ? `${f(one)}${errors}${now.value === null ? ` in each of ${now.n} series` : ''}` : `${f(now.min)}–${f(now.max)}${errors} across ${now.n} series`;
+  return `${value}${now.window ? ` over ${now.window}` : ''}`;
+}
+function budgetWords(b) {
+  if (!b) return '';
+  if (b.state !== 'data') return `Error budget: ${b.note.replace(/^Not read/, 'not read')}`;
+  const left = (v) => (v <= 0 ? `spent${v < 0 ? `, ${formatValue(-v, 'ratio')} over` : ''}` : `${formatValue(v, 'ratio')} left`);
+  if (b.value !== null) return b.value <= 0 ? `Error budget ${left(b.value)}` : `${formatValue(b.value, 'ratio')} of its error budget left`;
+  if (b.min === null || b.max === null) return '';
+  return `Error budget across ${b.n} series: ${left(b.min)} to ${left(b.max)}`;
+}
+function sloHtml(r) {
+  const bound = r.now?.state === 'data' && r.now.threshold !== null && r.now.role !== 'good' && r.now.role !== 'errors'
+    ? `, ${r.now.better === 'higher' ? '≥' : '≤'} ${exactWords(r.now.threshold, r.now.unit)}` : '';
+  const objective = r.objective.value !== null
+    ? `Objective ${formatValue(r.objective.value, 'ratio')}${r.objective.window ? ` over ${r.objective.window}` : ''}${bound}${r.objective.isDefault ? ' (default)' : ''}`
+    : 'No objective';
+  const budget = budgetWords(r.budget);
+  return `
+          <li class="ov-cr__slo ov-cr__slo--${escapeHtml(r.tone)}">
+            <span class="ov-cr__slo-name">${escapeHtml(r.title)}</span>
+            <span class="ov-cr__slo-now${r.now?.state === 'data' ? '' : ' ov-cr__slo-now--note ov-cr__muted'}">${escapeHtml(sliNowWords(r.now, { exact: r.judged }))}</span>
+            <span class="ov-cr__slo-obj ov-cr__muted">${escapeHtml(objective)}</span>
+            <span class="ov-cr__slo-budget">${escapeHtml(budget)}</span>
+          </li>`;
+}
+function slosHtml(s) {
+  if (!s) return '';
+  return `
+      <section class="ov-cr__slos" aria-label="SLIs and SLOs">
+        <h3 class="ov-cr__h">SLIs and SLOs</h3>${s.rows.length ? `
+        <ul class="ov-cr__slo-list">${s.rows.map(sloHtml).join('')}
+        </ul>
+        <p class="ov-cr__muted">Read live from the series its repository's own recording rules write.${s.rows.some((r) => r.objective.isDefault) ? " A default objective is the scan's: the repository states none, so the SLI is not judged against it." : ''}${s.cut ? ` ${s.cut} more not read.` : ''}</p>` : `
+        <p class="ov-cr__muted">${escapeHtml(s.note)}</p>`}${s.unrecorded?.length ? `
+        <p class="ov-cr__muted">No recorded series: ${escapeHtml(s.unrecorded.slice(0, 6).join(', '))}${s.unrecorded.length > 6 ? ` and ${s.unrecorded.length - 6} more` : ''}.</p>` : ''}
+      </section>`;
+}
+
 function bodyHtml(m) {
   if (m.first) return '<p class="ov-cr__reading" role="status">Reading the live side…</p>';
   if (m.error && !m.status) return `<p class="ov-cr__error">${escapeHtml(m.error.text)}</p><p class="ov-cr__muted">${m.error.final ? 'Reads stopped: Refresh tries again.' : 'Trying again shortly.'}</p>`;
@@ -206,10 +256,16 @@ function bodyHtml(m) {
       <section class="ov-cr__kpis" aria-label="Detection and resolution">${kpiHtml(m.kpis.mttr)}${kpiHtml(m.kpis.mttd)}
       </section>${m.targets || m.record ? `
       <p class="ov-cr__targets">${m.targets ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-targets" aria-label="${escapeHtml(m.targets.aria)}">${escapeHtml(m.targets.label)}</button>` : ''}${m.record ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-record" aria-label="${escapeHtml(m.record.aria)}">${escapeHtml(m.record.label)}</button>` : ''}</p>` : ''}
+      ${slosHtml(m.slos)}
       ${insights}
+      <details class="ov-cr__fold" data-cr-open="more">
+        <summary class="ov-cr__fold-sum"><span class="ov-cr__h">${escapeHtml(m.more.label)}</span><span class="ov-cr__muted">${escapeHtml(m.more.detail)}</span></summary>
+        <div class="ov-cr__fold-body">
       ${scrapeHtml(m.scrape)}
       ${alertsHtml(m.alerts)}
-      ${fams}${m.families.note ? `<p class="ov-cr__muted">${escapeHtml(m.families.note)}</p>` : ''}${m.families.absent ? `<p class="ov-cr__muted">${escapeHtml(m.families.absent)}</p>` : ''}`;
+      ${fams}${m.families.note ? `<p class="ov-cr__muted">${escapeHtml(m.families.note)}</p>` : ''}${m.families.absent ? `<p class="ov-cr__muted">${escapeHtml(m.families.absent)}</p>` : ''}
+        </div>
+      </details>`;
 }
 
 function stripHtml(m) {
