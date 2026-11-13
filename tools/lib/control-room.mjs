@@ -28,6 +28,12 @@
 //   families  the known metric families the endpoint exposes
 //             (tools/lib/contracts/control-room-families.mjs), a few tiles
 //             and one chart each
+//   slos      the service's SLOs (scope.slos, slosOfPack): each SLI's value
+//             now and its error budget left, read from the series the
+//             repository's own recording rules write, by name — never
+//             computed from an SLI the scan only inferred (its objective a
+//             default, its ratio's direction unknown). An SLO whose
+//             repository records no series for it is listed as not recorded
 //
 // Why the rule evaluator's history and not Alertmanager or Grafana's
 // alerting: Alertmanager's API answers only alerts still open, and
@@ -55,6 +61,7 @@
 
 import { createMcpClient, MCP_PROTOCOL_VERSION } from './mcp-client.mjs';
 import { capabilityTool } from './contracts/mcp-capabilities.mjs';
+import { goodWhen } from './good-when.mjs';
 import { CONTROL_ROOM_FAMILIES, CONTROL_ROOM_UNITS, CONTROL_ROOM_LAYERS } from './contracts/control-room-families.mjs';
 
 export const CONTROL_ROOM_LIMITS = Object.freeze({
@@ -80,6 +87,8 @@ export const CONTROL_ROOM_LIMITS = Object.freeze({
   declaredJobs: 60,
   // Declared alert names read at most, the same way.
   declaredAlerts: 200,
+  // SLOs read at most (two reads each: the SLI now and the budget left); the rest are counted.
+  slos: 8,
   toolsListMaxPages: 10,
   // One answer's size: a few KiB is usual; the 30-day firing history is the one large one.
   answerBytes: 4 * 1024 * 1024,
@@ -444,6 +453,88 @@ export function scopeQueries(scope, limits = CONTROL_ROOM_LIMITS) {
   };
 }
 
+// ---------- the service's SLOs ----------
+
+// What a recorded series' operation says of it (the part of its name after the SLI's): its unit and
+// which way is better. `error_ratio_5m` is a share of errors (lower), `ratio_below_500ms_1h`,
+// `probe_success_ratio_1d`, `composite_1h` a share of good (higher), `p99_5m` a latency (lower);
+// anything else is read and said as it is, with no direction.
+const WINDOW_RE = /_(\d+[smhdw])$/;
+// `role`: what the value is — 'errors' (a share of bad), 'good' (a share of good), 'latency', or 'value'
+// (read as it is: a rate, a count, a usage). The good/total/bad halves of a ratio (`good_5m`, `total_5m`)
+// are event rates, never a share.
+export function seriesSense(op, { durationish = false } = {}) {
+  const o = String(op || '').toLowerCase();
+  const window = WINDOW_RE.exec(o)?.[1] || null;
+  if (/error_budget_remaining|budget_remaining/.test(o)) return { kind: 'budget', unit: 'ratio', better: 'higher', role: 'budget', window };
+  if (/^(good|total|bad|requests|events|count)(_|$)/.test(o)) return { kind: 'sli', unit: '', better: null, role: 'value', window };
+  if (/ratio|rate_of_errors/.test(o) && /error|fail|bad/.test(o)) return { kind: 'sli', unit: 'ratio', better: 'lower', role: 'errors', window };
+  if (/ratio|success|composite|availability/.test(o)) return { kind: 'sli', unit: 'ratio', better: 'higher', role: 'good', window };
+  if (/^p\d{1,3}(_|$)|quantile/.test(o)) return { kind: 'sli', unit: durationish ? 'seconds' : '', better: 'lower', role: 'latency', window };
+  return { kind: 'sli', unit: '', better: null, role: 'value', window };
+}
+// A window's length in seconds ("5m" → 300), for choosing the shortest; unknown → Infinity.
+const windowSeconds = (w) => { const m = /^(\d+)([smhdw])$/.exec(String(w || '')); return m ? Number(m[1]) * { s: 1, m: 60, h: 3600, d: 86400, w: 604800 }[m[2]] : Infinity; };
+const slugOf = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+// The scan's own words for an SLI it inferred (tools/lib/sli-inference.mjs, crawler.mjs): its objective is a default.
+const INFERRED_SLI = /^(Inferred from recording rule|Auto-derived from burn-rate alert|Stub SLI)/;
+
+// slosOfPack(canonical) → [{ id, sli, objective, window, objectiveSource, series, budget }] — the
+// service's SLOs as its repository records them: `series` the recorded series of its SLI the panel reads
+// as "now" ({ name, unit, better, window }, the shortest window of the ones whose direction is known),
+// `budget` the series recording its error budget left (a name), each null when the repository records
+// none. A series belongs to an SLI by name — the recording rule `<base>:<op>` whose base, slugged, is the
+// SLI's id (the scan's naming), or whose expr is `ref:slis.<id>` (a compiled pack's). `objectiveSource`
+// 'default' where the scan inferred the SLI (its objective 0.99 is no one's), else 'repository'. In the
+// order that says most: a recorded budget, then a known direction, then the rest.
+export function slosOfPack(canonical) {
+  const spec = canonical?.spec || {};
+  const slis = new Map((Array.isArray(spec.slis) ? spec.slis : []).filter(isObj).map((x) => [String(x.id || ''), x]));
+  const rules = (Array.isArray(spec.queries?.recording_rules) ? spec.queries.recording_rules : []).filter((r) => isObj(r) && METRIC_RE.test(String(r.name || '')));
+  const out = [];
+  const allSlos = (Array.isArray(spec.slos) ? spec.slos : []).filter(isObj);
+  const sliOf = (slo) => String(slo.sli || '').replace(/^ref:slis\./, '');
+  const slosPerSli = new Map();
+  for (const slo of allSlos) slosPerSli.set(sliOf(slo), (slosPerSli.get(sliOf(slo)) || 0) + 1);
+  for (const slo of allSlos) {
+    const sliId = sliOf(slo);
+    const sli = slis.get(sliId) || null;
+    const durationish = /duration|latency|seconds|time/.test(sliId);
+    const mine = rules.map((r) => {
+      const name = String(r.name);
+      const expr = String(r.expr || '').trim();
+      if (expr === `ref:slis.${sliId}`) {
+        // A compiled pack's own recording rule: the SLI as its type says (a ratio is the good share).
+        const op = name.slice(name.lastIndexOf(':') + 1);
+        const window = WINDOW_RE.exec(op)?.[1] || null;
+        if (sli?.type === 'ratio') return { name, kind: 'sli', unit: 'ratio', better: 'higher', role: 'good', window };
+        if (sli?.type === 'threshold') {
+          const threshold = num(sli.threshold);
+          return { name, kind: 'sli', unit: String(sli.unit || ''), better: goodWhen(sli) === 'above' ? 'higher' : 'lower', role: 'value', window, ...(threshold !== null ? { threshold } : {}) };
+        }
+        return { name, kind: 'sli', unit: '', better: null, role: 'value', window };
+      }
+      const at = name.lastIndexOf(':');
+      if (at <= 0 || slugOf(name.slice(0, at)) !== sliId) return null;
+      return { name, ...seriesSense(name.slice(at + 1), { durationish }) };
+    }).filter(Boolean);
+    // A budget series is recorded against one objective; with several SLOs on this SLI it is no one row's.
+    const budget = (slosPerSli.get(sliId) || 0) > 1 ? null : mine.find((x) => x.kind === 'budget') || null;
+    const now = mine.filter((x) => x.kind === 'sli').sort((a, b) => (a.better === null) - (b.better === null) || windowSeconds(a.window) - windowSeconds(b.window) || a.name.localeCompare(b.name, 'en'))[0] || null;
+    out.push({
+      id: String(slo.id || ''), sli: sliId,
+      objective: num(slo.objective), window: typeof slo.window === 'string' ? slo.window : null,
+      objectiveSource: INFERRED_SLI.test(String(sli?.description || '')) ? 'default' : 'repository',
+      series: now ? { name: now.name, unit: now.unit, better: now.better, role: now.role, window: now.window, ...(now.threshold !== undefined ? { threshold: now.threshold } : {}) } : null,
+      budget: budget ? budget.name : null,
+    });
+  }
+  // The ones that say most first: a budget the repository records, then an SLI whose direction is known,
+  // then a series read as it is (a rate, a usage); the pack's order within each.
+  const rank = (x) => (x.budget ? 0 : x.series?.better ? 1 : x.series ? 2 : 3);
+  return out.map((x, i) => ({ x, i })).sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i).map(({ x }) => x);
+}
+
 /** For each family, the first variant whose required names are all exposed, or null. */
 export function pickVariant(family, exposed) {
   return family.variants.find((v) => v.requires.every((n) => exposed.has(n))) || null;
@@ -502,7 +593,10 @@ function readPool({ size, budget, signal }) {
 //   scope            { jobs, alerts } — the service's own (its repository's scrape jobs and alert rule
 //                    names): every part reads only those (above); null reads the endpoint's whole,
 //                    with `declaredJobs` beside it as before
-//   → { calls, scope?, alerts, scrape, timing, families, absent }
+//   → { calls, scope?, slos?, alerts, scrape, timing, families, absent }
+//      slos   { outcome, reason, rows: [{ id, sli, objective, window, objectiveSource, now, budget }], cut } —
+//             only with a scope that carries `slos` (slosOfPack); `now` { name, unit, better, window,
+//             outcome, reason, value | min, max, n } or null (the repository records no series of it)
 //      scope  { kind: 'service', jobs, alerts, cut: { jobs, alerts } } — only with a scope (the counts read)
 //   timing    false skips the firing history (the route keeps it longer than the rest); the answer's timing is then null
 // A part that cannot be made sense of fails alone ({ outcome: 'failed', reason }); a transport hook
@@ -744,10 +838,48 @@ export async function readControlRoom({ callTool, callHistoryTool = null, tool, 
     return { outcome: 'data', reason: null, rows, absent: picked.filter((p) => !p.v).map((p) => ({ id: p.f.id, title: p.f.title })) };
   }, { rows: [], absent: [] });
 
-  const [alerts, scrape, timing, fam] = await Promise.all([alertsP, scrapeP, timingP, familiesP]);
+  // The SLOs: each one's recorded SLI now and its budget left, by the names the repository records them
+  // under (validated as metric names; nothing else reaches the query). Asked in the first lane: beside
+  // MTTD and MTTR they are the panel's headline. A value is the series' own; several series (labels the
+  // rule keeps) are said as their range, never averaged into one number.
+  const valueOfRead = (r) => {
+    if (r.outcome !== 'data') return { outcome: r.outcome, reason: r.reason || (r.outcome === 'empty' ? 'no series of this name answers live' : null), value: null, min: null, max: null, n: 0 };
+    // A recorded series that keeps its job label says whose it is: another service's job is not this one's.
+    const all = seriesOf(r);
+    const jobs = S ? new Set(S.jobs) : null;
+    const mineOnly = jobs && jobs.size && all.some((x) => labelOf(x, 'job')) ? all.filter((x) => !labelOf(x, 'job') || jobs.has(labelOf(x, 'job'))) : all;
+    const values = mineOnly.map(valueOf).filter((v) => v !== null);
+    if (!values.length) return { outcome: 'empty', reason: 'the answer holds no number', value: null, min: null, max: null, n: 0 };
+    return { outcome: 'data', reason: null, value: values.length === 1 ? values[0] : null, min: Math.min(...values), max: Math.max(...values), n: values.length };
+  };
+  const sloList = S && Array.isArray(scope?.slos) ? scope.slos.filter(isObj) : null;
+  const slosP = sloList ? part(async () => {
+    const read = sloList.slice(0, L.slos);
+    const rows = await Promise.all(read.map(async (x) => {
+      const series = isObj(x.series) && METRIC_RE.test(String(x.series.name || '')) ? x.series : null;
+      const budgetName = typeof x.budget === 'string' && METRIC_RE.test(x.budget) ? x.budget : null;
+      const [nowR, budgetR] = await Promise.all([
+        series ? ask(series.name) : Promise.resolve(null),
+        budgetName ? ask(budgetName) : Promise.resolve(null),
+      ]);
+      return {
+        id: String(x.id || ''), sli: String(x.sli || ''), objective: num(x.objective), window: x.window || null, objectiveSource: x.objectiveSource === 'default' ? 'default' : 'repository',
+        now: series ? {
+          name: series.name, unit: String(series.unit || ''), better: ['higher', 'lower'].includes(series.better) ? series.better : null,
+          role: ['errors', 'good', 'latency', 'value'].includes(series.role) ? series.role : 'value', window: series.window || null,
+          ...(num(series.threshold) !== null ? { threshold: num(series.threshold) } : {}), ...valueOfRead(nowR),
+        } : null,
+        budget: budgetName ? { name: budgetName, ...valueOfRead(budgetR) } : null,
+      };
+    }));
+    return { outcome: rows.length ? 'data' : 'empty', reason: rows.length ? null : 'its repository declares no SLO', rows, cut: sloList.length - read.length };
+  }, { rows: [], cut: 0 }) : Promise.resolve(null);
+
+  const [alerts, scrape, timing, fam, slos] = await Promise.all([alertsP, scrapeP, timingP, familiesP, slosP]);
   return {
     calls: { made: pool.made, budget: L.maxCalls, ...(signal?.aborted ? { outOfTime: true } : {}) },
     ...(scopeOut ? { scope: scopeOut } : {}),
+    ...(slos ? { slos } : {}),
     alerts, scrape, timing,
     families: { outcome: fam.outcome, reason: fam.reason, rows: fam.rows },
     absent: fam.absent,

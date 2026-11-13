@@ -18,7 +18,7 @@ import { CONTROL_ROOM_FAMILIES, CONTROL_ROOM_UNITS } from './lib/contracts/contr
 import {
   CONTROL_ROOM_LIMITS, normaliseSeverity, statusWord, judgeValue, jobsRegex, cleanError,
   incidentsFrom, timingSummary, familyRowErrors, controlRoomFamilies, detectionQuery, pickVariant, readControlRoom, openControlRoom,
-  scopeSelectors, scopeQueries,
+  scopeSelectors, scopeQueries, slosOfPack, seriesSense,
 } from './lib/control-room.mjs';
 import { capabilityTool } from './lib/contracts/mcp-capabilities.mjs';
 
@@ -538,4 +538,94 @@ test('readControlRoom with a scope: only the service\'s alerts, history, targets
   const old = await readControlRoom({ callTool: whole.callTool, tool: 'q', nowSeconds: now });
   assert.equal(Object.hasOwn(old, 'scope'), false, 'no scope key: an older caller\'s answer keeps its own');
   assert.ok(whole.seen.some((c) => c.query === 'count by (alertname, severity, alertstate) (ALERTS)'));
+});
+
+// The service's SLOs: the series its repository records them under, read by name (slosOfPack, the slos part).
+test('slosOfPack: each SLO\'s recorded SLI and budget by name (the scan\'s naming and a compiled pack\'s ref), the direction and unit from the series, a scan\'s inferred objective said as a default, the ones that say most first; readControlRoom reads them by name, several series as a range, none recorded said', async () => {
+  const pack = {
+    apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { name: 'shop', version: '0.1.0' },
+    spec: {
+      slis: [
+        { id: 'slo_http_requests', type: 'ratio', description: 'Inferred from recording rule slo:http_requests:error_ratio_5m.', good: 'x', total: '1' },
+        { id: 'slo_availability', type: 'threshold', description: 'Inferred from recording rules …', query: 'y', threshold: 1 },
+        { id: 'checkout_latency', type: 'threshold', query: 'z', threshold: 0.5, unit: 'seconds' },
+        { id: 'finops_cpu', type: 'threshold', description: 'Inferred from recording rule finops:cpu:usage_per_pod_5m.', query: 'w', threshold: 1 },
+        { id: 'unrecorded', type: 'ratio', good: 'a', total: 'b' },
+      ],
+      slos: [
+        { id: 'slo_http_requests_99', sli: 'slo_http_requests', objective: 0.99, window: '30d' },
+        { id: 'finops_cpu_99', sli: 'finops_cpu', objective: 0.99, window: '30d' },
+        { id: 'unrecorded_99_9', sli: 'unrecorded', objective: 0.999, window: '30d' },
+        { id: 'checkout_latency_99', sli: 'ref:slis.checkout_latency', objective: 0.99, window: '7d' },
+        { id: 'slo_availability_99', sli: 'slo_availability', objective: 0.99, window: '30d' },
+      ],
+      queries: { recording_rules: [
+        { name: 'slo:http_requests:error_ratio_1h', expr: 'a' }, { name: 'slo:http_requests:error_ratio_5m', expr: 'a' },
+        { name: 'slo:availability:composite_1h', expr: 'b' }, { name: 'slo:availability:error_budget_remaining', expr: 'c' },
+        { name: 'shop:checkout_latency:value_5m', expr: 'ref:slis.checkout_latency' },
+        { name: 'finops:cpu:usage_per_pod_5m', expr: 'd' }, { name: 'not a name', expr: 'e' },
+      ] },
+    },
+  };
+  const slos = slosOfPack(pack);
+  assert.deepEqual(slos.map((x) => [x.id, x.objectiveSource, x.series?.name ?? null, x.series?.unit ?? null, x.series?.better ?? null, x.budget]), [
+    ['slo_availability_99', 'default', 'slo:availability:composite_1h', 'ratio', 'higher', 'slo:availability:error_budget_remaining'],
+    ['slo_http_requests_99', 'default', 'slo:http_requests:error_ratio_5m', 'ratio', 'lower', null],
+    ['checkout_latency_99', 'repository', 'shop:checkout_latency:value_5m', 'seconds', 'lower', null],
+    ['finops_cpu_99', 'default', 'finops:cpu:usage_per_pod_5m', '', null, null],
+    ['unrecorded_99_9', 'repository', null, null, null, null],
+  ], 'a budget first, then a known direction (the shortest window), then a rate read as it is, then none recorded');
+  assert.deepEqual(seriesSense('p99_5m', { durationish: true }), { kind: 'sli', unit: 'seconds', better: 'lower', role: 'latency', window: '5m' });
+  // The halves of a ratio are event rates, never a share; an error-named op that is no ratio is read as it is.
+  for (const op of ['good_5m', 'total_5m', 'bad_1h', 'requests_5m', 'errors_total_rate5m']) assert.deepEqual([seriesSense(op).unit, seriesSense(op).better, seriesSense(op).role], ['', null, 'value'], op);
+  assert.deepEqual([seriesSense('error_ratio_5m').role, seriesSense('failure_ratio_5m').role, seriesSense('probe_success_ratio_1d').role], ['errors', 'errors', 'good']);
+  // The good/total/ratio convention: the ratio is the SLI, never its good half.
+  const halves = slosOfPack({ spec: {
+    slis: [{ id: 'api_requests', type: 'ratio', good: 'g', total: 't' }],
+    slos: [{ id: 'api_requests_99_9', sli: 'api_requests', objective: 0.999, window: '30d' }],
+    queries: { recording_rules: [{ name: 'api:requests:good_5m', expr: 'g' }, { name: 'api:requests:total_5m', expr: 't' }, { name: 'api:requests:ratio_5m', expr: 'g/t' }] },
+  } });
+  assert.equal(halves[0].series.name, 'api:requests:ratio_5m');
+  // A threshold SLI recorded by a compiled pack: its threshold rides along (the panel judges against it, never the objective).
+  const ceiling = slosOfPack({ spec: {
+    slis: [{ id: 'disk', type: 'threshold', query: 'q', threshold: 0.85, unit: 'ratio' }],
+    slos: [{ id: 'disk_99', sli: 'disk', objective: 0.99, window: '30d' }],
+    queries: { recording_rules: [{ name: 'node:disk:value_5m', expr: 'ref:slis.disk' }] },
+  } });
+  assert.deepEqual(ceiling[0].series, { name: 'node:disk:value_5m', unit: 'ratio', better: 'lower', role: 'value', window: '5m', threshold: 0.85 });
+  // Two SLOs on one SLI: the budget series is recorded against one objective, so neither row claims it.
+  const shared = slosOfPack({ spec: {
+    slis: [{ id: 'api_errors', type: 'ratio', good: 'g', total: 't' }],
+    slos: [{ id: 'api_errors_99_9', sli: 'api_errors', objective: 0.999, window: '30d' }, { id: 'api_errors_99', sli: 'api_errors', objective: 0.99, window: '7d' }],
+    queries: { recording_rules: [{ name: 'api:errors:error_ratio_5m', expr: 'e' }, { name: 'api:errors:error_budget_remaining', expr: 'b' }] },
+  } });
+  assert.deepEqual(shared.map((x) => [x.id, x.series?.name, x.budget]), [['api_errors_99_9', 'api:errors:error_ratio_5m', null], ['api_errors_99', 'api:errors:error_ratio_5m', null]]);
+  assert.deepEqual(slosOfPack({ spec: {} }), []);
+
+  const now = 1_800_000_000;
+  const fake = fakeTool([
+    ['slo:availability:composite_1h', vec([{}, 0.9993])], ['slo:availability:error_budget_remaining', vec([{}, 0.42])],
+    ['slo:http_requests:error_ratio_5m', vec([{ route: '/a' }, 0.001], [{ route: '/b' }, 0.02])],
+    ['shop:checkout_latency:value_5m', { resultType: 'vector', result: [] }],
+  ]);
+  const r = await readControlRoom({ callTool: fake.callTool, tool: 'q', nowSeconds: now, scope: { jobs: ['shop'], alerts: [], slos } });
+  assert.equal(r.slos.outcome, 'data');
+  const row = (id) => r.slos.rows.find((x) => x.id === id);
+  assert.deepEqual([row('slo_availability_99').now.value, row('slo_availability_99').budget.value], [0.9993, 0.42]);
+  assert.deepEqual([row('slo_http_requests_99').now.value, row('slo_http_requests_99').now.min, row('slo_http_requests_99').now.max, row('slo_http_requests_99').now.n], [null, 0.001, 0.02, 2], 'several series: their range, never one averaged number');
+  assert.deepEqual([row('checkout_latency_99').now.outcome, row('checkout_latency_99').now.reason], ['empty', 'no series of this name answers live']);
+  assert.equal(row('unrecorded_99_9').now, null, 'none recorded: nothing asked');
+  const asked = fake.seen.map((c) => c.query);
+  for (const name of ['slo:availability:composite_1h', 'slo:availability:error_budget_remaining', 'slo:http_requests:error_ratio_5m', 'shop:checkout_latency:value_5m', 'finops:cpu:usage_per_pod_5m']) assert.ok(asked.includes(name), name);
+  // A name that is no metric name is never sent; past the limit the rest are counted.
+  const odd = fakeTool([]);
+  const cut = await readControlRoom({ callTool: odd.callTool, tool: 'q', nowSeconds: now, scope: { jobs: [], alerts: [], slos: [{ id: 'x', series: { name: 'up) or vector(1' } }, ...Array.from({ length: 9 }, (_, i) => ({ id: `s${i}`, series: null }))] }, limits: { slos: 4 } });
+  assert.ok(!odd.seen.some((c) => /vector/.test(c.query)), 'a name that is no metric name is never sent');
+  assert.deepEqual([cut.slos.rows.length, cut.slos.cut, cut.slos.rows[0].now], [4, 6, null]);
+  // A store several services write: a recorded series that keeps its job says whose it is.
+  const shared2 = fakeTool([['slo:http_requests:error_ratio_5m', vec([{ job: 'shop' }, 0.001], [{ job: 'payments' }, 0.4])]]);
+  const mine = await readControlRoom({ callTool: shared2.callTool, tool: 'q', nowSeconds: now, scope: { jobs: ['shop'], alerts: [], slos: [{ id: 'x', series: { name: 'slo:http_requests:error_ratio_5m', unit: 'ratio', better: 'lower', role: 'errors' } }] } });
+  assert.deepEqual([mine.slos.rows[0].now.value, mine.slos.rows[0].now.n, mine.slos.rows[0].now.role], [0.001, 1, 'errors'], 'another service\'s job left out');
+  // No scope (an older caller): no slos key.
+  assert.equal(Object.hasOwn(await readControlRoom({ callTool: fakeTool([]).callTool, tool: 'q', nowSeconds: now }), 'slos'), false);
 });

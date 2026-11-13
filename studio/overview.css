@@ -745,13 +745,14 @@ p.ov-scan__sum { cursor: default; }
 .ov-cr__h { margin: 0 0 6px; font: 600 13px/1.3 var(--og-font); color: var(--og-text); }
 .ov-cr__sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* Status */
-.ov-cr__status { --ov-t: var(--og-muted); display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "dot text" "counts counts"; column-gap: 12px; row-gap: 8px; align-items: center; padding: 12px; border: 1px solid var(--og-line); border-left: 3px solid var(--ov-t); border-radius: 8px; background: var(--og-panel-2); }
+.ov-cr__status { --ov-t: var(--og-muted); display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "dot text" "counts counts"; column-gap: 10px; row-gap: 4px; align-items: center; padding: 8px 12px; border: 1px solid var(--og-line); border-left: 3px solid var(--ov-t); border-radius: 8px; background: var(--og-panel-2); }
 .ov-cr__status--ok { --ov-t: var(--og-accent); }
 .ov-cr__status--warn { --ov-t: var(--og-warn); }
 .ov-cr__status--fail { --ov-t: var(--og-fail); }
-.ov-cr__dot { grid-area: dot; width: 14px; height: 14px; border-radius: 50%; background: var(--ov-t); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ov-t) 22%, transparent); }
+.ov-cr__dot { grid-area: dot; width: 10px; height: 10px; border-radius: 50%; background: var(--ov-t); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ov-t) 22%, transparent); }
 .ov-cr__status-text { grid-area: text; min-width: 0; }
-.ov-cr__word { font: 750 28px/1.05 var(--og-font); letter-spacing: -0.02em; color: var(--ov-t); }
+/* The alerts' status stays in sight but small: MTTD / MTTR and the SLOs are the panel's headline. */
+.ov-cr__word { font: 700 16px/1.2 var(--og-font); color: var(--ov-t); }
 .ov-cr__sentence { margin: 2px 0 0; font: 400 13px/1.35 var(--og-font); color: var(--og-text-2); }
 .ov-cr__counts { grid-area: counts; display: flex; flex-wrap: wrap; gap: 6px 14px; font: 400 12.5px/1.3 var(--og-font); color: var(--og-text-2); }
 .ov-cr__count b { font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -804,6 +805,27 @@ p.ov-scan__sum { cursor: default; }
 .ov-cr__more summary { cursor: pointer; color: var(--og-text-2); }
 /* Known metrics: a closed row per family, its layer colour on the left, its health on the numbers */
 .ov-cr__fams { display: grid; gap: 6px; }
+/* The SLIs and SLOs beside MTTD / MTTR: a row each, the tone a stripe on its edge (the budget's, else the SLI's). */
+.ov-cr__slos { display: grid; gap: 6px; }
+.ov-cr__slo-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+/* Two lines a row: the SLI and its value now; its objective and its budget left. */
+.ov-cr__slo { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; padding: 7px 10px; border: 1px solid var(--og-line); border-left: 3px solid var(--og-line-strong); border-radius: 8px; min-width: 0; }
+.ov-cr__slo-now, .ov-cr__slo-budget { text-align: right; }
+.ov-cr__slo-budget:empty { display: none; }
+/* A note in place of a value (not read, nothing recorded) takes the row's width, under the name. */
+.ov-cr__slo-now--note { grid-column: 1 / -1; text-align: left; }
+.ov-cr__slo--good { border-left-color: var(--og-accent); }
+.ov-cr__slo--warn { border-left-color: var(--og-warn); }
+.ov-cr__slo--bad { border-left-color: var(--og-fail); }
+.ov-cr__slo-name { font: 600 13px/1.3 var(--og-font); color: var(--og-text); }
+.ov-cr__slo-now { font: 500 13px/1.35 var(--og-font); font-variant-numeric: tabular-nums; color: var(--og-text); }
+.ov-cr__slo-obj, .ov-cr__slo-budget { font: 400 12px/1.35 var(--og-font); font-variant-numeric: tabular-nums; }
+.ov-cr__slo-budget { color: var(--og-text); }
+/* The rest of the live side, folded under the headline. */
+.ov-cr__fold { border-top: 1px solid var(--og-line); padding-top: 8px; }
+.ov-cr__fold-sum { cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ov-cr__fold-sum .ov-cr__h { margin: 0; }
+.ov-cr__fold-body { display: grid; gap: 10px; margin-top: 8px; }
 .ov-cr__fam { --ov-l: var(--ov-l-app); border: 1px solid var(--og-line); border-left: 3px solid var(--ov-l); border-radius: 8px; background: var(--og-panel-2); }
 .ov-cr__fam--platform { --ov-l: var(--ov-l-platform); }
 .ov-cr__fam--infra { --ov-l: var(--ov-l-infra); }
