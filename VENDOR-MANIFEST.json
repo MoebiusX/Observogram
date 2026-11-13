@@ -469,8 +469,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/control-room.mjs": {
-      "sha256": "a7905f1137f4429d02262c86c6d47527d2ad9ca3fc5e661aa60490854b750fd1",
-      "bytes": 59762,
+      "sha256": "47980c9b0988d7d8e53a677924b7ef7b9b14435482c3173e5738df7da1412505",
+      "bytes": 61387,
       "exports": [
         "CONTROL_ROOM_LIMITS",
         "cleanError",

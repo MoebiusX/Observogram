@@ -12,6 +12,11 @@
 - **Docs.** `README.md` (the control room, its image `docs/img/control-room.png`, the API row), `docs/USER_JOURNEY.md` (the control room).
 - **Downstream:** api, behaviour — the control-room answer gains `slos` (from `scope.slos`, which `scopeOfPack` now returns), `buildControlRoomModel` returns `slos` and `more`, and the panel draws the SLIs and SLOs under MTTD / MTTR with the rest folded.
 
+### Docs
+- `docs/Event Broker Availability.md` (new): a proposal for measuring an event broker's availability — the SLIs (process up, VPN reachable, one active node, delivery ratio, dead-message depth, spool headroom, a put/get canary), one composite SLO (VPN reachability × delivery ratio, time-based: a threshold SLI with `good_when: above`, so no new SLI shape and no spec change), the chaos that proves each SLI, and what is needed from the broker team. Modelled on the IBM MQ library entry. Laid out as its published page is: the three questions side by side, the recommendation as a callout, the SLI ids and their kind as code chips, the rules highlighted, objectives and alerting side by side.
+- Suite total 1931 → 1931.
+- **Downstream:** none — a document only.
+
 ### Tests
 - `tools/test-control-room.mjs` +1: `slosOfPack` on the scan's naming and a compiled pack's ref, the direction and unit from the series, the default objective, the order; `readControlRoom` reading them by name, a range across series, one that answers nothing, none recorded asked for nothing, a name that is no metric name never sent, the limit, no `slos` without a scope.
 - `tools/test-control-room-panel.mjs` +2: `slosOf`'s tones (a budget under half, spent, an SLI past a stated objective, never against a default), its states (empty, none, not read), the unrecorded named on one line; the order on the panel (status, MTTR / MTTD, the SLOs, the fold), the fold's line and its contents, the words of a row, a range and one alike across series, an older server's answer with no section. `server/test-control-room.mjs`: `scopeOfPack` with its SLOs.
