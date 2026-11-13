@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Docs
-- `docs/EVENT_BROKER_AVAILABILITY.md` (new): a proposal for measuring an event broker's availability — the SLIs (process up, tenant reachable, one active node, delivery ratio, dead-letter depth, spool headroom, a put/get canary), one composite SLO (tenant reachability × delivery ratio, time-based: a threshold SLI with `good_when: above`, so no new SLI shape and no spec change), the chaos that proves each SLI, and what is needed from the broker team. Modelled on the IBM MQ library entry.
+- `docs/Event Broker Availability.md` (new): a proposal for measuring an event broker's availability — the SLIs (process up, VPN reachable, one active node, delivery ratio, dead-message depth, spool headroom, a put/get canary), one composite SLO (VPN reachability × delivery ratio, time-based: a threshold SLI with `good_when: above`, so no new SLI shape and no spec change), the chaos that proves each SLI, and what is needed from the broker team. Modelled on the IBM MQ library entry.
 - Suite total 1931 → 1931.
 - **Downstream:** none — a document only.
 
