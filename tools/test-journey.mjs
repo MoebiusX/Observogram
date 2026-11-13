@@ -1204,6 +1204,24 @@ try {
       try { loadJourneyDef('bad-ep'); } catch (e) { loadErr = e.message; }
       assert(/^journey bad-ep: packB\.mcp\.endpointId must be a positive integer/.test(loadErr || ''), `packB.mcp.endpointId ${bad} is refused at load`, loadErr);
     }
+    // packB.mcp.scope: the command line runs a scoped check as the server does (the scope the server's
+    // Run wrote), refuses one that does not parse at load, and records which scope the live read applied.
+    assert(t1.packB.liveScope === null, 'an unscoped live read says so on the record', t1.packB);
+    writeFileSync(join(TMP, 'journeys', 'fake-live-scope.journey.yaml'), [
+      'name: fake-live-scope',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { mcp: { url: ${fakeUrl}, scope: { metricPrefixes: [shop_], ruleGroups: [shop] } } }`,
+    ].join('\n'));
+    const ts = await runJourney(loadJourneyDef('fake-live-scope'));
+    assert(ts.outcome === 'pass' && JSON.stringify(ts.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], ruleGroups: ['shop'] }),
+           'a scoped check is read with its scope, and the record names it', ts.packB);
+    const scopeNote = readLivePack('fake-live-scope', ts)?.metadata?.annotations?.['observogram.live.scope'];
+    assert(scopeNote && JSON.parse(scopeNote).metricPrefixes[0] === 'shop_' && readLivePack('fake-live-scope', ts).metadata.annotations['observogram.live.mode'] === undefined,
+           'the kept live pack carries the scope annotation, and stays a draft', scopeNote);
+    writeFileSync(join(TMP, 'journeys', 'bad-scope.journey.yaml'), ['name: bad-scope', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: ${fakeUrl}, scope: { metricPrefixes: [9bad] } } }`].join('\n'));
+    let scopeErr = null;
+    try { loadJourneyDef('bad-scope'); } catch (e) { scopeErr = e.message; }
+    assert(/^journey bad-scope: packB\.mcp\.scope\.metricPrefixes\[0\] "9bad" is not a metric-name prefix/.test(scopeErr || ''), 'a packB.mcp.scope that does not parse is refused at load, naming the field', scopeErr);
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,

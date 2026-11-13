@@ -607,6 +607,27 @@ host.overview.pickPackFile = async (side) => {    // side: 'repo' | 'live'
 
 The studio's wiring is `listPickPackFile` in `studio/app.mjs`.
 
+**A live scope per environment** (README, *A live scope per environment*):
+step 4 draws the scope's five answers under the endpoint (`formModel`'s
+`scope`: `{ shown, from, hint, fields }`), and the matrix cell its summary
+(`serviceListModel` rows' `scope`: `{ text, from }`). Pass the server's
+configured snapshot scope, compact, to the three places that read it — none
+of them is required, and without it an environment with no scope of its own
+reads as empty:
+
+```js
+import { liveScopeDefaultsOf } from './overview-model.mjs';
+// An operator's read (anyone else gets a refusal: no scope then); a variable that does not parse makes it null.
+const defaults = liveScopeDefaultsOf(await fetchJson('/api/mcp/jobs').then((b) => b.scope, () => null));
+serviceListModel({ …, liveScopeDefaults: defaults });
+formOpened(services, { …, scopeDefaults: defaults });                                    // prefills, form.scopeFrom 'server'
+savePlan(values, { …, scopeDefaults: form.scopeDefaults });                              // liveScopes in the create or patch, when changed
+```
+
+`scopeFormValues`, `scopeFromValues`, `scopeSummary`, `sameScope`,
+`resolvedScope` and `SCOPE_FIELDS` are the model's own (the studio never
+imports `tools/lib`; the server checks every value).
+
 **A repository read as the person who runs it.** A GitHub or Azure DevOps
 repository is read with the person's own token (README, *Whose access reads
 a repository*); the server's own only where it has no sign-in. A Run its host

@@ -40,6 +40,12 @@
 // place of its MCP endpoint (server/service-packs.mjs): { [environment
 // name]: { packId, name, uploadedAt, bytes } }, {} for none. Kept the same
 // way, under live_packs:<orgId>:<serviceId>.
+//
+// liveScopes is the scope each environment's live read applies (the snapshot
+// scope's fields, tools/lib/live-fetch.mjs normalizeScope, compact):
+// { [environment name]: { metricPrefixes?, folderUids?, datasourceUid?,
+// metricExclude?, ruleGroups? } }, {} for none (the org's configured snapshot
+// scope, else none). Kept the same way, under live_scopes:<orgId>:<serviceId>.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
@@ -54,6 +60,7 @@ export const targetsKey = (orgId, serviceId) => `mttx_targets:${orgId}:${service
 export const chaosRunsKey = (orgId, serviceId) => `chaos_runs:${orgId}:${serviceId}`;
 export const envRefsKey = (orgId, serviceId) => `env_refs:${orgId}:${serviceId}`;
 export const livePacksKey = (orgId, serviceId) => `live_packs:${orgId}:${serviceId}`;
+export const liveScopesKey = (orgId, serviceId) => `live_scopes:${orgId}:${serviceId}`;
 
 export function rowToService(r) {
   if (!r) return null;
@@ -129,6 +136,18 @@ function storedLivePacks(db, orgId, serviceId) {
   return value;
 }
 
+// A map of environment names to live scopes: each a plain object with at least one field.
+const isScopeMap = (x) => !!x && typeof x === 'object' && !Array.isArray(x)
+  && Object.values(x).every((v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0);
+
+// The stored live scopes by environment, or {} when there are none; damage is named, as above.
+function storedLiveScopes(db, orgId, serviceId) {
+  const key = liveScopesKey(orgId, serviceId);
+  const value = getMetaJson(db, key, {});
+  if (!isScopeMap(value)) throw new Error(`observogram store: schema_meta ${key} is not a map of live scopes`);
+  return value;
+}
+
 // The service as the callers read it: the row, and its switches, set-asides, targets and recorded chaos runs beside it.
 function withGradeOff(db, service) {
   if (!service) return null;
@@ -136,7 +155,8 @@ function withGradeOff(db, service) {
   return {
     ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id),
     targets: storedTargets(db, service.orgId, service.id), chaosRuns: storedChaosRuns(db, service.orgId, service.id),
-    envRefs: storedEnvRefs(db, service.orgId, service.id), livePacks: storedLivePacks(db, service.orgId, service.id), createdAt, updatedAt,
+    envRefs: storedEnvRefs(db, service.orgId, service.id), livePacks: storedLivePacks(db, service.orgId, service.id),
+    liveScopes: storedLiveScopes(db, service.orgId, service.id), createdAt, updatedAt,
   };
 }
 
@@ -180,6 +200,14 @@ function envRefsJson(envRefs) {
 }
 
 // A map of environment names to live exports (the admin module owns their shape); none is no key.
+// The audit's view of a live-scope map: each environment's scope fields, never their values.
+const scopeFieldsOf = (map) => Object.fromEntries(Object.entries(map || {}).map(([env, scope]) => [env, Object.keys(scope || {})]));
+
+function liveScopesJson(liveScopes) {
+  if (!isScopeMap(liveScopes)) throw new TypeError('observogram store: liveScopes is { [environment]: scope }');
+  return Object.keys(liveScopes).length ? JSON.stringify(liveScopes) : null;
+}
+
 function livePacksJson(livePacks) {
   if (!isLivePackMap(livePacks)) throw new TypeError('observogram store: livePacks is { [environment]: { packId, name, uploadedAt, bytes } }');
   return Object.keys(livePacks).length ? JSON.stringify(livePacks) : null;
@@ -236,7 +264,7 @@ export function listServices(db) {
 
 // detail extends the service.create row ({ via: 'pack', pack } when a
 // register or the import created it).
-export function createService(db, actor, { slug, name, owners = [], tier = null, description = null, repository = null, targets = null, envRefs = {} }, { detail = null } = {}) {
+export function createService(db, actor, { slug, name, owners = [], tier = null, description = null, repository = null, targets = null, envRefs = {}, liveScopes = {} }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(slug, 'slug');
   requireText(name, 'name');
@@ -254,11 +282,13 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     putMeta(db, chaosRunsKey(org, row.id), null);
     putMeta(db, envRefsKey(org, row.id), envRefsJson(envRefs));
     putMeta(db, livePacksKey(org, row.id), null);
+    putMeta(db, liveScopesKey(org, row.id), liveScopesJson(liveScopes));
     // The targets as they start, the same shape an update's row names: the profile and the two durations.
     // …and the branches by environment it starts with, when it names any.
     const created = {
       ...(targets ? { targets: { profile: targets.profile, mttd: targets.mttd, mttr: targets.mttr } } : {}),
       ...(Object.keys(envRefs || {}).length ? { envRefs } : {}),
+      ...(Object.keys(liveScopes || {}).length ? { liveScopes: scopeFieldsOf(liveScopes) } : {}),
     };
     writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail: Object.keys(created).length ? { ...(detail || {}), ...created } : detail });
     return withGradeOff(db, rowToService(row));
@@ -281,8 +311,9 @@ export function updateService(db, actor, id, patch) {
   const chaosRuns = patch.chaosRuns === undefined ? undefined : chaosRunsJson(patch.chaosRuns);
   const envRefs = patch.envRefs === undefined ? undefined : envRefsJson(patch.envRefs);
   const livePacks = patch.livePacks === undefined ? undefined : livePacksJson(patch.livePacks);
+  const liveScopes = patch.liveScopes === undefined ? undefined : liveScopesJson(patch.liveScopes);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs']), ...(patch.livePacks === undefined ? [] : ['livePacks'])];
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs']), ...(patch.livePacks === undefined ? [] : ['livePacks']), ...(patch.liveScopes === undefined ? [] : ['liveScopes'])];
   // The row names the criteria now off, so the audit says what the grade stopped counting,
   // and how many differences are set aside on each side (the list itself can be long).
   const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
@@ -298,6 +329,7 @@ export function updateService(db, actor, id, patch) {
     ...(patch.envRefs === undefined ? {} : { envRefs: patch.envRefs }),
     // The live exports by environment: each one's file name (the pack ids are the pack rows').
     ...(patch.livePacks === undefined ? {} : { livePacks: Object.fromEntries(Object.entries(patch.livePacks).map(([env, p]) => [env, p.name])) }),
+    ...(patch.liveScopes === undefined ? {} : { liveScopes: scopeFieldsOf(patch.liveScopes) }),
   };
   return atomic(db, () => {
     const current = rowOf(db, org, id);
@@ -309,6 +341,7 @@ export function updateService(db, actor, id, patch) {
     if (chaosRuns !== undefined) putMeta(db, chaosRunsKey(org, id), chaosRuns);
     if (envRefs !== undefined) putMeta(db, envRefsKey(org, id), envRefs);
     if (livePacks !== undefined) putMeta(db, livePacksKey(org, id), livePacks);
+    if (liveScopes !== undefined) putMeta(db, liveScopesKey(org, id), liveScopes);
     prepare(db, `UPDATE services SET ${sql ? `${sql}, ` : ''}updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
     writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail });
@@ -326,7 +359,7 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     if (!row) throw notFound('service', id);
     // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, livePacks: {} }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, livePacks: {}, liveScopes: {} }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
     putMeta(db, setAsideKey(org, id), null);
@@ -334,6 +367,7 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     putMeta(db, chaosRunsKey(org, id), null);
     putMeta(db, envRefsKey(org, id), null);
     putMeta(db, livePacksKey(org, id), null);
+    putMeta(db, liveScopesKey(org, id), null);
     writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });

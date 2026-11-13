@@ -2201,3 +2201,94 @@ test('a pack file for a service whose slug starts with a digit: named svc-…, a
     forgetChecks(['2fa-gate.prod']);
   }
 });
+
+// A live scope per environment (server/service-admin.mjs parseLiveScopes): the Run's live read narrowed to the
+// service's own metric names, folders and rule groups as a Path-B snapshot narrows them (a scoped draft), written
+// into the check as packB.mcp.scope and said on the record; without one, the org's configured snapshot scope.
+test('a live scope per environment: PATCH liveScopes (the whole map; a bad scope 400 before anything is sent), the environment view, a rename moves it; the Run saves it as packB.mcp.scope, reads only the scoped metric names and says so on the record; without one the configured snapshot scope, else none', async () => {
+  const { loadJourneyDef } = await import('../tools/lib/journey.mjs');
+  const made = await call('POST', '/api/services', { name: 'Scoped Shop' });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.service.id;
+  const NAME = 'scoped-shop.prod';
+  const defOf = (name = NAME) => runWithOrg('default', () => loadJourneyDef(name));
+  const livePackOfRun = (run) => parseYaml(readFileSync(join(WORKSPACE, 'packs', `${run.json.livePack.id}.pack.yaml`), 'utf8'));
+  const namesOf = (pack) => JSON.parse(pack.metadata.annotations['mcp.discovered.metric_names'] || '[]');
+  try {
+    const env = await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint });
+    assert.equal(env.status, 201, env.text);
+    assert.equal(env.json.environment.liveScope, null);
+    const DECLARED = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
+    assert.equal((await call('PUT', `/api/services/${id}/repository-pack`, { name: 'shop.pack.yaml', text: DECLARED })).status, 200);
+
+    // Refusals: each a 400 naming the environment and the field, nothing kept, nothing sent.
+    const calls = fake.calls.length;
+    for (const [body, why] of [
+      [{ liveScopes: { prod: { metricPrefixes: ['9bad'] } } }, /^liveScopes\.prod: scope\.metricPrefixes\[0\] "9bad" is not a metric-name prefix/],
+      [{ liveScopes: { prod: { colour: 'blue' } } }, /^liveScopes\.prod: scope\.colour is not a scope field/],
+      [{ liveScopes: { prod: { metricExclude: ['nope'] } } }, /is not anchored/],
+      [{ liveScopes: ['prod'] }, /^liveScopes is the scope each environment's live read applies/],
+    ]) {
+      const r = await call('PATCH', `/api/services/${id}`, body);
+      assert.equal(r.status, 400, r.text);
+      assert.match(r.json.error, why);
+    }
+    assert.deepEqual([(await call('GET', `/api/services/${id}`)).json.service.liveScopes, fake.calls.length], [{}, calls], 'nothing kept, nothing sent');
+
+    // No scope anywhere: the read is unscoped, and the record says so.
+    const plain = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(plain.status, 200, plain.text);
+    assert.equal(defOf().packB.mcp.scope, undefined);
+    assert.equal(plain.json.record.packB.liveScope, null, 'an unscoped read is said, not left out');
+    assert.equal(namesOf(livePackOfRun(plain)).length, 43, 'every name the endpoint lists');
+
+    // The environment's own scope: kept compact, on the view, saved into the check, applied to the read.
+    const set = await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricPrefixes: 'alertmanager_', folderUids: [], datasourceUid: '' } } });
+    assert.deepEqual([set.status, set.json.changed, set.json.service.liveScopes], [200, ['liveScopes'], { prod: { metricPrefixes: ['alertmanager_'] } }], set.text);
+    assert.deepEqual(set.json.service.environments[0].liveScope, { metricPrefixes: ['alertmanager_'] });
+    const scoped = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(scoped.status, 200, scoped.text);
+    assert.deepEqual(defOf().packB.mcp.scope, { metricPrefixes: ['alertmanager_'] }, 'the check carries the scope: a Check now and the command line read the same');
+    assert.deepEqual(scoped.json.record.packB.liveScope, { metricPrefixes: ['alertmanager_'] });
+    const pack = livePackOfRun(scoped);
+    const names = namesOf(pack);
+    assert.ok(names.length === 27 && names.every((n) => n.startsWith('alertmanager_')), `only the scoped names: ${names.length}`);
+    assert.deepEqual(JSON.parse(pack.metadata.annotations['observogram.scope.metric']), { by: 'prefix', values: ['alertmanager_'] }, 'the snapshot\'s annotations, so the diff parks what the read did not look at');
+    assert.equal(pack.metadata.annotations['observogram.live.mode'], undefined, 'still a draft, not a snapshot');
+    // A Check now runs the saved check as it is: scoped too.
+    const again = await call('POST', `/api/journeys/${NAME}/run`, {});
+    assert.equal(again.status, 200, again.text);
+    assert.deepEqual(again.json.record.packB.liveScope, { metricPrefixes: ['alertmanager_'] });
+    // A change of scope reaches the saved check at once, as the service's switches do: the next Check now reads it.
+    assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricPrefixes: ['alertmanager_cluster_'] } } })).status, 200);
+    assert.deepEqual(defOf().packB.mcp.scope, { metricPrefixes: ['alertmanager_cluster_'] }, 'no Run needed');
+
+    // Without the environment's own: the org's configured snapshot scope; one that does not parse is a 409.
+    assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: null } })).json.service.liveScopes.prod, undefined);
+    assert.equal(defOf().packB.mcp.scope, undefined, 'none of its own and none configured: the check reads unscoped');
+    process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES = 'ALERTS';
+    try {
+      const configured = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+      assert.equal(configured.status, 200, configured.text);
+      assert.deepEqual(configured.json.record.packB.liveScope, { metricPrefixes: ['ALERTS'] });
+      assert.deepEqual(namesOf(livePackOfRun(configured)), ['ALERTS', 'ALERTS_FOR_STATE']);
+      process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES = '9bad';
+      const before = fake.calls.length;
+      const bad = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+      assert.equal(bad.status, 409, bad.text);
+      assert.match(bad.json.error, /^the configured snapshot scope does not parse — OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES\[0\] "9bad"/);
+      assert.equal(fake.calls.length, before, 'nothing sent');
+    } finally { delete process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES; }
+
+    // A rename takes the scope along; a deletion takes it away.
+    assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { ruleGroups: ['shop'] } } })).status, 200);
+    assert.equal((await call('PATCH', `/api/environments/${env.json.environment.id}`, { name: 'production' })).status, 200);
+    assert.deepEqual((await call('GET', `/api/services/${id}`)).json.service.liveScopes, { production: { ruleGroups: ['shop'] } });
+    assert.equal((await call('DELETE', `/api/environments/${env.json.environment.id}`)).status, 200);
+    assert.deepEqual((await call('GET', `/api/services/${id}`)).json.service.liveScopes, {});
+  } finally {
+    await call('DELETE', `/api/services/${id}`);
+    forgetChecks([NAME, 'scoped-shop.production']);
+  }
+});
+

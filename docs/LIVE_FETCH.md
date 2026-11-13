@@ -143,7 +143,11 @@ annotation: a hand-uploaded pack can make them.
 `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE`, `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` for the deployment and
 `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
 deployment's field by field; a request's `scope` replaces the configured one
-whole. Inert when unset; the draft and the refresh never read them. Metric
+whole. Inert when unset; a plain draft and the refresh never read them, a
+service's Run does where its environment has no live scope of its own
+(README, *A live scope per environment*: a scoped draft — the families the
+scope narrows narrowed as here, the same annotations, the draft's signals
+kept). Metric
 prefixes filter the name list, then the exclude patterns drop names from what
 the prefixes kept (anchored, bounded regexes, white-space-separated in the
 variable — a backend's names that no declaration will ever match, an

@@ -34,6 +34,8 @@ import { SET_ASIDE_KINDS, SET_ASIDE_LAYERS, SET_ASIDE_MAX, SET_ASIDE_SIDES, base
 import { MTTX_CUSTOM, MTTX_PROFILES, sameTargets, targetsErrors, targetsRecord } from '../studio/mttx-targets.mjs';
 import { CHAOS_RUNS_MAX, chaosRunErrors, chaosRunId, chaosRunRecord, sameChaosRun } from '../studio/chaos-runs.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
+import { compactScope, normalizeScope } from '../tools/lib/live-fetch.mjs';
+import { timedExcludeErrors } from '../tools/fetch-live-pack.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
 import { credentialThatRides, exposedWay, mcpOriginDecision, originOf, typedMcpUrlDecision } from './mcp-target-policy.mjs';
@@ -126,6 +128,8 @@ export const WAYS = Object.freeze({
   repositoryPath: (x) => `${JSON.stringify(x)} is not a folder path on the server — give its full path (C:\\src\\shop, /srv/src/shop)`,
   repositoryRef: 'a branch is 1–200 characters with no spaces',
   envRefs: `envRefs is the branch each environment's Run reads where it is not the repository's own — { [environment name]: branch }, {} for none, at most ${ENV_REFS_MAX}`,
+  liveScopes: `liveScopes is the scope each environment's live read applies — { [environment name]: { metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups } }, {} for none, at most ${ENV_REFS_MAX}`,
+  liveScope: (env, errors) => `liveScopes.${env}: ${errors.join('; ')}`,
   envRef: (name) => `the branch for ${JSON.stringify(name)} is 1–200 characters with no spaces`,
   repositoryFolderRoots: (x) => `${JSON.stringify(x)} is not under a folder this server reads repositories from (OBSERVOGRAM_REPO_ROOTS)`,
   repositoryFolderPosture: "a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS on the server, or from the server's own machine while it runs without sign-in on loopback — list the folder there, or give a GitHub or Azure DevOps repository",
@@ -272,6 +276,34 @@ export function parseEnvRefs(value) {
   }
   // By name, so the same map is the same whatever order it came in; the last of a name twice wins.
   return Object.fromEntries([...new Map(out)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// The scope each environment's live read applies (the snapshot scope's fields, normalizeScope, and the
+// exclude patterns' timed check): { [environment name]: compact scope }, {} for none. The whole map is
+// sent; a name with an empty scope (or null) is left out — it reads with the org's configured snapshot
+// scope, else unscoped. A scope that does not parse is refused whole, naming its environment and field.
+export function parseLiveScopes(value) {
+  if (!isPlainObject(value)) invalid(WAYS.liveScopes);
+  const entries = Object.entries(value);
+  if (entries.length > ENV_REFS_MAX) invalid(WAYS.liveScopes);
+  const out = [];
+  for (const [name, raw] of entries) {
+    const env = String(name).trim();
+    if (!env || env.length > 200) invalid(WAYS.liveScopes);
+    if (raw === null) continue;
+    const { scope, errors } = normalizeScope(raw);
+    if (!errors.length) errors.push(...timedExcludeErrors(scope.metricExclude));
+    if (errors.length) invalid(WAYS.liveScope(env, errors));
+    const compact = compactScope(scope);
+    if (compact) out.push([env, compact]);
+  }
+  return Object.fromEntries([...new Map(out)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// The scope an environment of `service` keeps for its live read (its own entry), else null.
+export function liveScopeOf(service, envName) {
+  const map = service?.liveScopes;
+  return map && typeof map === 'object' && Object.hasOwn(map, envName) && map[envName] && typeof map[envName] === 'object' ? map[envName] : null;
 }
 
 // The branch an environment of `service` reads where it is not the repository's own — a GitHub or
@@ -512,12 +544,13 @@ function changedFields(current, next) {
 
 // `caller` (mcpCallerOf(req)) decides whether a folder repository may be
 // named; a repository of a source the org switched off is refused (409).
-export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets, envRefs } = {}, { caller = null } = {}) {
+export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets, envRefs, liveScopes } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
     targets: targets === undefined ? null : parseTargets(targets, { actor }),
     envRefs: envRefs === undefined ? {} : parseEnvRefs(envRefs),
+    liveScopes: liveScopes === undefined ? {} : parseLiveScopes(liveScopes),
   };
   if (namedSource(repository)) refuseSourceOff(db, namedSource(repository));
   fields.repository = parseRepository(repository, { caller }) ?? null;
@@ -555,6 +588,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
     if (patch.envRefs !== undefined) next.envRefs = parseEnvRefs(patch.envRefs);
+    if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes);
     // Another repository (another kind or address): the branches named for the old one are not its own.
     if (next.repository !== undefined && patch.envRefs === undefined && Object.keys(current.envRefs || {}).length
       && (next.repository?.kind !== current.repository?.kind || next.repository?.location !== current.repository?.location)) next.envRefs = {};
@@ -646,8 +680,9 @@ function moveEnvRef(db, actor, serviceId, from, to) {
   const service = getService(db, serviceId);
   const envRefs = movedMap(service?.envRefs, from, to);
   const livePacks = movedMap(service?.livePacks, from, to);
-  if (!envRefs && !livePacks) return;
-  updateService(db, actor, serviceId, { ...(envRefs ? { envRefs } : {}), ...(livePacks ? { livePacks } : {}) });
+  const liveScopes = movedMap(service?.liveScopes, from, to);
+  if (!envRefs && !livePacks && !liveScopes) return;
+  updateService(db, actor, serviceId, { ...(envRefs ? { envRefs } : {}), ...(livePacks ? { livePacks } : {}), ...(liveScopes ? { liveScopes } : {}) });
 }
 
 // An environment's export of live, own entry only (never an inherited name), or null.
@@ -783,6 +818,9 @@ function environmentView(env, service, endpoint) {
     ref: envRefOf(service, env.name),
     // The export of live it is checked against in place of an MCP endpoint, else null.
     livePack: livePackOf(service, env.name),
+    // The scope its live read applies, as the service keeps it (compact), else null — then the org's
+    // configured snapshot scope applies, if any (GET /api/mcp/jobs's scope), else none.
+    liveScope: liveScopeOf(service, env.name),
     createdAt: env.createdAt, updatedAt: env.updatedAt,
   };
 }
@@ -805,6 +843,8 @@ function serviceView(service, environments, links) {
     chaosRuns: Array.isArray(service.chaosRuns) ? service.chaosRuns : [],
     // The branch each environment's Run reads where it is not the repository's own: { [environment]: branch }, {} for none.
     envRefs: service.envRefs && typeof service.envRefs === 'object' ? service.envRefs : {},
+    // The scope each environment's live read applies: { [environment]: scope }, {} for none.
+    liveScopes: service.liveScopes && typeof service.liveScopes === 'object' ? service.liveScopes : {},
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

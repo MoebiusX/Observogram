@@ -120,7 +120,7 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
+  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, scopeSummary, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
   targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
@@ -2238,7 +2238,7 @@ async function restoreListFormDraft() {
   if (!listFacts.loaded) { try { await refreshListFacts(); } catch (_) { /* the form opens on what is known */ } }
   // The person may have moved on, or opened the form themselves, while the facts were read.
   if (!onList() || listForm.open) return;
-  const form = formRestored(state.services, draft, { endpoints: listFacts.endpoints || [], sources: listFacts.sources });
+  const form = formRestored(state.services, draft, { endpoints: listFacts.endpoints || [], sources: listFacts.sources, scopeDefaults: liveScopeDefaultsOf(listFacts.liveScope) });
   if (!form) return;
   listForm = { ...form, focus: form.mode === 'add' && !form.values.name ? 'name' : 'location' };
   renderMainView();
@@ -2255,6 +2255,7 @@ function serviceListModelNow() {
     journeys: listFacts.journeys, journeysError: listFacts.journeysError, endpoints: listFacts.endpoints,
     access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll, heldTokens: [...repoTokens.keys()],
     repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null, sources: listFacts.sources,
+    liveScopeDefaults: liveScopeDefaultsOf(listFacts.liveScope),
   });
 }
 
@@ -2449,7 +2450,7 @@ const listRow = (key) => serviceListModelNow().rows.find((r) => r.key === key) |
 // `focus`: the answer to start on (the board's Set targets… opens on the Targets one); `returnTo`:
 // { serviceId, env } — the board it was opened from, which Save and Cancel bring back.
 function openListForm(serviceId = null, env = null, { focus = null, returnTo = null, render = true, pick = false, addEnv = false } = {}) {
-  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources, pick, addEnv });
+  const opened = formOpened(state.services, { serviceId, env, endpoints: listFacts.endpoints || [], sources: listFacts.sources, pick, addEnv, scopeDefaults: liveScopeDefaultsOf(listFacts.liveScope) });
   // The service's Change with its environment as a choice: the choice first.
   const first = opened.mode === 'add' ? 'name' : (opened.envChoices ? 'env' : opened.envFixed ? 'location' : 'env');
   listForm = { ...opened, focus: focus || first, returnTo };
@@ -2614,7 +2615,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   }
   listForm = { ...listForm, saving: true, error: null };
   renderMainView();
-  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched, packs: listForm.packs || null });
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched, packs: listForm.packs || null, scopeDefaults: listForm.scopeDefaults ?? liveScopeDefaultsOf(listFacts.liveScope), scopeKnown: !!listForm.record });
   let serviceId = plan.service.id ?? null;
   try {
     let endpointId = plan.endpoint.id;
@@ -2711,7 +2712,9 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   const of = Number(scan?.candidates) > Number(scan?.files) ? ` of ${scan.candidates}` : '';
   const lost = scanLossText(scan);
   const read = scan ? `${scan.files ?? '?'}${of} files from ${scan.source || 'the repository'}${lost ? ` (${lost})` : ''}` : `the pack file${row.repository?.text ? ` ${row.repository.text}` : ''}`;
-  toast(`${row.name} · ${row.env} checked: ${read}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
+  // The live read's scope, as the record says it (none: the whole estate the endpoint serves).
+  const scoped = out?.record?.packB?.liveScope ? `, live read scoped to ${scopeSummary(out.record.packB.liveScope)}` : '';
+  toast(`${row.name} · ${row.env} checked: ${read}${scoped}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
 }
 
 // Signing in to a repository host (server/repo-sign-in.mjs): a window of the

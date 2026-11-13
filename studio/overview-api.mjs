@@ -86,7 +86,7 @@ export async function runServiceCheck(name, { fetchFn = requestJson } = {}) {
 //            listing (an older one) or this reader may not ask (a viewer):
 //            Browse… is then not drawn
 export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
-  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, sources: null };
+  const out = { journeys: null, journeysError: null, endpoints: null, endpointsError: null, register: null, folders: null, sources: null, liveScope: null };
   await Promise.all([
     fetchFn('/api/journeys')
       .then((body) => { out.journeys = Array.isArray(body?.journeys) ? body.journeys : []; })
@@ -103,6 +103,11 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
         out.folders = { allowed: body.allowed, why: body.why || null };
       })
       .catch(() => { /* no listing here, or not for this reader: no Browse… */ }),
+    // The server's configured snapshot scope ({ defaults, from, errors }): what an environment with no
+    // live scope of its own reads with. An operator reads it; for anyone else, none is drawn.
+    fetchFn('/api/mcp/jobs')
+      .then((body) => { out.liveScope = body?.scope && typeof body.scope === 'object' ? body.scope : null; })
+      .catch(() => { /* not for this reader, or an older server */ }),
     fetchFn('/api/repository-sources')
       .then((body) => { out.sources = body?.sources && typeof body.sources === 'object' ? body.sources : null; })
       .catch(() => { /* an older server: every source offered, and the server judges */ }),

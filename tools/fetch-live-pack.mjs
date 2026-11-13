@@ -72,7 +72,7 @@ import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-ru
 import { brandEnv } from './lib/brand-env.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
-import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations } from './lib/live-fetch.mjs';
+import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty } from './lib/live-fetch.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2579,8 +2579,15 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // static half, and that module imports nothing). The server runs the same
   // check before it answers a start, so this is the backstop.
   const excludeMatchers = [];
-  if (snapshot) {
-    const normalized = normalizeScope(scope);
+  // A draft takes a scope too (a scoped draft — the Services Run's live read of
+  // one service): every family the scope narrows is narrowed exactly as a
+  // snapshot narrows it, and everything else a draft reads (the stack signals,
+  // the chaos feed, the vantage rule) stays as it is. A draft with no scope, or
+  // an empty one, reads as it always did: `snapScope` stays null.
+  const draftScope = !snapshot && scope != null ? normalizeScope(scope) : null;
+  if (draftScope?.errors.length) throw new TypeError(`fetchMcp: ${draftScope.errors.join('; ')}`);
+  if (snapshot || (draftScope && !scopeIsEmpty(draftScope.scope))) {
+    const normalized = draftScope || normalizeScope(scope);
     if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
     snapScope = normalized.scope;
     const slow = timedExcludeErrors(snapScope.metricExclude);
@@ -2828,9 +2835,12 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     dashCounts.kept = kept.length;
     return kept;
   };
-  const adaptFor = (probe, response) => (snapshot && probe.name === 'dashboards'
-    ? scopedSearchItems(response).map((d) => dashboardFromSearchItem(d, snapshotDashboardId))
-    : snapshot && typeof probe.adaptSnapshot === 'function' ? probe.adaptSnapshot(response)
+  // Rules are read as a snapshot reads them (every engine, their group and folder) only where the
+  // scope can narrow them: a snapshot, or a scoped draft with folders or rule groups.
+  const rulesScoped = snapshot || folders.length > 0 || groups.length > 0;
+  const adaptFor = (probe, response) => (snapScope && probe.name === 'dashboards'
+    ? scopedSearchItems(response).map((d) => (snapshot ? dashboardFromSearchItem(d, snapshotDashboardId) : dashboardFromSearchItem(d)))
+    : rulesScoped && typeof probe.adaptSnapshot === 'function' ? probe.adaptSnapshot(response)
       : probe.adapt(response));
 
   // A probe family's end in the gate log: done with its counts, or skipped
@@ -3015,6 +3025,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
 
   const probeResults = {};
   let unionResult = null;
+  // The alert rules the listing held before a scope narrowed them (the ALERTS fallback reads it).
+  let alertRulesListed = null;
   await Promise.all(PROBES.map(async (probe) => {
     report(STAGE_OF_PROBE[probe.name], 'running');
     await runProbe(probe);
@@ -3023,7 +3035,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       if (probe.name === 'alert_rules') {
         const union = unionResult;
         const listed = union ? union.listed : adaptedLength('alert_rules');
-        const message = snapshot ? [...unionNotes, scopeRules('alert_rules', 'alert_rule', { allPushedDown: !!union?.allPushedDown })].filter(Boolean).join('; ') || null : null;
+        alertRulesListed = listed;
+        const message = snapScope ? [...unionNotes, scopeRules('alert_rules', 'alert_rule', { allPushedDown: !!union?.allPushedDown })].filter(Boolean).join('; ') || null : null;
         endProbeStage('alert_rules', { listed, kept: adaptedLength('alert_rules'), engines: union ? union.engines : (probeResults.alert_rules?.outcome === 'data' ? 1 : 0) }, message);
       } else if (probe.name === 'scrape_configs') {
         const jobs = Array.isArray(probeResults.scrape_configs?.adapted) ? probeResults.scrape_configs.adapted : [];
@@ -3054,7 +3067,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     } else {
       candidates = probe.candidates.slice();
     }
-    if (snapshot && probe.name === 'alert_rules') {
+    if (rulesScoped && probe.name === 'alert_rules') {
       // Per-call state rides on a local, never on the shared PROBES row.
       unionResult = await unionAlertRules(probe, candidates);
       return;
@@ -3124,7 +3137,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const listed = Array.isArray(unscopedMetricNames) ? unscopedMetricNames.length : 0;
     let message = null;
     let excluded = null;
-    if (snapshot && Array.isArray(unscopedMetricNames)) {
+    if (snapScope && Array.isArray(unscopedMetricNames)) {
       const prefixes = snapScope.metricPrefixes;
       let kept = prefixes.length ? unscopedMetricNames.filter(n => prefixes.some(pre => n.startsWith(pre))) : unscopedMetricNames;
       // The exclude patterns, after the keep-list and before the cap: names a
@@ -3136,7 +3149,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         kept = kept.filter(n => !excludeMatchers.some(re => re.test(n)));
         excluded = before - kept.length;
       }
-      if (kept.length > SNAPSHOT_LIMITS.metricNames) {
+      if (snapshot && kept.length > SNAPSHOT_LIMITS.metricNames) {
         message = `listed ${listed}, kept the first ${SNAPSHOT_LIMITS.metricNames} — set metric prefixes or exclude patterns to narrow it`;
         kept = kept.slice(0, SNAPSHOT_LIMITS.metricNames);
       }
@@ -3150,7 +3163,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // No capability row declares a datasource-uid argument slot today
     // (tools/lib/contracts/mcp-capabilities.mjs runtimeArgs): the scope field
     // is named in the gate log, never silently dropped.
-    if (snapshot && snapScope.datasourceUid) {
+    if (snapScope?.datasourceUid) {
       const ds = `datasource uid "${snapScope.datasourceUid}" not applied — no advertised tool takes a datasource uid`;
       message = message ? `${ds}; ${message}` : ds;
     }
@@ -3170,7 +3183,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       limit: GRAFANA_DASHBOARD_SEARCH_LIMIT,
     });
     // A snapshot narrows the list by folder BEFORE the serial detail reads.
-    const searchItems = snapshot ? scopedSearchItems(searchResponse) : grafanaDashboardSearchItems(searchResponse);
+    const searchItems = snapScope ? scopedSearchItems(searchResponse) : grafanaDashboardSearchItems(searchResponse);
     const idOf = snapshot ? snapshotDashboardId : dashboardIdFrom;
     const detailed = [];
     const detailErrors = [];
@@ -3221,17 +3234,17 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     }
   }
   {
-    if (!snapshot) {
+    if (!snapScope) {
       dashCounts.listed = adaptedLength('dashboards');
       dashCounts.kept = dashCounts.listed;
     } else if (folders.length && ['data', 'empty'].includes(probeResults.dashboards?.outcome)) {
       applied.push('dashboard');
     }
     const messages = [];
-    if (snapshot && dashCounts.listed === GRAFANA_DASHBOARD_SEARCH_LIMIT) {
+    if (snapScope && dashCounts.listed === GRAFANA_DASHBOARD_SEARCH_LIMIT) {
       messages.push(`listed ${GRAFANA_DASHBOARD_SEARCH_LIMIT} — the search limit; raise OBSERVOGRAM_GRAFANA_DASHBOARD_LIMIT (≤ 500) to see more`);
     }
-    if (snapshot && dashCounts.unfoldered) {
+    if (snapScope && dashCounts.unfoldered) {
       messages.push(`${dashCounts.unfoldered} dashboard${dashCounts.unfoldered === 1 ? '' : 's'} named no folder and ${dashCounts.unfoldered === 1 ? 'was' : 'were'} left out by the folder scope`);
     }
     endProbeStage('dashboards', { ...dashCounts }, messages.join('; ') || null);
@@ -3373,8 +3386,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     }
   }
   const metricNamesProbe = probeResults?.metric_names;
+  // A scoped draft's signals read the names as listed: the scope narrows the inventory, never the badge.
   const stackInventory = metricNamesProbe?.outcome === 'data' && Array.isArray(metricNamesProbe.adapted)
-    ? metricNamesProbe.adapted
+    ? (snapScope && !snapshot && Array.isArray(unscopedMetricNames) ? unscopedMetricNames : metricNamesProbe.adapted)
     : null;
   // A snapshot reads none of it: signals for the badge, not inventory.
   report('signals', 'running');
@@ -3435,8 +3449,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // Fallback for alert_rules: only run when the primary probe returned
   // an empty array AND the MCP exposes metrics_query.
   const alertProbe = probeResults?.alert_rules;
-  const alertPrimaryEmpty = alertProbe &&
-    (alertProbe.outcome === 'empty' || (Array.isArray(alertProbe.adapted) && alertProbe.adapted.length === 0));
+  const alertPrimaryEmpty = alertProbe && (alertProbe.outcome === 'empty'
+    || (Array.isArray(alertProbe.adapted) && (snapScope && alertRulesListed !== null ? alertRulesListed : alertProbe.adapted.length) === 0));
   if (!snapshot && alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
     const r = await quiet(`${TOOL.metricsQuery}.ALERTS`,
       () => callTool(TOOL.metricsQuery, { query: 'count by (alertname, severity, team, alertgroup) (ALERTS{alertstate="firing"})' }));
@@ -3444,6 +3458,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     for (const s of series) {
       const m = s?.metric || {};
       if (!m.alertname) continue;
+      if (groups.length && m.alertgroup && !groups.includes(m.alertgroup)) continue;
       const count = Number(s.value?.[1] ?? 0);
       ruleEvidence.firingAlerts.push({
         name: m.alertname,
@@ -3478,7 +3493,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   report('signals', 'done', { counts: { stackRows: stackSamples?.rows?.length ?? 0, firingAlerts: ruleEvidence.firingAlerts.length } });
   {
     const listed = adaptedLength('recording_rules');
-    const message = snapshot ? scopeRules('recording_rules', 'recording_rule') : null;
+    const message = snapScope ? scopeRules('recording_rules', 'recording_rule') : null;
     endProbeStage('recording_rules', {
       listed, kept: adaptedLength('recording_rules'),
       fromInventory: ruleEvidence.recordingRuleNames.length,
@@ -3545,6 +3560,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         counts: stageCounts,
         toolsListComplete,
       },
+    } : {}),
+    // A scoped draft: the scope and what it was applied to (the caller writes
+    // scopeAnnotations(scope, learned) on the pack it builds).
+    ...(snapScope && !snapshot ? {
+      liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles } },
     } : {}),
   };
 }
