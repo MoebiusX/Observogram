@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Docs
+- `docs/EVENT_BROKER_AVAILABILITY.md` (new): a proposal for measuring an event broker's availability — the SLIs (process up, tenant reachable, one active node, delivery ratio, dead-letter depth, spool headroom, a put/get canary), one composite SLO (tenant reachability × delivery ratio, time-based: a threshold SLI with `good_when: above`, so no new SLI shape and no spec change), the chaos that proves each SLI, and what is needed from the broker team. Modelled on the IBM MQ library entry.
+- Suite total 1931 → 1931.
+- **Downstream:** none — a document only.
+
 ## 0.8.38 — 2026-11-13
 
 **A service's Run can read only its own part of a shared live estate.** An MCP endpoint in front of a shared Grafana estate answers every metric name its datasource knows (18 000 and more), every rule and every dashboard in every folder, while the repository declares one service's few hundred metrics and a few dozen dashboards. The Run read all of it, so the match collapsed and the grade was a D however healthy the service was — although a snapshot of the same endpoint, read through "New pack from a live MCP server" with the server's snapshot scope, paired correctly. Each environment can now carry a live scope, the Run applies it as a snapshot does, and the match counts only what was read.
