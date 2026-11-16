@@ -1306,6 +1306,36 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify(endpoints) === JSON.stringify(['http://grafana:3000', 'http://prometheus:9090']), 'a nested default and a long-form target from a variable draft their ports', endpoints);
 }
 
+// ---------- a backend's image is named by the last segment of its path ----------
+{
+  const productOf = (ref) => BACKEND_PATTERNS.find((p) => p.match.test(ref))?.product ?? null;
+  const cases = {
+    // Under any registry or namespace, tagged, untagged or by digest, and behind a mirror's prefix.
+    'prom/prometheus': 'prometheus', 'prom/prometheus:v2.55.1': 'prometheus', 'quay.io/prometheus/prometheus:v2.53.0': 'prometheus',
+    'quay.io/prometheus/prometheus': 'prometheus', 'docker.io/bitnami/prometheus:2.53.0-debian-12-r0': 'prometheus',
+    'prom/prometheus@sha256:0123456789abcdef': 'prometheus', 'localhost:5000/prometheus:v3': 'prometheus',
+    '${REGISTRY:-docker.io}/prom/prometheus:v2.53.0': 'prometheus', 'rancher/mirrored-prometheus-prometheus:v2.42.0': 'prometheus',
+    'grafana/loki:3.0.0': 'loki', 'bitnami/grafana-loki:3.0.0': 'loki', 'grafana/tempo:2.4.0': 'tempo', 'bitnami/grafana-tempo:2.5.0': 'tempo',
+    'grafana/mimir:2.13.0': 'mimir', 'bitnami/grafana-mimir:2.13.0': 'mimir', 'grafana/grafana:12.0.0': 'grafana',
+    'bitnami/grafana:11.2.0': 'grafana', 'rancher/mirrored-grafana-grafana:9.1.5': 'grafana',
+    'docker.elastic.co/elasticsearch/elasticsearch:8.15.0': 'elasticsearch', 'jaegertracing/jaeger:2.0.0': 'jaeger', 'bitnami/jaeger:1.62.0': 'jaeger',
+    'quay.io/thanos/thanos:v0.35.1': 'thanos', 'thanosio/thanos:v0.35.1': 'thanos', 'prom/alertmanager:v0.27.0': 'alertmanager',
+    'quay.io/prometheus/alertmanager:v0.27.0': 'alertmanager', 'rancher/mirrored-prometheus-alertmanager:v0.25.0': 'alertmanager',
+    'quay.io/cilium/cilium:v1.15.0': 'cilium', 'timberio/vector:0.36.0-debian': 'vector', 'grafana/promtail:3.0.0': 'promtail',
+    // A name that only holds the product's is another image: an exporter's, a plugin's, a look-alike's, a registry's host.
+    'registry.example/mq/mq_prometheus:v6.0.0': null, 'ghcr.io/prometheus-community/windows-exporter:0.25.1': null,
+    'grafana/fluent-plugin-loki:main': null, 'acme/team-grafana:1.4.0': null, 'acme/contempo:2.0': null, 'acme/otel-to-jaeger:1.0': null,
+    'acme/kube-thanos:0.1.0': null, 'acme/sms-alertmanager:1.0': null, 'acme/kube-mimir:1.0': null, 'acme/app-elasticsearch:1.0': null,
+    'acme/my-cilium:1.0': null, 'acme/log-vector:1.0': null, 'acme/k8s-promtail:1.0': null, 'prometheus:5000/app:1.0': null,
+    'prom/blackbox-exporter:v0.25.0': null, 'quay.io/prometheuscommunity/postgres-exporter:v0.15.0': null,
+  };
+  for (const [ref, want] of Object.entries(cases)) assert(productOf(ref) === want, `image ${ref}: ${want ?? 'no backend'}`, productOf(ref), want);
+  const out = crawlFiles({ 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.55.1\n  mq-exporter:\n    image: registry.example/mq/mq_prometheus:v6.0.0\n' },
+    { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const drafted = (out.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.id}`);
+  assert(JSON.stringify(drafted) === JSON.stringify(['prometheus:metrics-prometheus']), 'an exporter beside Prometheus in a compose file is not drafted as a second Prometheus', drafted);
+}
+
 // ---------- a Prometheus Operator PrometheusRule is read as a rule file is ----------
 {
   const groups = [

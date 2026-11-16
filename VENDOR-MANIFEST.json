@@ -168,8 +168,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/backend-products.mjs": {
-      "sha256": "f63099877b804e06c90520df63afce5e6ca72ee938b6fdda9da2f1ae7631783e",
-      "bytes": 8470,
+      "sha256": "039b6b90311c35b3cbac5759bd4ac7e45c1f42da0698f64595e873de733eb33e",
+      "bytes": 9414,
       "exports": [
         "BACKEND_PATTERNS",
         "backendForScrapeJob",

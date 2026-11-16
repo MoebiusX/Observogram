@@ -11,26 +11,39 @@
 //
 // Pure ESM, data + lookups only.
 
-// Known backend image-name fragments → spec.telemetry.backends.product enum.
-// Prefix match against the docker-compose service image. Order matters —
-// most-specific first.
+// An image is a product's when its NAME — the last segment of its path,
+// before a tag or a digest — is the product's: under any registry or
+// namespace (`prom/prometheus`, `quay.io/prometheus/prometheus`,
+// `bitnami/prometheus`, `localhost:5000/prometheus:v3`), and after a
+// mirror's own prefix (`rancher/mirrored-prometheus-prometheus`). A name
+// that only ends in the product's or holds it is another image's — an
+// exporter's (`mq_prometheus`), a plugin's (`fluent-plugin-loki`). `vendor`
+// is a prefix a distribution gives the name (Bitnami's `grafana-loki`).
+const named = (name, vendor = '') =>
+  String.raw`(?:^|\/)(?:mirrored-[a-z0-9-]+-)?${vendor ? `(?:${vendor})?` : ''}${name}(?:[:@][^\/]*)?$`;
+const image = (...alternatives) => new RegExp(alternatives.join('|'), 'i');
+
+// Known backend images → spec.telemetry.backends.product enum, matched
+// against a compose service's image, a workload container's, or a Helm
+// values `image.repository` (with its tag). The first row that matches
+// names the product: order matters — most-specific first.
 // Signal enum per schema: metrics, logs, traces, profiles, network,
 // policy, mesh, gateway, collection, alerting, dashboards. No "all" —
 // products that handle multiple signals (Grafana, OTel Collector,
 // Alertmanager) get their primary classification.
 export const BACKEND_PATTERNS = [
   { match: /opentelemetry[/-]?collector|otel\/opentelemetry-collector/i, product: 'opentelemetry-collector', signal: 'collection' },
-  { match: /^prom\/prometheus|prometheus:|prometheus-community/i,         product: 'prometheus',              signal: 'metrics' },
-  { match: /^grafana\/loki|grafana\/loki-docker|loki:/i,                  product: 'loki',                    signal: 'logs' },
-  { match: /^grafana\/tempo|tempo:/i,                                     product: 'tempo',                   signal: 'traces' },
-  { match: /^grafana\/mimir|mimir:|grafana\/mimirtool/i,                  product: 'mimir',                   signal: 'metrics' },
-  { match: /^grafana\/grafana|grafana:|grafana\/grafana-/i,               product: 'grafana',                 signal: 'dashboards' },
-  { match: /^elastic\/|elasticsearch:|opensearch/i,                       product: 'elasticsearch',           signal: 'logs' },
-  { match: /^jaegertracing\/|jaegertracing\/all-in-one|jaeger:/i,         product: 'jaeger',                  signal: 'traces' },
-  { match: /^thanos\/|thanos:|quay\.io\/thanos/i,                         product: 'thanos',                  signal: 'metrics' },
-  { match: /^prom\/alertmanager|alertmanager:|prometheus-community.*alertmanager/i, product: 'alertmanager',  signal: 'alerting' },
+  { match: image(String.raw`^prom\/prometheus`, named('prometheus')),    product: 'prometheus',              signal: 'metrics' },
+  { match: image(String.raw`^grafana\/loki`, String.raw`grafana\/loki-docker`, named('loki', 'grafana-')), product: 'loki', signal: 'logs' },
+  { match: image(String.raw`^grafana\/tempo`, named('tempo', 'grafana-')), product: 'tempo',                 signal: 'traces' },
+  { match: image(String.raw`^grafana\/mimir`, String.raw`grafana\/mimirtool`, named('mimir', 'grafana-')), product: 'mimir', signal: 'metrics' },
+  { match: image(String.raw`^grafana\/grafana`, String.raw`grafana\/grafana-`, named('grafana')), product: 'grafana', signal: 'dashboards' },
+  { match: image(String.raw`^elastic\/`, 'opensearch', named('elasticsearch')), product: 'elasticsearch',  signal: 'logs' },
+  { match: image(String.raw`^jaegertracing\/`, String.raw`jaegertracing\/all-in-one`, named('jaeger')), product: 'jaeger', signal: 'traces' },
+  { match: image(String.raw`^thanos\/`, String.raw`quay\.io\/thanos`, named('thanos')), product: 'thanos',   signal: 'metrics' },
+  { match: image(String.raw`^prom\/alertmanager`, named('alertmanager')), product: 'alertmanager',          signal: 'alerting' },
   { match: /^pyroscope|grafana\/pyroscope/i,                              product: 'pyroscope',               signal: 'profiles' },
-  { match: /^cilium\/cilium|quay\.io\/cilium\/cilium|cilium:/i,             product: 'cilium',                  signal: 'network' },
+  { match: image(String.raw`^cilium\/cilium`, String.raw`quay\.io\/cilium\/cilium`, named('cilium')), product: 'cilium', signal: 'network' },
   { match: /^openpolicyagent\/opa|^opa:/i,                                  product: 'opa',                     signal: 'policy' },
   { match: /^envoyproxy\/envoy|^envoy:/i,                                   product: 'envoy',                   signal: 'mesh' },
   { match: /^consul:|^hashicorp\/consul/i,                                  product: 'consul',                  signal: 'mesh' },
@@ -39,17 +52,17 @@ export const BACKEND_PATTERNS = [
   { match: /fluent[-/]?bit|fluent-bit/i,                                  product: 'fluent-bit',              signal: 'logs' },
   { match: /^grafana\/alloy|^alloy:/i,                                      product: 'alloy',                   signal: 'collection' },
   { match: /^elastic\/beats|^beats:/i,                                      product: 'beats',                   signal: 'collection' },
-  { match: /timberio\/vector|vector:/i,                                   product: 'vector',                  signal: 'collection' },
+  { match: image(String.raw`timberio\/vector`, named('vector')),         product: 'vector',                  signal: 'collection' },
   // Additional common production stacks
   { match: /victoriametrics\/victoria-metrics|victoriametrics\/vmselect|victoriametrics\/vminsert|victoriametrics\/vmstorage|victoriametrics\/vmagent/i,
                                                                           product: 'victoriametrics',         signal: 'metrics' },
   { match: /victoriametrics\/vmalert/i,                                   product: 'vmalert',                 signal: 'alerting' },
   { match: /kube-state-metrics/i,                                          product: 'kube-state-metrics',      signal: 'metrics' },
   { match: /prom\/node-exporter|node_exporter/i,                          product: 'node-exporter',           signal: 'metrics' },
-  { match: /grafana\/promtail|promtail:/i,                                product: 'promtail',                signal: 'logs' },
+  { match: image(String.raw`grafana\/promtail`, named('promtail')),      product: 'promtail',                signal: 'logs' },
   { match: /grafana\/k6|loadimpact\/k6/i,                                 product: 'k6',                      signal: 'metrics' },
   { match: /^otel\/opentelemetry-collector-contrib/i,                     product: 'opentelemetry-collector', signal: 'collection' },
-  { match: /opensearchproject\/opensearch|opensearch:/i,                  product: 'opensearch',              signal: 'logs' },
+  { match: image(String.raw`opensearchproject\/opensearch`, named('opensearch')), product: 'opensearch',   signal: 'logs' },
   { match: /datadog\/agent|datadoghq\/agent/i,                            product: 'datadog-agent',           signal: 'collection' },
 ];
 
