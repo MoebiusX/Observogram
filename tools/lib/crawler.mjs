@@ -22,7 +22,7 @@
 // ============================================================
 
 import { LIFECYCLE_ANNOTATION, readLifecycleBlock, sameDeployment } from './lifecycle.mjs';
-import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from './mini-yaml.mjs';
+import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml, withAliasBudget, apartFromAliasBudget } from './mini-yaml.mjs';
 import {
   inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
@@ -240,8 +240,19 @@ export async function walkScanFolder(dir, onFile, prefix = String(dir?.name ?? '
 // Parse a (possibly multi-document) YAML file into a list of non-null
 // documents. Prometheus rule files, Alertmanager configs and Kubernetes
 // manifests are frequently shipped as multi-document streams (`---`).
-function parseYamlDocs(content) {
-  return parseYamlAll(content).filter(d => d && typeof d === 'object');
+// Repository files are read with a value standing on the line below its
+// key (a compose file's `KEY:\n  ${VAR:-x}`): the reader leaves it out by
+// default only for the writer's own files, read back elsewhere.
+const REPO_YAML = Object.freeze({ valueBelowKey: true });
+// A Helm template, once stripped, puts `helmvalue` alone on a line where an
+// include renders a whole block: read below its key it would be a scalar the
+// chart never renders, and a template that never read would read. So a
+// template is read without valueBelowKey (walkHelmTemplate), as it always was.
+const TEMPLATE_YAML = Object.freeze({});
+let repoYaml = REPO_YAML;
+
+function parseYamlDocs(content, options) {
+  return parseYamlAll(content, { ...repoYaml, ...options }).filter(d => d && typeof d === 'object');
 }
 
 // Kubernetes workload kinds whose pod template carries container images we
@@ -380,7 +391,7 @@ export function detectArtefactKind(relPath, content, opts) {
   // heuristics, which would read `mq-collector.yaml` as an OTel collector.
   if (mayBeExporterConfig(content, catalogue)) {
     let cfg = null;
-    try { cfg = parseYaml(content); } catch { /* not YAML: fall through */ }
+    try { cfg = parseYaml(content, repoYaml); } catch { /* not YAML: fall through */ }
     if (matchExporterConfig(cfg, catalogue)) return 'exporter-config';
   }
 
@@ -396,7 +407,7 @@ export function detectArtefactKind(relPath, content, opts) {
 
   // Content sniff fallback.
   let obj;
-  try { obj = parseYaml(content); } catch (_) { return 'unknown'; }
+  try { obj = parseYaml(content, repoYaml); } catch (_) { return 'unknown'; }
   if (!obj || typeof obj !== 'object') return 'unknown';
 
   if (obj.groups && Array.isArray(obj.groups)
@@ -775,7 +786,12 @@ export function crawlFiles(filesInput, opts = {}) {
   }
 
   // ----- pass 2: walk per kind -----
-  for (const f of classified) {
+  // One alias budget for every file the walk reads: it keeps what it reads,
+  // from up to hundreds of files (mini-yaml's withAliasBudget). The reads
+  // before it — the sniffs that classify, the Helm toggle — keep nothing and
+  // are bounded each on its own.
+  withAliasBudget(() => walkClassified());
+  function walkClassified() { for (const f of classified) {
     try {
       switch (f.kind) {
         case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary); break;
@@ -801,7 +817,7 @@ export function crawlFiles(filesInput, opts = {}) {
     } catch (e) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
     }
-  }
+  } }
 
   settleCollectorGuesses(collectorState, pipelines, evidence, summary);
 
@@ -1487,7 +1503,7 @@ function extractConfigMapData(content) {
 // genuinely matches an observability artefact.
 function sniffObservabilityKind(content) {
   let obj;
-  try { obj = parseYaml(content); } catch (_) { return 'unknown'; }
+  try { obj = parseYaml(content, repoYaml); } catch (_) { return 'unknown'; }
   if (!obj || typeof obj !== 'object') return 'unknown';
   if (Array.isArray(obj.groups) && obj.groups.some(g => g.rules?.some(r => 'record' in r || 'alert' in r))) return 'prometheus-rules';
   if (Array.isArray(obj.scrape_configs) && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
@@ -2116,13 +2132,18 @@ function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
 //   - a value filled in at deploy time: the placeholder stripGoTemplate
 //     leaves, a template action, a ${VAR} or a $VAR (never a capture group's
 //     ${1} / $1, nor the ruler's own {{ $labels.x }} inside a label);
-//   - labels that are not a map of the rule's own strings: a map the chart
-//     fills in whole, a YAML anchor, alias or merge key (this reader keeps
-//     them as text), a bare number or boolean (re-printed: 1.0 as 1, True as
-//     true), or labels the rule's group adds to every rule (not read here).
+//   - labels that are not a map of the rule's own strings: a map a chart or
+//     a deploy step fills in whole (on the rule, or on its group), a labels
+//     map given as an alias or a merge key whose anchor the file does not
+//     define (the reader keeps it as text), group labels past the scan's
+//     copy budget. The group's labels, anchors and merge keys the file does
+//     define, and numbers and booleans, are read as the ruler reads them
+//     (asListed, tools/lib/mini-yaml.mjs). A label value that is an alias to
+//     no anchor is stated as its text: the ruler refuses such a file, so live
+//     lists none of its rules to hold the statement to.
 const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*\}|\$[A-Za-z_][A-Za-z0-9_]*/;
-function notStatedAsWritten({ rule, groupLabels }) {
-  if (groupLabels) return true;
+function notStatedAsWritten({ rule, labelsUnread }) {
+  if (labelsUnread) return true;
   const text = (v) => (typeof v === 'string' ? v : '');
   const injected = (v) => new RegExp(`\\b${HELM_VALUE}\\b`).test(v) || INJECTED_NAME_RE.test(v);
   for (const v of [rule.alert, rule.title, rule.expr, rule.for]) {
@@ -2132,10 +2153,12 @@ function notStatedAsWritten({ rule, groupLabels }) {
   if (labels === null || labels === undefined) return false;
   if (typeof labels !== 'object' || Array.isArray(labels)) return true;
   for (const [k, v] of Object.entries(labels)) {
+    // An empty label is no label, to the ruler as to this reading.
+    if (v === null) continue;
     if (k === '<<' || typeof v !== 'string') return true;
     // The ruler's own templating of a label ({{ $labels.job }}) is the rule's text, listed as written.
     const own = (s) => s.replace(/\{\{[^}]*\}\}/g, '');
-    if (injected(k) || injected(own(v)) || /^[&*]/.test(v)) return true;
+    if (injected(k) || injected(own(v))) return true;
   }
   return false;
 }
@@ -2449,6 +2472,12 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
 // like a rule shipped as a standalone file. If the template embeds nothing, we
 // strip the scaffolding and treat the document itself as a single manifest.
 function walkHelmTemplate(f, buckets, evidence, summary) {
+  const was = repoYaml;
+  repoYaml = TEMPLATE_YAML;
+  try { return walkStrippedTemplate(f, buckets, evidence, summary); } finally { repoYaml = was; }
+}
+
+function walkStrippedTemplate(f, buckets, evidence, summary) {
   const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName } = buckets;
   const route = (kind, sub) => {
     switch (kind) {
@@ -2545,16 +2574,42 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
   }
 }
 
+// Compose interpolation with the variables unset: each `${VAR:-default}` or
+// `${VAR-default}` its default, any other `${…}` nothing — innermost first.
+function composeDefaults(value) {
+  let text = String(value ?? '');
+  for (let i = 0; i < 8; i++) {
+    const next = text.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-([^${}]*))?[^${}]*\}/g, (_, fallback) => fallback ?? '');
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
 function inferEndpoint(svc, product) {
   // Walk ports + healthcheck for a hint. We emit a relative URL so the
   // engineer can see where in the compose graph the backend lives.
   const ports = Array.isArray(svc?.ports) ? svc.ports : [];
   if (ports.length) {
-    const first = String(ports[0]);
-    const m = first.match(/(\d+)(?::(\d+))?/);
-    if (m) return `http://${product}:${m[2] || m[1]}`;
+    const port = containerPort(ports[0]);
+    if (port) return `http://${product}:${port}`;
   }
   return null;
+}
+
+// A compose port entry's container port — the one the other services reach:
+// `3000`, `13000:3000`, `127.0.0.1:13000:3000`, `[::1]:13000:3000`,
+// `13000:3000/tcp`, a range's first port, the long form's `target`; a
+// variable with a default (`${PORT:-3000}`, nested too) is its default, as
+// `docker compose config` resolves it, and one without is no port.
+function containerPort(entry) {
+  if (isMapping(entry)) {
+    const target = composeDefaults(entry.target).trim();
+    return /^\d+$/.test(target) ? target : null;
+  }
+  const spec = composeDefaults(entry).trim().replace(/\/[a-z]+$/i, '');
+  const m = /^(\d+)/.exec(spec.slice(spec.lastIndexOf(':') + 1));
+  return m ? m[1] : null;
 }
 
 // A LogQL condition: a stream selector (`{app="x"}`) that is not a metric's
@@ -2600,24 +2655,91 @@ function grafanaRuleExpr(rule) {
   return null;
 }
 
+// An alerting rule as the ruler lists it. Its labels: the labels its group
+// gives every rule (Prometheus 3, vmalert) under the rule's own — the rule's
+// own label wins; and each label and annotation the text the file writes,
+// where YAML would read a number or a boolean (a Go reader decoding into a
+// string keeps `objective: 99.0` as "99.0", `page: True` as "True").
+// `twin` gives the rule and its group read with numbers and booleans as
+// written. `labelsUnread` when the group gives labels this reading cannot
+// see: a map a chart or a deploy step fills in whole, or labels past the
+// scan's copy budget (`mergeGroup` false, groupLabelsFit).
+function asListed(rule, group, twin, mergeGroup = true) {
+  const typed = (m) => isMapping(m) && Object.values(m).some((v) => typeof v === 'number' || typeof v === 'boolean');
+  const shared = group?.labels;
+  const grouped = shared !== null && shared !== undefined && shared !== '';
+  // The group's labels are looked at only when they will be merged: past the
+  // budget their size is the reason not to.
+  const retyped = typed(rule.labels) || typed(rule.annotations) || (grouped && mergeGroup && typed(shared));
+  if (!grouped && !retyped) return { rule };
+  const asWritten = retyped ? twin() : {};
+  const written = (typedValue, writtenValue) => (isMapping(writtenValue) ? writtenValue : typedValue);
+  const out = { ...rule };
+  if (retyped && isMapping(rule.labels)) out.labels = written(rule.labels, asWritten.rule?.labels);
+  if (retyped && isMapping(rule.annotations)) out.annotations = written(rule.annotations, asWritten.rule?.annotations);
+  if (!grouped) return { rule: out };
+  if (!isMapping(shared) || !mergeGroup) return { rule: out, labelsUnread: true };
+  const groupLabels = retyped ? written(shared, asWritten.group?.labels) : shared;
+  if (out.labels === null || out.labels === undefined) out.labels = { ...groupLabels };
+  else if (isMapping(out.labels)) out.labels = { ...groupLabels, ...out.labels };
+  return { rule: out };
+}
+
+// The label entries one scan may copy from rule groups into their alerting
+// rules. The ruler copies them into every rule; a file of thousands of rules
+// under thousands of group labels would make millions here. Past the budget
+// a group's labels are not added to its rules — which then state no rules
+// (asListed's labelsUnread) — and the scan says so.
+const GROUP_LABEL_COPIES = 250_000;
+const groupLabelCopies = new WeakMap();   // a scan's summary → the copies it made
+function groupLabelsFit(group, rules, f, summary) {
+  if (!isMapping(group?.labels)) return true;
+  const alerting = rules.filter((r) => r && (r.alert || r.title)).length;
+  const copies = Object.keys(group.labels).length * alerting;
+  const used = groupLabelCopies.get(summary) ?? 0;
+  if (used + copies <= GROUP_LABEL_COPIES) {
+    groupLabelCopies.set(summary, used + copies);
+    return true;
+  }
+  summary.warnings.push(`${f.relPath}: the labels of group ${JSON.stringify(String(group.name ?? '_'))} were not added to its ${alerting} alerting rule(s): past ${GROUP_LABEL_COPIES} label copies in this scan`);
+  return false;
+}
+
 function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
   // A rule that cannot be read is skipped on its own; the file and its other
   // rules survive, and one warning per file says how many were lost and why.
   let ruleCount = 0;
   const skipped = [];
-  for (const obj of parseYamlDocs(f.content)) {
-    if (!Array.isArray(obj.groups)) continue;
-    for (const group of obj.groups) {
-      for (const rule of group.rules || []) {
+  // The same file read with numbers and booleans as written, only once a
+  // rule's labels or annotations hold one (asListed) — and once: a second
+  // reading of a text the walk has already been charged for, so apart from
+  // the scan's alias budget; if it fails, the rules keep the typed reading.
+  let written = null;
+  const writtenDocs = () => {
+    if (written === null) {
+      try { written = apartFromAliasBudget(() => parseYamlDocs(f.content, { asWritten: true })); } catch { written = []; }
+    }
+    return written;
+  };
+  parseYamlDocs(f.content).forEach((obj, d) => {
+    if (!Array.isArray(obj.groups)) return;
+    obj.groups.forEach((group, g) => {
+      const rules = Array.isArray(group?.rules) ? group.rules : [];
+      const mergeGroup = groupLabelsFit(group, rules, f, summary);
+      rules.forEach((rule, r) => {
         ruleCount++;
+        const twin = () => {
+          const writtenGroup = writtenDocs()[d]?.groups?.[g];
+          return { group: writtenGroup, rule: writtenGroup?.rules?.[r] };
+        };
         try {
-          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
+          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin, mergeGroup);
         } catch (e) {
           skipped.push(e?.message || String(e));
         }
-      }
-    }
-  }
+      });
+    });
+  });
   if (skipped.length) {
     const reason = skipped.every(m => /^model JSON could not be parsed/.test(m))
       ? 'model JSON could not be parsed'
@@ -2626,7 +2748,7 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
   }
 }
 
-function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
+function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin = () => ({}), mergeGroup = true) {
   if (rule.record) {
     // The Prometheus form (`record: <name>`, `expr`) and the Grafana
     // unified-alerting recording form (`record: { metric, from }`, the
@@ -2674,7 +2796,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // the shared derivation (sli-inference.mjs) the live fetcher applies
     // to the ruler's rules: one rule set, one policy.
     const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
-    const read = grafanaExpr === null ? rule : { ...rule, expr: grafanaExpr };
+    const listed = asListed(rule, group, twin, mergeGroup);
+    const read = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
     const candidate = burnCandidateFromAlertRule(read);
     const { alertName, expr } = candidate;
     // Every alert rule that reads is kept raw as well, with where it was
@@ -2683,8 +2806,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // (its model could not be read) is not declared either.
     alertRules.push({
       rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName,
-      // Labels the group gives every rule are not read into the rule (sourceRuleAnnotations).
-      ...(group.labels !== null && group.labels !== undefined && group.labels !== '' ? { groupLabels: true } : {}),
+      // Labels the group gives every rule that this reading cannot see (sourceRuleAnnotations).
+      ...(listed.labelsUnread ? { labelsUnread: true } : {}),
     });
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);
@@ -3024,7 +3147,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
       return jobs.length ? `${relPath} (collector scrape jobs: ${jobs.join(', ')})` : null;
     }
     if (kind === 'exporter-config') {
-      const entry = matchExporterConfig(parseYaml(content), catalogue);
+      const entry = matchExporterConfig(parseYaml(content, repoYaml), catalogue);
       return `${relPath} (exporter config: ${entry?.id ?? 'unknown'})`;
     }
     if (kind === 'helm-values') {

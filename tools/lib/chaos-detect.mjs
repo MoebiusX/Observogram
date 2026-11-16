@@ -283,7 +283,8 @@ export function chaosToggleIn(valuesFiles) {
   };
   for (const f of valuesFiles) {
     let docs;
-    try { docs = parseYamlAll(f.content); } catch { continue; }
+    // Repository files: a value on the line below its key is read, as the scan reads the rest.
+    try { docs = parseYamlAll(f.content, { valueBelowKey: true }); } catch { continue; }
     for (const d of docs) visit(d, [], f.relPath);
   }
   return found;
@@ -405,7 +406,7 @@ export function detectChaos(files, { valuesFiles = [] } = {}) {
     if (c.routes.length || c.header) control.files.add(relPath);
     if (/\.ya?ml$/i.test(relPath) && /(chaos-mesh\.org|litmuschaos\.io)\//.test(content)) {
       let docs;
-      try { docs = parseYamlAll(content); } catch { docs = []; }
+      try { docs = parseYamlAll(content, { valueBelowKey: true }); } catch { docs = []; }
       const r = chaosResourcesIn(relPath, docs);
       resources.push(...r.resources);
       templates += r.templates;

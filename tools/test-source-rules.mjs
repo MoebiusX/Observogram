@@ -497,12 +497,11 @@ test('the scan states no rules where the file does not say what the ruler will l
   const scanOf = (options) => scan([], { 'rules/alerts.yml': file(options) });
   assert.equal(stated(scanOf({})).length, 1, 'the control states its rule');
   const notStated = {
-    'labels the group gives every rule': { group: '    labels:\n      team: shop', labels: '        labels:\n          severity: critical\n' },
     'a labels map filled in whole': { labels: '        labels: ${RULE_LABELS}\n' },
-    'a YAML anchor in place of the map': { labels: '        labels: &page { severity: critical, team: shop }\n' },
-    'a merge key among the labels': { labels: '        labels:\n          <<: *common\n          severity: critical\n' },
-    'a label written as a bare number (the ruler lists 99.0, this reader 99)': { labels: '        labels:\n          severity: critical\n          objective: 99.0\n' },
-    'a label written as a bare boolean': { labels: '        labels:\n          severity: critical\n          page: True\n' },
+    'labels the group gets filled in whole': { group: '    labels: ${GROUP_LABELS}' },
+    'a label a deploy step fills in on the group': { group: '    labels:\n      owner: ${OWNER}' },
+    'an alias to an anchor the file does not define': { labels: '        labels: *page\n' },
+    'a merge key whose anchor the file does not define': { labels: '        labels:\n          <<: *common\n          severity: critical\n' },
     'a threshold substituted at deploy time, without braces': { expr: 'shop:checkout:error_ratio_5m > $ERROR_RATIO' },
     'a threshold a template engine fills in': { expr: 'shop:checkout:error_ratio_5m > {{ .threshold }}' },
     'a wait substituted at deploy time': { wait: '$WAIT' },
@@ -520,14 +519,9 @@ test('the scan states no rules where the file does not say what the ruler will l
     'a capture group in braces': { expr: 'label_replace(shop:checkout:error_ratio_5m, "service", "${1}", "job", "(.*)-prod") > 0.05' },
     'a label the ruler templates': { labels: '        labels:\n          severity: critical\n          instance: "{{ $labels.instance }}"\n' },
     'a label that holds the placeholder\'s letters': { labels: '        labels:\n          severity: critical\n          origin: helmvalues-repo\n' },
+    'a quoted label value that starts with a star': { labels: '        labels:\n          severity: critical\n          hosts: "*.shop.example"\n' },
   };
   for (const [what, options] of Object.entries(isStated)) assert.equal(stated(scanOf(options))?.length, 1, `stated: ${what}`);
-
-  // The same system, its labels on the group: compared as it was without the statements — no rule is blamed.
-  const grouped = scanOf(notStated['labels the group gives every rule']);
-  const ruler = live([ERRORS_HIGH], { shape: 'labels' });
-  assert.deepEqual(compare(grouped, ruler).pair.deltas, compare(without(grouped), without(ruler)).pair.deltas);
-  assert.equal(compare(grouped, ruler).pair.match, 'aligned');
 
   // A delta's values are copies: what a caller does to one answer does not reach the next, nor the chain.
   const repoPack = scan([ERRORS_HIGH]);
@@ -539,6 +533,94 @@ test('the scan states no rules where the file does not say what the ruler will l
   first[0].a.team = '***';
   first[0].b.team = '***';
   assert.deepEqual(deltasOf(polA, polB), asGiven);
+});
+
+test('a rule file is read as the ruler reads it: the group\'s labels, anchors and merge keys, bare numbers and booleans, values over several lines', () => {
+  const head = 'groups:\n  - name: shop-alerts\n';
+  const disk = (labels) => `      - alert: DiskAlmostFull\n        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1\n${labels}`;
+  const errors = (labels, expr = 'shop:checkout:error_ratio_5m > 0.01') => `      - alert: ShopCheckoutErrorsHigh\n        expr: ${expr}\n        for: 5m\n${labels}`;
+  // Each file, the labels the ruler lists for each of its rules, the same for every form.
+  const cases = {
+    'labels the group gives every rule, the rule\'s own label winning': {
+      file: `${head}    labels:\n      team: shop\n      severity: warning\n    rules:\n${disk('')}${errors('        labels:\n          severity: critical\n')}`,
+      listed: { DiskAlmostFull: { severity: 'warning', team: 'shop' }, ShopCheckoutErrorsHigh: { severity: 'critical', team: 'shop' } },
+    },
+    'an anchor on one rule\'s labels, an alias on the next': {
+      file: `${head}    rules:\n${disk('        labels: &page { severity: critical, team: shop }\n')}${errors('        labels: *page\n')}`,
+      listed: { DiskAlmostFull: { severity: 'critical', team: 'shop' }, ShopCheckoutErrorsHigh: { severity: 'critical', team: 'shop' } },
+    },
+    'a merge key under the rule\'s own label': {
+      file: `${head}    rules:\n${disk('        labels: &common\n          severity: warning\n          team: shop\n')}${errors('        labels:\n          <<: *common\n          severity: critical\n')}`,
+      listed: { DiskAlmostFull: { severity: 'warning', team: 'shop' }, ShopCheckoutErrorsHigh: { severity: 'critical', team: 'shop' } },
+    },
+    'numbers and booleans written bare, as the ruler lists their text': {
+      file: `${head}    labels:\n      tier: 01\n    rules:\n${disk('        labels:\n          severity: warning\n          ratio: 1.0\n')}${errors('        labels:\n          severity: critical\n          objective: 99.0\n          page: True\n')}`,
+      listed: {
+        DiskAlmostFull: { severity: 'warning', ratio: '1.0', tier: '01' },
+        ShopCheckoutErrorsHigh: { severity: 'critical', objective: '99.0', page: 'True', tier: '01' },
+      },
+    },
+    'an expression over several lines, as a YAML writer wraps one, with a rule after it': {
+      file: `${head}    rules:\n${errors('        labels:\n          severity: critical\n          team: shop\n', 'shop:checkout:error_ratio_5m\n          > 0.01')}${disk('        labels:\n          severity: warning\n')}`.replace(
+        'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', '"node_filesystem_avail_bytes /\n          node_filesystem_size_bytes < 0.1"'),
+      listed: { ShopCheckoutErrorsHigh: { severity: 'critical', team: 'shop' }, DiskAlmostFull: { severity: 'warning' } },
+    },
+  };
+  const ruleOf = (name, labels) => (name === 'DiskAlmostFull'
+    ? { ...DISK, labels }
+    : { ...ERRORS_HIGH, labels });
+  const alertPair = (diff, name) => Object.values(diff.layers).flatMap((l) => l.inBoth).find((e) => e.key === `alert_rule::{"name":"${name.toLowerCase()}"}`);
+  for (const [what, { file, listed }] of Object.entries(cases)) {
+    const repoPack = scan([], { 'rules/alerts.yml': file });
+    // The SLO's rule is stated with the labels the ruler lists; the operational rule is declared with them.
+    assert.deepEqual(stated(repoPack)?.map((r) => [r.name, r.labels]), [['ShopCheckoutErrorsHigh', listed.ShopCheckoutErrorsHigh]], `stated as listed: ${what}`);
+    const operational = repoPack.spec.alerting.rules.find((r) => r.name === 'DiskAlmostFull');
+    assert.deepEqual(operational?.labels, listed.DiskAlmostFull, `the operational rule as listed: ${what}`);
+    assert.equal(operational?.expr.replace(/\s+/g, ' '), DISK.expr, `the operational rule's whole expression: ${what}`);
+    // Against the ruler's listing of the same rules: aligned, the statement held and the operational rule matched.
+    const rules = Object.entries(listed).map(([name, labels]) => ruleOf(name, labels));
+    for (const shape of ['labels', 'projection']) {
+      const same = compare(repoPack, live(rules, { shape }));
+      assert.equal(same.pair.match, 'aligned', `the same system is aligned (${shape}): ${what}`);
+      assert.deepEqual(same.pair.deltas, [], `no rule blamed (${shape}): ${what}`);
+      assert.equal(same.node.status, 'aligned', `the chain agrees (${shape}): ${what}`);
+      assert.equal(alertPair(same.diff, 'DiskAlmostFull')?.match, 'aligned', `the operational rule matches (${shape}): ${what}`);
+    }
+    // A label changed live is the rule's difference.
+    const moved = rules.map((r) => (r.name === 'ShopCheckoutErrorsHigh' ? { ...r, labels: { ...r.labels, severity: 'info' } } : r));
+    const changed = compare(repoPack, live(moved, { shape: 'labels' }));
+    assert.equal(changed.pair.match, 'drifted', `a label changed live is a difference: ${what}`);
+    assert.deepEqual([...new Set(changed.pair.deltas.map((d) => `${d.rule}:${d.field}`))].sort(), ['ShopCheckoutErrorsHigh:labels', 'ShopCheckoutErrorsHigh:severity'], what);
+  }
+});
+
+test('the labels one scan copies from rule groups into rules are bounded: past the budget a group states no rules, and the scan says so', () => {
+  const groupFile = (rules, labels) => [
+    'groups:', '  - name: shop-alerts', '    labels:', ...Array.from({ length: labels }, (_, i) => `      l${i}: v${i}`), '    rules:',
+    ...Array.from({ length: rules }, (_, i) => `      - alert: ShopCheckoutErrorsHigh${i === 0 ? '' : i}\n        expr: shop:checkout:error_ratio_5m > 0.0${(i % 9) + 1}\n        labels:\n          severity: critical`),
+  ].join('\n') + '\n';
+  const crawl = (text) => crawlFiles({ 'rules/recording.yml': RECORDING, 'rules/alerts.yml': text }, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' });
+  const under = crawl(groupFile(2, 3));
+  assert.deepEqual(stated(under.canonical)?.find((r) => r.name === 'ShopCheckoutErrorsHigh')?.labels, { l0: 'v0', l1: 'v1', l2: 'v2', severity: 'critical' });
+  const over = crawl(groupFile(501, 500));
+  assert.equal(stated(over.canonical), null, 'past the budget the group states no rules');
+  assert.ok(over.summary.warnings.some((w) => /the labels of group "shop-alerts" were not added to its 501 alerting rule\(s\): past 250000 label copies/.test(w)), 'and the scan says so');
+  assert.ok(over.canonical.spec.policy.burn_rate_alerts.some((e) => e.slo === SLO), 'the entry is still there');
+  // A rule file whose aliases use over half the scan's budget, its labels holding a bare number: the second reading
+  // (numbers and booleans as written) is apart from that budget and made once, so its rules are kept.
+  const heavy = [
+    'groups:', '  - name: busy', '    rules:',
+    ...Array.from({ length: 3 }, (_, i) => [
+      `      - alert: Busy${i}`, `        expr: node_load1{job="j${i}"} > 4`, '        labels:', '          severity: warning', '          priority: 2',
+      ...(i === 0 ? ['        annotations:', '          a0: &a0 [{a: 1, b: 2}]', ...Array.from({ length: 12 }, (_, k) => `          a${k + 1}: &a${k + 1} [*a${k}, *a${k}]`)] : []),
+    ].join('\n')),
+  ].join('\n') + '\n';
+  const kept = scan([], { 'rules/alerts.yml': heavy });
+  assert.deepEqual(kept.spec.alerting.rules.filter((r) => /^Busy/.test(r.name)).map((r) => [r.name, r.labels.priority]), [['Busy0', '2'], ['Busy1', '2'], ['Busy2', '2']]);
+  // Past the budget the group's labels are not looked at again for each rule: the scan stays fast.
+  const t0 = Date.now();
+  crawl(groupFile(1000, 20000));
+  assert.ok(Date.now() - t0 < 3000, `a thousand rules under twenty thousand group labels scan in ${Date.now() - t0} ms`);
 });
 
 test('not covered: a rule whose alert name an earlier rule took leaves its SLO without an entry live, so nothing there states it', () => {
