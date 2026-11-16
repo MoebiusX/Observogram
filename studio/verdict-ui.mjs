@@ -149,7 +149,7 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
         items.push({
           uid: entryUid(L, 'drifted', e), layer: L, kind: 'drifted',
           label: diffEntryLabel(e), badness: cost.weight, badnessClass: cost.className,
-          fields: (e.deltas || []).map(d => d.field).filter(Boolean),
+          fields: [...new Set((e.deltas || []).map(d => d.field).filter(Boolean))],
           art: e.a, identity: e.key, deployable: false, fix: 'reconcile',
         });
       }

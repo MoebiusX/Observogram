@@ -944,7 +944,7 @@ function renderRemediationPlan(root) {
           : e.direction === 'drift' ? 'choose a side'
           : (haveB ? 'manual fix' : 'not compared');
         const driftText = e.direction === 'drift' && e.deltas?.length
-          ? `<span class="remediate-item-delta">${escapeHtml(e.deltas.slice(0, 3).map(d => d.path || d.field || 'field').join(' · '))}</span>`
+          ? `<span class="remediate-item-delta">${escapeHtml([...new Set(e.deltas.map(d => d.path || d.field || 'field'))].slice(0, 3).join(' · '))}</span>`
           : '';
         li.innerHTML = `
           <div class="remediate-item-row">

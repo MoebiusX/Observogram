@@ -222,7 +222,7 @@ const FAMILY_PANEL = {
   panel: (id, s) => panelDashboardPanel(s),
   recording_rule: (id, s) => panelRecordingRule(s),
   derived_view: (id, s) => panelDerivedView(s),
-  burn_rate: (id, s) => panelBurnRate(s),
+  burn_rate: (id, s, artefact) => panelBurnRate(s, artefact?.sourceRules),
   forecast: (id, s) => panelForecast(s),
   alert_route: (id, s) => panelAlertRoute(s),
   alert_rule: (id, s) => panelAlertRule(s),
@@ -242,7 +242,7 @@ function renderTypedPanels(artefact, def) {
   const id = artefact.id || '';
   const s = artefact.spec || {};
   const c = classifyArtefact(artefact);
-  if ((c.via === 'type' || c.via === 'override') && FAMILY_PANEL[c.family]) return FAMILY_PANEL[c.family](id, s);
+  if ((c.via === 'type' || c.via === 'override') && FAMILY_PANEL[c.family]) return FAMILY_PANEL[c.family](id, s, artefact);
   if (id.startsWith('SLI-'))     return panelSLI(s);
   if (id.startsWith('SLO-'))     return panelSLO(s);
   if (id.startsWith('OTEL-'))    return panelOtel(s);
@@ -255,7 +255,7 @@ function renderTypedPanels(artefact, def) {
   if (id.startsWith('PANEL-'))   return panelDashboardPanel(s);
   if (id.startsWith('QRY-'))     return panelRecordingRule(s);
   if (id.startsWith('VIEW-'))    return panelDerivedView(s);
-  if (id.startsWith('POL-'))     return panelBurnRate(s);
+  if (id.startsWith('POL-'))     return panelBurnRate(s, artefact.sourceRules);
   if (id.startsWith('FCST-'))    return panelForecast(s);
   if (id.startsWith('ALR-'))     return panelAlertRoute(s);
   if (id.startsWith('RULE-'))    return panelAlertRule(s);
@@ -629,7 +629,11 @@ function panelDerivedView(s) {
   return p;
 }
 
-function panelBurnRate(s) {
+// `sourceRules`: the alerting rules the entry was read from, when the pack
+// states them (the adapter's `sourceRules`, beside `spec`) — the hand-written
+// rules on the SLO's recorded series. Where both sides of a comparison state
+// theirs, each rule is held to the one of the same name.
+function panelBurnRate(s, sourceRules) {
   const p = panel('Burn-rate alert', 'p-burn');
   const sloSpan = document.createElement('span');
   if (s.slo) {
@@ -645,6 +649,26 @@ function panelBurnRate(s) {
       s.windows.map(w => [w.short, w.long, w.factor + 'x', w.severity]),
       ['short', 'long', 'factor', 'severity'],
     ));
+    p.appendChild(sec);
+  }
+  if (Array.isArray(sourceRules) && sourceRules.length) {
+    const sec = subpanel(`read from ${sourceRules.length === 1 ? 'this alerting rule' : `these ${sourceRules.length} alerting rules`}`);
+    // The expression sits under the rule's name, in the block that wraps inside the drawer.
+    const ruleCell = (r) => {
+      const cell = document.createElement('div');
+      const name = document.createElement('div');
+      name.textContent = r.name;
+      cell.append(name, code(r.expr));
+      return cell;
+    };
+    sec.appendChild(table(
+      sourceRules.map(r => [ruleCell(r), r.for || '—', r.severity || '—']),
+      ['rule', 'for', 'severity'],
+    ));
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = 'Where the other side states its rules too, a comparison holds each of these to the one it runs under the same name: expression, wait, severity and labels.';
+    sec.appendChild(note);
     p.appendChild(sec);
   }
   return p;

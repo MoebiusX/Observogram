@@ -93,8 +93,8 @@ Align nodes by `(role, identityKey)` within the branch (not globally — this is
 
 | Node status | Meaning |
 |---|---|
-| `aligned` | present both sides, `behaviorOf` equal |
-| `drifted` | present both sides, behaviour differs (carry the diverging fields from `deltasOf`) |
+| `aligned` | present both sides, `deltasOf` empty (`behaviorOf` equal, and for a burn-rate node whose two sides state the rules it was read from, those rules equal too) |
+| `drifted` | present both sides, behaviour differs (carry the diverging fields from `deltasOf`; a burn-rate node's may name the `rule` they belong to) |
 | `declared_only` | in A's branch, absent in B's branch **and** the node type is live-verifiable (§6) → genuine missing-in-live |
 | `unverifiable` | in A's branch, absent in B, but the node type is **not** live-introspectable (§6) → neutral, not a gap |
 | `live_only` | in B's branch, absent in A → genuine drift/shadow *within a declared requirement* |

@@ -726,7 +726,9 @@ signal exists.
 ### Annotation reference
 
 Every key the fetcher writes, by family. Comma lists are capped at 64 names;
-JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
+JSON arrays (`annotationJson`) at 200 entries — the metric inventory and the
+source rules (`observogram.source_rules.*`) are written whole — and error
+strings at 200 chars.
 
 | Key | Value | Meaning |
 |---|---|---|
@@ -757,6 +759,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
 | `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
+| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part. The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `observogram.partial.alerting.rules[<i>]` | `labels=<keys>` | an alert rule whose listing gave no `labels` object: of its labels, the keys the listing did show — `labels=severity`, written for every rule of a listing in which no rule carries a labels map and at least one carries a flat `severity`. The comparison holds the rule to those keys (docs/DIFF.md) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
@@ -896,7 +899,12 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   the ruler attests an alert on the SLO's series, not a multi-window
   burn-rate alert. It names its rules in `mcp.derived.policy.burn_rate_alerts[<i>]`;
   `mcp.discovered.alert_rules_linked` / `alert_rules_operational` count the
-  two kinds.
+  two kinds. The windows of such an entry are the reading's, not the rule's:
+  what each rule actually says — its expression and so its threshold, its
+  wait, its severity, its labels — is stated beside the entry in
+  `observogram.source_rules.policy.burn_rate_alerts.<slo>`, by the same
+  function the crawler states a rule file's through, and that is what a
+  comparison compares (docs/DIFF.md).
 - A burn group for an SLO nobody inferred, or one with a single window (the
   schema requires two), is not representable and is listed in
   `mcp.discovered.alert_rules_unmapped` instead of being padded.
@@ -1389,7 +1397,7 @@ the vantage looking away yields none. The four kinds and their fixed scores
 | `observogram-deploy` | a deploy in the window `(baseline.startedAt, current.startedAt]` from `deploys.jsonl` beside `runs/` (Observogram's own audit — only the trailing 8 MB are read, `DEPLOY_LOG_TAIL_BYTES`, the cut first line dropped; the latest `verify` line is merged onto its deploy so the evidence names the outcome; a baseline whose start time cannot be parsed gives an EMPTY window, never all of history) whose item names a moved node. The server persists compile SELECTORS on its items, so `runJourney` resolves each one against Pack A first (`resolveDeployArtifact`: `declared:<i>` → the i-th declared recording rule's name, `slo:<id>` → the SLO id, its SLI base and the SLI the pack binds it to, `dash:<id>` → the id, a bare name — a rollback's dashboard uid — → itself, `all` → nothing; carried as `resolved` beside `artifact`); the ranker then matches EXACTLY, never by substring — the selector or a resolved name equals the node's `aId` / `bId`, or a resolved name equals the node's label or an identity handle of its `kind::{json}` key (`id`, `name`, `record`, `slo`, `job`, `uid`) — and only when the item's `group` can write the node's kind (`DEPLOY_GROUP_KINDS`: `dashboards` / `restore` / `delete` → dashboard, panel; `rules` → recording_rule, burn_rate, sli, slo; `alerts` → burn_rate, alert_route; `alertmanager` → alert_route; `pipelines` → pipeline_*, otel; an unknown or missing group constrains nothing). Evidence: `touched declared:0 → payment:api_availability:ratio_5m` (a bare name that is the label reads as itself; `(failed)` marks an item that failed) | 0.9 |
 | `observogram-deploy` | a deploy in the window that wrote the journey's pack without an item naming a moved node — including a deploy whose only items are the group wildcard `all` (`wrote pack X (all rules) — no item names a moved artefact`). Needs the audit line's `pack.id` (the registry id — the pack FILE's stem) or `pack.name` to equal the record's `packA.name` (`metadata.name`) or `packA.id`: for a crawl-sourced Pack A, or a file whose stem differs from its `metadata.name`, this rung never fires | 0.6 |
 | `config-drift` | a moved node that `drifted` on a decision-bearing field (`objective`, `expr`, `route`, `window`, … — the graph's vocabulary, copied so the module stays zero-import) | 0.8 |
-| `config-drift` | drifted on cosmetic fields only, or on fields the record did not keep | 0.4 |
+| `config-drift` | drifted on cosmetic fields only (*cosmetic only*), on fields the record did not keep, or on a field of neither table such as an alert's wait (*worth a look*) | 0.4 |
 | `backend-version` | a product both records (baseline and current) reported with a different `versions.<product>`, when that product FEEDS the family of a moved node — `PRODUCT_FAMILIES`: prometheus / victoriametrics / thanos / mimir → scrape, ruler, tsdb; grafana → dashboards; alertmanager → notify; otel, otelcol → collector; loki, promtail → logs; jaeger, tempo → traces — crossed with `FAMILY_FOR_KIND` (`versionFeedsMovedKind`; a Grafana change on a Prometheus rule is not this rung) | 0.6 |
 | `backend-version` | the same version change while a chain got worse elsewhere, or a product outside the table | 0.3 |
 | `stack-self-metric` | a `stackEvidence` row of the current record that answered data and reads as a signal by direction and value alone (a `lower` row above 0, a `higher` ratio below 1 — the stored display hint is never consulted) in the family feeding a moved node's kind — scrape → `scrape_job`; ruler → `recording_rule` / `burn_rate` / `sli` / `slo`; notify → `alert_route`; tsdb → `backend` / `storage_metrics`; collector → `pipeline_*` / `otel`; dashboards → `panel` / `dashboard`; synthetic → `synthetic` | 0.5 |

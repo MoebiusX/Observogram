@@ -444,6 +444,43 @@ assert(both('L4').alert_rule === 3
   assert(diff.collisions.some(c => c.kind === 'alert_rule' && c.aCount === 2 && c.bCount === 2),
     'and the shared name is on the collisions list, two on each side', diff.collisions);
 }
+{
+  // The three alerts that guard a recorded SLO are in no alerting.rules: each is its SLO's burn-rate entry, which
+  // holds windows and nothing of the rule. Both readings state the rules beside the entry, and that is what is compared.
+  const statedBy = (pack) => Object.fromEntries(Object.entries(pack.metadata.annotations)
+    .filter(([k]) => k.startsWith('observogram.source_rules.policy.burn_rate_alerts.'))
+    .map(([k, v]) => [k.slice('observogram.source_rules.policy.burn_rate_alerts.'.length), JSON.parse(v).map(r => `${r.name}|${r.expr}|${r.for}|${r.severity}`)])
+    .sort(([x], [y]) => x.localeCompare(y)));
+  assert(JSON.stringify(statedBy(repoPack)) === JSON.stringify(statedBy(livePack))
+    && JSON.stringify(statedBy(repoPack).shop_availability_99) === JSON.stringify(['ShopAvailabilityLow|shop:availability:ratio_5m < 0.99|2m|SEV1', 'ShopAvailabilityVeryLow|shop:availability:ratio_5m < 0.95|10m|SEV1'])
+    && JSON.stringify(statedBy(repoPack).shop_latency_99) === JSON.stringify(['ShopLatencyHigh|shop:latency:p95_5m > 0.5|15m|SEV2']),
+  'each burn-rate entry states the alerting rules it was read from, the same on both sides: name, expression, wait (`600s` and `duration: 600` are one 10m), severity',
+  [statedBy(repoPack), statedBy(livePack)]);
+  const entries = diff.layers.L4.inBoth.filter(e => e.key.startsWith('burn_rate::'));
+  assert(entries.length === 2 && entries.every(e => e.match === 'aligned' && e.deltas.length === 0 && !('unobserved' in e)
+    && Array.isArray(e.a.sourceRules) && Array.isArray(e.b.sourceRules)),
+  'and each pair is aligned on those rules, compared whole (the files state a severity and no other label)', entries.map(e => [e.key, e.match, e.deltas, e.unobserved]));
+  // The same deployment with one of those rules loosened in production: a threshold fifty times lower, a two-hour wait.
+  const loosened = ruler();
+  Object.assign(loosened.groups[0].rules.find(r => r.name === 'ShopAvailabilityLow'), { query: 'shop:availability:ratio_5m < 0.5\n', duration: 7200 });
+  const after = compare(liveInputs({ rules: loosened })).diff;
+  const pair = after.layers.L4.inBoth.find(e => e.key === 'burn_rate::{"slo":"shop_availability_99"}');
+  assert(after.summary.drifted === 1 && pair?.match === 'drifted'
+    && JSON.stringify(pair.deltas.map(d => d.field)) === JSON.stringify(['windows', 'expr', 'for'])
+    && JSON.stringify(pair.deltas.filter(d => d.rule)) === JSON.stringify([
+      { field: 'expr', a: 'shop:availability:ratio_5m<0.99', b: 'shop:availability:ratio_5m<0.5', rule: 'ShopAvailabilityLow' },
+      { field: 'for', a: '2m', b: '2h', rule: 'ShopAvailabilityLow' },
+    ]),
+  'a rule loosened live is the one difference: beside the entry\'s windows (the wait was read into one, as before), its own threshold and wait, naming the rule — where the windows alone could not say which rule, and the threshold was nowhere',
+  [after.summary.drifted, pair?.match, pair?.deltas]);
+  // The threshold alone, the wait left as declared: before, nothing of it reached the comparison.
+  const thresholdOnly = ruler();
+  Object.assign(thresholdOnly.groups[0].rules.find(r => r.name === 'ShopAvailabilityLow'), { query: 'shop:availability:ratio_5m < 0.5\n' });
+  const quiet = compare(liveInputs({ rules: thresholdOnly })).diff.layers.L4.inBoth.find(e => e.key === 'burn_rate::{"slo":"shop_availability_99"}');
+  assert(quiet?.match === 'drifted' && JSON.stringify(quiet.deltas) === JSON.stringify([
+    { field: 'expr', a: 'shop:availability:ratio_5m<0.99', b: 'shop:availability:ratio_5m<0.5', rule: 'ShopAvailabilityLow' },
+  ]), 'a threshold changed live, and nothing else, is a difference: the entries themselves are equal', [quiet?.match, quiet?.deltas]);
+}
 assert(both('L2').backend === 7,
   'L2: the seven products the repository deploys are the seven the live side found evidence of', both('L2'));
 assert(both('L2').scrape_job === 3, 'L2: the three metrics scrape jobs pair', both('L2'));

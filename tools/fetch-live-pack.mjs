@@ -56,8 +56,8 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr } from './lib/sli-inference.mjs';
-import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation } from './lib/artefact-model.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr } from './lib/sli-inference.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey } from './lib/artefact-model.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -1984,6 +1984,29 @@ export function buildCanonicalPack({
   }
   if (burnMapping.severityInferred.length) {
     annotations['mcp.discovered.alert_rules_severity_inferred'] = burnMapping.severityInferred.slice(0, 64).join(',');
+  }
+  // The rules each burn-rate entry was read from, with their own terms. An
+  // entry keeps { slo, windows } and the windows are the reading's, so what a
+  // hand-written rule on an SLO's series actually says — its expression and
+  // so its threshold, its wait, its severity — is in no field of the pack:
+  // a rule loosened in production read exactly like the one the repository
+  // declares. Each entry states its rules beside it, per SLO
+  // (observogram.source_rules.<symbol>, tools/lib/artefact-model.mjs), read by
+  // the function the crawler states a rule file's through
+  // (sli-inference.mjs sourceRuleTerms): every listed rule whose expression
+  // references a recorded series of the SLO, whatever its labels or its
+  // shape, so the two sides apply one test. What the listing showed of a
+  // rule's labels only in part rides with the rule (`partial`). A rule the
+  // listing gave no expression cannot be placed on an SLO and is in no list;
+  // a rule one side does not list is held against nothing.
+  {
+    const stated = sourceRuleTerms(discoveredAlerts.filter(a => a?.name), hasSlo, {
+      partialOf: (a) => (Array.isArray(a.labelsObserved) ? { labels: a.labelsObserved } : null),
+    });
+    for (const { slo } of burnRateAlerts) {
+      const terms = stated.get(slo);
+      if (terms?.length) annotations[sourceRulesAnnotationKey(slo)] = annotationJson(terms);
+    }
   }
   if (burnRateAlerts.length === 0) {
     // The schema forces policy.burn_rate_alerts to hold >= 1 entry with

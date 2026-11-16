@@ -2220,7 +2220,11 @@ saturated, a certificate expiring — is an operational alert and is declared in
 wait, severity, labels, engine (`prometheus`, `grafana`, `loki`) and the file
 and group it was read from. The same name is what a live Grafana or ruler
 listing is reconciled on, so the repository's rule and the running rule pair
-in Compare.
+in Compare. A burn-rate entry holds an SLO and windows and nothing of the
+rule it was read from, so each one also states its rules beside it
+(`observogram.source_rules.<symbol>`: name, expression, wait, severity,
+labels): a threshold, a wait or a severity changed in production reads as a
+difference on that entry.
 
 ### Fetch Live From MCP
 

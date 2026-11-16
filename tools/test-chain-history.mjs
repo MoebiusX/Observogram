@@ -407,6 +407,9 @@ assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: 
     const byId = deployCauses(rankCauses({ previous: { ...prevRun, branches: [{ rootKey: 'slo::g', title: 'g', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] }, current: { ...curRun, branches: fromGraph }, deploys: [sel('dep_id', [{ artifact: 'QRY-04', group: 'rules', ok: true }])] }));
     assert(byId.length === 1 && byId[0].score === 0.9 && byId[0].nodes.join() === 'checkout:ratio' && byId[0].evidence.endsWith('touched QRY-04 → checkout:ratio'), 'a persisted degraded node carries the artefact id the id match needs', byId);
   }
+  // A drift on a field of neither table — an alert's wait changed alone — is not called cosmetic.
+  assert(rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('burn_rate', 'checkout-burn', { status: 'drifted', deltaFields: ['for'] })] }] } }).causes.some((c) => c.kind === 'config-drift' && c.score === 0.4 && c.evidence === 'checkout-burn (burn_rate) drifted on for — worth a look'),
+    'a wait changed alone is worded worth a look, at the score it had');
   // Cosmetic drift 0.4; version 0.3 when the changed product feeds no moved node's family; a ratio row below 1 is a signal.
   const cosmetic = rankCauses({ previous: { ...prevRun, versions: { ...prevRun.versions, alertmanager: '0.26.0' } }, current: { ...curRun, versions: { prometheus: '2.53.0', grafana: '11.1.0', alertmanager: '0.27.0' }, stackEvidence: { status: 'sampled', rows: [
       { id: 'scrape_success_ratio', family: 'scrape', value: 0.75, unit: 'ratio', direction: 'higher', outcome: 'data', hint: null }] },

@@ -347,7 +347,8 @@ function alertState(alert, states, unhealthy) {
   if (!states) return { state: 'declared', deltas: [] };
   const hit = alert.identityKey ? states.get(alert.identityKey) : null;
   if (!hit) return { state: 'unverified', deltas: [] };
-  const deltas = hit.state === 'drifted' ? listOf(hit.entry?.deltas).map((d) => String(d.field ?? '')).filter(Boolean) : [];
+  // Each field once: a burn-rate pair may name one field for several of the rules it was read from.
+  const deltas = hit.state === 'drifted' ? [...new Set(listOf(hit.entry?.deltas).map((d) => String(d.field ?? '')).filter(Boolean))] : [];
   if ((hit.state === 'live' || hit.state === 'drifted') && alert.names.some((n) => unhealthy.has(n))) return { state: 'unhealthy', deltas };
   return { state: hit.state, deltas };
 }
