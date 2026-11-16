@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.40 — 2026-11-16
+
 **An alert on an SLO's series is compared on what it says: its threshold, its wait, its severity.** A hand-written alerting rule on an SLO's recorded series is declared — by the repository scan and by the live fetch alike — as that SLO's burn-rate entry, which holds an SLO and windows and nothing else; the windows are the reading's own (a rule's wait as `short`, constants for the rest — a severity only where the label is literally SEV1–SEV3 — the default pair below two). So the rule's expression and its severity word reached no comparison, and its wait only where it survived as a window: a rule declared `> 0.01 for 5m critical` and running `> 0.5 for 2h info` read *match*, on the board and in the requirement chain. Each entry now states the rules it was read from, and the comparison holds each rule to the one the other side runs under the same name.
 
 ### Fixed
@@ -24,6 +26,7 @@
 - `tools/test-scan-live.mjs`: the three alerts that guard a recorded SLO stated the same on both sides and compared whole; one loosened live as the one difference, naming the rule beside the entry's windows; its threshold alone, where the entries are equal.
 - `tools/test-chain-history.mjs`: a wait changed alone worded *worth a look* at the score it had.
 - `tools/fixtures/golden-crawl.pack.json`: one annotation more, the statement of the golden's one alert; nothing else moved.
+- Cut as 0.8.40: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1934 → 1948.
 - **Downstream:** none — tests only.
 
