@@ -1306,6 +1306,106 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify(endpoints) === JSON.stringify(['http://grafana:3000', 'http://prometheus:9090']), 'a nested default and a long-form target from a variable draft their ports', endpoints);
 }
 
+// ---------- a Prometheus Operator PrometheusRule is read as a rule file is ----------
+{
+  const groups = [
+    'groups:', '  - name: checkout', '    rules:',
+    '      - record: checkout:errors:ratio_5m', '        expr: sum(rate(errors_total[5m])) / sum(rate(requests_total[5m]))',
+    '      - alert: CheckoutErrorsHigh', '        expr: checkout:errors:ratio_5m > 0.01', '        for: 5m', '        labels:', '          severity: critical',
+    '      - alert: CheckoutPodRestarting', '        expr: rate(kube_pod_container_status_restarts_total{container="checkout"}[15m]) > 0',
+    '        labels:', '          severity: warning',
+  ].map((l) => `  ${l}`);
+  const resource = (head = ['  labels:', '    release: kube-prometheus-stack']) => ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: checkout', ...head, 'spec:', ...groups].join('\n') + '\n';
+  const deployment = ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: grafana', 'spec:', '  template:', '    spec:', '      containers:',
+    '        - name: grafana', '          image: grafana/grafana:11.2.0'].join('\n') + '\n';
+  const chart = { 'charts/checkout/Chart.yaml': 'name: checkout\nversion: 0.1.0\n' };
+  const read = (files) => crawlFiles(files, { repoName: 'checkout', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const rulesOf = (out) => [
+    ...(out.canonical.spec.alerting?.rules || []).map((r) => `${r.name}@${r.engine}`),
+    ...(out.canonical.spec.policy?.burn_rate_alerts || []).map((e) => `policy:${e.slo}`),
+    ...(out.canonical.spec.queries?.recording_rules || []).map((r) => `record:${r.name}`),
+  ].sort();
+  const want = ['CheckoutPodRestarting@prometheus', 'policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'];
+  const stated = (out) => Object.keys(out.canonical.metadata.annotations).filter((k) => k.startsWith('observogram.source_rules.'));
+  for (const [what, files, kind, backends] of [
+    ['in a file named for its rules', { 'k8s/prometheusrule.yaml': resource() }, 'prometheus-rules', []],
+    ['in a file named for nothing', { 'deploy/monitoring.yaml': resource() }, 'prometheus-rules', []],
+    ['after a Namespace in one manifest', { 'deploy/app.yaml': `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: shop\n---\n${resource()}` }, 'prometheus-rules', []],
+    ['after a Deployment in one manifest', { 'deploy/app.yaml': `${deployment}---\n${resource()}` }, 'k8s-workload', ['grafana']],
+    ['before a Deployment in one manifest', { 'deploy/app.yaml': `${resource()}---\n${deployment}` }, 'prometheus-rules', ['grafana']],
+    ['under a path that names Loki: still a Prometheus rule', { 'monitoring/loki/prometheusrule.yaml': resource() }, 'prometheus-rules', []],
+    ['in a Helm template, its values inline', { ...chart, 'charts/checkout/templates/prometheusrule.yaml': `{{- if .Values.rules.enabled }}\n${resource(['  labels:', '    release: {{ .Release.Name }}'])}{{- end }}\n` }, 'helm-template', []],
+    ['in a Helm template whose labels are an include', { ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource(['  labels:', '    {{- include "checkout.labels" . | nindent 4 }}']) }, 'helm-template', []],
+    ['in a Helm template whose labels end in an include at the margin', { ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource(['  labels:', '    app: {{ template "checkout.name" . }}', '{{ include "checkout.labels" . | indent 4 }}']) }, 'helm-template', []],
+  ]) {
+    const out = read(files);
+    const path = Object.keys(files).find((p) => !p.endsWith('Chart.yaml'));
+    assert(detectArtefactKind(path, files[path]) === kind, `PrometheusRule ${what}: the file is ${kind}`, detectArtefactKind(path, files[path]), kind);
+    assert(JSON.stringify(rulesOf(out)) === JSON.stringify(want), `PrometheusRule ${what}: its rules are read`, rulesOf(out), want);
+    assert(JSON.stringify(stated(out)) === JSON.stringify(['observogram.source_rules.policy.burn_rate_alerts.checkout_errors_99']), `PrometheusRule ${what}: the SLO states its rule`, stated(out));
+    assert(JSON.stringify([...products(out)]) === JSON.stringify(backends), `PrometheusRule ${what}: backends ${JSON.stringify(backends)}`, [...products(out)], backends);
+    assert(!out.summary.warnings.some((w) => /stopped reading|Failed to parse|not declared/.test(w)), `PrometheusRule ${what}: nothing to warn about`, out.summary.warnings);
+  }
+  // A template holding a dashboard ConfigMap and a PrometheusRule: both are read.
+  const both = read({ ...chart, 'charts/checkout/templates/monitoring.yaml': [
+    'apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "checkout.fullname" . }}-dashboards', 'data:', '  checkout.json: |',
+    '    {"title": "Checkout", "uid": "checkout", "schemaVersion": 39, "panels": [{"type": "timeseries", "title": "Errors", "targets": [{"expr": "checkout:errors:ratio_5m"}]}]}',
+    '---', resource(),
+  ].join('\n') });
+  assert(JSON.stringify(rulesOf(both)) === JSON.stringify(want) && (both.canonical.spec.dashboards || []).length === 1,
+    'a template holding a dashboard ConfigMap and a PrometheusRule gives both', [rulesOf(both), both.canonical.spec.dashboards]);
+  // Another kind, or another group's resource of that name, is not one.
+  for (const [what, text] of [
+    ['a PrometheusRule of another API group', resource().replace('monitoring.coreos.com/v1', 'monitoring.example.com/v1')],
+    ['a resource of another kind with spec.groups', resource().replace('kind: PrometheusRule', 'kind: RuleSet')],
+  ]) {
+    const out = read({ 'deploy/monitoring.yaml': text });
+    assert(detectArtefactKind('deploy/monitoring.yaml', text) === 'unknown' && out.summary.discovered.recordingRules === 0 && out.summary.discovered.burnRateAlerts === 0,
+      `not a PrometheusRule: ${what}`, out.summary.discovered);
+  }
+  // A template whose rule holds an include at the left margin cannot be read past it: the scan says where, in the template's lines.
+  const margin = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('        labels:\n            severity: critical',
+    '        labels:\n{{ toYaml .Values.extraLabels | indent 10 }}\n            severity: critical') });
+  assert(margin.summary.warnings.some((w) => w.startsWith('Failed to parse charts/checkout/templates/prometheusrule.yaml: yaml line 17:')),
+    'a PrometheusRule template the reader cannot read past an include: the template and its line', margin.summary.warnings);
+  // A lifecycle block at the top of a manifest covers the rules of its resource, the manifest's first document a workload.
+  const planned = read({ 'deploy/app.yaml': `# observogram-lifecycle:\n#   deployment:\n#     prod: planned\n${deployment}---\n${resource()}` });
+  const lifecycle = JSON.parse(planned.canonical.metadata.annotations['observogram.lifecycle'] ?? '[]');
+  assert(lifecycle.length === 1 && lifecycle[0].source === 'deploy/app.yaml'
+    && ['alerting.rules.CheckoutPodRestarting', 'policy.burn_rate_alerts.checkout_errors_99', 'queries.recording_rules.checkout:errors:ratio_5m'].every((s) => lifecycle[0].symbols.includes(s)),
+    'a lifecycle block atop a manifest covers its PrometheusRule\'s rules', lifecycle);
+  // Only the documents a manifest holds that are workloads give backends; a Service first no longer hides them.
+  const service = read({ 'deploy/app.yaml': `apiVersion: v1\nkind: Service\nmetadata:\n  name: grafana\nspec:\n  ports: [{ port: 3000 }]\n---\n${deployment}` });
+  assert(products(service).has('grafana') && detectArtefactKind('deploy/app.yaml', `apiVersion: v1\nkind: Service\nmetadata:\n  name: grafana\n---\n${deployment}`) === 'k8s-workload',
+    'a workload after a Service in one manifest gives its image', [...products(service)]);
+}
+
+// ---------- a rule whose terms a chart fills in is not declared, and the scan names it ----------
+{
+  const template = (inConfigMap) => (inConfigMap ? [
+    'apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "shop.fullname" . }}-rules', 'data:', '  alerts.rules.yaml: |',
+    '    groups:', '      - name: shop', '        rules:',
+    '          - alert: ShopDown', '            expr: up{job="{{ include "shop.fullname" . }}"} == 0', '            labels:', '              severity: critical',
+    '          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '            labels:', '              severity: warning',
+  ] : [
+    'apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: {{ include "shop.fullname" . }}', 'spec:', '  groups:', '    - name: shop', '      rules:',
+    '        - alert: ShopDown', '          expr: up{job="{{ include "shop.fullname" . }}"} == 0', '          labels:', '            severity: critical',
+    '        - alert: ShopDiskFull', '          expr: node_filesystem_avail_bytes < 1', '          labels:', '            severity: warning',
+  ]).join('\n') + '\n';
+  for (const inConfigMap of [true, false]) {
+    const out = crawlFiles({
+      'rules/recording.yml': 'groups:\n  - name: rec\n    rules:\n      - record: shop:checkout:error_ratio_5m\n        expr: sum(rate(e[5m])) / sum(rate(t[5m]))\n',
+      'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n',
+      'charts/shop/templates/rules.yaml': template(inConfigMap),
+    }, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+    const where = inConfigMap ? 'in a ConfigMap' : 'in a PrometheusRule';
+    assert(JSON.stringify((out.canonical.spec.alerting?.rules || []).map((r) => r.name)) === JSON.stringify(['ShopDiskFull']),
+      `${where}: a rule whose expression holds a value the chart fills in is not declared; the rest are`, out.canonical.spec.alerting?.rules);
+    assert(out.summary.warnings.some((w) => /^1 alert rule\(s\) hold a value a chart or a deploy step fills in, and are not declared in alerting\.rules .*: ShopDown \(charts\/shop\/templates\/rules\.yaml\)\.$/.test(w)),
+      `${where}: and the scan names it`, out.summary.warnings);
+  }
+}
+
 // ---------- where the reader stops, the scan says: the file and its line ----------
 {
   const read = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });

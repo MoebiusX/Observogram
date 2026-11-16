@@ -921,8 +921,8 @@ Detection is by file name, so a YAML file with your keys is never read. Use
 - **Expect some rules to stay visible.** A symbol parks only when every file that speaks
   for it carries the same deployment, readers included. If an alert or a dashboard in a
   file with no block reads a rule, that rule still reads *declared, not live*.
-- **A `PrometheusRule` custom resource is not walked.** A block in one does nothing, and a
-  rule in one does not keep a series visible.
+- **A `PrometheusRule` custom resource is walked** (0.8.42). A block at the top of its file
+  covers its rules as a rule file's does.
 - **Update what reads the diff.** The pack carries one `observogram.lifecycle` annotation,
   not `.sources` and `.symbols`. `summary.lifecycleEnvironment` is now
   `summary.lifecycleEnvironments`, an array. Every new key exists only when a pack carries
@@ -971,6 +971,6 @@ shapes above before reading their tables. Then run your own suite.
 - The diff goldens hash the whole diff, so a new key must be absent unless its data is present.
 - Run your redaction over patches, notes and fixtures before they leave.
 
-Upstream would still use three things from you: the alert-rule tool's recorded per-folder
-answer, the recording-rule tool's recorded answer, and whether your rules live in
-`PrometheusRule` custom resources, which would make walking them the next piece of work.
+Upstream would still use two things from you: the alert-rule tool's recorded per-folder
+answer and the recording-rule tool's recorded answer. `PrometheusRule` custom resources are
+walked since 0.8.42 (docs/DIFF.md, *Where the scan reads a rule*).

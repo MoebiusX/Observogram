@@ -355,7 +355,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 6,950,000 since the Services matrix (2026-11-12: the studio's own code reached 6,809,288 with the list
   // drawn as a row per service and a column per environment, a branch per environment and the shared
   // clause fixes; no dependency).
-  assert.ok(built.bytes < 6_950_000, `the two-pack bundle is under 6,950,000 bytes (${built.bytes})`);
+  // 7,100,000 since the scan reads PrometheusRule resources (2026-11-16: the bundle reached 6,956,268 with
+  // tools/lib/crawler.mjs reading them and saying, with tools/lib/mini-yaml.mjs, where it stopped reading a
+  // file — both travel in it as data: modules; no dependency).
+  assert.ok(built.bytes < 7_100_000, `the two-pack bundle is under 7,100,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

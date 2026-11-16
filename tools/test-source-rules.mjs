@@ -623,6 +623,72 @@ test('the labels one scan copies from rule groups into rules are bounded: past t
   assert.ok(Date.now() - t0 < 3000, `a thousand rules under twenty thousand group labels scan in ${Date.now() - t0} ms`);
 });
 
+// ---------------------------------------------------------------------------
+// A Prometheus Operator PrometheusRule resource
+// ---------------------------------------------------------------------------
+
+// The recording rules and the alerts above, as a PrometheusRule resource gives them to its ruler.
+const resource = ({ meta = ['  labels:', '    release: kube-prometheus-stack'], groupLabels = [] } = {}) => [
+  'apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', ...meta, 'spec:',
+  ...[
+    'groups:',
+    ...RECORDING.split('\n').slice(1).filter(Boolean),
+    '  - name: shop-alerts', ...groupLabels, '    rules:',
+    '      - alert: ShopCheckoutErrorsHigh', '        expr: shop:checkout:error_ratio_5m > 0.01', '        for: 5m', '        labels:', '          severity: critical',
+    '      - alert: DiskAlmostFull', '        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', '        labels:', '          severity: warning',
+  ].map((l) => `  ${l}`),
+].join('\n') + '\n';
+const crawlOnly = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' }).canonical;
+const alertPairOf = (diff, name) => Object.values(diff.layers).flatMap((l) => l.inBoth).find((e) => e.key === `alert_rule::{"name":"${name.toLowerCase()}"}`);
+
+test('a PrometheusRule resource is read as the ruler it is given to lists it: on its own, beside a workload, from a Helm template', () => {
+  const rule = { ...ERRORS_HIGH, labels: { severity: 'critical' } };
+  const workload = 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: shop\nspec:\n  template:\n    spec:\n      containers:\n        - name: shop\n          image: registry.example/shop:1.0.0\n';
+  const chart = { 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n' };
+  const cases = {
+    'a resource in a file of its own': { files: { 'deploy/prometheusrule.yaml': resource() }, listed: rule.labels },
+    'a resource after a workload in one manifest': { files: { 'deploy/shop.yaml': `${workload}---\n${resource()}` }, listed: rule.labels },
+    'a Helm template whose labels are an include': {
+      files: { ...chart, 'charts/shop/templates/prometheusrule.yaml': `{{- if .Values.rules.enabled }}\n${resource({ meta: ['  labels:', '    {{- include "shop.labels" . | nindent 4 }}'] })}{{- end }}\n` },
+      listed: rule.labels,
+    },
+    'labels its group gives every rule': { files: { 'deploy/prometheusrule.yaml': resource({ groupLabels: ['    labels:', '      team: shop'] }) }, listed: { severity: 'critical', team: 'shop' } },
+  };
+  for (const [what, { files, listed }] of Object.entries(cases)) {
+    const repoPack = crawlOnly(files);
+    assert.deepEqual(validateCanonical(repoPack, SCHEMA), [], `valid: ${what}`);
+    assert.deepEqual(stated(repoPack), [{ name: 'ShopCheckoutErrorsHigh', expr: 'shop:checkout:error_ratio_5m > 0.01', for: '5m', severity: 'SEV1', labels: listed }], `stated as listed: ${what}`);
+    const disk = repoPack.spec.alerting.rules.find((r) => r.name === 'DiskAlmostFull');
+    assert.equal(disk?.engine, 'prometheus', `the operational rule is the ruler's: ${what}`);
+    const rules = [{ ...rule, labels: listed }, { ...DISK, labels: { ...DISK.labels, ...(listed.team ? { team: listed.team } : {}) } }];
+    for (const shape of ['labels', 'projection']) {
+      const same = compare(repoPack, live(rules, { shape }));
+      assert.equal(same.pair.match, 'aligned', `the same system is aligned (${shape}): ${what}`);
+      assert.deepEqual(same.pair.deltas, [], `no rule blamed (${shape}): ${what}`);
+      assert.equal(alertPairOf(same.diff, 'DiskAlmostFull')?.match, 'aligned', `the operational rule matches (${shape}): ${what}`);
+    }
+    const loose = compare(repoPack, live([{ ...rules[0], expr: 'shop:checkout:error_ratio_5m > 0.5' }, rules[1]]));
+    assert.equal(loose.pair.match, 'drifted', `a threshold loosened live is a difference: ${what}`);
+    assert.deepEqual(fieldsOf(loose.pair.deltas), ['ShopCheckoutErrorsHigh:expr'], what);
+    assert.equal(loose.node.status, 'drifted', `the chain agrees: ${what}`);
+  }
+});
+
+test('a chart\'s rule whose expression the chart fills in is not declared: live\'s rule is compared with nothing, never read as drifted', () => {
+  const chart = {
+    'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n',
+    'charts/shop/templates/prometheusrule.yaml': resource().replace('node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', 'up{job="{{ include "shop.fullname" . }}"} == 0'),
+  };
+  const out = crawlFiles(chart, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  assert.deepEqual((out.canonical.spec.alerting?.rules || []).map((r) => r.name), [], 'not declared');
+  assert.ok(out.summary.warnings.some((w) => /not declared in alerting\.rules .*: DiskAlmostFull \(charts\/shop\/templates\/prometheusrule\.yaml\)\./.test(w)), 'and named');
+  const rendered = { ...DISK, expr: 'up{job="shop-api"} == 0' };
+  const against = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, rendered]));
+  assert.equal(alertPairOf(against.diff, 'DiskAlmostFull'), undefined, 'no pair to read as drifted');
+  assert.equal(against.diff.summary.drifted, 0);
+  assert.equal(against.pair.match, 'aligned', 'the SLO\'s own rule, stated as written, still compares');
+});
+
 test('not covered: a rule whose alert name an earlier rule took leaves its SLO without an entry live, so nothing there states it', () => {
   // The fold reads the first rule of an alert name, on both sides. Here that one guards no SLO, so the SLO's own rule
   // of that name never becomes an entry on the live side and is in no list there: it is compared with nothing.

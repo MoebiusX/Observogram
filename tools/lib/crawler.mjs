@@ -294,6 +294,39 @@ const K8S_WORKLOAD_KINDS = new Set([
   'ReplicationController', 'Pod', 'Job', 'CronJob',
 ]);
 
+// A workload document whose pod template carries containers.
+function isWorkloadManifest(obj) {
+  return isMapping(obj) && K8S_WORKLOAD_KINDS.has(obj.kind)
+    && !!(obj.spec?.template?.spec?.containers
+      || obj.spec?.containers
+      || obj.spec?.jobTemplate?.spec?.template?.spec?.containers);
+}
+
+// A Prometheus Operator PrometheusRule resource (monitoring.coreos.com). It
+// gives the ruler its rule groups under `spec.groups`, as a rule file gives
+// them under `groups`, and the operator writes them into the ruler's rule
+// files as they are: they are read as a rule file's are.
+function isPrometheusRuleResource(obj) {
+  return isMapping(obj) && obj.kind === 'PrometheusRule'
+    && /^monitoring\.coreos\.com\//.test(String(obj.apiVersion ?? ''));
+}
+
+// The rule groups a document gives the ruler — a rule file's `groups`, a
+// PrometheusRule resource's `spec.groups` — or null.
+function ruleGroupsOf(obj) {
+  const groups = isPrometheusRuleResource(obj) ? obj.spec?.groups : obj?.groups;
+  return Array.isArray(groups) ? groups : null;
+}
+
+// Whether rule groups hold a recording or an alerting rule.
+const holdsRules = (groups) => Array.isArray(groups)
+  && groups.some((g) => Array.isArray(g?.rules) && g.rules.some((r) => isMapping(r) && ('record' in r || 'alert' in r)));
+
+// The line of a manifest that names a PrometheusRule resource, or a
+// workload: a manifest whose documents hold both is read for both.
+const PROMETHEUS_RULE_KIND_RE = /^kind:[ \t]*["']?PrometheusRule["']?[ \t]*(?:#.*)?$/m;
+const WORKLOAD_KIND_RE = /^kind:[ \t]*["']?(?:Deployment|StatefulSet|DaemonSet|ReplicaSet|ReplicationController|Pod|Job|CronJob)["']?[ \t]*(?:#.*)?$/m;
+
 const METRIC_SOURCE_EXT_RE = /\.(?:cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
 
 // The built-in exporter catalogue (tools/lib/exporter-catalogue.mjs), the one
@@ -435,30 +468,33 @@ export function detectArtefactKind(relPath, content, opts) {
   // rule groups of `title` + `data[]` rules, walked by the rules walker.
   if (/(^|\/)provisioning\/alerting\/[^/]+\.ya?ml$/.test(lower))        return 'prometheus-rules';
 
-  // Content sniff fallback.
-  let obj;
-  try { obj = parseYaml(content, repoYaml); } catch (_) { return 'unknown'; }
-  if (!obj || typeof obj !== 'object') return 'unknown';
-
-  if (obj.groups && Array.isArray(obj.groups)
-      && obj.groups.some(g => g.rules?.some(r => r && typeof r === 'object' && ('record' in r || 'alert' in r || isGrafanaManagedRule(r))))) {
-    return 'prometheus-rules';
+  // Content sniff fallback: the first document says what the file is.
+  let docs;
+  try { docs = parseYamlAll(content, repoYaml); } catch (_) { return 'unknown'; }
+  // The document parse() answers: the first with content.
+  const obj = docs.find((d) => d !== null && d !== undefined) ?? docs[docs.length - 1];
+  if (obj && typeof obj === 'object') {
+    if (obj.groups && Array.isArray(obj.groups)
+        && obj.groups.some(g => g.rules?.some(r => r && typeof r === 'object' && ('record' in r || 'alert' in r || isGrafanaManagedRule(r))))) {
+      return 'prometheus-rules';
+    }
+    if (Array.isArray(obj.scrape_configs)
+        && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
+    if (looksLikeActuatorMetricsConfig(lower, content, obj)) return 'actuator-metrics-config';
+    if (obj.route && obj.receivers && Array.isArray(obj.receivers)) return 'alertmanager';
+    if (looksLikeOtelCollector(obj))                                return 'otel-collector';
+    if (obj.services && typeof obj.services === 'object'
+        && Object.values(obj.services).some(s => s?.image))         return 'docker-compose';
+    // Plain (non-templated) Kubernetes workload manifest carrying concrete
+    // container images — the backends a Helm chart would otherwise template.
+    if (isWorkloadManifest(obj)) return 'k8s-workload';
   }
-  if (Array.isArray(obj.scrape_configs)
-      && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
-  if (looksLikeActuatorMetricsConfig(lower, content, obj)) return 'actuator-metrics-config';
-  if (obj.route && obj.receivers && Array.isArray(obj.receivers)) return 'alertmanager';
-  if (looksLikeOtelCollector(obj))                                return 'otel-collector';
-  if (obj.services && typeof obj.services === 'object'
-      && Object.values(obj.services).some(s => s?.image))         return 'docker-compose';
-  // Plain (non-templated) Kubernetes workload manifest carrying concrete
-  // container images — the backends a Helm chart would otherwise template.
-  if (K8S_WORKLOAD_KINDS.has(obj.kind)
-      && (obj.spec?.template?.spec?.containers
-          || obj.spec?.containers
-          || obj.spec?.jobTemplate?.spec?.template?.spec?.containers)) {
-    return 'k8s-workload';
-  }
+  // A Kubernetes manifest of several documents (a Namespace or a Service
+  // first, often) is what the resources in any of them are: a PrometheusRule
+  // holding rules, a workload. walkClassified reads such a file for both.
+  const resources = docs.filter(isMapping);
+  if (resources.some((d) => isPrometheusRuleResource(d) && holdsRules(ruleGroupsOf(d)))) return 'prometheus-rules';
+  if (resources.some(isWorkloadManifest)) return 'k8s-workload';
   return 'unknown';
 }
 
@@ -829,7 +865,11 @@ export function crawlFiles(filesInput, opts = {}) {
     try {
       switch (f.kind) {
         case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary); break;
-        case 'prometheus-rules': walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); break;
+        case 'prometheus-rules':
+          walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
+          // A manifest holding workloads beside its PrometheusRule resources: their images too.
+          if (WORKLOAD_KIND_RE.test(f.content)) walkK8sWorkload(f, backends, pipelines, evidence, summary);
+          break;
         case 'prometheus-scrape-config': walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary); break;
         case 'actuator-metrics-config': walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName); break;
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
@@ -841,7 +881,11 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
         case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName }, evidence, summary); break;
         case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorState }); break;
-        case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
+        case 'k8s-workload':
+          walkK8sWorkload(f, backends, pipelines, evidence, summary);
+          // A manifest holding PrometheusRule resources beside its workloads: their rules too.
+          if (PROMETHEUS_RULE_KIND_RE.test(f.content)) walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
+          break;
         // Chart.yaml itself carries no observability contracts — the payloads
         // live in the templated manifests (handled as 'helm-template'). We
         // record the chart only as a signal that this is a Helm-packaged repo.
@@ -950,12 +994,28 @@ export function crawlFiles(filesInput, opts = {}) {
   // recording rules still reads every alert as an SLO contract (the tier-3
   // fallback), and then declares no operational rules.
   const ruleMeta = new Map(alertRules.map(r => [r.rule, r]));
+  // A rule whose terms hold a value the repository does not state — one a
+  // chart or a deploy step fills in (notStatedAsWritten) — is not declared:
+  // held against what live renders there, it would read as a difference in a
+  // system that is the same. Live's rule is then compared with nothing, as
+  // when the scan cannot read it, and the scan names it.
+  const statedRules = alertRules.filter(r => !notStatedAsWritten(r));
   const operational = haveRecordedSlis
-    ? operationalAlertRules(alertRules.map(r => r.rule), (id) => sloMap.has(id), {
-      engineOf: (rule) => alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
+    ? operationalAlertRules(statedRules.map(r => r.rule), (id) => sloMap.has(id), {
+      engineOf: (rule) => ruleMeta.get(rule)?.engine ?? alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
       sourceOf: (rule) => ruleMeta.get(rule)?.source,
     })
     : { kept: [], skipped: [] };
+  const unstatedRules = haveRecordedSlis
+    ? operationalAlertRules(alertRules.filter(r => notStatedAsWritten(r)).map(r => r.rule), (id) => sloMap.has(id), {
+      sourceOf: (rule) => ruleMeta.get(rule)?.source,
+    }).kept
+    : [];
+  if (unstatedRules.length) {
+    const shown = unstatedRules.slice(0, 8).map(r => `${r.name} (${String(r.source).split('#')[0]})`).join(', ')
+      + (unstatedRules.length > 8 ? `, … (${unstatedRules.length - 8} more)` : '');
+    summary.warnings.push(`${unstatedRules.length} alert rule(s) hold a value a chart or a deploy step fills in, and are not declared in alerting.rules — compared with what live renders, they would read as differences: ${shown}.`);
+  }
   summary.discovered.alertRules = operational.kept.length;
   if (operational.kept.length) {
     const names = operational.kept.map(r => r.name);
@@ -1564,13 +1624,41 @@ function sniffObservabilityKind(content) {
   if (looksLikeOtelCollector(obj)) return 'otel-collector';
   if (obj.services && typeof obj.services === 'object'
       && Object.values(obj.services).some(s => s?.image)) return 'docker-compose';
-  if (K8S_WORKLOAD_KINDS.has(obj.kind)
-      && (obj.spec?.template?.spec?.containers
-          || obj.spec?.containers
-          || obj.spec?.jobTemplate?.spec?.template?.spec?.containers)) {
-    return 'k8s-workload';
-  }
+  if (isWorkloadManifest(obj)) return 'k8s-workload';
+  // A PrometheusRule resource is read by walkStrippedTemplate apart from the
+  // rest of the template (prometheusRuleResources), never by its first document.
   return 'unknown';
+}
+
+// The PrometheusRule resources of a stripped template, each cut down to the
+// lines a scan reads of it — its apiVersion, its kind and its spec — with
+// the index, in `text`, of each line kept (`lines`). What else a resource
+// states, its name and its labels, is mostly the chart's own includes, which
+// a stripped template cannot read; its rule groups need none of it.
+function prometheusRuleResources(text) {
+  const lines = text.split('\n');
+  const out = [];
+  const take = (from, to) => {
+    const at = (re) => { for (let i = from; i < to; i++) if (re.test(lines[i])) return i; return -1; };
+    const kind = at(PROMETHEUS_RULE_KIND_RE);
+    const api = at(/^apiVersion:[ \t]*["']?monitoring\.coreos\.com\//);
+    const spec = at(/^spec:(?:[ \t]|$)/);
+    if (kind < 0 || api < 0 || spec < 0) return;
+    // The spec runs to the next key at the left margin. A line an include
+    // left there, which is no key, stays in it: the reader stops on it, and
+    // the scan says where.
+    let end = spec + 1;
+    while (end < to && !/^[A-Za-z_][\w.-]*[ \t]*:(?:[ \t]|$)/.test(lines[end])) end++;
+    const kept = [api, kind];
+    for (let i = spec; i < end; i++) kept.push(i);
+    out.push({ text: kept.map((i) => lines[i]).join('\n'), lines: kept });
+  };
+  let from = 0;
+  lines.forEach((line, i) => {
+    if (/^(?:---|\.\.\.)(?:\s.*)?$/.test(line)) { take(from, i); from = i + 1; }
+  });
+  take(from, lines.length);
+  return out;
 }
 
 function imageFromHelmImageObject(obj) {
@@ -2292,7 +2380,8 @@ function buildMetricFamilyAnnotations(families) {
 function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, derivedIds }) {
   const blocks = new Map();
   for (const f of classified) {
-    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template') continue;
+    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template'
+        && !(f.kind === 'k8s-workload' && PROMETHEUS_RULE_KIND_RE.test(f.content))) continue;
     const read = readLifecycleBlock(f.content);
     if (!read) continue;
     if (read.problem) summary.warnings.push(`${f.relPath}: the lifecycle block is not read: ${read.problem}.`);
@@ -2531,9 +2620,14 @@ function walkHelmTemplate(f, buckets, evidence, summary) {
 
 function walkStrippedTemplate(f, buckets, evidence, summary) {
   const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName } = buckets;
-  const route = (kind, sub) => {
+  // `resources` false: the text's PrometheusRule resources are read apart
+  // (prometheusRuleResources below), not with its other rule groups.
+  const route = (kind, sub, { resources = true } = {}) => {
     switch (kind) {
-      case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); return true;
+      case 'prometheus-rules':
+        walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary,
+          resources ? {} : { groupsOf: (obj) => (isPrometheusRuleResource(obj) ? null : ruleGroupsOf(obj)) });
+        return true;
       case 'prometheus-scrape-config': walkPrometheusScrapeConfig(sub, scrapeJobs, evidence, summary); return true;
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
@@ -2578,12 +2672,22 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
   // `deployment-alertmanager.yaml`); stay silent otherwise, since the
   // overwhelming majority of chart templates are Deployments, Services,
   // Secrets, etc. that carry no observability contracts.
+  const whole = stripGoTemplate(f.content);
   if (blocks.length === 0) {
-    const { text: clean, origin } = stripGoTemplate(f.content);
-    const kind = sniffObservabilityKind(clean);
+    const kind = sniffObservabilityKind(whole.text);
     if (kind !== 'unknown') {
-      try { mappingStops(templateLineAt(origin), () => route(kind, { relPath: f.relPath, content: clean })); } catch (_) { /* speculative */ }
+      try { mappingStops(templateLineAt(whole.origin), () => route(kind, { relPath: f.relPath, content: whole.text }, { resources: false })); } catch (_) { /* speculative */ }
     }
+  }
+
+  // The PrometheusRule resources the template renders, each read from its
+  // apiVersion, kind and spec alone (prometheusRuleResources), beside any
+  // ConfigMap the template holds too. A resource is no guess: one that does
+  // not read is said.
+  for (const resource of prometheusRuleResources(whole.text)) {
+    const lineAt = (n) => templateLineAt(whole.origin)(resource.lines[Math.min(Math.max(n, 1), resource.lines.length) - 1] + 1);
+    try { mappingStops(lineAt, () => route('prometheus-rules', { relPath: f.relPath, content: resource.text })); }
+    catch (e) { summary.warnings.push(`Failed to parse ${f.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
 }
 
@@ -2759,7 +2863,9 @@ function groupLabelsFit(group, rules, f, summary) {
   return false;
 }
 
-function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
+// The rule groups of each document: a rule file's, and a PrometheusRule
+// resource's (ruleGroupsOf), unless `groupsOf` reads them otherwise.
+function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, { groupsOf = ruleGroupsOf } = {}) {
   // A rule that cannot be read is skipped on its own; the file and its other
   // rules survive, and one warning per file says how many were lost and why.
   let ruleCount = 0;
@@ -2776,18 +2882,23 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
     return written;
   };
   parseYamlDocs(f.content).forEach((obj, d) => {
-    if (!Array.isArray(obj.groups)) return;
-    obj.groups.forEach((group, g) => {
+    const groups = groupsOf(obj);
+    if (!groups) return;
+    // A PrometheusRule resource's rules run on the Prometheus (or the Thanos
+    // Ruler) the operator gives them to, whatever its file's path or its
+    // expressions look like (alertRuleEngine).
+    const engine = isPrometheusRuleResource(obj) ? 'prometheus' : null;
+    groups.forEach((group, g) => {
       const rules = Array.isArray(group?.rules) ? group.rules : [];
       const mergeGroup = groupLabelsFit(group, rules, f, summary);
       rules.forEach((rule, r) => {
         ruleCount++;
         const twin = () => {
-          const writtenGroup = writtenDocs()[d]?.groups?.[g];
+          const writtenGroup = groupsOf(writtenDocs()[d])?.[g];
           return { group: writtenGroup, rule: writtenGroup?.rules?.[r] };
         };
         try {
-          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin, mergeGroup);
+          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin, mergeGroup, engine);
         } catch (e) {
           skipped.push(e?.message || String(e));
         }
@@ -2802,7 +2913,7 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
   }
 }
 
-function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin = () => ({}), mergeGroup = true) {
+function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin = () => ({}), mergeGroup = true, engine = null) {
   if (rule.record) {
     // The Prometheus form (`record: <name>`, `expr`) and the Grafana
     // unified-alerting recording form (`record: { metric, from }`, the
@@ -2862,6 +2973,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName,
       // Labels the group gives every rule that this reading cannot see (sourceRuleAnnotations).
       ...(listed.labelsUnread ? { labelsUnread: true } : {}),
+      // The engine the rule's source names (a PrometheusRule resource's), over the guess.
+      ...(engine ? { engine } : {}),
     });
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);

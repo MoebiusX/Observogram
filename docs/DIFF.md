@@ -223,6 +223,32 @@ missing label is drift. One field uses it, an alert rule's labels — an
 operational rule's, and those of the rules a burn-rate entry was read from
 (below); the live fetcher writes the statement (docs/MCP_INTEGRATION.md).
 
+**Where the scan reads a rule.** A rule file, a ConfigMap a Helm chart
+renders (each data key a rule file), and a Prometheus Operator
+`PrometheusRule` resource (0.8.42): its `spec.groups` are read as a rule
+file's `groups`, in a file of its own, in any document of a manifest that
+holds workloads too, and in a chart's template — there from its
+`apiVersion`, `kind` and `spec` alone, since its name and labels are mostly
+the chart's includes and its rules need none of them. The operator hands
+those groups to a Prometheus (or a Thanos Ruler) as they are written, so a
+resource's rule is the `prometheus` engine's whatever its path or its
+expression look like. The operator can also be told to add a namespace label
+to every rule and matcher (`enforcedNamespaceLabel` on the Prometheus
+resource), which the scan cannot see: there a resource's rules read as
+different on those labels and expressions.
+
+**A rule the repository does not state** as the ruler will list it — a
+value a Helm chart or another template engine fills in at deploy time, or a
+`${VAR}` / `$VAR` a deploy step substitutes, in its name, expression, wait or
+labels; a labels map filled in whole; group labels past the scan's copy
+budget (the tests of *Not stated, so compared as before*, below) — is not
+declared in `alerting.rules` (0.8.42), and the scan warns, naming each. Held
+against what live renders there it read as drifted (`up{job="helmvalue"}`
+against `up{job="shop-api"}`) in a system that is the same. Live's rule of
+that name is now compared with nothing, as a rule in a file the scan cannot
+read is: live only when the repository declares other alert rules, out of
+scope when it declares none.
+
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and
 the live fetcher keeps every operational rule the ruler lists, folding
@@ -496,7 +522,9 @@ pack without one keeps its bytes. The studio shows the count wherever it shows
   staging stack is compared for `prod`.
 - With several environments in a pack and none picked, the adapter reads the first.
 - Only what the crawl reads can speak for a series. A `PrometheusRule` custom resource
-  (`spec.groups`) is not walked, so a rule in one does not keep a series visible.
+  is walked (0.8.42), and a block at the top of its file covers its rules as a rule
+  file's does; a rule the scan does not declare (below, *a rule the repository does not
+  state*) still speaks for the series it reads.
 
 ## Addresses a source does not state
 
