@@ -1188,4 +1188,122 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'the rule pinned: `_` mapped, `--` kept, cut at 60, `d-` before a digit, the title when the uid yields nothing, null when neither does', exported);
 }
 
+// A compose file as people write them: a port bound to a host address is the
+// container's, a value may stand on the line below its key, anchors and merge
+// keys share settings between services.
+{
+  const compose = [
+    'x-common: &common',
+    '  restart: unless-stopped',
+    'services:',
+    '  grafana:',
+    '    <<: *common',
+    '    image: grafana/grafana:12.4.4',
+    '    ports:',
+    '      - "127.0.0.1:13000:3000"',
+    '    environment: &env',
+    '      GF_ADMIN:',
+    '        ${CRED:-admin}',
+    '  grafana-next:',
+    '    <<: *common',
+    '    image: grafana/grafana:13.0.2',
+    '    ports: ["[::1]:13013:3000/tcp"]',
+    '    environment: *env',
+    '  prometheus:',
+    '    image: prom/prometheus:v2.55.1',
+    '    ports:',
+    '      - target: 9090',
+    '        published: 19090',
+  ].join('\n') + '\n';
+  const out = crawlFiles({ 'docker-compose.yml': compose }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const backends = Object.values(out.canonical.spec.telemetry?.backends || {}).map((b) => `${b.product} ${b.version?.declared ?? ''} ${(b.endpoints || []).join(' ')}`).sort();
+  assert(JSON.stringify(backends) === JSON.stringify(['grafana 12.4.4 http://grafana:3000', 'grafana 13.0.2 http://grafana:3000', 'prometheus 2.55.1 http://prometheus:9090']),
+    'a compose file with anchors, merge keys and a value below its key is read whole, each backend at its container port', backends);
+}
+
+// A Helm template in the `helm create` layout — a helper's include alone
+// under a key — is read as it always was: a component its environment's values
+// switch off declares nothing from its template either.
+{
+  const files = {
+    ...ENV_TOGGLE,
+    'k8s/charts/app/templates/prometheus.yaml': [
+      '{{- if .Values.prometheus.enabled }}',
+      'apiVersion: apps/v1',
+      'kind: Deployment',
+      'metadata:',
+      '  name: {{ include "app.fullname" . }}-prometheus',
+      '  labels:',
+      '    {{- include "app.labels" . | nindent 4 }}',
+      'spec:',
+      '  selector:',
+      '    matchLabels:',
+      '      {{- include "app.selectorLabels" . | nindent 6 }}',
+      '  template:',
+      '    spec:',
+      '      containers:',
+      '        - name: prometheus',
+      '          image: "prom/prometheus:{{ .Values.prometheus.image.tag }}"',
+      '{{- end }}',
+    ].join('\n') + '\n',
+  };
+  const eks = crawlFiles(files, { repoName: 'app', environment: 'eks', now: '2026-06-05T00:00:00.000Z' });
+  assert(!products(eks).has('prometheus'), 'a template in the helm-create layout declares no backend its environment switches off', [...products(eks)]);
+}
+// A compose port given through a variable with a default drafts that default.
+{
+  const compose = 'services:\n  grafana:\n    image: grafana/grafana:12.4.4\n    ports:\n      - "${GRAFANA_PORT:-3000}:${GRAFANA_PORT:-3000}"\n  prometheus:\n    image: prom/prometheus:v2.55.1\n    ports: ["127.0.0.1:${PROM_PORT-19090}:9090"]\n';
+  const out = crawlFiles({ 'docker-compose.yml': compose }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const endpoints = Object.values(out.canonical.spec.telemetry?.backends || {}).map((b) => (b.endpoints || []).join(' ')).sort();
+  assert(JSON.stringify(endpoints) === JSON.stringify(['http://grafana:3000', 'http://prometheus:9090']), 'a port written through a variable with a default drafts the container port', endpoints);
+}
+// One alias budget for a whole scan: each rule file fits it alone; past it the
+// scan warns about each file it cannot read and carries on.
+{
+  const chain = ['          a0: &a0 [{a: 1, b: 2}]', ...Array.from({ length: 12 }, (_, k) => `          a${k + 1}: &a${k + 1} [*a${k}, *a${k}]`)].join('\n');
+  const ruleFile = (i) => `groups:\n  - name: g${i}\n    rules:\n      - alert: Down${i}\n        expr: up{job="j${i}"} == 0\n        annotations:\n${chain}\n`;
+  const t0 = Date.now();
+  const out = crawlFiles(Object.fromEntries([0, 1, 2].map((i) => [`rules/r${i}.rules.yml`, ruleFile(i)])), { repoName: 'x', environment: 'prod', now: '2026-11-16T00:00:00.000Z' });
+  const refused = out.summary.warnings.filter((w) => /aliases copy more than 1000000/.test(w));
+  assert(refused.length === 2 && Date.now() - t0 < 3000, 'one alias budget for a scan: the files past it are reported, the scan goes on', out.summary.warnings);
+}
+// The other readers of repository files read a value below its key too: a
+// team's .observability pack, a Chaos Mesh resource.
+{
+  const pack = [
+    'apiVersion: observability.platform/v1', 'kind: ObservabilityPack', 'metadata: { name: shop-api, version: 0.1.0 }', 'spec:',
+    '  baselines:', '    mttd_target_p50: 5m', '    mttr_target_p50: 45m', '    measurement_source:', '      grafana chaos game days, last run on 2026-11-01',
+  ].join('\n') + '\n';
+  const mesh = [
+    'apiVersion: chaos-mesh.org/v1alpha1', 'kind: PodChaos', 'metadata:', '  name: api-pod-kill', '  annotations:', '    description:',
+    '      Kill half the API pods for a minute', 'spec:', '  action: pod-kill', '  mode: fixed-percent', '  value: "50"', '  duration: 60s',
+    '  selector: { labelSelectors: { app: shop-api } }',
+  ].join('\n') + '\n';
+  const out = crawlFiles({ '.observability/pack.yaml': pack, 'k8s/chaos/mesh.yaml': mesh }, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' });
+  assert(out.canonical.spec.baselines?.mttd_target_p50 === '5m' && out.summary.inferred?.baselines !== true, 'a repository pack with a value below its key gives its baselines', out.canonical.spec.baselines);
+  assert((out.canonical.spec.validation?.chaos_experiments || []).length > 0, 'a Chaos Mesh resource with a value below its key is read', out.canonical.spec.validation?.chaos_experiments);
+}
+
+// The alias budget is the walk's: alias-heavy files the scan only sniffs (a
+// locale, a CI template) do not starve the files it reads.
+{
+  const locale = (lang) => [`${lang}: &${lang}`, ...Array.from({ length: 2400 }, (_, i) => `  message_${i}: "Text of message ${i} in ${lang}"`),
+    `${lang}-GB: *${lang}`, `${lang}-AU: *${lang}`, `${lang}-CA: *${lang}`].join('\n') + '\n';
+  const files = {
+    'config/locales/web.yml': locale('en'),
+    'config/locales/mail.yml': locale('fr'),
+    'docker-compose.yml': 'x-logging: &logging\n  driver: json-file\nservices:\n  prometheus:\n    image: prom/prometheus:v2.55.1\n    logging: *logging\n    ports: ["9090:9090"]\n',
+  };
+  const out = crawlFiles(files, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' });
+  assert(products(out).has('prometheus') && !out.summary.warnings.some((w) => /aliases copy more than/.test(w)),
+    'alias-heavy files the scan only sniffs leave the budget to the files it reads', out.summary.warnings);
+}
+// Compose interpolation, nested and in the long form's target.
+{
+  const compose = 'services:\n  grafana:\n    image: grafana/grafana:12.4.4\n    ports: ["${CP:-${DEFAULT_PORT:-3000}}"]\n  prometheus:\n    image: prom/prometheus:v2.55.1\n    ports:\n      - target: ${PROM_TARGET:-9090}\n        published: 19090\n';
+  const out = crawlFiles({ 'docker-compose.yml': compose }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const endpoints = Object.values(out.canonical.spec.telemetry?.backends || {}).map((b) => (b.endpoints || []).join(' ')).sort();
+  assert(JSON.stringify(endpoints) === JSON.stringify(['http://grafana:3000', 'http://prometheus:9090']), 'a nested default and a long-form target from a variable draft their ports', endpoints);
+}
+
 report('crawler');

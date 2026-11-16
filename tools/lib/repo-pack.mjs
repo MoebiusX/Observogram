@@ -36,7 +36,8 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 /** The ObservabilityPack documents in a file's text, or [] (a parse failure is []). */
 export function repoPackDocuments(content) {
   let docs;
-  try { docs = parseYamlAll(String(content ?? '')); } catch { return []; }
+  // A repository file: a value on the line below its key is read, as the scan reads the rest (crawler.mjs REPO_YAML).
+  try { docs = parseYamlAll(String(content ?? ''), { valueBelowKey: true }); } catch { return []; }
   return docs.filter(d => isObj(d) && d.kind === 'ObservabilityPack');
 }
 

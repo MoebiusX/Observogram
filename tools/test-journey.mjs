@@ -762,7 +762,7 @@ try {
     };
     for (const [line, why] of [
       ['gradeOff: chaos-validated', 'it is not a list'], ['gradeOff:', 'it is not a list'], ['gradeOff: { key: fresh }', 'it is not a list'],
-      ['gradeOff: [chaos-validated, ]', 'null is not one'], ['gradeOff: [{ key: fresh }]', '{"key":"fresh"} is not one'],
+      ['gradeOff: [chaos-validated, ~]', 'null is not one'], ['gradeOff: [{ key: fresh }]', '{"key":"fresh"} is not one'],
       ['gradeOff: [fresh, fresh]', 'a criterion is listed twice'], [`gradeOff: [${KEYS}]`, 'a check is graded on at least one criterion'], ['gradeOff: [chaos]', '"chaos" is not one'],
     ]) {
       offFile('graded-badly', [line]);

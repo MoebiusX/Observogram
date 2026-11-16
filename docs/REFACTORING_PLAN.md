@@ -105,6 +105,21 @@ state the supported subset in the module header. A user feeding
 hand-written YAML should get "unsupported YAML feature at line N", not a
 silently different value.
 
+*Status (0.8.41):* the reader now reads what YAML readers read in the files a
+scan meets — values over several lines (plain, quoted, flow), folded
+scalars, anchors, aliases, merge keys naming aliases, `- - item`, quotes and
+brackets only where a node starts — and agrees with PyYAML on the tracked
+YAML files of the repository and krystalinex-core but for block chomping
+(`|-`, `|+` read as `|`). A
+value on the line below its key is read only where asked (`valueBelowKey`,
+the scan's repository files): the writer leaves a key with a line break
+unquoted, which would read back as different keys. Outside the subset a
+complex key or a document that is one flow collection throws, a tag on a
+scalar reads as text, and a line the reader cannot place stops reading where
+it stands (a tag on a block collection or a misplaced deeper line ends the
+document; a flow's content line in its key's column ends the flow, and is read
+as the next key when it holds one).
+
 ## 8. `drawer.mjs` repeated builders
 
 The dt/dd meta-row pattern is built inline in three places (~lines 62, 233,
