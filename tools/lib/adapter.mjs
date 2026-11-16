@@ -19,7 +19,7 @@ import { annotationList, buildRequirementTraceability } from './traceability.mjs
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
 import { toolLabels as activeToolLabels } from './artefact-classify.mjs';
-import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation } from './artefact-model.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation, sourceRulesAnnotationKey, parseSourceRulesAnnotation } from './artefact-model.mjs';
 
 // `metadata.annotations["observogram.artefact.type.<symbol>"]` declares the
 // type of the artefact a canonical symbol projects to (`slis.<id>`,
@@ -29,6 +29,7 @@ import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation } from './artefact-mo
 // nothing else in this repository does, so adapted packs carry no `type`
 // unless a producer declared one.
 export const DECLARED_TYPE_PREFIX = 'observogram.artefact.type.';
+
 //
 // LAYERED DISPLAY OBJECT shape:
 //   {
@@ -128,6 +129,16 @@ export function adapt(canonical, opts = {}) {
     partial: (id) => {
       const stated = parsePartialAnnotation(annotations[`${PARTIAL_ANNOTATION_PREFIX}${id}`]);
       return stated ? { partial: stated } : {};
+    },
+    // The alerting rules a burn-rate entry was read from
+    // (`observogram.source_rules.policy.burn_rate_alerts.<slo>`,
+    // tools/lib/artefact-model.mjs): the hand-written rules on the SLO's
+    // recorded series, each with its own terms. They ride on the artefact
+    // as `sourceRules`, beside `spec`, and the comparison holds each to its
+    // counterpart when both packs state them. No statement, no key.
+    sourceRules: (slo) => {
+      const stated = parseSourceRulesAnnotation(annotations[sourceRulesAnnotationKey(slo)]);
+      return stated ? { sourceRules: stated } : {};
     },
   };
 
@@ -835,6 +846,7 @@ function adaptBurnRateAlerts(ctx) {
 
       ...ctx.typed(`policy.burn_rate_alerts[${i}]`),
       ...ctx.lifecycle(`policy.burn_rate_alerts.${stripRefPrefix(a.slo).replace(/^slos\./, '')}`),
+      ...ctx.sourceRules(a.slo),
       refs: [normalizeSliRef(a.slo, 'slos')],
       spec: a,
     };

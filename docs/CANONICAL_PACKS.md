@@ -71,7 +71,12 @@ error_budget_policy ref:platform/default-budget`; SLI `total: '1'`; SLI
 `threshold: 1` with `unit: 'ratio'`; burn windows `5m/1h/14/SEV1 +
 30m/6h/6/SEV2`. Why unmarked: the live fetcher derives the same values through
 `tools/lib/sli-inference.mjs`, and Compare pairs them; marking one side would
-park them. The crawler's `version: 0.1.0-crawled` is reported `unmarked` on a
+park them. The burn windows read from a hand-written alerting rule are of
+this kind — the rule's wait as `short`, constants for the rest, this default
+pair when fewer than two survive — and still unmarked, and still compared.
+What the rule itself says is stated beside its entry
+(`observogram.source_rules.<symbol>`), and Compare holds the rule to it as
+well. The crawler's `version: 0.1.0-crawled` is reported `unmarked` on a
 crawler-written pack: a fresh crawl *validates* but is not *conformant* until
 the operator names the version.
 

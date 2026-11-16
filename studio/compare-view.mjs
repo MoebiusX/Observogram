@@ -925,7 +925,7 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
   const title = primary?.title || primary?.id || primary?.defines || prettyDiffKey(finding.key);
   // For stale rows the engine already names the diverging contract fields —
   // surface them so "reconcile" starts from the actual deltas.
-  const driftFields = (finding.deltas || []).map(d => d.field).filter(Boolean);
+  const driftFields = [...new Set((finding.deltas || []).map(d => d.field).filter(Boolean))];
   const sub = [primary?.desc || primary?.tool || '', driftFields.length ? `differs in: ${driftFields.join(', ')}` : '']
     .filter(Boolean).join(' · ');
   const sevLabel = sev === 'red' ? 'Promised outcome not seen live' : sev === 'amber' ? 'Needs reconciling' : '';
@@ -1795,7 +1795,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
   // WHICH artefacts drifted but WHICH FIELDS diverged.
   const sampleDeltas = (entries, max = 3) => {
     const names = entries.slice(0, max).map(e => {
-      const fields = (e.deltas || []).map(d => d.field).slice(0, 3).join(',');
+      const fields = [...new Set((e.deltas || []).map(d => d.field))].slice(0, 3).join(',');
       return escapeHtml(diffEntryLabel(e)) + (fields ? `<span class="drift-delta-fields">(${escapeHtml(fields)})</span>` : '');
     });
     const more = entries.length > max ? ` +${entries.length - max}` : '';
@@ -2507,7 +2507,7 @@ export function renderDiagnosticTraceabilityGraph(graph) {
       const status = !ladderLabel
         ? base
         : ['aligned', 'declared_only'].includes(node.status) ? ladderLabel : `${base} · ${ladderLabel}`;
-      const fields = node.deltas?.length ? ` (${node.deltas.map(d => d.field).slice(0, 3).join(', ')})` : '';
+      const fields = node.deltas?.length ? ` (${[...new Set(node.deltas.map(d => d.field))].slice(0, 3).join(', ')})` : '';
       // Structural exposure: what WOULD go blind if this declared node is
       // really gone or wrong live — never a claim that it is blind now.
       const slos = ['declared_only', 'drifted'].includes(node.status) ? Number(node.blastRadius?.slos) || 0 : 0;
@@ -4881,6 +4881,31 @@ function fieldMeaning(field) {
   for (const [re, text] of FIELD_MEANINGS) if (re.test(String(field || ''))) return text;
   return 'The value differs.';
 }
+// A number that stands alone in an expression — a threshold, a factor, a
+// parameter — and not the digits of a series name (`ratio_5m`) or of a range
+// (`[5m]`).
+const BARE_NUMBER_RE = /(^|[^\w:.[])\d+(?:\.\d+)?(?:e[+-]?\d+)?(?![\w:.\]])/gi;
+// What is quoted (a matcher's value, in any of the three quote marks) is kept
+// as it is; elsewhere each bare number is blanked and its value kept in `seen`.
+const QUOTED_OR_PLAIN_RE = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)|([^"'`]+)/g;
+const withoutNumbers = (expr, seen) => expr.replace(QUOTED_OR_PLAIN_RE,
+  (_, quoted, plain) => (quoted !== undefined ? quoted : plain.replace(BARE_NUMBER_RE, (m, lead) => { seen.push(Number(m.slice(lead.length))); return `${lead}#`; })));
+// What one difference means. A delta on one of the alerting rules a
+// burn-rate entry was read from names it (`rule`); there, two expressions
+// equal but for their bare numbers are the same query with another value —
+// or the same value written another way — not another signal.
+function deltaMeaning(d) {
+  if (d?.rule && d.field === 'expr' && typeof d.a === 'string' && typeof d.b === 'string') {
+    const na = [];
+    const nb = [];
+    if (withoutNumbers(d.a, na) === withoutNumbers(d.b, nb)) {
+      return na.some((n, i) => n !== nb[i])
+        ? 'Only a number in the expression differs — a threshold, factor or parameter has another value.'
+        : 'Only the way a number is written differs — the same expression.';
+    }
+  }
+  return fieldMeaning(d?.field);
+}
 function fmtDeltaValue(v) {
   if (v == null || v === '') return '—';
   const text = typeof v === 'string' ? v : JSON.stringify(v);
@@ -4963,7 +4988,7 @@ function renderCompareReview(digest, cmp, ctx) {
               ${openBtn(e.b, L, 'b', `Open in ${r.bNoun}`)}
             </span>
           </header>
-          <p class="compare-change-desc">${escapeHtml(lead ? fieldMeaning(lead.field) : 'The behaviour differs; no field detail was recorded.')}${deltas.length > 1 ? ` ${deltas.length} fields differ in all.` : ''}</p>
+          <p class="compare-change-desc">${escapeHtml(lead ? deltaMeaning(lead) : 'The behaviour differs; no field detail was recorded.')}${deltas.length > 1 ? ` ${deltas.length} fields differ in all.` : ''}</p>
           ${deltas.length ? `
           <div class="compare-counts-scroll">
             <table class="compare-fields">
@@ -4976,10 +5001,10 @@ function renderCompareReview(digest, cmp, ctx) {
               <tbody>
                 ${deltas.slice(0, MAX_FIELDS).map(d => `
                 <tr>
-                  <th scope="row"><code>${escapeHtml(String(d.field ?? ''))}</code></th>
+                  <th scope="row"><code>${escapeHtml(String(d.field ?? ''))}</code>${d.rule ? ` <span class="compare-fields-side">of ${escapeHtml(String(d.rule))}${d.nth ? ` (${escapeHtml(String(d.nth))})` : ''}</span>` : ''}</th>
                   <td><code>${escapeHtml(fmtDeltaValue(d.a))}</code></td>
                   <td><code>${escapeHtml(fmtDeltaValue(d.b))}</code></td>
-                  <td>${escapeHtml(fieldMeaning(d.field))}</td>
+                  <td>${escapeHtml(deltaMeaning(d))}</td>
                 </tr>`).join('')}
               </tbody>
             </table>

@@ -26,7 +26,7 @@ import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from '
 import {
   inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
-  operationalAlertRules, isGrafanaManagedRule, alertRuleExpr,
+  operationalAlertRules, sourceRuleTerms, isGrafanaManagedRule, alertRuleExpr,
   isSpecRecordingRuleName, canonicalRuleDuration, SPEC_DURATION_RE,
 } from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
@@ -1250,6 +1250,9 @@ export function crawlFiles(filesInput, opts = {}) {
         // policy and a repository's with no recording rules (the tier-3 fallback) included, which
         // alerting.rules does not keep: the control room's scope reads it (server/routes/control-room.mjs).
         ...alertNameAnnotations(alertRules),
+        // The rules each burn-rate entry was read from, with their own terms: the entry keeps only
+        // { slo, windows }, and the windows are this reading's, so the comparison reads the rules here.
+        ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id)) : {}),
         ...(chaosFound.scenarios.length && chaosControlSummary(chaosFound) ? { 'crawler.chaos.control': chaosControlSummary(chaosFound) } : {}),
         ...(chaosFound.scenarios.length && chaosFound.toggle?.enabled === false ? { 'crawler.chaos.disabled': `${chaosFound.toggle.path}: false (${chaosFound.toggle.file})` } : {}),
         ...metricAnnotations,
@@ -1410,6 +1413,9 @@ function looksLikeHelm(content) {
 // injections collapse, so they are never taken for one.
 const HELM_OPEN = '\u0000helm-open\u0000';
 const HELM_CLOSE = '\u0000helm-close\u0000';
+// What an inline value injection collapses to: a value the chart fills in at
+// deploy time, which the repository does not state.
+const HELM_VALUE = 'helmvalue';
 const helmLiteral = (text) => text.replaceAll('{{', HELM_OPEN).replaceAll('}}', HELM_CLOSE);
 function stripGoTemplate(content) {
   return content.split(/\r?\n/).map((line) => {
@@ -1419,7 +1425,7 @@ function stripGoTemplate(content) {
     return line
       .replace(/\{\{-?\s*"((?:[^"\\]|\\.)*)"\s*-?\}\}/g, (_, s) => helmLiteral(s.replace(/\\(.)/g, '$1')))   // {{ "…" }} prints …
       .replace(/\{\{-?\s*`([^`]*)`\s*-?\}\}/g, (_, s) => helmLiteral(s))                                      // {{ `…` }} prints …
-      .replace(/\{\{-?[\s\S]*?-?\}\}/g, 'helmvalue') // inline value injection
+      .replace(/\{\{-?[\s\S]*?-?\}\}/g, HELM_VALUE) // inline value injection
       .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}');
   }).filter((l) => l !== null).join('\n');
 }
@@ -2068,6 +2074,72 @@ function alertNameAnnotations(alertRules) {
   return names.length ? { 'crawler.discovered.alert_names': annotationJson(names), 'crawler.discovered.alert_names_count': String(names.length) } : {};
 }
 
+// The alerting rules each burn-rate entry was read from, stated beside it.
+// A hand-written rule on an SLO's recorded series becomes that SLO's entry,
+// { slo, windows }, whose windows are this reading's own (the rule's wait as
+// `short`, constants for the rest, the default pair below two): its
+// expression and severity are in no field of the pack, its wait only as a
+// window. So each entry says them here, per SLO — every rule that guards it,
+// read as an operational rule is read (sli-inference.mjs sourceRuleTerms, the
+// function the live fetch states its own rules through) — and the comparison
+// holds each rule to the one live runs under the same name. The key and the
+// value are tools/lib/artefact-model.mjs's (sourceRulesAnnotationKey,
+// parseSourceRulesAnnotation), mirrored here so this module's imports stay
+// what they were; tools/test-source-rules.mjs holds the two together.
+//
+// Not for an SLO any of whose rules holds a value the repository does not
+// state itself — one a chart fills in at deploy time, which reaches a rule as
+// the placeholder stripGoTemplate leaves (HELM_VALUE), or a ${VAR} a deploy
+// step substitutes: held against what live renders there it would read as a
+// difference, so that SLO states no rules and compares as it always did.
+const SOURCE_RULES_ANNOTATION = 'observogram.source_rules.policy.burn_rate_alerts.';
+function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
+  const bySlo = sourceRuleTerms(alertRules.map((r) => r.rule), hasSlo);
+  // Decided on each rule as the file writes it: what the reading keeps of it
+  // no longer shows a labels map the chart fills in whole.
+  const withheld = new Set();
+  for (const r of alertRules) {
+    if (!notStatedAsWritten(r)) continue;
+    for (const slo of sourceRuleTerms([r.rule], hasSlo).keys()) withheld.add(slo);
+  }
+  const out = {};
+  for (const { slo } of burnRateAlerts) {
+    const terms = bySlo.get(slo);
+    if (terms?.length && !withheld.has(slo)) out[`${SOURCE_RULES_ANNOTATION}${slo}`] = annotationJson(terms);
+  }
+  return out;
+}
+
+// A rule the repository does not state as the ruler will list it. Its SLO
+// states no rules: held against what live renders, it would read as a
+// difference in a system that is the same.
+//   - a value filled in at deploy time: the placeholder stripGoTemplate
+//     leaves, a template action, a ${VAR} or a $VAR (never a capture group's
+//     ${1} / $1, nor the ruler's own {{ $labels.x }} inside a label);
+//   - labels that are not a map of the rule's own strings: a map the chart
+//     fills in whole, a YAML anchor, alias or merge key (this reader keeps
+//     them as text), a bare number or boolean (re-printed: 1.0 as 1, True as
+//     true), or labels the rule's group adds to every rule (not read here).
+const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*\}|\$[A-Za-z_][A-Za-z0-9_]*/;
+function notStatedAsWritten({ rule, groupLabels }) {
+  if (groupLabels) return true;
+  const text = (v) => (typeof v === 'string' ? v : '');
+  const injected = (v) => new RegExp(`\\b${HELM_VALUE}\\b`).test(v) || INJECTED_NAME_RE.test(v);
+  for (const v of [rule.alert, rule.title, rule.expr, rule.for]) {
+    if (injected(text(v)) || text(v).includes('{{')) return true;
+  }
+  const labels = rule.labels;
+  if (labels === null || labels === undefined) return false;
+  if (typeof labels !== 'object' || Array.isArray(labels)) return true;
+  for (const [k, v] of Object.entries(labels)) {
+    if (k === '<<' || typeof v !== 'string') return true;
+    // The ruler's own templating of a label ({{ $labels.job }}) is the rule's text, listed as written.
+    const own = (s) => s.replace(/\{\{[^}]*\}\}/g, '');
+    if (injected(k) || injected(own(v)) || /^[&*]/.test(v)) return true;
+  }
+  return false;
+}
+
 function annotationJson(value) {
   const compact = JSON.stringify(value);
   return compact.length > JSON_ANNOTATION_BLOCK_LENGTH
@@ -2609,7 +2681,11 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // read from: the ones that turn out to guard no SLO are declared in
     // alerting.rules (crawlFiles), name for name. A rule skipped above
     // (its model could not be read) is not declared either.
-    alertRules.push({ rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName });
+    alertRules.push({
+      rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName,
+      // Labels the group gives every rule are not read into the rule (sourceRuleAnnotations).
+      ...(group.labels !== null && group.labels !== undefined && group.labels !== '' ? { groupLabels: true } : {}),
+    });
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);
       const id = `pol-${burnRateAlerts.length}`;

@@ -31,11 +31,11 @@ prose contracts that follow.
 
 | Module | Dependencies | Notes |
 | --- | --- | --- |
-| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), a snapshot's `observogram.scope.<kind>` parked as *not checked*, and — only on a pair one side of which was shown a field in part — `unobserved: [{ field, side, keys }]` on the `inBoth` entry |
+| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), a snapshot's `observogram.scope.<kind>` parked as *not checked*, and — only on a pair one side of which was shown a field in part — `unobserved: [{ field, side, keys }]` on the `inBoth` entry; on a burn-rate pair whose two packs both state the rules the entry was read from, each rule's differences join the pair's `deltas` as `{ field, a, b, rule, nth? }` and its note is `{ field, side, keys, rule, nth? }` — one field name may repeat in a pair's `deltas`, and `summary.partlyCompared` counts rules, not pairs |
 | [`tools/lib/identity-modes.mjs`](../tools/lib/identity-modes.mjs) | imports `artefact-model.mjs`, `artefact-classify.mjs`; no Node APIs | comparison identity modes (rebadge batch 3, R3) — `IDENTITY_MODES` (`behaviour` = `identityKeyOf`, `name`, `id`), `DEFAULT_IDENTITY_MODE`, `identityMode`, `nameOf`, `idOf`, `nameKeyOf` / `idKeyOf` (`(artefact, { side })`), `pairingOf`, `identityFamilies`; the studio's Compare loads the same file |
 | [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
 | [`tools/lib/mcp-server-settings.mjs`](../tools/lib/mcp-server-settings.mjs) | imports `artefact-classify.mjs`, `mcp-url-safety.mjs` — copy the three together; no Node APIs | the MCP server-settings contract (rebadge batch 4) — the descriptor v1 an MCP server serves at `<root>/admin/schema` (`SETTINGS_DESCRIPTOR_VERSION`, `SETTINGS_DESCRIPTOR_PATH`, `SETTINGS_LIMITS`, `FIELD_TYPES`, `parseSettingsDescriptor`), the root and path rule (`settingsRoot`, `resolveSettingsPath`, `normaliseUrlValue`), the generic form (`genericDescriptor`, `GENERIC_NAMES`), the request (`settingsRequest`), the outcome and its redaction (`outcomeOf`, `redactEchoes`, `redactSecretKeys`) and the settings policy (`compileSettingsPolicy`, `policyFindings`); an MCP server author vendors it to validate a descriptor or policy file, and the studio's Server settings modal loads the same file |
-| [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`); a field shown only in part — `PARTIAL_ANNOTATION_PREFIX` (`observogram.partial.`), `partialAnnotation`, `parsePartialAnnotation`, `unobservedOf`; `adapter.mjs` now imports the first and third, so the adapter's closure gains this file and `promql-canon.mjs` |
+| [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`); a field shown only in part — `PARTIAL_ANNOTATION_PREFIX` (`observogram.partial.`), `partialAnnotation`, `parsePartialAnnotation`, `unobservedOf`; `adapter.mjs` now imports the first and third, so the adapter's closure gains this file and `promql-canon.mjs`; the rules a burn-rate entry was read from — `SOURCE_RULES_ANNOTATION_PREFIX` (`observogram.source_rules.`), `sourceRulesAnnotationKey`, `parseSourceRulesAnnotation` (the adapter imports the last two and puts the list on the artefact as `sourceRules`), which `deltasOf` and `unobservedOf` read for a burn-rate pair |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1, v2 or v3 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), the v3 tool labels `toolLabels` (`TOOL_LABEL_LIMITS`; `adapter.mjs` imports it to rename `tool`), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
 | [`tools/lib/brand.mjs`](../tools/lib/brand.mjs) | zero-import, no Node APIs | the brand config — `DEFAULT_BRAND`, `normalizeBrand`, `brandChrome`, `brandTokensCss`, `brandShellHtml`; a downstream studio reads the same object its server injects (`#brand-config`) |
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
@@ -760,8 +760,9 @@ switches are a what-if only.
   that is a re-copy, not a migration.
 - **Pack annotation namespace** — writers emit `observogram.*`
   (`observogram.diff.scopeMode`, `observogram.retrofeed.*`,
-  `observogram.services`, `observogram.unobserved.<kind>`); readers keep
-  accepting the pre-rebrand `tomograph.*` keys.
+  `observogram.services`, `observogram.unobserved.<kind>`,
+  `observogram.source_rules.<symbol>`); readers keep accepting the
+  pre-rebrand `tomograph.*` keys.
 - **Diff buckets and entry fields are only ever added.** `notObserved`
   (per layer, and `summary.notObserved`) is the latest: a host whose live
   pack comes from its own fetcher gets it by writing
@@ -772,7 +773,13 @@ switches are a what-if only.
   a pack's own artefacts beside the diff uses `memberIds` to give every
   series its family's status (the studio's Compare does). `declaredAhead`
   (per layer, and `summary.declaredAhead`) came after it, and those keys exist
-  only when a pack carries a lifecycle statement (docs/DIFF.md).
+  only when a pack carries a lifecycle statement (docs/DIFF.md). A delta's
+  `rule` (and the note's) is the latest: a host whose live pack comes from
+  its own fetcher gets the comparison of a burn-rate entry's alerting rules by
+  writing `observogram.source_rules.policy.burn_rate_alerts.<slo>` — the list
+  `sourceRuleTerms` (tools/lib/sli-inference.mjs) returns for its listing —
+  beside each entry it reads from such rules; a host that writes none sees
+  the deltas it always had.
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.

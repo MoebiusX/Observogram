@@ -361,6 +361,58 @@ export function operationalAlertRules(rules, hasSlo, { engineOf = () => undefine
 }
 
 /**
+ * The alerting rules a reading folds into burn-rate entries, each with its
+ * own terms, by the SLO it guards.
+ *
+ * A burn-rate entry keeps { slo, windows } and nothing else (the spec closes
+ * it), and its windows are the reading's — a rule's `for` as `short`, the
+ * rest constants, the default pair when fewer than two survive. Nothing of
+ * the rule itself is left there: its expression (the threshold), its wait
+ * and its severity. So both readings state, beside the entry, the rules it
+ * was read from (`observogram.source_rules.<symbol>`, artefact-model.mjs),
+ * and the comparison holds each to its counterpart as it holds an
+ * operational rule.
+ *
+ * The rules are exactly the ones operationalAlertRules leaves out: named,
+ * with an expression that references a recorded series of an SLO `hasSlo`
+ * knows. Decided rule by rule, never from the fold's candidates — those keep
+ * the first rule of a name and drop the others. Each is read with
+ * operationalAlertRule, the one reading of a rule's terms for a rule file
+ * and for a ruler's listing, and reduced to what is compared:
+ *   { name, expr, for?, severity?, labels? }
+ * `partialOf(rule)` adds what the reader was shown of the rule only in part,
+ * in the shape an artefact's `partial` has (`{ labels: [keys shown] }`).
+ *
+ * Returns Map<sloId, terms[]>, each list sorted by the rules' own content
+ * (name, expression, wait, severity, labels), so a rule file and a listing
+ * that hold the same rules state the same list whatever order they give them in.
+ */
+export function sourceRuleTerms(rules, hasSlo, { partialOf = () => null } = {}) {
+  const bySlo = new Map();
+  for (const rule of rules || []) {
+    const read = operationalAlertRule(rule);
+    if (!read) continue;
+    const slo = recordedSloForExpr(alertRuleExpr(rule), hasSlo);
+    if (!slo) continue;
+    const terms = { name: read.name, expr: read.expr };
+    if (read.for) terms.for = read.for;
+    if (read.severity) terms.severity = read.severity;
+    if (read.labels) terms.labels = read.labels;
+    const partial = partialOf(rule);
+    if (partial && typeof partial === 'object' && !Array.isArray(partial) && Object.keys(partial).length) terms.partial = partial;
+    if (!bySlo.has(slo)) bySlo.set(slo, []);
+    bySlo.get(slo).push(terms);
+  }
+  const byText = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+  const labelsOf = (r) => JSON.stringify(Object.entries(r.labels || {}).sort(([x], [y]) => byText(x, y)));
+  for (const list of bySlo.values()) {
+    list.sort((x, y) => byText(x.name, y.name) || byText(x.expr, y.expr) || byText(x.for || '', y.for || '')
+      || byText(x.severity || '', y.severity || '') || byText(labelsOf(x), labelsOf(y)));
+  }
+  return bySlo;
+}
+
+/**
  * Fold entries that share an SLO into one, unioning their windows
  * (de-duplicated by short/long/factor). MUTATES and returns `alerts`.
  */

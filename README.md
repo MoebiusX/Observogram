@@ -1980,8 +1980,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.39 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.39
+docker build -t observogram:0.8.40 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.40
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2044,7 +2044,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.39
+  observogram:0.8.40
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2052,7 +2052,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.39
+    image: observogram:0.8.40
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -2220,7 +2220,11 @@ saturated, a certificate expiring — is an operational alert and is declared in
 wait, severity, labels, engine (`prometheus`, `grafana`, `loki`) and the file
 and group it was read from. The same name is what a live Grafana or ruler
 listing is reconciled on, so the repository's rule and the running rule pair
-in Compare.
+in Compare. A burn-rate entry holds an SLO and windows and nothing of the
+rule it was read from, so each one also states its rules beside it
+(`observogram.source_rules.<symbol>`: name, expression, wait, severity,
+labels): a threshold, a wait or a severity changed in production reads as a
+difference on that entry.
 
 ### Fetch Live From MCP
 

@@ -434,7 +434,7 @@ function buildPanels(vm, ctx) {
   };
   const sampleDeltas = (entries, max = 3) => {
     const names = entries.slice(0, max).map(e => {
-      const fields = (e.deltas || []).map(d => d.field).slice(0, 3).join(',');
+      const fields = [...new Set((e.deltas || []).map(d => d.field))].slice(0, 3).join(',');
       return escapeHtml(diffEntryLabel(e)) + (fields ? `<span class="drift-delta-fields">(${escapeHtml(fields)})</span>` : '');
     });
     const more = entries.length > max ? ` +${entries.length - max}` : '';

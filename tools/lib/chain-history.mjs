@@ -356,6 +356,9 @@ export function familyForKind(kind) {
 // zero-import. A delta on one of these fields changes what the artefact
 // decides; anything else is cosmetic.
 const DECISION_BEARING_DELTA_RE = /(objective|target|threshold|window|duration|severity|burn|budget|expr|query|promql|expression|condition|sli|slo|metric|record|route|receiver|channel|contact|notification|pager|trigger|pipeline|exporter|backend|signal|good|total|mttd|mttr)/i;
+// The graph's cosmetic fields (traceability-graph.mjs, mirrored: this module imports nothing). A drift on
+// neither table — an alert's wait changed alone — is worth a look, not cosmetic.
+const COSMETIC_DELTA_RE = /(title|label|labels|legend|display|layout|grid|position|folder|tag|tags|description|desc|summary|annotation|annotations|unit|color|schema|uid|source|provider)/i;
 
 // Which stack families a product feeds — the product whose version moved
 // (`mcp.versions.<product>`) can only explain a node whose family it
@@ -748,7 +751,8 @@ export function rankCauses({ previous, current, deploys = [], baseline = null } 
       const fields = (Array.isArray(node.deltaFields) ? node.deltaFields : []).map((f) => ws(f)).filter(Boolean);
       const decision = fields.filter((f) => DECISION_BEARING_DELTA_RE.test(f));
       const evidence = `${ws(labelOf(node))} (${ws(node.kind) || 'unknown'}) drifted on ${fields.length ? fields.join(', ') : 'fields not recorded'}`
-        + (decision.length ? ` — decision-bearing: ${decision.join(', ')}` : ' — cosmetic only');
+        + (decision.length ? ` — decision-bearing: ${decision.join(', ')}`
+          : fields.length && !fields.every((f) => COSMETIC_DELTA_RE.test(f)) ? ' — worth a look' : ' — cosmetic only');
       add('config-drift', decision.length ? CAUSE_SCORES.driftDecisionBearing : CAUSE_SCORES.driftCosmetic, evidence, [rootKey], [labelOf(node)]);
     }
     // backend-version: a product's version moved between the two runs —

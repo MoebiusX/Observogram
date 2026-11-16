@@ -316,7 +316,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     outOfScope += bucket.outOfScope.length;
     scaffold += bucket.scaffold.length;
     notObserved += bucket.notObserved.length;
-    partlyCompared += bucket.inBoth.filter((e) => e.unobserved).length;
+    partlyCompared += bucket.inBoth.reduce((n, e) => n + partlyComparedOf(e), 0);
     declaredAhead += bucket.declaredAhead?.length || 0;
   }
 
@@ -351,7 +351,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // observe: unchecked, not missing. Never paired, never counted.
       notObserved,
       // Only when a pair was compared on part of a field (a side shown its
-      // labels only in part): how many pairs carry `unobserved`. They are
+      // labels only in part): how many alerting rules were — a pair that carries
+    // `unobserved` once, a burn-rate pair once for each of its rules. They are
       // counted aligned or drifted on what was shown.
       ...(partlyCompared ? { partlyCompared } : {}),
       // Only when a side declares a dynamic family, so a pack without one
@@ -927,6 +928,15 @@ function collectCollisions(target, layerId, aByKey, bByKey) {
 function unobservedNote(a, b) {
   const unobserved = unobservedOf(a, b);
   return unobserved.length ? { unobserved } : {};
+}
+
+// How many alert rules a pair compared in part stands for: one, or — for a
+// burn-rate pair, whose note names each alerting rule the entry was read
+// from that went partly compared (`rule`, and `nth` where a name holds
+// several) — that many.
+function partlyComparedOf(entry) {
+  if (!entry.unobserved) return 0;
+  return new Set(entry.unobserved.filter((u) => u.rule).map((u) => `${u.rule}\u0000${u.nth ?? 1}`)).size || 1;
 }
 
 function matchGroups(baseKey, aGroup, bGroup, bucket) {

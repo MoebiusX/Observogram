@@ -111,10 +111,17 @@ matched, with the channel difference reported as decision-bearing drift.
 ## Agreement
 
 `projectOf(artefact)` returns the canonical comparable contract, and
-`deltasOf(a, b)` reports top-level fields that differ. A matched pair is:
+`deltasOf(a, b)` reports the top-level fields of that contract that differ,
+each as `{ field, a, b }`. For a burn-rate pair whose two sides both state
+the alerting rules they were read from it also reports what differs in those
+rules, each as `{ field, a, b, rule, nth? }` under the alert rule's own field
+name (`expr`, `for`, `severity`, `labels`) — not a field of the entry's
+`{ slo, windows }` contract (*The rules a burn-rate entry was read from*,
+below). `deltas` is a list, not a map: one `field` may occur in it more than
+once. A matched pair is:
 
 ```js
-{ key, a, b, match: 'aligned' | 'drifted', deltas }
+{ key, a, b, match: 'aligned' | 'drifted', deltas, unobserved? }
 ```
 
 `aligned` means the declared contract matches after normalisation. It does not
@@ -208,12 +215,13 @@ different there, a `labels` delta holding those keys alone. The pack's
 key was shown. The pair then carries what went uncompared, `unobserved:
 [{ field: 'labels', side: 'b', keys: ['service', 'team'] }]` — `side` the
 one that did not see the keys the other states (`unobservedOf`) — and
-`summary.partlyCompared` counts such pairs (the key is absent when there is
-none; a run record carries it as `drift.partlyCompared`). A pair
-compared whole has no such key, and a listing that does give each rule its
-labels object is compared in full: there a missing label is drift. Today one
-field of one family uses it, an alert rule's labels; the live fetcher writes
-the statement (docs/MCP_INTEGRATION.md).
+`summary.partlyCompared` counts the alert rules compared this way (the key is
+absent when there is none; a run record carries it as
+`drift.partlyCompared`). A pair compared whole has no such key, and a listing
+that does give each rule its labels object is compared in full: there a
+missing label is drift. One field uses it, an alert rule's labels — an
+operational rule's, and those of the rules a burn-rate entry was read from
+(below); the live fetcher writes the statement (docs/MCP_INTEGRATION.md).
 
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and
@@ -221,6 +229,87 @@ the live fetcher keeps every operational rule the ruler lists, folding
 none. The pair of groups is matched closest first — a pair that matches
 whole, then one that matches on the part it was shown, then the fewest
 deltas — under `#01` / `#02` occurrence keys and one `collisions` row.
+
+**The rules a burn-rate entry was read from.** A hand-written alerting rule
+on an SLO's recorded series is not an operational rule: both readers fold it
+into that SLO's burn-rate entry (the spec keeps a rule in one place). The
+entry is `{ slo, windows }` and nothing else, and its windows are the
+reading's own — a rule's wait as `short`, constants for the rest (a
+severity only where the rule's label is literally SEV1–SEV3), the default
+pair when fewer than two survive — so the rule's expression (and with it
+the threshold) is in no field of the entry, its severity word in none, and
+its wait only where it survived as a window. Compared on the entry alone, a
+rule loosened in production (`> 0.01 for 5m critical` against `> 0.5 for 2h
+info`) read *aligned*.
+
+So each entry says, beside it, the rules it was read from:
+`observogram.source_rules.policy.burn_rate_alerts.<slo id>` = a JSON list of
+`{ name, expr, for?, severity?, labels?, partial? }`, the rules' terms as an
+operational rule's are read (`sourceRuleTerms`, tools/lib/sli-inference.mjs
+— the repository scan and the live fetch write the statement through that
+one function, over every rule whose expression references a recorded series
+of the SLO — a rule on two SLOs' series beside the first of them only, where
+both readers put it — in one order whatever order they were read in). The adapter puts
+the list on the burn-rate artefact as `sourceRules`, beside `spec`. When
+**both** artefacts of a pair state it, `deltasOf` also holds the rules to
+each other:
+
+- the rules both sides state under one name are paired, and each pair is
+  compared exactly as an operational alert rule: `expr`, `for`, `severity`,
+  and `labels` on the keys both sides were shown. A difference is a delta of
+  the burn-rate pair under the alert rule's own field name, with the rule's
+  name beside it — `{ field: 'expr', a, b, rule: '<name>' }` — so the pair
+  reads `drifted`, in the flat diff and in the requirement chain alike (the
+  chain's alert link is the burn-rate entry);
+- several rules under one name are paired closest first — a pair that
+  matches whole, then one that matches on the part it was shown, then two
+  with the same expression, then any two, each time the two of all still
+  open that differ least — by what the rules say, never by the order a side
+  lists them in, so the answer is the same with the sides swapped; their
+  deltas and notes say which pair of the name they are (`nth`);
+- a rule only one side states is held against nothing. That side may not
+  have listed it at all — another rule engine, a rule scope, a file the scan
+  did not read, a chart condition — so its absence is not reported as a rule
+  that does not run.
+
+The entry's own fields are compared as before: the rules are compared as
+well as `slo` and `windows`, never in their place, so nothing that read as
+a difference stops reading as one. Labels a listing never showed ride on the
+pair as `unobserved`, one entry per rule and side, each naming its `rule`
+(and `nth`); `partlyCompared` counts those rules. When only **one** side
+states its rules — a pack written by hand, or one read before the statement
+existed — nothing is held to it and the pair compares as it always did.
+
+Not stated, so compared as before:
+
+- an SLO any of whose rules the repository does not state as the ruler
+  will list it: a value a Helm chart or another template engine fills in at
+  deploy time, or a `${VAR}` / `$VAR` a deploy step substitutes, in its
+  name, expression, wait or labels (a capture group's `$1` and the ruler's
+  own `{{ $labels.x }}` in a label are the rule's text); a labels map filled
+  in whole, or given through a YAML anchor, alias or merge key; a label
+  written as a bare number or boolean (the ruler lists `99.0`, the scan
+  reads `99`); labels the rule's group gives every rule. Held against what
+  live renders there it would read as a difference, so that SLO states no
+  rules;
+- an SLO the fold gave no entry: the fold reads the first rule of an alert
+  name, on both sides, so a rule whose name an earlier rule took (on another
+  SLO, or on no SLO) may leave its own SLO with none, and there is then no
+  entry to state it beside (where the scan gives every SLO a default entry,
+  it does state the rule there, and the rule is compared). A repository with
+  no recording rules states nothing either.
+
+Not covered, as for an operational rule: a ruler that re-prints expressions
+(another number spelling, the aggregation modifier moved) reads the same
+rule as different on `expr`, and a listing with neither a labels map nor a
+flat severity on `labels` and `severity`; Helm control flow inside a rule,
+and a plain YAML scalar continued on the next line, are read wrong by the
+scan; a Grafana-managed rule's threshold kept in a threshold node is in no
+reading's `expr`; a label whose key the comparison drops everywhere as
+volatile (`source`, `host`, `version`, `url`, `description`, …) is
+compared on neither kind of rule. Two burn-rate entries on one SLO — no
+reader writes them — both carry the SLO's one statement, and a rule that
+differs then keeps the two from pairing by their own windows first.
 
 A live **snapshot** read within a scope (rebadge batch 3, C1: metric
 prefixes, dashboard or rule folder uids) records it per family as
@@ -481,7 +570,7 @@ import { keyOf, projectOf, deltasOf, diffPacks } from './tools/lib/diff.mjs';
 
 keyOf(artefact);              // behavioural identity key
 projectOf(artefact);          // comparable contract projection
-deltasOf(a, b);               // top-level contract deltas
+deltasOf(a, b);               // contract deltas; on a burn-rate pair also those of its source rules (`rule`)
 diffPacks(aLayered, bLayered); // directional drift report
 diffPacks(aLayered, bLayered, { scopeMode, service, identity }); // scopeMode service | family | all; identity as above
 ```

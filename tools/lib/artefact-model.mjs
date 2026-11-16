@@ -136,6 +136,59 @@ function stripRef(s) {
   return s.replace(/^ref:/, '').replace(/^slos\./, '').replace(/^slis\./, '');
 }
 
+// THE RULES A BURN-RATE ENTRY WAS READ FROM
+// A hand-written alerting rule on an SLO's recorded series is declared as
+// that SLO's burn-rate entry, { slo, windows }, a shape the spec closes; the
+// windows are the reader's own, so the rule's expression (its threshold) and
+// severity are in no field of the entry, and its wait only as a window. The
+// pack says them beside it, per SLO (docs/DIFF.md):
+//   observogram.source_rules.policy.burn_rate_alerts.<slo id> = <JSON list>
+// of { name, expr, for?, severity?, labels?, partial? } — a rule's terms as
+// operationalAlertRule reads them (sli-inference.mjs sourceRuleTerms, the
+// one function both readers write it through); `partial` is what the reader
+// was shown of the rule only in part, as an artefact's `partial` says it
+// ({ labels: [keys shown] }). The adapter puts the list on the burn-rate
+// artefact as `sourceRules`, beside `spec` (the entry is closed, and `spec`
+// may be copied back into a pack). When BOTH artefacts of a pair state it,
+// each rule is also held to its counterpart of the same name, as an
+// operational alert rule is (deltasOf). A rule only one side states, and a
+// side that states none, are held to nothing.
+export const SOURCE_RULES_ANNOTATION_PREFIX = 'observogram.source_rules.';
+
+/** The annotation that states the rules the burn-rate entry of `slo` was read from. */
+export function sourceRulesAnnotationKey(slo) {
+  return `${SOURCE_RULES_ANNOTATION_PREFIX}policy.burn_rate_alerts.${stripRef(slo)}`;
+}
+
+/**
+ * The annotation's value → the rules' terms, or null when it states none.
+ * A value that is not a JSON list of rules, each with a name and an
+ * expression, states nothing: half a list would be compared as the whole.
+ */
+export function parseSourceRulesAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let list;
+  try { list = JSON.parse(value); } catch { return null; }
+  if (!Array.isArray(list) || !list.length) return null;
+  const out = [];
+  for (const r of list) {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+    if (typeof r.name !== 'string' || !r.name || typeof r.expr !== 'string' || !r.expr) return null;
+    const terms = { name: r.name, expr: r.expr };
+    if (typeof r.for === 'string' && r.for) terms.for = r.for;
+    if (typeof r.severity === 'string' && r.severity) terms.severity = r.severity;
+    if (r.labels && typeof r.labels === 'object' && !Array.isArray(r.labels)) {
+      const labels = {};
+      for (const k of Object.keys(r.labels)) if (k !== '__proto__' && typeof r.labels[k] === 'string') labels[k] = r.labels[k];
+      if (Object.keys(labels).length) terms.labels = labels;
+    }
+    // Of `partial`, the one field the comparison reads: the label keys shown.
+    if (Array.isArray(r.partial?.labels)) terms.partial = { labels: r.partial.labels.filter((k) => typeof k === 'string') };
+    out.push(terms);
+  }
+  return out;
+}
+
 // Recursively normalise a value for order-independent structural equality:
 // sort object keys, drop volatile/empty fields, normalise expressions, and
 // collapse a version block to its declared contract (gating is an operational
@@ -375,8 +428,20 @@ export function behaviorOf(artefact) {
 // artefacts. Empty array ⇒ identical deployed behaviour (aligned).
 export function deltasOf(a, b) {
   const kind = sharedKind(a, b);
-  const ba = behaviorOf(a);
-  const bb = behaviorOf(b);
+  const deltas = behaviourDeltas(kind, behaviorOf(a), behaviorOf(b), a, b);
+  // A burn-rate pair whose two entries both say which alerting rules they
+  // were read from is held to those rules as well, each with its counterpart.
+  const rules = kind === 'burn_rate' ? compareSourceRules(a, b) : null;
+  return rules ? [...deltas, ...rules.deltas.map((d) => ({ ...d, a: ownCopy(d.a), b: ownCopy(d.b) }))] : deltas;
+}
+
+// A kept value handed out as the caller's own: what a caller does to one answer
+// must not reach the next.
+const ownCopy = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v);
+
+// The fields of two behaviours that differ. `a` and `b` carry what each side
+// said about its own evidence beside the behaviour (`partial`).
+function behaviourDeltas(kind, ba, bb, a, b) {
   const fields = new Set([...Object.keys(ba), ...Object.keys(bb)]);
   // The label keys both sides were shown, when a side saw an alert rule's
   // labels only in part; null when both saw them whole.
@@ -385,9 +450,10 @@ export function deltasOf(a, b) {
   for (const f of [...fields].sort()) {
     const sa = JSON.stringify(ba[f] ?? null);
     const sb = JSON.stringify(bb[f] ?? null);
-    if (sa !== sb && isPartialEvidenceExpressionDelta(kind, f, ba[f], bb[f])) continue;
-    if (sa !== sb && kind === 'alert_route' && f === 'channels' && isWithheldChannelDelta(ba[f], bb[f])) continue;
-    if (sa !== sb && shown && f === 'labels') {
+    if (sa === sb) continue;
+    if (isPartialEvidenceExpressionDelta(kind, f, ba[f], bb[f])) continue;
+    if (kind === 'alert_route' && f === 'channels' && isWithheldChannelDelta(ba[f], bb[f])) continue;
+    if (shown && f === 'labels') {
       // Compared on the keys both were shown, and reported on those alone.
       const la = pickKeys(ba[f], shown);
       const lb = pickKeys(bb[f], shown);
@@ -395,8 +461,8 @@ export function deltasOf(a, b) {
       continue;
     }
     // The pack's severity is read from the severity label: not shown, not compared.
-    if (sa !== sb && shown && f === 'severity' && !shown.includes('severity')) continue;
-    if (sa !== sb) deltas.push({ field: f, a: ba[f] ?? null, b: bb[f] ?? null });
+    if (shown && f === 'severity' && !shown.includes('severity')) continue;
+    deltas.push({ field: f, a: ba[f] ?? null, b: bb[f] ?? null });
   }
   return deltas;
 }
@@ -405,14 +471,22 @@ export function deltasOf(a, b) {
 // a field only in part (`partial`, the adapter's reading of
 // `observogram.partial.<symbol>`), the keys the OTHER side states there that
 // it was never shown — `[{ field, side, keys }]`, `side` the one that did
-// not see them. Empty for a pair compared whole.
+// not see them. A burn-rate pair says it of the alerting rules it was read
+// from, one entry per rule and side, each naming its `rule` (and, where the
+// name holds several pairs, which of them: `nth`). Empty for a pair compared
+// whole.
 export function unobservedOf(a, b) {
-  if (sharedKind(a, b) !== 'alert_rule') return [];
+  const kind = sharedKind(a, b);
+  if (kind === 'alert_rule') return ruleUnobserved(a, b, behaviorOf(a), behaviorOf(b));
+  if (kind === 'burn_rate') return (compareSourceRules(a, b)?.unobserved || []).map((u) => ({ ...u, keys: [...u.keys] }));
+  return [];
+}
+
+function ruleUnobserved(a, b, ba, bb) {
   const out = [];
-  for (const [side, self, other] of [['a', a, b], ['b', b, a]]) {
+  for (const [side, self, stated] of [['a', a, bb || {}], ['b', b, ba || {}]]) {
     const seen = partialKeysOf(self, 'labels');
     if (!seen) continue;
-    const stated = behaviorOf(other) || {};
     const labels = stated.labels && typeof stated.labels === 'object' && !Array.isArray(stated.labels) ? stated.labels : {};
     // The pack's severity is read from the severity label: stated there
     // without the label, it went uncompared all the same.
@@ -441,6 +515,151 @@ function pickKeys(map, keys) {
   const out = {};
   if (map && typeof map === 'object' && !Array.isArray(map)) for (const k of keys) if (k in map) out[k] = map[k];
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// The alerting rules a burn-rate entry was read from
+// ---------------------------------------------------------------------------
+
+// The list an artefact states, or null. The adapter's parse makes every item a
+// rule with a name and an expression; a list built by hand that is not one
+// states nothing.
+function sourceRulesOf(artefact) {
+  const list = artefact?.sourceRules;
+  if (!Array.isArray(list) || !list.length) return null;
+  const rule = (r) => r && typeof r === 'object' && typeof r.name === 'string' && r.name && typeof r.expr === 'string' && r.expr;
+  return list.every(rule) ? list : null;
+}
+
+// A rule's terms as the behaviour of the alert rule it is, and that behaviour
+// with what the rule says of its own evidence as one string — its content,
+// whatever order a side lists it in. Each read once a rule.
+const RULE_READINGS = new WeakMap();
+function ruleReading(terms) {
+  let reading = RULE_READINGS.get(terms);
+  if (!reading) {
+    const { partial, ...spec } = terms;
+    const behaviour = behaviorFor('alert_rule', spec);
+    const shown = Array.isArray(partial?.labels) ? [...partial.labels].sort() : null;
+    reading = { behaviour, signature: JSON.stringify([behaviour, shown]) };
+    RULE_READINGS.set(terms, reading);
+  }
+  return reading;
+}
+const ruleBehaviour = (terms) => ruleReading(terms).behaviour;
+
+function ruleDeltas(x, y) {
+  return behaviourDeltas('alert_rule', ruleBehaviour(x), ruleBehaviour(y), x, y);
+}
+
+// One name's rules on each side, paired closest first: a pair that matches
+// whole, then one that matches on the part it was shown, then two rules with
+// the same expression, then any two — and in each step the two of ALL still
+// open that differ least, ties settled by the rules' own content. Never each
+// rule in the order a side lists them: where a name holds more rules on one
+// side, the first listed would take a counterpart a later one is nearer to,
+// and the answer would change with the listing's order or with the sides
+// swapped. A rule left without a counterpart is not compared.
+function pairRulesOfOneName(as, bs) {
+  // Each pair is measured once, however often it is asked about.
+  const measured = as.map(() => []);
+  const measure = (i, j) => {
+    if (!measured[i][j]) {
+      const n = ruleDeltas(as[i], bs[j]).length;
+      const whole = n === 0 && ruleUnobserved(as[i], bs[j], ruleBehaviour(as[i]), ruleBehaviour(bs[j])).length === 0;
+      measured[i][j] = { n, whole };
+    }
+    return measured[i][j];
+  };
+  // A rule's content as its place among the contents of both sides: a pair's
+  // tie-break is its two places, the lower first — the same for (x, y) as for
+  // (y, x), and two numbers to compare where the contents are long strings.
+  const sa = as.map((r) => ruleReading(r).signature);
+  const sb = bs.map((r) => ruleReading(r).signature);
+  const place = new Map([...new Set([...sa, ...sb])].sort().map((s, at) => [s, at]));
+  const pa = sa.map((s) => place.get(s));
+  const pb = sb.map((s) => place.get(s));
+  const openA = new Set(as.keys());
+  const openB = new Set(bs.keys());
+  const pairs = [];
+  const steps = [
+    (i, j) => measure(i, j).whole,
+    (i, j) => measure(i, j).n === 0,
+    (i, j) => ruleBehaviour(as[i]).expr === ruleBehaviour(bs[j]).expr,
+    () => true,
+  ];
+  for (const among of steps) {
+    if (!openA.size || !openB.size) break;
+    // The step's candidates in the order they would be chosen one at a time;
+    // taking each whose two rules are both still open is that same choice.
+    const candidates = [];
+    for (const i of openA) {
+      for (const j of openB) {
+        if (!among(i, j)) continue;
+        candidates.push({ i, j, n: measure(i, j).n, lo: Math.min(pa[i], pb[j]), hi: Math.max(pa[i], pb[j]) });
+      }
+    }
+    candidates.sort((x, y) => x.n - y.n || x.lo - y.lo || x.hi - y.hi);
+    for (const { i, j } of candidates) {
+      if (!openA.has(i) || !openB.has(j)) continue;
+      openA.delete(i);
+      openB.delete(j);
+      pairs.push([as[i], bs[j]]);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * The comparison of the alerting rules two burn-rate entries were read
+ * from, or null unless BOTH state them: each rule against its counterpart of
+ * the same name, as an operational alert rule is compared.
+ *   deltas      under the alert rule's own field names (`expr`, `for`,
+ *               `severity`, `labels`), the rule's name beside them as
+ *               `rule` — never inside `field`, which the weight tables
+ *               read word by word — and, where the name holds several pairs,
+ *               which of them as `nth`
+ *   unobserved  what each pair could not be compared on, per rule
+ * A rule only one side states is held against nothing: the other side may
+ * simply not have listed it (another engine, a scope, a file the scan did
+ * not read, a chart condition). Where its wait was read into the entry's
+ * windows, those differ as they always did.
+ * Measured once for two lists, however often the pair is asked about (the
+ * diff's matcher and the chain each ask several times).
+ */
+const RULE_COMPARISONS = new WeakMap();
+function compareSourceRules(a, b) {
+  const ra = sourceRulesOf(a);
+  const rb = sourceRulesOf(b);
+  if (!ra || !rb) return null;
+  let known = RULE_COMPARISONS.get(ra);
+  if (!known) RULE_COMPARISONS.set(ra, known = new WeakMap());
+  let result = known.get(rb);
+  if (result) return result;
+  const byName = (list) => {
+    const groups = new Map();
+    for (const r of list) {
+      const key = low(r.name);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    return groups;
+  };
+  const ga = byName(ra);
+  const gb = byName(rb);
+  const deltas = [];
+  const unobserved = [];
+  for (const key of [...ga.keys()].filter((k) => gb.has(k)).sort()) {
+    const pairs = pairRulesOfOneName(ga.get(key), gb.get(key));
+    pairs.forEach(([x, y], at) => {
+      const which = pairs.length > 1 ? { rule: x.name, nth: at + 1 } : { rule: x.name };
+      for (const d of ruleDeltas(x, y)) deltas.push({ ...d, ...which });
+      for (const u of ruleUnobserved(x, y, ruleBehaviour(x), ruleBehaviour(y))) unobserved.push({ ...u, ...which });
+    });
+  }
+  result = { deltas, unobserved };
+  known.set(rb, result);
+  return result;
 }
 
 function sharedKind(a, b) {
@@ -504,7 +723,9 @@ function isExpressionReferenceOnly(value) {
   return false;
 }
 
-// True when two artefacts deploy to identical behaviour.
+// True when two artefacts deploy to identical behaviour — their `spec`s alone.
+// What rides beside the spec (the rules a burn-rate entry was read from, a
+// field shown in part) is deltasOf's to weigh.
 export function behaviorEqual(a, b) {
   return stableStringify(behaviorOf(a)) === stableStringify(behaviorOf(b));
 }
