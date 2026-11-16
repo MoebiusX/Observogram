@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.41 — 2026-11-16
+
 **The scan reads a rule file as the ruler does.** The YAML reader behind the scan stopped at the first value written over several lines — the form PyYAML and go-yaml v2 writers give a value with spaces past 80 columns — and dropped the rest of the document without a word; it read an anchor and an alias as text and a merge key as a key named `<<`, took an apostrophe inside a plain value for a quote, and folded a `>` scalar its own way. The scan ignored the labels a rule group gives every rule (Prometheus 3, vmalert) and re-printed a label written as a bare number or boolean (`99.0` as `99`). In 0.8.40 an SLO whose rules had group labels, a bare number or boolean label, or labels given through an anchor, alias or merge key stated no rules, and so did one whose rules came after a value the reader cut short: its alerts went uncompared. An SLO whose rule the reader misread — an expression cut at its line break, an anchor read into the expression, a comment kept in a label — stated it as misread and read drifted against a ruler running that same rule. Now the scan reads them as the ruler lists them: the first are compared, the second no longer drift.
 
 ### Fixed
@@ -24,6 +26,7 @@
 - `tools/test-mini-yaml.mjs`: each reading above as PyYAML reads the same text; numbers and booleans as written; an alias as a copy; merge keys naming aliases and one written in place; folded scalars; a `- - ` staircase; the alias budget (a long string, a long scalar aliased two thousand times, two documents sharing one budget, two texts under one `withAliasBudget`, a read apart from it, one fitting); merge keys over a block list, a flow list on two lines and an anchored list of aliases; lines of spaces in block scalars, empty block scalars; dashes parted by a no-break space; an inner flow closed in its key's column; the nesting limits; four inputs that took seconds to minutes reading in linear time; `valueBelowKey` on and off; what still reads as before; a key written with a line break not read back as other keys; keys with quotes inside them and a `<<` key round-tripped.
 - `tools/test-crawl.mjs`: a compose file with anchors, merge keys and a value below its key read whole, each backend at its container port; a port given through a variable with a default; a Helm template in the `helm create` layout declaring nothing its environment switches off; one alias budget across the files a scan reads, the files past it reported; alias-heavy files the scan only sniffs leaving the budget to the files it reads; a nested default and a long-form target from a variable; a repository pack and a Chaos Mesh resource with a value below its key read.
 - `tools/test-journey.mjs`: the null entry of a `gradeOff` list written `~` (`[chaos-validated, ]` is now the one-entry list YAML makes of it).
+- Cut as 0.8.41: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1948 → 1950.
 - **Downstream:** none — tests only.
 
