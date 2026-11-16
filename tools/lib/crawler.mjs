@@ -251,8 +251,38 @@ const REPO_YAML = Object.freeze({ valueBelowKey: true });
 const TEMPLATE_YAML = Object.freeze({});
 let repoYaml = REPO_YAML;
 
+// Where the reader stopped in the file the walk reads: at a line it cannot
+// place it ends that document, and nothing after the line is read
+// (mini-yaml's onStop). walkClassified sets it for each file, so the scan
+// says where; what walkStrippedTemplate reads of a template reports the
+// template's own lines (mappingStops). Null outside the walk.
+let noteStop = null;
+
 function parseYamlDocs(content, options) {
-  return parseYamlAll(content, { ...repoYaml, ...options }).filter(d => d && typeof d === 'object');
+  return parseYamlAll(content, { ...repoYaml, ...(noteStop ? { onStop: noteStop } : {}), ...options })
+    .filter(d => d && typeof d === 'object');
+}
+
+// While `fn` runs, a stop at line n of the text being read is reported as
+// line lineAt(n) of the file it was cut from.
+function mappingStops(lineAt, fn) {
+  const outer = noteStop;
+  noteStop = outer ? (line) => outer(lineAt(line)) : null;
+  try { return fn(); } finally { noteStop = outer; }
+}
+
+// The reader's error message (`yaml line N: …`) with the line of the file
+// the text was cut from.
+const atFileLine = (message, lineAt) => String(message).replace(/^yaml line (\d+):/, (_, n) => `yaml line ${lineAt(Number(n))}:`);
+
+// The warning for the lines of one file where the reader stopped.
+function stoppedWarning(relPath, lines) {
+  const sorted = [...lines].sort((x, y) => x - y);
+  const shown = sorted.length > 5 ? [...sorted.slice(0, 5), `${sorted.length - 5} more`] : sorted;
+  const list = shown.length === 1 ? String(shown[0]) : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+  return sorted.length === 1
+    ? `${relPath}: the scan stopped reading at line ${list}, a line the YAML reader cannot place; the rest of that document was not read.`
+    : `${relPath}: the scan stopped reading at lines ${list}, lines the YAML reader cannot place; the rest of each of those documents was not read.`;
 }
 
 // Kubernetes workload kinds whose pod template carries container images we
@@ -792,6 +822,10 @@ export function crawlFiles(filesInput, opts = {}) {
   // are bounded each on its own.
   withAliasBudget(() => walkClassified());
   function walkClassified() { for (const f of classified) {
+    // Where the reader stopped in this file, by its own lines: one warning
+    // for the file, whichever walker (or a second reading) met them.
+    const stops = new Set();
+    noteStop = (line) => { stops.add(line); };
     try {
       switch (f.kind) {
         case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary); break;
@@ -812,11 +846,14 @@ export function crawlFiles(filesInput, opts = {}) {
         // live in the templated manifests (handled as 'helm-template'). We
         // record the chart only as a signal that this is a Helm-packaged repo.
         case 'helm-chart':       summary.discovered.helmCharts = (summary.discovered.helmCharts || 0) + 1; break;
-        case 'observability-pack': repoPacks.push({ relPath: f.relPath, read: readRepoPack(f.relPath, f.content) }); break;
+        case 'observability-pack': repoPacks.push({ relPath: f.relPath, read: readRepoPack(f.relPath, f.content, { onStop: noteStop }) }); break;
       }
     } catch (e) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
+    } finally {
+      noteStop = null;
     }
+    if (stops.size) summary.warnings.push(stoppedWarning(f.relPath, stops));
   } }
 
   settleCollectorGuesses(collectorState, pipelines, evidence, summary);
@@ -1433,40 +1470,55 @@ const HELM_CLOSE = '\u0000helm-close\u0000';
 // deploy time, which the repository does not state.
 const HELM_VALUE = 'helmvalue';
 const helmLiteral = (text) => text.replaceAll('{{', HELM_OPEN).replaceAll('}}', HELM_CLOSE);
+
+// The stripped text and, for each of its lines, the index of the line of
+// `content` it was left from (`origin`; a dropped line leaves none): where
+// the reader stops in the text is a line of the template.
 function stripGoTemplate(content) {
-  return content.split(/\r?\n/).map((line) => {
+  const kept = [];
+  const origin = [];
+  content.split(/\r?\n/).forEach((line, i) => {
     const t = line.trim();
-    if (/^\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}$/.test(t)) return null;            // comment
-    if (/^\{\{-?\s*(if|else|end|range|with|define|block)\b.*?-?\}\}$/.test(t)) return null; // control flow
-    return line
+    if (/^\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}$/.test(t)) return;            // comment
+    if (/^\{\{-?\s*(if|else|end|range|with|define|block)\b.*?-?\}\}$/.test(t)) return; // control flow
+    kept.push(line
       .replace(/\{\{-?\s*"((?:[^"\\]|\\.)*)"\s*-?\}\}/g, (_, s) => helmLiteral(s.replace(/\\(.)/g, '$1')))   // {{ "…" }} prints …
       .replace(/\{\{-?\s*`([^`]*)`\s*-?\}\}/g, (_, s) => helmLiteral(s))                                      // {{ `…` }} prints …
       .replace(/\{\{-?[\s\S]*?-?\}\}/g, HELM_VALUE) // inline value injection
-      .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}');
-  }).filter((l) => l !== null).join('\n');
+      .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}'));
+    origin.push(i);
+  });
+  return { text: kept.join('\n'), origin };
 }
+
+// A line of a stripped text (from 1) → the line of the template it was left
+// from (from 1), the template's lines counted from `first` (an index).
+const templateLineAt = (origin, first = 0) => (n) => (origin.length
+  ? first + origin[Math.min(Math.max(n, 1), origin.length) - 1] + 1
+  : first + n);
 
 // Lift the embedded file payloads out of a Kubernetes ConfigMap's `data:` map.
 // Each `  <name>.<ext>: |` literal-block scalar (Prometheus rules, scrape
 // configs, dashboards, \u2026) is captured verbatim and de-indented. The scan is
 // purely indentation-driven, so the surrounding Helm/Go-template directives in
-// the unrendered manifest don't get in the way.
+// the unrendered manifest don't get in the way. Each block also says where
+// its body starts (`first`, the index of its first line in `content`).
 function extractConfigMapData(content) {
   const lines = content.split(/\r?\n/);
   const blocks = [];
   let dataIndent = -1;      // indentation of the active `data:` key, or -1
-  let current = null;       // { key, indent, body: [] }
+  let current = null;       // { key, indent, body: [], first }
 
   const flush = () => {
     if (current && current.body.some((l) => l.trim())) {
       const widths = current.body.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
       const base = widths.length ? Math.min(...widths) : 0;
-      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(base)).join('\n') });
+      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(base)).join('\n'), first: current.first });
     }
     current = null;
   };
 
-  for (const line of lines) {
+  for (const [i, line] of lines.entries()) {
     const indent = line.match(/^ */)[0].length;
     const trimmed = line.trim();
 
@@ -1486,7 +1538,7 @@ function extractConfigMapData(content) {
       } else {
         const keyM = /^(\s*)([\w][\w.-]*):\s*\|[-+0-9]*\s*$/.exec(line);
         if (keyM && keyM[1].length > dataIndent) {
-          current = { key: keyM[2], indent: keyM[1].length, body: [] };
+          current = { key: keyM[2], indent: keyM[1].length, body: [], first: i + 1 };
           continue;
         }
       }
@@ -2495,8 +2547,10 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
 
   const blocks = extractConfigMapData(f.content);
 
-  for (const { key, body } of blocks) {
-    const clean = stripGoTemplate(body);
+  for (const { key, body, first } of blocks) {
+    const { text: clean, origin } = stripGoTemplate(body);
+    // What the reader says of the block, it says of the template's own lines.
+    const lineAt = templateLineAt(origin, first);
     const lk = key.toLowerCase();
     const sub = { relPath: `${f.relPath}#${key}`, content: clean };
     let kind = 'unknown';
@@ -2514,8 +2568,8 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     // A ConfigMap whose data key looks like an observability artefact but
     // can't be parsed is a genuine signal worth surfacing; ordinary
     // non-observability data keys (scripts, plain config) are simply skipped.
-    try { route(kind, sub); }
-    catch (e) { summary.warnings.push(`Failed to parse ${sub.relPath}: ${e.message}`); }
+    try { mappingStops(lineAt, () => route(kind, sub)); }
+    catch (e) { summary.warnings.push(`Failed to parse ${sub.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
 
   // No embedded ConfigMap payloads — the template may itself be a single
@@ -2525,10 +2579,10 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
   // overwhelming majority of chart templates are Deployments, Services,
   // Secrets, etc. that carry no observability contracts.
   if (blocks.length === 0) {
-    const clean = stripGoTemplate(f.content);
+    const { text: clean, origin } = stripGoTemplate(f.content);
     const kind = sniffObservabilityKind(clean);
     if (kind !== 'unknown') {
-      try { route(kind, { relPath: f.relPath, content: clean }); } catch (_) { /* speculative */ }
+      try { mappingStops(templateLineAt(origin), () => route(kind, { relPath: f.relPath, content: clean })); } catch (_) { /* speculative */ }
     }
   }
 }

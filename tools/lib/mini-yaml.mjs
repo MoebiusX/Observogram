@@ -65,11 +65,13 @@
 //
 // Outside this subset the reader throws with the line number, reads the
 // construct as text, or — at a line it cannot place — stops reading the
-// block it is in there: a deeper line ends the document. A flow collection's
-// content line in or left of its key's column (only closing brackets may
-// stand there) leaves the flow as the text of its first line; that line is
-// then read as the next key when it holds one, and otherwise the reader
-// throws or ends the document there.
+// block it is in there: a deeper line ends the document (`onStop` hears of
+// each document so ended). A flow collection's content line in or left of
+// its key's column (only closing brackets may stand there) leaves the flow
+// as the text of its first line; that line is then read as the next key
+// when it holds one, and otherwise the reader throws or ends the document
+// there. A line number, in an error or to `onStop`, counts from the start of
+// the text, `---` lines and all.
 
 export function parse(text, options = {}) {
   const docs = parseAll(text, options);
@@ -88,37 +90,48 @@ export function parse(text, options = {}) {
 // values and are left untouched). Single-document input yields a one-element
 // array, so callers that only care about the first document can use parse().
 // `options.asWritten`: numbers and booleans read as the text they are
-// written in; `options.valueBelowKey`: a value on the line below its key.
+// written in; `options.valueBelowKey`: a value on the line below its key;
+// `options.onStop(line)`: called for each document the reader ends before
+// its last line, at a line it cannot place, with that line's number (from
+// 1, in `text`) — what follows it in the document is not read. parse()
+// reads every document too, and reports them all.
 export function parseAll(text, options = {}) {
   if (typeof text !== 'string') throw new Error('mini-yaml: input must be a string');
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);   // strip BOM
   text = text.replace(/\r\n?/g, '\n');
   const lines = text.split('\n');
 
-  // Split into documents on bare `---` / `...` markers at column 0.
+  // Split into documents on bare `---` / `...` markers at column 0; each
+  // document keeps the index of its first line in the text.
   const docs = [];
   let current = [];
+  let first = 0;
   const hasContent = ls => ls.some(l => { const t = l.trim(); return t !== '' && !t.startsWith('#'); });
-  for (const line of lines) {
-    if (/^---(?:\s.*)?$/.test(line) || line === '---') {
-      if (hasContent(current)) docs.push(current);
+  lines.forEach((line, i) => {
+    if (/^---(?:\s.*)?$/.test(line) || line === '---' || /^\.\.\.(?:\s.*)?$/.test(line) || line === '...') {
+      if (hasContent(current)) docs.push({ lines: current, first });
       current = [];
-      continue;
-    }
-    if (/^\.\.\.(?:\s.*)?$/.test(line) || line === '...') {
-      if (hasContent(current)) docs.push(current);
-      current = [];
-      continue;
+      first = i + 1;
+      return;
     }
     current.push(line);
-  }
-  if (hasContent(current)) docs.push(current);
+  });
+  if (hasContent(current)) docs.push({ lines: current, first });
 
   if (docs.length === 0) return [null];
   // One alias budget for the whole call — a `---` does not renew it — or the
   // one withAliasBudget opened around it.
   const budget = sharedBudget ?? { copied: 0, shared: false };
-  return docs.map(docLines => parseAtIndent(new TokenStream(docLines, options, budget), 0));
+  const onStop = typeof options?.onStop === 'function' ? options.onStop : null;
+  return docs.map((doc) => {
+    const stream = new TokenStream(doc.lines, options, budget, doc.first);
+    const value = parseAtIndent(stream, 0);
+    if (onStop) {
+      const unread = stream.nextSignificantIdx();
+      if (unread !== -1) onStop(stream.lineNo(unread));
+    }
+    return value;
+  });
 }
 
 // One alias budget for every parse made while `fn` runs (it must be
@@ -142,9 +155,11 @@ export function apartFromAliasBudget(fn) {
 }
 
 class TokenStream {
-  constructor(lines, options, budget) {
+  constructor(lines, options, budget, first = 0) {
     this.lines = lines;
     this.idx = 0;
+    // The index, in the text, of the document's first line.
+    this.first = first;
     // The document's anchors: `&name` → the node it names (a later anchor of
     // the same name replaces it, as YAML 1.2 says).
     this.anchors = new Map();
@@ -163,6 +178,8 @@ class TokenStream {
     this.valueBelowKey = options?.valueBelowKey === true;
   }
   hasMore() { return this.idx < this.lines.length; }
+  // The number, from 1 in the whole text, of the document's line `i`.
+  lineNo(i) { return this.first + i + 1; }
   // Index of the next significant (non-blank, non-comment) line. -1 at EOF.
   // Does NOT consume.
   nextSignificantIdx() {
@@ -336,7 +353,7 @@ function parseBlockMapping(stream, indent, out = {}, merges = []) {
 
     const colon = findMappingColon(content);
     if (colon === -1) {
-      throw new Error(`yaml line ${sig + 1}: expected "key: value", got ${JSON.stringify(content)}`);
+      throw new Error(`yaml line ${stream.lineNo(sig)}: expected "key: value", got ${JSON.stringify(content)}`);
     }
     stream.idx = sig + 1;
     const key = resolveKey(stream, content.slice(0, colon).trim());
@@ -387,7 +404,7 @@ function parseBlockSequence(stream, indent) {
       // first dash, the first on this line.
       if (stream.nestLine !== sig) {
         if (leadingDashes(line.slice(indent)) > MAX_ITEM_NESTING + 1) {
-          throw new Error(`yaml line ${sig + 1}: sequences nested past ${MAX_ITEM_NESTING} levels on one line`);
+          throw new Error(`yaml line ${stream.lineNo(sig)}: sequences nested past ${MAX_ITEM_NESTING} levels on one line`);
         }
         stream.nestLine = sig;
       }

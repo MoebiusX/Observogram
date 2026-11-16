@@ -33,11 +33,14 @@ export function isRepoPackPath(relPath) {
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** The ObservabilityPack documents in a file's text, or [] (a parse failure is []). */
-export function repoPackDocuments(content) {
+/**
+ * The ObservabilityPack documents in a file's text, or [] (a parse failure is []).
+ * `onStop(line)` hears where the reader ended a document early (mini-yaml's onStop).
+ */
+export function repoPackDocuments(content, { onStop = null } = {}) {
   let docs;
   // A repository file: a value on the line below its key is read, as the scan reads the rest (crawler.mjs REPO_YAML).
-  try { docs = parseYamlAll(String(content ?? ''), { valueBelowKey: true }); } catch { return []; }
+  try { docs = parseYamlAll(String(content ?? ''), { valueBelowKey: true, ...(onStop ? { onStop } : {}) }); } catch { return []; }
   return docs.filter(d => isObj(d) && d.kind === 'ObservabilityPack');
 }
 
@@ -69,9 +72,10 @@ export function baselinesErrors(b) {
  * evidence path, `<file>#spec.validation.chaos_experiments.<id>`.
  * `baselines` is `{ entry, source: '<file>#spec.baselines' }` or null (the
  * later document wins); `baselinesRefused` the reason one was left out, or null.
+ * `onStop` as repoPackDocuments takes it.
  */
-export function readRepoPack(relPath, content) {
-  const docs = repoPackDocuments(content);
+export function readRepoPack(relPath, content, { onStop = null } = {}) {
+  const docs = repoPackDocuments(content, { onStop });
   if (!docs.length) return null;
   const chaos = [];
   const refused = [];

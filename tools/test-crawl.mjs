@@ -1306,4 +1306,44 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify(endpoints) === JSON.stringify(['http://grafana:3000', 'http://prometheus:9090']), 'a nested default and a long-form target from a variable draft their ports', endpoints);
 }
 
+// ---------- where the reader stops, the scan says: the file and its line ----------
+{
+  const read = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const stopsOf = (out) => out.summary.warnings.filter((w) => /stopped reading/.test(w));
+  // A rule file: a tag on a block mapping stops the document at the line below it; the rules above it are read.
+  const rules = ['groups:', '  - name: shop', '    rules:', '      - alert: First', '        expr: up == 0', '      - alert: Second', '        expr: up == 1',
+    '        labels: !!map', '          severity: page', '      - alert: Third', '        expr: up == 2'].join('\n') + '\n';
+  const ruleScan = read({ 'rules/alerts.yml': rules });
+  assert(JSON.stringify(stopsOf(ruleScan)) === JSON.stringify(['rules/alerts.yml: the scan stopped reading at line 9, a line the YAML reader cannot place; the rest of that document was not read.']),
+    'a rule file the reader stops in: the file and the line', ruleScan.summary.warnings);
+  assert(JSON.stringify(ruleScan.canonical.spec.policy.burn_rate_alerts.map((e) => e.slo).sort()) === JSON.stringify(['first', 'second']), 'the rules above the line are read', ruleScan.canonical.spec.policy.burn_rate_alerts);
+  // Read twice (its labels hold a bare number, read again as written): one warning still.
+  const twice = read({ 'rules/alerts.yml': rules.replace('      - alert: First\n        expr: up == 0\n', '      - alert: First\n        expr: up == 0\n        labels:\n          priority: 2\n') });
+  assert(stopsOf(twice).length === 1 && /at line 11,/.test(stopsOf(twice)[0]), 'a file read a second time is warned about once', twice.summary.warnings);
+  // A manifest of two documents: the line is the file's.
+  const manifest = ['apiVersion: apps/v1', 'kind: Deployment', 'metadata: { name: a }', 'spec: { template: { spec: { containers: [{ name: p, image: "prom/prometheus:v2.53.0" }] } } }',
+    '---', 'apiVersion: apps/v1', 'kind: Deployment', 'metadata: !!map', '  name: b', 'spec: { template: { spec: { containers: [{ name: g, image: "grafana/grafana:11.2.0" }] } } }'].join('\n') + '\n';
+  const k8s = read({ 'k8s/app.yaml': manifest });
+  assert(JSON.stringify(stopsOf(k8s)) === JSON.stringify(['k8s/app.yaml: the scan stopped reading at line 9, a line the YAML reader cannot place; the rest of that document was not read.'])
+    && products(k8s).has('prometheus') && !products(k8s).has('grafana'), 'a second document stopped in: the line counts from the top of the file', [k8s.summary.warnings, [...products(k8s)]]);
+  // A Helm template: lines of its ConfigMap, through the template actions the scan sets aside, are the template's own.
+  const template = ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "shop.fullname" . }}-rules', 'data:', '  alerts.rules.yaml: |',
+    '    groups:', '      - name: shop', '        rules:', '        {{- if .Values.extra }}', '          - alert: Extra', '            expr: up == 3', '        {{- end }}',
+    '          - alert: Tagged', '            expr: up == 4', '            labels: !!map', '              severity: page'].join('\n') + '\n';
+  const chart = read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/rules.yaml': template });
+  assert(JSON.stringify(stopsOf(chart)) === JSON.stringify(['charts/shop/templates/rules.yaml: the scan stopped reading at line 17, a line the YAML reader cannot place; the rest of that document was not read.']),
+    'a template\'s ConfigMap stopped in: the template\'s own line', chart.summary.warnings);
+  // And an error in it names that line too.
+  const broken = read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/rules.yaml': template.replace('          - alert: Tagged', '        not a rule\n          - alert: Tagged') });
+  assert(broken.summary.warnings.some((w) => w.startsWith('Failed to parse charts/shop/templates/rules.yaml#alerts.rules.yaml: yaml line 14:')),
+    'an error in a template\'s ConfigMap names the template\'s line', broken.summary.warnings);
+  // A repository's own pack.
+  const pack = read({ '.observability/pack.yaml': 'apiVersion: observability.platform/v1\nkind: ObservabilityPack\nmetadata: { name: shop }\nspec:\n  baselines: !!map\n    mttd_target_p50: 5m\n' });
+  assert(stopsOf(pack).length === 1 && /^\.observability\/pack\.yaml: .* at line 6,/.test(stopsOf(pack)[0]), 'a repository pack stopped in', pack.summary.warnings);
+  // Several documents stopped in, one warning; a file the scan does not read, none.
+  const many = read({ 'k8s/app.yaml': `${manifest}---\n${manifest}`, 'docs/notes.yaml': 'a: 1\n  b: 2\n' });
+  assert(JSON.stringify(stopsOf(many)) === JSON.stringify(['k8s/app.yaml: the scan stopped reading at lines 9 and 20, lines the YAML reader cannot place; the rest of each of those documents was not read.']),
+    'one warning for a file stopped in twice; none for a file the scan does not read', many.summary.warnings);
+}
+
 report('crawler');
