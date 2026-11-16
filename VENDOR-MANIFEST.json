@@ -168,8 +168,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/backend-products.mjs": {
-      "sha256": "039b6b90311c35b3cbac5759bd4ac7e45c1f42da0698f64595e873de733eb33e",
-      "bytes": 9414,
+      "sha256": "306d1b64e8c3cd9f4ac72a15102966eaaa9339dc068a9459d56f8db16fa7e091",
+      "bytes": 9839,
       "exports": [
         "BACKEND_PATTERNS",
         "backendForScrapeJob",
@@ -504,8 +504,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "13db5f29d577de2cbc0bce5f9fd791ccfea17421852f511e3e3a8532a56a053d",
-      "bytes": 179518,
+      "sha256": "73ab8f9c57b1e49ef7ec7d421610c3d88897f921d6b4847b1225f423fa6caba0",
+      "bytes": 188946,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -1186,8 +1186,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/repo-pack.mjs": {
-      "sha256": "a2fd930d27b39b1b0945e408189e69f434b5eda8b42668e1be63db37571f7ea2",
-      "bytes": 5741,
+      "sha256": "4b8f5a7134bca50362ed688beff6b42a8ba76a2c235d8014212348118a168a5b",
+      "bytes": 5937,
       "exports": [
         "baselinesErrors",
         "isRepoPackPath",

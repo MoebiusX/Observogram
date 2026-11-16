@@ -1328,12 +1328,37 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'acme/kube-thanos:0.1.0': null, 'acme/sms-alertmanager:1.0': null, 'acme/kube-mimir:1.0': null, 'acme/app-elasticsearch:1.0': null,
     'acme/my-cilium:1.0': null, 'acme/log-vector:1.0': null, 'acme/k8s-promtail:1.0': null, 'prometheus:5000/app:1.0': null,
     'prom/blackbox-exporter:v0.25.0': null, 'quay.io/prometheuscommunity/postgres-exporter:v0.15.0': null,
+    // A distribution's build keeps the product's name after its prefix.
+    'quay.io/openshift/origin-prometheus:4.14': 'prometheus', 'registry.redhat.io/openshift4/ose-prometheus:v4.12': 'prometheus',
+    'rancher/prom-prometheus:v2.18.2': 'prometheus', 'quay.io/openshift/origin-prometheus-alertmanager:4.14': 'alertmanager',
+    'registry.redhat.io/openshift4/ose-prometheus-alertmanager:v4.12': 'alertmanager', 'rancher/prom-alertmanager:v0.21.0': 'alertmanager',
+    'cgr.dev/chainguard/prometheus-alertmanager:latest': 'alertmanager', 'ubuntu/prometheus-alertmanager:0.25-22.04_stable': 'alertmanager',
+    'rancher/grafana-grafana:7.1.5': 'grafana', 'quay.io/openshift/origin-grafana:4.10': 'grafana', 'quay.io/openshift/origin-thanos:4.14': 'thanos',
+    // A bare word is no image reference: a values file's datasource, plugin or service name.
+    Loki: null, prometheus: null, alertmanager: null, Tempo: null, mimir: null,
   };
   for (const [ref, want] of Object.entries(cases)) assert(productOf(ref) === want, `image ${ref}: ${want ?? 'no backend'}`, productOf(ref), want);
   const out = crawlFiles({ 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.55.1\n  mq-exporter:\n    image: registry.example/mq/mq_prometheus:v6.0.0\n' },
     { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
   const drafted = (out.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.id}`);
   assert(JSON.stringify(drafted) === JSON.stringify(['prometheus:metrics-prometheus']), 'an exporter beside Prometheus in a compose file is not drafted as a second Prometheus', drafted);
+  // A values file's names (Grafana datasources, a Kong plugin, an ingress service, a remote-write target) draft nothing.
+  const values = [
+    'grafana:', '  image:', '    repository: grafana/grafana', '    tag: 11.2.0', '  datasources:', '    - name: Loki', '      url: https://logs.example', '    - name: Tempo',
+    'kong:', '  plugins:', '    - name: prometheus', 'ingress:', '  backend:', '    service:', '      name: alertmanager', 'remoteWrite:', '  - name: mimir', '    url: https://mimir.example',
+  ].join('\n') + '\n';
+  const valuesScan = crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/values.yaml': values }, { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const fromValues = (valuesScan.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`);
+  assert(JSON.stringify(fromValues) === JSON.stringify(['grafana:11.2.0']), 'names in a values file draft no backend; the image does, with its tag', fromValues);
+  // A compose image as `docker compose config` resolves it, and a tag read after the last `:` no `/` follows.
+  const compose = [
+    'services:', '  prometheus:', '    image: ${REGISTRY}prometheus:v2.53.0', '  grafana:', '    image: ${GRAFANA_IMAGE:-grafana/grafana}:${GRAFANA_TAG:-11.2.0}',
+    '  alertmanager:', '    image: registry.example:5000/prom/alertmanager', '  tempo:', '    image: grafana/tempo:2.4.0@sha256:0123456789abcdef',
+  ].join('\n') + '\n';
+  const composeScan = crawlFiles({ 'docker-compose.yml': compose }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const resolved = (composeScan.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).sort();
+  assert(JSON.stringify(resolved) === JSON.stringify(['alertmanager:-', 'grafana:11.2.0', 'prometheus:2.53.0', 'tempo:2.4.0']),
+    'compose images resolved as compose resolves them; a registry port or a digest is no version', resolved);
 }
 
 // ---------- a Prometheus Operator PrometheusRule is read as a rule file is ----------
@@ -1393,11 +1418,33 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     assert(detectArtefactKind('deploy/monitoring.yaml', text) === 'unknown' && out.summary.discovered.recordingRules === 0 && out.summary.discovered.burnRateAlerts === 0,
       `not a PrometheusRule: ${what}`, out.summary.discovered);
   }
-  // A template whose rule holds an include at the left margin cannot be read past it: the scan says where, in the template's lines.
+  // A resource's rule in LogQL is a Loki ruler's (Grafana Alloy loads PrometheusRule resources into one).
+  const logql = read({ 'k8s/prometheusrule.yaml': resource().replace('rate(kube_pod_container_status_restarts_total{container="checkout"}[15m]) > 0', 'sum(rate({app="checkout"} |= "error" [5m])) > 10') });
+  assert(JSON.stringify(rulesOf(logql)) === JSON.stringify(['CheckoutPodRestarting@loki', 'policy:checkout_errors_99', 'record:checkout:errors:ratio_5m']), 'a resource\'s LogQL rule is the loki engine\'s', rulesOf(logql));
+  // Whatever the file is called: named for a collector or an Alertmanager, a resource is read beside what the file is read as.
+  for (const path of ['k8s/otel-collector.yaml', 'k8s/collector-rules.yaml', 'k8s/alertmanager.yaml']) {
+    assert(JSON.stringify(rulesOf(read({ [path]: `${deployment}---\n${resource()}` }))) === JSON.stringify(want), `a resource in ${path} is read`, rulesOf(read({ [path]: `${deployment}---\n${resource()}` })));
+  }
+  // A template with a byte-order mark, and one whose apiVersion the chart fills in.
+  const bom = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': `${String.fromCharCode(0xFEFF)}${resource()}` });
+  assert(JSON.stringify(rulesOf(bom)) === JSON.stringify(want), 'a template with a byte-order mark is read', rulesOf(bom));
+  const templatedApi = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('apiVersion: monitoring.coreos.com/v1', 'apiVersion: {{ include "checkout.prometheusRule.apiVersion" . }}') });
+  assert(JSON.stringify(rulesOf(templatedApi)) === JSON.stringify(want), 'a template whose apiVersion the chart fills in is read', rulesOf(templatedApi));
+  // A template whose rule holds an include alone on a line (at the margin, the kube-prometheus-stack way): what
+  // precedes the rule it stands in is read, that rule and what follows are not, and the scan says where.
   const margin = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('        labels:\n            severity: critical',
     '        labels:\n{{ toYaml .Values.extraLabels | indent 10 }}\n            severity: critical') });
-  assert(margin.summary.warnings.some((w) => w.startsWith('Failed to parse charts/checkout/templates/prometheusrule.yaml: yaml line 17:')),
-    'a PrometheusRule template the reader cannot read past an include: the template and its line', margin.summary.warnings);
+  // (the SLO the recording rule gives keeps the default burn-rate pair the scan synthesizes when it reads no alert on it)
+  assert(JSON.stringify(rulesOf(margin)) === JSON.stringify(['policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'])
+    && margin.summary.warnings.some((w) => w === 'charts/checkout/templates/prometheusrule.yaml: the scan stopped reading at line 17, a line the YAML reader cannot place; the rest of that document was not read.')
+    && !margin.summary.warnings.some((w) => /Failed to parse/.test(w)),
+    'a PrometheusRule template with an include alone on a line: the rules before the rule it stands in, and the line', [rulesOf(margin), margin.summary.warnings]);
+  // The same include indented under the rule's labels (the `nindent` way): the same reading.
+  const indented = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('        labels:\n            severity: critical',
+    '        labels:\n            {{- toYaml .Values.extraLabels | nindent 12 }}\n            severity: critical') });
+  assert(JSON.stringify(rulesOf(indented)) === JSON.stringify(['policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'])
+    && indented.summary.warnings.some((w) => /prometheusrule\.yaml: the scan stopped reading at line 17,/.test(w)),
+    'a PrometheusRule template with an indented include in a rule: the same', [rulesOf(indented), indented.summary.warnings]);
   // A lifecycle block at the top of a manifest covers the rules of its resource, the manifest's first document a workload.
   const planned = read({ 'deploy/app.yaml': `# observogram-lifecycle:\n#   deployment:\n#     prod: planned\n${deployment}---\n${resource()}` });
   const lifecycle = JSON.parse(planned.canonical.metadata.annotations['observogram.lifecycle'] ?? '[]');
@@ -1410,7 +1457,22 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'a workload after a Service in one manifest gives its image', [...products(service)]);
 }
 
-// ---------- a rule whose terms a chart fills in is not declared, and the scan names it ----------
+// ---------- one name, two engines: a Grafana-managed rule and a Prometheus rule are two rules, not two forms of one ----------
+{
+  const out = crawlFiles({
+    'prometheus/recording.yml': 'groups:\n  - name: rec\n    rules:\n      - record: shop:checkout:error_ratio_5m\n        expr: sum(rate(e[5m])) / sum(rate(t[5m]))\n',
+    'prometheus/alerts.rules.yml': 'groups:\n  - name: stack\n    rules:\n      - alert: StackDown\n        expr: up{job="stack"} == 0\n        for: 5m\n',
+    'grafana/provisioning/alerting/stack.yaml': [
+      'apiVersion: 1', 'groups:', '  - orgId: 1', '    name: stack', '    folder: stack', '    interval: 1m', '    rules:', '      - uid: stack-down', '        title: StackDown', '        condition: A',
+      '        data:', '          - refId: A', '            datasourceUid: prom', '            model:', '              expr: up{job="stack"} == 0', '        for: 5m',
+    ].join('\n') + '\n',
+  }, { repoName: 'stack', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const declared = (out.canonical.spec.alerting?.rules || []).map((r) => `${r.name}@${r.engine}`).sort();
+  assert(JSON.stringify(declared) === JSON.stringify(['StackDown@grafana', 'StackDown@prometheus']) && !out.summary.warnings.some((w) => /written differently|written the same/.test(w)),
+    'a Grafana-managed rule and a Prometheus rule of one name are both declared, neither a copy of the other', [declared, out.summary.warnings]);
+}
+
+// ---------- not covered: a chart's rule holding a value the chart fills in is declared with the placeholder ----------
 {
   const template = (inConfigMap) => (inConfigMap ? [
     'apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: {{ include "shop.fullname" . }}-rules', 'data:', '  alerts.rules.yaml: |',
@@ -1429,10 +1491,10 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
       'charts/shop/templates/rules.yaml': template(inConfigMap),
     }, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
     const where = inConfigMap ? 'in a ConfigMap' : 'in a PrometheusRule';
-    assert(JSON.stringify((out.canonical.spec.alerting?.rules || []).map((r) => r.name)) === JSON.stringify(['ShopDiskFull']),
-      `${where}: a rule whose expression holds a value the chart fills in is not declared; the rest are`, out.canonical.spec.alerting?.rules);
-    assert(out.summary.warnings.some((w) => /^1 alert rule\(s\) hold a value a chart or a deploy step fills in, and are not declared in alerting\.rules .*: ShopDown \(charts\/shop\/templates\/rules\.yaml\)\.$/.test(w)),
-      `${where}: and the scan names it`, out.summary.warnings);
+    // Both rules are declared, as a chart's ConfigMap rules always were; the filled-in selector keeps its placeholder.
+    const declared = (out.canonical.spec.alerting?.rules || []).map((r) => `${r.name}: ${r.expr}`);
+    assert(JSON.stringify(declared) === JSON.stringify(['ShopDown: up{job="helmvalue"} == 0', 'ShopDiskFull: node_filesystem_avail_bytes < 1']),
+      `${where}: a rule whose expression the chart fills in is declared with the placeholder, the rest as written`, declared);
   }
 }
 
@@ -1474,6 +1536,28 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   const many = read({ 'k8s/app.yaml': `${manifest}---\n${manifest}`, 'docs/notes.yaml': 'a: 1\n  b: 2\n' });
   assert(JSON.stringify(stopsOf(many)) === JSON.stringify(['k8s/app.yaml: the scan stopped reading at lines 9 and 20, lines the YAML reader cannot place; the rest of each of those documents was not read.']),
     'one warning for a file stopped in twice; none for a file the scan does not read', many.summary.warnings);
+  // A ConfigMap's block runs on over template lines at the margin: control flow is read through, and an include
+  // alone on a line stops the reading there (the rule it stands in left out), said in the template's lines.
+  const cm = (inner) => ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-rules', 'data:', '  alerts.rules.yaml: |', '    groups:', '      - name: shop', '        rules:',
+    '          - alert: ShopDown', '            expr: up{job="shop"} == 0', ...inner, '          - alert: ShopCertExpiry', '            expr: probe_ssl_earliest_cert_expiry - time() < 86400'].join('\n') + '\n';
+  const chartOf = (template) => read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/rules.yaml': template });
+  const policyOf = (out) => (out.canonical.spec.policy?.burn_rate_alerts || []).map((e) => e.slo).sort();
+  const gated = chartOf(cm(['{{- if .Values.alerts.disk }}', '          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{- end }}']));
+  assert(JSON.stringify(policyOf(gated)) === JSON.stringify(['shopcertexpiry', 'shopdiskfull', 'shopdown']) && !stopsOf(gated).length,
+    'control flow at the margin of a ConfigMap\'s block is read through', [policyOf(gated), gated.summary.warnings]);
+  const included = chartOf(cm(['          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{ toYaml .Values.extraFields | indent 12 }}']));
+  assert(JSON.stringify(policyOf(included)) === JSON.stringify(['shopdown'])
+    && JSON.stringify(stopsOf(included)) === JSON.stringify(['charts/shop/templates/rules.yaml: the scan stopped reading at line 14, a line the YAML reader cannot place; the rest of that document was not read.'])
+    && !included.summary.warnings.some((w) => /Failed to parse/.test(w)),
+    'an include at the margin of a ConfigMap\'s block: the rules before the one it stands in, and the line', [policyOf(included), included.summary.warnings]);
+  // A manifest the reader stops in before anything the scan reads: not read, and said.
+  const early = read({ 'deploy/monitoring.yaml': 'apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: !!map\n  name: shop\nspec:\n  groups: []\n' });
+  assert(early.summary.warnings.includes('deploy/monitoring.yaml was not read: the YAML reader stopped at line 4, a line it cannot place, before anything the scan reads there.'),
+    'a manifest stopped in before anything the scan reads is said', early.summary.warnings);
+  // A file that throws after a stop was not read at all: only its error is said.
+  const thrown = read({ 'rules/alerts.yml': `${rules}---\nnot a key\n` });
+  assert(!stopsOf(thrown).length && thrown.summary.warnings.some((w) => w === 'Failed to parse rules/alerts.yml: yaml line 13: expected "key: value", got "not a key"'),
+    'a stop in a file that then throws is not said as a partial read', thrown.summary.warnings);
 }
 
 report('crawler');

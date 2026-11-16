@@ -40,7 +40,10 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 export function repoPackDocuments(content, { onStop = null } = {}) {
   let docs;
   // A repository file: a value on the line below its key is read, as the scan reads the rest (crawler.mjs REPO_YAML).
-  try { docs = parseYamlAll(String(content ?? ''), { valueBelowKey: true, ...(onStop ? { onStop } : {}) }); } catch { return []; }
+  // Where it stopped is said once the text has read: a text that throws was not read at all.
+  const stops = [];
+  try { docs = parseYamlAll(String(content ?? ''), { valueBelowKey: true, ...(onStop ? { onStop: (line) => stops.push(line) } : {}) }); } catch { return []; }
+  if (onStop) for (const line of stops) onStop(line);
   return docs.filter(d => isObj(d) && d.kind === 'ObservabilityPack');
 }
 

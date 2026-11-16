@@ -259,8 +259,12 @@ let repoYaml = REPO_YAML;
 let noteStop = null;
 
 function parseYamlDocs(content, options) {
-  return parseYamlAll(content, { ...repoYaml, ...(noteStop ? { onStop: noteStop } : {}), ...options })
-    .filter(d => d && typeof d === 'object');
+  // Where it stopped is said once the text has read: a text that throws was
+  // not read at all, and its error says so.
+  const stops = [];
+  const docs = parseYamlAll(content, { ...repoYaml, ...(noteStop ? { onStop: (line) => stops.push(line) } : {}), ...options });
+  if (noteStop) for (const line of stops) noteStop(line);
+  return docs.filter(d => d && typeof d === 'object');
 }
 
 // While `fn` runs, a stop at line n of the text being read is reported as
@@ -327,6 +331,22 @@ const holdsRules = (groups) => Array.isArray(groups)
 const PROMETHEUS_RULE_KIND_RE = /^kind:[ \t]*["']?PrometheusRule["']?[ \t]*(?:#.*)?$/m;
 const WORKLOAD_KIND_RE = /^kind:[ \t]*["']?(?:Deployment|StatefulSet|DaemonSet|ReplicaSet|ReplicationController|Pod|Job|CronJob)["']?[ \t]*(?:#.*)?$/m;
 
+// Where the reader stopped in a YAML file the scan could not classify, when
+// its text names something the scan reads (a PrometheusRule, a workload, rule
+// groups): the first line, or null.
+function unreadManifestStop(relPath, content) {
+  if (!/\.ya?ml$/i.test(relPath) || typeof content !== 'string') return null;
+  if (!(PROMETHEUS_RULE_KIND_RE.test(content) || WORKLOAD_KIND_RE.test(content) || /^groups:/m.test(content))) return null;
+  const stops = [];
+  try { parseYamlAll(content, { ...repoYaml, onStop: (line) => stops.push(line) }); } catch { return null; }
+  return stops.length ? stops[0] : null;
+}
+
+// A YAML file the walk reads as something other than rules or a template
+// that names a PrometheusRule resource: walkClassified reads its rules too.
+const holdsRuleResourceText = (f) => f.kind !== 'prometheus-rules' && f.kind !== 'helm-template'
+  && /\.ya?ml$/i.test(f.relPath) && PROMETHEUS_RULE_KIND_RE.test(f.content);
+
 const METRIC_SOURCE_EXT_RE = /\.(?:cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
 
 // The built-in exporter catalogue (tools/lib/exporter-catalogue.mjs), the one
@@ -342,10 +362,19 @@ const isMapping = (v) => v !== null && typeof v === 'object' && !Array.isArray(v
 // and per-environment values files), an existing backend with the same
 // signal+product is treated as already-discovered; the docker-compose walker
 // keeps its historical per-service uniqueness and so does not pass the flag.
+// The tag of an image reference — the text after its last `:` that no `/`
+// follows, any `@digest` set aside — or '': `localhost:5000/prometheus` has
+// none, `grafana/grafana:11.2.0@sha256:…` has 11.2.0.
+function imageTag(ref) {
+  const name = String(ref ?? '').split('@')[0];
+  const at = name.lastIndexOf(':');
+  return at > name.lastIndexOf('/') ? name.slice(at + 1).trim() : '';
+}
+
 function registerBackendFromImage(image, relPath, backends, evidence, summary, { dedupeByProduct = false, pipelines = null } = {}) {
   const ref = String(image || '').trim();
   if (!ref) return false;
-  const tag = (ref.split(':')[1] || '').trim();
+  const tag = imageTag(ref);
   for (const p of BACKEND_PATTERNS) {
     if (!p.match.test(ref)) continue;
     const baseId = `${p.signal}-${p.product}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -833,6 +862,10 @@ export function crawlFiles(filesInput, opts = {}) {
     const kind = detectArtefactKind(relPath, content, { exporterCatalogue: catalogue });
     if (kind === 'unknown') {
       if (summary.files.unclassified++ < UNKNOWN_FILES_SHOWN) summary.files.unknown.push(relPath);
+      // A manifest the reader stopped in before anything the scan reads:
+      // said, as for a file the walk reads.
+      const stoppedAt = unreadManifestStop(relPath, content);
+      if (stoppedAt) summary.warnings.push(`${relPath} was not read: the YAML reader stopped at line ${stoppedAt}, a line it cannot place, before anything the scan reads there.`);
       continue;
     }
     classified.push({ relPath, content, kind });
@@ -881,16 +914,19 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
         case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName }, evidence, summary); break;
         case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorState }); break;
-        case 'k8s-workload':
-          walkK8sWorkload(f, backends, pipelines, evidence, summary);
-          // A manifest holding PrometheusRule resources beside its workloads: their rules too.
-          if (PROMETHEUS_RULE_KIND_RE.test(f.content)) walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
-          break;
+        case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
         // live in the templated manifests (handled as 'helm-template'). We
         // record the chart only as a signal that this is a Helm-packaged repo.
         case 'helm-chart':       summary.discovered.helmCharts = (summary.discovered.helmCharts || 0) + 1; break;
         case 'observability-pack': repoPacks.push({ relPath: f.relPath, read: readRepoPack(f.relPath, f.content, { onStop: noteStop }) }); break;
+      }
+      // A PrometheusRule resource in a YAML file read as something else — a
+      // manifest whose first document is a workload, a file named for a
+      // collector or an Alertmanager: its rules too.
+      if (holdsRuleResourceText(f)) {
+        walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary,
+          { groupsOf: (obj) => (isPrometheusRuleResource(obj) ? ruleGroupsOf(obj) : null) });
       }
     } catch (e) {
       summary.warnings.push(`Failed to parse ${f.relPath}: ${e.message}`);
@@ -901,6 +937,21 @@ export function crawlFiles(filesInput, opts = {}) {
   } }
 
   settleCollectorGuesses(collectorState, pipelines, evidence, summary);
+
+  // Rules read from several files: the same ones declared once, the
+  // differing ones each kept — and both said, naming the files.
+  const copiesRead = ruleCopiesRead(summary);
+  const namedCopies = (list) => list.slice(0, 8).map((c) => `${c.name} (${c.files.join(', ')})`).join('; ') + (list.length > 8 ? `; … (${list.length - 8} more)` : '');
+  if (copiesRead.same.length) {
+    summary.warnings.push(`${copiesRead.same.length} rule(s) are written the same in more than one file and are declared once — the ruler is given one of the copies: ${namedCopies(copiesRead.same)}.`);
+  }
+  if (copiesRead.differing.length) {
+    summary.warnings.push(`${copiesRead.differing.length} rule name(s) are written differently in more than one file, and each form is declared — which one runs is not known here (a kustomize overlay, for one, is not merged into its base): ${namedCopies(copiesRead.differing)}.`);
+  }
+  // An SLO any of whose alerting rules is written differently in several
+  // files states no rules: held against the ruler's one copy, the closest
+  // form would answer for a rule that may not run.
+  const rulesDiffering = new Set(copiesRead.differing.filter((c) => c.kind === 'alert').map((c) => c.name));
 
   // ----- infer SLIs/SLOs (decompiler ⇄ compiler symmetry) -----
   // PRIMARY source: recording rules. compile.mjs materialises every SLI in
@@ -994,28 +1045,12 @@ export function crawlFiles(filesInput, opts = {}) {
   // recording rules still reads every alert as an SLO contract (the tier-3
   // fallback), and then declares no operational rules.
   const ruleMeta = new Map(alertRules.map(r => [r.rule, r]));
-  // A rule whose terms hold a value the repository does not state — one a
-  // chart or a deploy step fills in (notStatedAsWritten) — is not declared:
-  // held against what live renders there, it would read as a difference in a
-  // system that is the same. Live's rule is then compared with nothing, as
-  // when the scan cannot read it, and the scan names it.
-  const statedRules = alertRules.filter(r => !notStatedAsWritten(r));
   const operational = haveRecordedSlis
-    ? operationalAlertRules(statedRules.map(r => r.rule), (id) => sloMap.has(id), {
+    ? operationalAlertRules(alertRules.map(r => r.rule), (id) => sloMap.has(id), {
       engineOf: (rule) => ruleMeta.get(rule)?.engine ?? alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
       sourceOf: (rule) => ruleMeta.get(rule)?.source,
     })
     : { kept: [], skipped: [] };
-  const unstatedRules = haveRecordedSlis
-    ? operationalAlertRules(alertRules.filter(r => notStatedAsWritten(r)).map(r => r.rule), (id) => sloMap.has(id), {
-      sourceOf: (rule) => ruleMeta.get(rule)?.source,
-    }).kept
-    : [];
-  if (unstatedRules.length) {
-    const shown = unstatedRules.slice(0, 8).map(r => `${r.name} (${String(r.source).split('#')[0]})`).join(', ')
-      + (unstatedRules.length > 8 ? `, … (${unstatedRules.length - 8} more)` : '');
-    summary.warnings.push(`${unstatedRules.length} alert rule(s) hold a value a chart or a deploy step fills in, and are not declared in alerting.rules — compared with what live renders, they would read as differences: ${shown}.`);
-  }
   summary.discovered.alertRules = operational.kept.length;
   if (operational.kept.length) {
     const names = operational.kept.map(r => r.name);
@@ -1365,7 +1400,7 @@ export function crawlFiles(filesInput, opts = {}) {
         ...alertNameAnnotations(alertRules),
         // The rules each burn-rate entry was read from, with their own terms: the entry keeps only
         // { slo, windows }, and the windows are this reading's, so the comparison reads the rules here.
-        ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id)) : {}),
+        ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id), rulesDiffering) : {}),
         ...(chaosFound.scenarios.length && chaosControlSummary(chaosFound) ? { 'crawler.chaos.control': chaosControlSummary(chaosFound) } : {}),
         ...(chaosFound.scenarios.length && chaosFound.toggle?.enabled === false ? { 'crawler.chaos.disabled': `${chaosFound.toggle.path}: false (${chaosFound.toggle.file})` } : {}),
         ...metricAnnotations,
@@ -1537,7 +1572,10 @@ const helmLiteral = (text) => text.replaceAll('{{', HELM_OPEN).replaceAll('}}', 
 function stripGoTemplate(content) {
   const kept = [];
   const origin = [];
-  content.split(/\r?\n/).forEach((line, i) => {
+  // The lines the YAML reader counts (a CR alone is a break too), a
+  // byte-order mark set aside as the reader sets it aside.
+  const text = String(content);
+  (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text).split(/\r\n?|\n/).forEach((line, i) => {
     const t = line.trim();
     if (/^\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}$/.test(t)) return;            // comment
     if (/^\{\{-?\s*(if|else|end|range|with|define|block)\b.*?-?\}\}$/.test(t)) return; // control flow
@@ -1549,6 +1587,25 @@ function stripGoTemplate(content) {
     origin.push(i);
   });
   return { text: kept.join('\n'), origin };
+}
+
+// A line that holds only template actions ({{- if .Values.x }}, {{- end }},
+// {{ toYaml .Values.y | indent 4 }}).
+const isTemplateLine = (line) => /^\s*(?:\{\{.*?\}\}\s*)+$/.test(line);
+
+// How many lines of a stripped template text to read when the reader cannot
+// place its line n (1-based): those before the rule the line stands in — the
+// last `- alert:` or `- record:` item above it whose lines it still runs
+// through — so no rule is read in part; else those before the line.
+function cutBeforeRule(lines, n) {
+  const indent = (l) => l.length - l.trimStart().length;
+  for (let i = Math.min(n, lines.length) - 2; i >= 0; i--) {
+    const item = /^(\s*)- (?:alert|record):/.exec(lines[i]);
+    if (!item) continue;
+    const inside = lines.slice(i + 1, n - 1).every((l) => !l.trim() || indent(l) > item[1].length);
+    return inside ? i : n - 1;
+  }
+  return n - 1;
 }
 
 // A line of a stripped text (from 1) → the line of the template it was left
@@ -1564,28 +1621,41 @@ const templateLineAt = (origin, first = 0) => (n) => (origin.length
 // the unrendered manifest don't get in the way. Each block also says where
 // its body starts (`first`, the index of its first line in `content`).
 function extractConfigMapData(content) {
-  const lines = content.split(/\r?\n/);
+  // The lines the YAML reader counts (a CR alone is a break too).
+  const lines = content.split(/\r\n?|\n/);
   const blocks = [];
   let dataIndent = -1;      // indentation of the active `data:` key, or -1
   let current = null;       // { key, indent, body: [], first }
+  const indentOf = (l) => l.match(/^ */)[0].length;
 
   const flush = () => {
+    if (current) {
+      // Template lines after the block's last line of YAML belong to what
+      // follows it (the {{- end }} closing the document), not to the block.
+      let end = current.body.length;
+      while (end > 0 && (!current.body[end - 1].trim() || isTemplateLine(current.body[end - 1]))) end--;
+      if (current.body.slice(end).some(isTemplateLine)) current.body = current.body.slice(0, end);
+    }
     if (current && current.body.some((l) => l.trim())) {
-      const widths = current.body.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
+      // De-indented by the block's YAML; a template line left of it stays at the margin.
+      const widths = current.body.filter((l) => l.trim() && !isTemplateLine(l)).map(indentOf);
       const base = widths.length ? Math.min(...widths) : 0;
-      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(base)).join('\n'), first: current.first });
+      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(Math.min(base, indentOf(l)))).join('\n'), first: current.first });
     }
     current = null;
   };
 
   for (const [i, line] of lines.entries()) {
-    const indent = line.match(/^ */)[0].length;
+    const indent = indentOf(line);
     const trimmed = line.trim();
 
     if (current) {
       // Literal-block body continues while indentation stays deeper than the
-      // key (blank lines belong to the block too).
-      if (trimmed === '' || indent > current.indent) { current.body.push(line); continue; }
+      // key (blank lines belong to the block too) — and over a line that holds
+      // only template actions, wherever it stands: Helm renders it to nothing
+      // ({{- if }}, {{- end }}) or to YAML indented by the action itself, and
+      // stripGoTemplate reads it so.
+      if (trimmed === '' || indent > current.indent || isTemplateLine(line)) { current.body.push(line); continue; }
       flush(); // fall through to re-classify the dedented line below
     }
 
@@ -1641,7 +1711,9 @@ function prometheusRuleResources(text) {
   const take = (from, to) => {
     const at = (re) => { for (let i = from; i < to; i++) if (re.test(lines[i])) return i; return -1; };
     const kind = at(PROMETHEUS_RULE_KIND_RE);
-    const api = at(/^apiVersion:[ \t]*["']?monitoring\.coreos\.com\//);
+    // The operator's API group, or a version the chart fills in (it picks
+    // among the operator's): read as the operator's.
+    const api = at(/^apiVersion:[ \t]*["']?(?:monitoring\.coreos\.com\/|helmvalue\b)/);
     const spec = at(/^spec:(?:[ \t]|$)/);
     if (kind < 0 || api < 0 || spec < 0) return;
     // The spec runs to the next key at the left margin. A line an include
@@ -1651,7 +1723,8 @@ function prometheusRuleResources(text) {
     while (end < to && !/^[A-Za-z_][\w.-]*[ \t]*:(?:[ \t]|$)/.test(lines[end])) end++;
     const kept = [api, kind];
     for (let i = spec; i < end; i++) kept.push(i);
-    out.push({ text: kept.map((i) => lines[i]).join('\n'), lines: kept });
+    const lineOf = (i) => (i === api && /helmvalue/.test(lines[i]) ? 'apiVersion: monitoring.coreos.com/v1' : lines[i]);
+    out.push({ text: kept.map(lineOf).join('\n'), lines: kept });
   };
   let from = 0;
   lines.forEach((line, i) => {
@@ -2249,13 +2322,15 @@ function alertNameAnnotations(alertRules) {
 // step substitutes: held against what live renders there it would read as a
 // difference, so that SLO states no rules and compares as it always did.
 const SOURCE_RULES_ANNOTATION = 'observogram.source_rules.policy.burn_rate_alerts.';
-function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
+function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo, rulesDiffering = new Set()) {
   const bySlo = sourceRuleTerms(alertRules.map((r) => r.rule), hasSlo);
   // Decided on each rule as the file writes it: what the reading keeps of it
-  // no longer shows a labels map the chart fills in whole.
+  // no longer shows a labels map the chart fills in whole. A rule written
+  // differently in several files (ruleCopiesRead) is not known as the ruler
+  // lists it either.
   const withheld = new Set();
   for (const r of alertRules) {
-    if (!notStatedAsWritten(r)) continue;
+    if (!notStatedAsWritten(r) && !rulesDiffering.has(r.name)) continue;
     for (const slo of sourceRuleTerms([r.rule], hasSlo).keys()) withheld.add(slo);
   }
   const out = {};
@@ -2380,8 +2455,7 @@ function buildMetricFamilyAnnotations(families) {
 function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, derivedIds }) {
   const blocks = new Map();
   for (const f of classified) {
-    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template'
-        && !(f.kind === 'k8s-workload' && PROMETHEUS_RULE_KIND_RE.test(f.content))) continue;
+    if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template' && !holdsRuleResourceText(f)) continue;
     const read = readLifecycleBlock(f.content);
     if (!read) continue;
     if (read.problem) summary.warnings.push(`${f.relPath}: the lifecycle block is not read: ${read.problem}.`);
@@ -2639,6 +2713,22 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     }
   };
 
+  // A text cut from the template, read by its walker. An include alone on a
+  // line (left as HELM_VALUE) renders YAML the scan cannot place: where the
+  // reader throws on one, what precedes the line is read, and the scan says
+  // where it stopped (noteStop, in the template's own lines).
+  const readTemplateText = (kind, sub, lineAt) => {
+    try { return mappingStops(lineAt, () => route(kind, sub)); }
+    catch (e) {
+      const at = /^yaml line (\d+): expected "key: value", got "helmvalue(?: helmvalue)*"$/.exec(String(e?.message ?? ''));
+      if (!at) throw e;
+      const n = Number(at[1]);
+      noteStop?.(lineAt(n));
+      const lines = sub.content.split('\n');
+      return mappingStops(lineAt, () => route(kind, { ...sub, content: lines.slice(0, cutBeforeRule(lines, n)).join('\n') }));
+    }
+  };
+
   const blocks = extractConfigMapData(f.content);
 
   for (const { key, body, first } of blocks) {
@@ -2662,7 +2752,7 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     // A ConfigMap whose data key looks like an observability artefact but
     // can't be parsed is a genuine signal worth surfacing; ordinary
     // non-observability data keys (scripts, plain config) are simply skipped.
-    try { mappingStops(lineAt, () => route(kind, sub)); }
+    try { readTemplateText(kind, sub, lineAt); }
     catch (e) { summary.warnings.push(`Failed to parse ${sub.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
 
@@ -2686,7 +2776,7 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
   // not read is said.
   for (const resource of prometheusRuleResources(whole.text)) {
     const lineAt = (n) => templateLineAt(whole.origin)(resource.lines[Math.min(Math.max(n, 1), resource.lines.length) - 1] + 1);
-    try { mappingStops(lineAt, () => route('prometheus-rules', { relPath: f.relPath, content: resource.text })); }
+    try { readTemplateText('prometheus-rules', { relPath: f.relPath, content: resource.text }, lineAt); }
     catch (e) { summary.warnings.push(`Failed to parse ${f.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
 }
@@ -2699,7 +2789,9 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
   for (const obj of parseYamlDocs(f.content)) {
     if (!obj?.services) continue;
     for (const [svcName, svc] of Object.entries(obj.services)) {
-    const image = String(svc?.image || '');
+    // The image as `docker compose config` resolves it with the variables
+    // unset: each `${VAR:-default}` its default, any other `${…}` nothing.
+    const image = composeDefaults(svc?.image).trim();
     if (!image) continue;
     for (const p of BACKEND_PATTERNS) {
       if (p.match.test(image)) {
@@ -2709,7 +2801,7 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
         let n = 2;
         while (backends.some(b => b.id === id)) id = `${baseId}-${n++}`;
         const endpoint = inferEndpoint(svc, p.product);
-        const versionTag = (image.split(':')[1] || '').trim();
+        const versionTag = imageTag(image);
         const backend = {
           id,
           signal: p.signal,
@@ -2863,6 +2955,59 @@ function groupLabelsFit(group, rules, f, summary) {
   return false;
 }
 
+// The rules one scan read, by what each says. A rule written the same in
+// another file — a rule file and the PrometheusRule that wraps it, a chart's
+// ConfigMap and its PrometheusRule behind a values switch — is one rule: the
+// ruler is given one of the copies, so it is declared once (ruleCopy answers
+// true for the later copy). A rule written differently under one name in
+// several files (a kustomize base and its overlay) is kept as each file
+// writes it: which one runs is not known here (ruleCopiesRead).
+const ruleCopies = new WeakMap();   // a scan's summary → { byTerms: Map(key → { kind, name, files }), byName: Map(kind:name → Map(key → Set(files))) }
+const sortedTerms = (v) => (v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedTerms(v[k])]))
+  : Array.isArray(v) ? v.map(sortedTerms) : v);
+function ruleCopy(summary, relPath, kind, terms) {
+  let copies = ruleCopies.get(summary);
+  if (!copies) ruleCopies.set(summary, (copies = { byTerms: new Map(), byName: new Map() }));
+  const key = `${kind}:${JSON.stringify(sortedTerms(terms))}`;
+  const nameKey = `${kind}:${terms.name}`;
+  if (!copies.byName.has(nameKey)) copies.byName.set(nameKey, new Map());
+  const forms = copies.byName.get(nameKey);
+  if (!forms.has(key)) forms.set(key, new Set());
+  forms.get(key).add(relPath);
+  const seen = copies.byTerms.get(key);
+  if (!seen) { copies.byTerms.set(key, { kind, name: terms.name, files: new Set([relPath]) }); return false; }
+  // Twice in one file: the ruler is given both.
+  if (seen.files.has(relPath)) return false;
+  seen.files.add(relPath);
+  return true;
+}
+
+// What ruleCopy saw in one scan: `same` the rules written the same in several
+// files ([{ kind, name, files }]), `differing` the names written differently
+// in several files ([{ kind, name, files }]: a file's set of forms of the
+// name is not another's).
+function ruleCopiesRead(summary) {
+  const copies = ruleCopies.get(summary);
+  if (!copies) return { same: [], differing: [] };
+  const same = [...copies.byTerms.values()].filter((c) => c.files.size > 1).map((c) => ({ ...c, files: [...c.files] }));
+  const differing = [];
+  for (const [nameKey, forms] of copies.byName) {
+    const byFile = new Map();
+    for (const [key, files] of forms) for (const file of files) {
+      if (!byFile.has(file)) byFile.set(file, new Set());
+      byFile.get(file).add(key);
+    }
+    const shapes = new Set([...byFile.values()].map((keys) => [...keys].sort().join('\n')));
+    if (byFile.size > 1 && shapes.size > 1) {
+      // `<kind> <engine>:<name>`: a kind of rule, for an engine.
+      const [kindEngine] = nameKey.split(':', 1);
+      differing.push({ kind: kindEngine.split(' ')[0], name: nameKey.slice(kindEngine.length + 1), files: [...byFile.keys()] });
+    }
+  }
+  return { same, differing };
+}
+
 // The rule groups of each document: a rule file's, and a PrometheusRule
 // resource's (ruleGroupsOf), unless `groupsOf` reads them otherwise.
 function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, { groupsOf = ruleGroupsOf } = {}) {
@@ -2885,8 +3030,8 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
     const groups = groupsOf(obj);
     if (!groups) return;
     // A PrometheusRule resource's rules run on the Prometheus (or the Thanos
-    // Ruler) the operator gives them to, whatever its file's path or its
-    // expressions look like (alertRuleEngine).
+    // Ruler) the operator gives them to, whatever its file's path looks like
+    // (alertRuleEngine) — but for a rule in LogQL (walkPrometheusRule).
     const engine = isPrometheusRuleResource(obj) ? 'prometheus' : null;
     groups.forEach((group, g) => {
       const rules = Array.isArray(group?.rules) ? group.rules : [];
@@ -2950,6 +3095,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       if (text && SPEC_DURATION_RE.test(text)) entry.interval = text;
       else summary.omitted.ruleIntervals.push({ group: group.name || '_', value: String(group.interval), source: f.relPath });
     }
+    // Written the same in another file, for the same engine: one rule, declared once (ruleCopy).
+    if (ruleCopy(summary, f.relPath, `record ${alertRuleEngine(rule, f.relPath)}`, { name, expr, interval: entry.interval ?? null, labels: rule.labels ?? null })) return;
     recordingRules.push(entry);
     evidence[id] = origin;
     summary.discovered.recordingRules++;
@@ -2965,6 +3112,11 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     const read = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
     const candidate = burnCandidateFromAlertRule(read);
     const { alertName, expr } = candidate;
+    // Written the same in another file, for the same engine: one rule, declared once (ruleCopy).
+    const ruleEngine = engine && !looksLikeLogQL(alertRuleExpr(read)) ? engine : alertRuleEngine(read, f.relPath);
+    const terms = { name: alertName, expr: read.expr ?? null, for: read.for ?? null, keep_firing_for: read.keep_firing_for ?? null,
+      labels: read.labels ?? null, annotations: read.annotations ?? null, data: read.data ?? null };
+    if (ruleCopy(summary, f.relPath, `alert ${ruleEngine}`, terms)) return;
     // Every alert rule that reads is kept raw as well, with where it was
     // read from: the ones that turn out to guard no SLO are declared in
     // alerting.rules (crawlFiles), name for name. A rule skipped above
@@ -2973,8 +3125,11 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName,
       // Labels the group gives every rule that this reading cannot see (sourceRuleAnnotations).
       ...(listed.labelsUnread ? { labelsUnread: true } : {}),
-      // The engine the rule's source names (a PrometheusRule resource's), over the guess.
-      ...(engine ? { engine } : {}),
+      // The engine the rule's source names (a PrometheusRule resource's), over
+      // the guess from its path. A resource's rule in LogQL is a Loki ruler's
+      // (Grafana Alloy loads PrometheusRule resources into one): its own
+      // expression says so (alertRuleEngine).
+      ...(engine && !looksLikeLogQL(alertRuleExpr(read)) ? { engine } : {}),
     });
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);

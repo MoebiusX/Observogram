@@ -226,28 +226,41 @@ operational rule's, and those of the rules a burn-rate entry was read from
 **Where the scan reads a rule.** A rule file, a ConfigMap a Helm chart
 renders (each data key a rule file), and a Prometheus Operator
 `PrometheusRule` resource (0.8.42): its `spec.groups` are read as a rule
-file's `groups`, in a file of its own, in any document of a manifest that
-holds workloads too, and in a chart's template — there from its
-`apiVersion`, `kind` and `spec` alone, since its name and labels are mostly
-the chart's includes and its rules need none of them. The operator hands
-those groups to a Prometheus (or a Thanos Ruler) as they are written, so a
-resource's rule is the `prometheus` engine's whatever its path or its
-expression look like. The operator can also be told to add a namespace label
-to every rule and matcher (`enforcedNamespaceLabel` on the Prometheus
-resource), which the scan cannot see: there a resource's rules read as
-different on those labels and expressions.
+file's `groups` — in a file of its own, in any document of a manifest
+(whatever else the file holds, whatever it is called), and in a chart's
+template, there from its `apiVersion` (or one the chart fills in), `kind`
+and `spec` alone, since its name and labels are mostly the chart's includes
+and its rules need none of them. The operator hands those groups to a
+Prometheus (or a Thanos Ruler) as they are written, so a resource's rule is
+the `prometheus` engine's whatever its path — but for a rule in LogQL, which
+a Loki ruler runs (Grafana Alloy loads PrometheusRule resources into one).
+The operator can also be told to add a namespace label to every rule and
+matcher (`enforcedNamespaceLabel` on the Prometheus resource), which the
+scan cannot see: there a resource's rules read as different on those labels
+and expressions.
 
-**A rule the repository does not state** as the ruler will list it — a
-value a Helm chart or another template engine fills in at deploy time, or a
-`${VAR}` / `$VAR` a deploy step substitutes, in its name, expression, wait or
-labels; a labels map filled in whole; group labels past the scan's copy
-budget (the tests of *Not stated, so compared as before*, below) — is not
-declared in `alerting.rules` (0.8.42), and the scan warns, naming each. Held
-against what live renders there it read as drifted (`up{job="helmvalue"}`
-against `up{job="shop-api"}`) in a system that is the same. Live's rule of
-that name is now compared with nothing, as a rule in a file the scan cannot
-read is: live only when the repository declares other alert rules, out of
-scope when it declares none.
+In a chart's template, a line holding only template actions does not end a
+ConfigMap's block (Helm renders control flow to nothing, an include to YAML
+indented by the action itself). Where the reader cannot place such a line —
+an include alone on a line, inside a rule or at the margin — it reads what
+comes before the rule the line stands in and stops there, and the scan says
+where, in the template's own lines; the rest of that document is not read.
+
+**One rule in several files.** A rule written the same in several files — a
+rule file and the PrometheusRule that wraps it, a chart's ConfigMap and its
+PrometheusRule behind a values switch — is one rule: the ruler is given one
+of the copies, so the scan declares it once and says so, naming the files.
+A rule name written differently in several files (a kustomize base and its
+overlay: the scan does not merge an overlay into its base) keeps each form,
+and the scan says so; an SLO any of whose rules is such a name states no
+rules (below), since the closest form would answer for a rule that may not
+run.
+
+**A value the chart fills in** reaches a rule as the placeholder
+stripGoTemplate leaves (`up{job="helmvalue"}`), and an operational rule is
+declared with it: against the rendered rule live runs (`up{job="shop-api"}`)
+it reads as different on that field — a chart's ConfigMap rules always
+have. An SLO's rules holding one state nothing (below).
 
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and
@@ -316,7 +329,8 @@ Not stated, so compared as before:
   in whole, on the rule or on its group, or given as an alias or a merge
   key the file does not resolve (an anchor it does not define, a merge key
   with its mapping written in place); group labels past the scan's copy
-  budget (250,000 in one scan, with a warning). Held against what live
+  budget (250,000 in one scan, with a warning); a rule written differently
+  in several files (*One rule in several files*, above). Held against what live
   renders there it would read as a difference, so that SLO states no rules. The rest the scan
   reads as the ruler does, and states: the labels a rule's group gives every
   rule (under the rule's own), anchors, aliases and merge keys naming
@@ -523,8 +537,7 @@ pack without one keeps its bytes. The studio shows the count wherever it shows
 - With several environments in a pack and none picked, the adapter reads the first.
 - Only what the crawl reads can speak for a series. A `PrometheusRule` custom resource
   is walked (0.8.42), and a block at the top of its file covers its rules as a rule
-  file's does; a rule the scan does not declare (below, *a rule the repository does not
-  state*) still speaks for the series it reads.
+  file's does.
 
 ## Addresses a source does not state
 

@@ -627,16 +627,17 @@ test('the labels one scan copies from rule groups into rules are bounded: past t
 // A Prometheus Operator PrometheusRule resource
 // ---------------------------------------------------------------------------
 
-// The recording rules and the alerts above, as a PrometheusRule resource gives them to its ruler.
-const resource = ({ meta = ['  labels:', '    release: kube-prometheus-stack'], groupLabels = [] } = {}) => [
+// The recording rules and the alerts above as rule groups, and as a PrometheusRule resource gives them to its ruler.
+const ruleGroups = ({ groupLabels = [], threshold = '0.01', wait = '5m' } = {}) => [
+  'groups:',
+  ...RECORDING.split('\n').slice(1).filter(Boolean),
+  '  - name: shop-alerts', ...groupLabels, '    rules:',
+  '      - alert: ShopCheckoutErrorsHigh', `        expr: shop:checkout:error_ratio_5m > ${threshold}`, `        for: ${wait}`, '        labels:', '          severity: critical',
+  '      - alert: DiskAlmostFull', '        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', '        labels:', '          severity: warning',
+];
+const resource = ({ meta = ['  labels:', '    release: kube-prometheus-stack'], ...groups } = {}) => [
   'apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', ...meta, 'spec:',
-  ...[
-    'groups:',
-    ...RECORDING.split('\n').slice(1).filter(Boolean),
-    '  - name: shop-alerts', ...groupLabels, '    rules:',
-    '      - alert: ShopCheckoutErrorsHigh', '        expr: shop:checkout:error_ratio_5m > 0.01', '        for: 5m', '        labels:', '          severity: critical',
-    '      - alert: DiskAlmostFull', '        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', '        labels:', '          severity: warning',
-  ].map((l) => `  ${l}`),
+  ...ruleGroups(groups).map((l) => `  ${l}`),
 ].join('\n') + '\n';
 const crawlOnly = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' }).canonical;
 const alertPairOf = (diff, name) => Object.values(diff.layers).flatMap((l) => l.inBoth).find((e) => e.key === `alert_rule::{"name":"${name.toLowerCase()}"}`);
@@ -674,18 +675,43 @@ test('a PrometheusRule resource is read as the ruler it is given to lists it: on
   }
 });
 
-test('a chart\'s rule whose expression the chart fills in is not declared: live\'s rule is compared with nothing, never read as drifted', () => {
+test('rules read from several files: written the same, one rule that aligns; written differently, the SLO states no rules and the scan says why', () => {
+  const rule = { ...ERRORS_HIGH, labels: { severity: 'critical' } };
+  const scanOf = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  // A rule file (the one promtool tests) beside the PrometheusRule that wraps it: the ruler is given one of them.
+  const twins = scanOf({ 'prometheus/shop.rules.yml': `${ruleGroups().join('\n')}\n`, 'k8s/prometheusrule.yaml': resource() });
+  assert.deepEqual(stated(twins.canonical), [{ name: 'ShopCheckoutErrorsHigh', expr: 'shop:checkout:error_ratio_5m > 0.01', for: '5m', severity: 'SEV1', labels: { severity: 'critical' } }], 'the SLO\'s rule stated once');
+  assert.deepEqual(twins.canonical.spec.alerting.rules.map((r) => r.name), ['DiskAlmostFull'], 'the operational rule declared once');
+  assert.deepEqual(twins.canonical.spec.queries.recording_rules.map((r) => r.name), ['shop:checkout:good_5m', 'shop:checkout:total_5m', 'shop:checkout:error_ratio_5m']);
+  assert.ok(twins.summary.warnings.some((w) => /^5 rule\(s\) are written the same in more than one file and are declared once .*: shop:checkout:good_5m \(prometheus\/shop\.rules\.yml, k8s\/prometheusrule\.yaml\)/.test(w)), 'and said, naming the files');
+  for (const shape of ['labels', 'projection']) {
+    const same = compare(twins.canonical, live([rule, DISK], { shape }));
+    assert.equal(same.pair.match, 'aligned', `aligned against the ruler (${shape})`);
+    const keys = Object.values(same.diff.layers).flatMap((l) => [...l.inBoth, ...l.onlyInA]).map((e) => e.key);
+    assert.ok(!keys.some((k) => k.includes('#02')), `no second copy reads declared, not live (${shape}): ${keys.filter((k) => k.includes('#'))}`);
+  }
+  // A kustomize base and its prod overlay, written differently: live runs the base's looser rule. Held against it,
+  // the closest copy would answer for the overlay's; the SLO states no rules instead, and the scan says why.
+  const overlay = scanOf({
+    'k8s/base/prometheusrule.yaml': resource({ threshold: '0.05', wait: '10m' }),
+    'k8s/overlays/prod/prometheusrule.yaml': resource(),
+  });
+  assert.equal(stated(overlay.canonical), null, 'no statement from copies that differ');
+  assert.ok(overlay.summary.warnings.some((w) => /^1 rule name\(s\) are written differently in more than one file, and each form is declared .*: ShopCheckoutErrorsHigh \(k8s\/base\/prometheusrule\.yaml, k8s\/overlays\/prod\/prometheusrule\.yaml\)\.$/.test(w)),
+    'said, naming the files', overlay.summary.warnings);
+  const looser = compare(overlay.canonical, live([{ ...rule, expr: 'shop:checkout:error_ratio_5m > 0.05', for: '10m' }, DISK]));
+  assert.deepEqual(looser.pair.deltas.filter((d) => d.rule), [], 'no rule is held to the one live runs');
+});
+
+test('not covered: a chart\'s rule whose expression the chart fills in is declared with the placeholder, and reads as different on it', () => {
   const chart = {
     'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n',
     'charts/shop/templates/prometheusrule.yaml': resource().replace('node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', 'up{job="{{ include "shop.fullname" . }}"} == 0'),
   };
   const out = crawlFiles(chart, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
-  assert.deepEqual((out.canonical.spec.alerting?.rules || []).map((r) => r.name), [], 'not declared');
-  assert.ok(out.summary.warnings.some((w) => /not declared in alerting\.rules .*: DiskAlmostFull \(charts\/shop\/templates\/prometheusrule\.yaml\)\./.test(w)), 'and named');
-  const rendered = { ...DISK, expr: 'up{job="shop-api"} == 0' };
-  const against = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, rendered]));
-  assert.equal(alertPairOf(against.diff, 'DiskAlmostFull'), undefined, 'no pair to read as drifted');
-  assert.equal(against.diff.summary.drifted, 0);
+  assert.deepEqual((out.canonical.spec.alerting?.rules || []).map((r) => [r.name, r.expr]), [['DiskAlmostFull', 'up{job="helmvalue"} == 0']], 'declared, as a chart\'s ConfigMap rule always was');
+  const against = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, { ...DISK, expr: 'up{job="shop-api"} == 0' }]));
+  assert.deepEqual(alertPairOf(against.diff, 'DiskAlmostFull')?.deltas?.map((d) => d.field), ['expr'], 'the filled-in selector is a difference on the expression');
   assert.equal(against.pair.match, 'aligned', 'the SLO\'s own rule, stated as written, still compares');
 });
 

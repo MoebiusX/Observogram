@@ -14,13 +14,20 @@
 // An image is a product's when its NAME — the last segment of its path,
 // before a tag or a digest — is the product's: under any registry or
 // namespace (`prom/prometheus`, `quay.io/prometheus/prometheus`,
-// `bitnami/prometheus`, `localhost:5000/prometheus:v3`), and after a
-// mirror's own prefix (`rancher/mirrored-prometheus-prometheus`). A name
-// that only ends in the product's or holds it is another image's — an
-// exporter's (`mq_prometheus`), a plugin's (`fluent-plugin-loki`). `vendor`
-// is a prefix a distribution gives the name (Bitnami's `grafana-loki`).
-const named = (name, vendor = '') =>
-  String.raw`(?:^|\/)(?:mirrored-[a-z0-9-]+-)?${vendor ? `(?:${vendor})?` : ''}${name}(?:[:@][^\/]*)?$`;
+// `bitnami/prometheus`, `localhost:5000/prometheus:v3`), or alone with a tag
+// or a digest (`prometheus:v3.0.0`) — a bare word (a values file's `name:
+// Loki`) is no image reference. A distribution's build keeps the product's
+// name after its prefix: a mirror's `mirrored-<org>-` (Rancher), OpenShift's
+// `origin-` and `ose-`, Rancher monitoring v1's `prom-`, and `vendor` where
+// the product's own name is given one (Bitnami's `grafana-loki`, the
+// `prometheus-alertmanager` of Debian-based builds). A name that only ends
+// in the product's or holds it is another image's — an exporter's
+// (`mq_prometheus`), a plugin's (`fluent-plugin-loki`).
+const DISTRIBUTION = String.raw`(?:mirrored-[a-z0-9-]+-|origin-|ose-|prom-)?`;
+const named = (name, vendor = '') => {
+  const n = `${DISTRIBUTION}${vendor ? `(?:${vendor})?` : ''}${name}`;
+  return String.raw`(?:\/${n}(?:[:@][^\/]*)?$|^${n}[:@][^\/]*$)`;
+};
 const image = (...alternatives) => new RegExp(alternatives.join('|'), 'i');
 
 // Known backend images → spec.telemetry.backends.product enum, matched
@@ -37,11 +44,11 @@ export const BACKEND_PATTERNS = [
   { match: image(String.raw`^grafana\/loki`, String.raw`grafana\/loki-docker`, named('loki', 'grafana-')), product: 'loki', signal: 'logs' },
   { match: image(String.raw`^grafana\/tempo`, named('tempo', 'grafana-')), product: 'tempo',                 signal: 'traces' },
   { match: image(String.raw`^grafana\/mimir`, String.raw`grafana\/mimirtool`, named('mimir', 'grafana-')), product: 'mimir', signal: 'metrics' },
-  { match: image(String.raw`^grafana\/grafana`, String.raw`grafana\/grafana-`, named('grafana')), product: 'grafana', signal: 'dashboards' },
+  { match: image(String.raw`^grafana\/grafana`, String.raw`grafana\/grafana-`, named('grafana', 'grafana-')), product: 'grafana', signal: 'dashboards' },
   { match: image(String.raw`^elastic\/`, 'opensearch', named('elasticsearch')), product: 'elasticsearch',  signal: 'logs' },
   { match: image(String.raw`^jaegertracing\/`, String.raw`jaegertracing\/all-in-one`, named('jaeger')), product: 'jaeger', signal: 'traces' },
   { match: image(String.raw`^thanos\/`, String.raw`quay\.io\/thanos`, named('thanos')), product: 'thanos',   signal: 'metrics' },
-  { match: image(String.raw`^prom\/alertmanager`, named('alertmanager')), product: 'alertmanager',          signal: 'alerting' },
+  { match: image(String.raw`^prom\/alertmanager`, named('alertmanager', 'prometheus-')), product: 'alertmanager', signal: 'alerting' },
   { match: /^pyroscope|grafana\/pyroscope/i,                              product: 'pyroscope',               signal: 'profiles' },
   { match: image(String.raw`^cilium\/cilium`, String.raw`quay\.io\/cilium\/cilium`, named('cilium')), product: 'cilium', signal: 'network' },
   { match: /^openpolicyagent\/opa|^opa:/i,                                  product: 'opa',                     signal: 'policy' },
