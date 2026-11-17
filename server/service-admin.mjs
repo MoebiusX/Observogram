@@ -285,17 +285,24 @@ export function parseEnvRefs(value) {
 // exclude patterns' timed check): { [environment name]: compact scope }, {} for none. The whole map is
 // sent; a name with an empty scope (or null) is left out — it reads with the org's configured snapshot
 // scope, else unscoped. A scope that does not parse is refused whole, naming its environment and field.
-export function parseLiveScopes(value) {
+export function parseLiveScopes(value, { current = null } = {}) {
   if (!isPlainObject(value)) invalid(WAYS.liveScopes);
   const entries = Object.entries(value);
   if (entries.length > ENV_REFS_MAX) invalid(WAYS.liveScopes);
   const out = [];
+  // One timing budget for the whole map (every environment's patterns together), and an environment
+  // whose scope comes back exactly as stored (`current`, the service's map) is read as stored: the
+  // rule earlier releases had, never timed again — saving another environment's scope never fails on
+  // a pattern this one kept from before (the fetch reads without it, and says so).
+  const budget = {};
+  const kept = isPlainObject(current) ? current : {};
   for (const [name, raw] of entries) {
     const env = String(name).trim();
     if (!env || env.length > 200) invalid(WAYS.liveScopes);
     if (raw === null) continue;
-    const { scope, errors } = normalizeScope(raw);
-    if (!errors.length) errors.push(...timedExcludeErrors(scope.metricExclude));
+    const asStored = Object.hasOwn(kept, env) && isPlainObject(kept[env]) && JSON.stringify(compactScope(normalizeScope(raw, { stored: true }).scope)) === JSON.stringify(compactScope(normalizeScope(kept[env], { stored: true }).scope));
+    const { scope, errors } = normalizeScope(raw, { stored: asStored });
+    if (!errors.length && !asStored) errors.push(...timedExcludeErrors(scope.metricExclude, { budget }));
     if (errors.length) invalid(WAYS.liveScope(env, errors));
     const compact = compactScope(scope);
     if (compact) out.push([env, compact]);
@@ -621,7 +628,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
     if (patch.envRefs !== undefined) next.envRefs = parseEnvRefs(patch.envRefs);
-    if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes);
+    if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes, { current: current.liveScopes ?? null });
     if (patch.envSurfaces !== undefined) next.envSurfaces = parseEnvSurfaces(patch.envSurfaces);
     // Another repository (another kind or address): the branches named for the old one are not its own.
     if (next.repository !== undefined && patch.envRefs === undefined && Object.keys(current.envRefs || {}).length

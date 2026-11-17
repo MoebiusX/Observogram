@@ -253,6 +253,8 @@ export function basisSummary(record) {
     liveLoss: reading === 'vantage-lost' ? liveLossOf(r).cause : null,
     ...basisFactsOf(r),
     comparable: isObj(r.comparable) && r.comparable.withPrevious === false ? { withPrevious: false, reason } : null,
+    // How many stored exclude patterns the live read went without (packB.notApplied): 0 when none.
+    scopeNotApplied: Array.isArray(r.packB?.notApplied) ? r.packB.notApplied.length : 0,
   };
 }
 

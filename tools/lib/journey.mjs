@@ -838,7 +838,12 @@ async function resolvePackB(def, crawlScope = null, live = null, { probeMemory =
       canonical.metadata = canonical.metadata || {};
       canonical.metadata.annotations = { ...(canonical.metadata.annotations || {}), ...scopeAnnotations(fetched.liveScope.scope, fetched.liveScope.learned) };
     }
-    return { canonical, source: `mcp:${live.safeUrl}` };
+    // What the read applied, for the record and the comparison: the stored scope less any exclude
+    // pattern the fetch read without (a stored one the rule refuses now), each named in `notApplied`.
+    // A scope left with nothing applied is an unscoped read (compactScope: null).
+    const appliedScope = fetched.liveScope ? compactScope(fetched.liveScope.scope) : scope;
+    const notApplied = Array.isArray(fetched.liveScope?.learned?.notApplied) ? fetched.liveScope.learned.notApplied.filter((v) => typeof v === 'string') : [];
+    return { canonical, source: `mcp:${live.safeUrl}`, appliedScope, notApplied };
   } catch (e) {
     // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
     // breaking its contract) is a configuration error like the ones above:
@@ -1808,7 +1813,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // A scan that lost files (packAScan, above) fails the gate whatever it asks, and its figures are not
   // set beside the last graded run's (`recent`, the history read once above); nor are a live read's
   // that applied another scope than that run's (the scan's reason first).
-  const comparable = scanComparability(packAScan, recent) ?? (liveTarget ? liveScopeComparability(packBScopeOf(def), recent) : null);
+  // The live scope the read applied (resolvePackB), never the stored one it may have read without part of.
+  const appliedScope = b.appliedScope !== undefined ? b.appliedScope : packBScopeOf(def);
+  const comparable = scanComparability(packAScan, recent) ?? (liveTarget ? liveScopeComparability(appliedScope, recent) : null);
   const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)];
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
@@ -1861,7 +1868,12 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // "the live side cannot observe it" instead of "it does not exist".
     // packB.liveScope: the scope a live read applied (null: the read was unscoped — every record
     // written before scopes existed has no key, and is read as it always was); a file has none.
-    packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt, unobserved: unobservedKindsOf(b.canonical), ...(liveTarget ? { liveScope: packBScopeOf(def) } : {}) },
+    // packB.notApplied: one sentence per stored exclude pattern the read went without (only when any).
+    packB: {
+      source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt, unobserved: unobservedKindsOf(b.canonical),
+      ...(liveTarget ? { liveScope: appliedScope } : {}),
+      ...(liveTarget && Array.isArray(b.notApplied) && b.notApplied.length ? { notApplied: b.notApplied.slice(0, 32).map((v) => v.slice(0, 400)) } : {}),
+    },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
     // schema identifies which scoring construct produced the score, so a
     // step in the gradeScore series is explainable as re-scoring vs reality

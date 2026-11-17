@@ -176,7 +176,7 @@ const checkUid = (what) => (value) => (value.length <= SCOPE_LIMITS.uidLength &&
 // metric stage.
 const QUANTIFIED_GROUP = /\)[+*{]/;
 export const EXCLUDE_NAME_MAX = 256;
-const EXCLUDE_WORK_MAX = 32_000_000;
+const EXCLUDE_WORK_MAX = 16_000_000;
 const EXCLUDE_TOO_SLOW = `may be too slow to match (testing a ${EXCLUDE_NAME_MAX}-character name can take more than ${EXCLUDE_WORK_MAX / 1_000_000} million steps)`;
 const checkExcludeStored = (value) => {
   if (value.length > SCOPE_LIMITS.excludeLength) return `is longer than ${SCOPE_LIMITS.excludeLength} characters`;
@@ -261,7 +261,9 @@ function excludeTerms(pattern) {
       if (/[1-9k]/.test(d)) { i += 2; return { type: 'backref' }; }
       if (d === 'b' || d === 'B') { i += 2; return { type: 'assert', src: pattern.slice(start, i) }; }
       let len = 2;
-      if (d === 'x' && HEX_DIGIT.test(pattern[i + 2] ?? '') && HEX_DIGIT.test(pattern[i + 3] ?? '')) len = 4;
+      // A legacy octal escape (\0 and up to two more octal digits, without the u flag) is one unit, as V8 reads it.
+      if (d === '0') { while (len < 4 && /[0-7]/.test(pattern[i + len] ?? '')) len += 1; }
+      else if (d === 'x' && HEX_DIGIT.test(pattern[i + 2] ?? '') && HEX_DIGIT.test(pattern[i + 3] ?? '')) len = 4;
       else if (d === 'u' && [2, 3, 4, 5].every((k) => HEX_DIGIT.test(pattern[i + k] ?? ''))) len = 6;
       else if (d === 'c' && /[A-Za-z]/.test(pattern[i + 2] ?? '')) len = 3;
       i += len;
@@ -308,11 +310,20 @@ const hasBackreference = (alts) => alts.some((seq) => seq.some((t) => t.type ===
 function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
   const alts = excludeTerms(pattern);
   if (!alts) return Infinity;
+  // Every unit a class can turn on or off at: without flags a class's membership changes only at a unit
+  // the pattern names (a literal, a range's ends, an escape) or at a built-in class's edge (ASCII for \w
+  // and \d, the \s set, the line terminators '.' leaves out, the surrogate blocks). Each such unit and its
+  // two neighbours, with every ASCII unit, are sampled, so two sets that share any unit share a sampled one.
   const sample = new Set();
-  for (let c = 0; c < 128; c += 1) sample.add(String.fromCharCode(c));
-  for (let k = 0; k < pattern.length; k += 1) sample.add(pattern[k]);
-  for (const m of pattern.matchAll(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g)) sample.add(String.fromCharCode(parseInt(m[1] ?? m[2], 16)));
-  for (const ch of '        　﻿') sample.add(ch);
+  const unit = (u) => { if (u >= 0 && u <= 0xffff) sample.add(String.fromCharCode(u)); };
+  const edges = [0, 0x80, 0xd800, 0xdc00, 0xe000, 0xffff];
+  for (const ch of '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff') edges.push(ch.charCodeAt(0));
+  for (let k = 0; k < pattern.length; k += 1) edges.push(pattern.charCodeAt(k));
+  for (const m of pattern.matchAll(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([0-3][0-7]{0,2}|[4-7][0-7]?)/g)) {
+    edges.push(m[3] !== undefined ? parseInt(m[3], 8) : parseInt(m[1] ?? m[2], 16));
+  }
+  for (let c = 0; c < 128; c += 1) unit(c);
+  for (const e of edges) { unit(e - 1); unit(e); unit(e + 1); }
   const chars = [...sample];
   const setOf = (t) => {
     if (t.set === undefined) {
@@ -375,7 +386,7 @@ function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
               const starts = top - lo + 1;
               let byRun = top + starts;
               for (let j = 0; j < run.length - 1; j += 1) byRun += Math.ceil(starts / periods[j]);
-              if (m - lo - run.length >= 0) byRun += Math.ceil(starts / periods[run.length - 1]) * rest[m - lo - run.length];
+              for (let at = 0; at < starts && m - lo - at - run.length >= 0; at += periods[run.length - 1]) byRun += rest[m - lo - at - run.length];
               sum = Math.min(sum, byRun);
             }
             out[m] = sum;
@@ -613,7 +624,7 @@ export function scopeOf(annotations) {
     if (parsed.by === 'prefix') {
       const values = parsed.values.filter((v) => typeof v === 'string' && v !== '');
       const exclude = (Array.isArray(parsed.exclude) ? parsed.exclude : [])
-        .filter((v) => typeof v === 'string' && v !== '' && checkExclude(v) === null)
+        .filter((v) => typeof v === 'string' && v !== '' && checkExcludeStored(v) === null)
         .slice(0, SCOPE_LIMITS.excludes);
       if (values.length || exclude.length) {
         out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values, ...(exclude.length ? { exclude } : {}) });

@@ -892,8 +892,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "164941ce6e83d27c3dfeaf3227d718467a089f50065b33f20a48d671621ad427",
-      "bytes": 45699,
+      "sha256": "cde0ce3dcc1def386ed1f0fe524173d58a0b5a05dc5323778a298daee946478c",
+      "bytes": 46739,
       "exports": [
         "EXCLUDE_NAME_MAX",
         "LIVE_KINDS",
@@ -1227,8 +1227,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/run-basis.mjs": {
-      "sha256": "9ca971cd76acd8861dab422f9e84a7546c8f9d12390b80f53355ff15f1b5edf5",
-      "bytes": 16656,
+      "sha256": "957c2b07727c36b3fd43bbaefb8ae7e9b42f7a51910adc44fe45072ca90bffd7",
+      "bytes": 16845,
       "exports": [
         "NOTHING_REASON",
         "alignmentWords",

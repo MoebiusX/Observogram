@@ -1428,9 +1428,10 @@ compares the service with all of it, and the match says little. `liveScopes`,
 metricExclude, ruleGroups } }` on `POST` and `PATCH /api/services/:id` (the
 whole map; an empty or `null` scope is none; each value checked as a snapshot
 scope is, the exclude patterns' work bound and timing included — a pattern
-that can take more than 32 million steps to test a 256-character name is
-refused, so none stalls the server; a scope stored before keeps loading, and a
-pattern it holds that the rule refuses now is read without and named), narrows that environment's
+that can take more than 16 million steps to test a 256-character name is
+refused, and a request spends about a second at most timing its patterns; a scope
+stored before keeps loading, and a pattern it holds that the rule refuses now is
+read without and named on the run record, the Run's toast and the row), narrows that environment's
 live read as a snapshot of the same scope narrows it: the metric names its
 prefixes keep and its patterns do not drop, the dashboards and alert rules of
 its folders (pushed down where the tool takes a folder, every engine read),

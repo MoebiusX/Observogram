@@ -1670,6 +1670,11 @@ test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a
   const lost = { record: { ...whole.record, probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } }, scan: null };
   const ml = keep(runToastModel(row, lost));
   assert.deepEqual([runToastText(ml), ml.tone], ['Checkout · prod checked: the pack file acme/checkout, live did not answer — alert_rules_list: HTTP 500.', '']);
+  // Stored exclude patterns the read went without (packB.notApplied): the scope named is the one applied, and
+  // the toast says what was skipped — never a whole reading.
+  const skipped = { ...whole, record: { ...whole.record, packB: { liveScope: { metricExclude: ['^go_'] }, notApplied: ['exclude pattern "^q*q*$" not applied — it may be too slow to match', 'exclude pattern "^(a)\\1" not applied — it refers back to a group'] } } };
+  const mn = keep(runToastModel(row, skipped));
+  assert.deepEqual([runToastText(mn), mn.tone], ['Checkout · prod checked: 12 files from acme/checkout, live read scoped to 1 exclude pattern, 2 stored exclude patterns not applied (may be too slow to match; change them in the service\'s live scope), grade B, 92% matches live.', '']);
   // A Run the server answered with an error but recorded: the refreshed listing's reading.
   const before = { name: 'checkout.prod', lastRun: { startedAt: '2026-11-16T09:00:00.000Z', outcome: 'pass' } };
   assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, lastRun: { startedAt: '2026-11-16T10:00:00.000Z', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: 'alert_rules_list: HTTP 500', liveLoss: 'error' } } }),
@@ -2083,6 +2088,9 @@ test('OM1 the service list\'s five states from the listing: never; unreachable (
   assert.deepEqual(last.capped.notes, [{ text: '30 files excluded by the Docker Compose filter — more than half of the files the scan recognised', tone: 'warn' }]);
   assert.deepEqual(pick(last.checked), ['checked', 'Checked 2 hours ago', '', '', 'A', 92, 'pass', 'Checked 2 hours ago']);
   assert.deepEqual(last.checked.notes, [{ text: 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'warn' }], 'after a stopped Run: the last check, and the stop beside it');
+  // Stored exclude patterns the last read went without (the listing's scopeNotApplied): said on the row until they change.
+  const skippedLast = Object.fromEntries(fiveStateList({ checked: { lastRun: { ...listedRun(ROW_RECORDS.checked), scopeNotApplied: 2 } } }).rows.map((r) => [r.name, r.last])).checked;
+  assert.deepEqual(skippedLast.notes, [{ text: '2 stored exclude patterns not applied — may be too slow to match; change them in the live scope', tone: 'warn' }]);
   // Every record but one that compared something has no gate pass; no percentage in a string.
   assert.deepEqual(m.rows.filter((r) => r.last.gate === 'pass').map((r) => r.name).sort(), ['capped', 'checked']);
   const strings = [];

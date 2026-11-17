@@ -182,8 +182,9 @@ function withoutIdentities(text) {
     .replace(ADDRESS_LIKE, (token) => {
       const bare = token.replace(/\.+$/, '');   // a sentence's full stop is no part of it
       if (isIP(bare)) return `<redacted>${token.slice(bare.length)}`;
-      const withPort = /^(.+):(\d{1,5})$/.exec(bare);
-      return withPort && isIP(withPort[1]) === 4 ? `<redacted>:${withPort[2]}${token.slice(bare.length)}` : token;
+      // An IPv4 address with its port, a colon after it included (Go's "dial tcp 10.0.0.1:3128: …").
+      const withPort = /^(.+):(\d{1,5})(:?)$/.exec(bare);
+      return withPort && isIP(withPort[1]) === 4 ? `<redacted>:${withPort[2]}${withPort[3]}${token.slice(bare.length)}` : token;
     });
 }
 

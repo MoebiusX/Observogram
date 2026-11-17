@@ -2486,6 +2486,7 @@ test('a host\'s sentence names no one: GitHub\'s rate-limit sentence loses its s
   assert.equal(said('Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.'), 'Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.', 'a time, a code and a build number stay');
   // An address with its port (a proxy's, in a URL or alone): the address goes, the port stays.
   assert.equal(said('Could not reach the proxy at http://10.0.0.1:3128/ or 10.0.0.2:8080.'), 'Could not reach the proxy at http://<redacted>:3128/ or <redacted>:8080.');
+  assert.equal(said('dial tcp 10.0.0.1:3128: connect: connection refused.'), 'dial tcp <redacted>:3128: connect: connection refused.', 'a colon after the port, as Go writes it');
   // The remedy a reader asks for keeps the next sentence too, masked the same way.
   assert.equal(said('Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization. More.', { sentences: 2 }),
     'Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization.');
@@ -3203,9 +3204,20 @@ test('POST /api/services/:id/scope-check: what a scope would leave out, from sto
     const SLOW = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
     const t0 = Date.now();
     const slow = await check({ env: 'prod', scope: { metricExclude: [SLOW] } });
-    assert.deepEqual([slow.status, slow.json.error], [400, `liveScopes.prod: scope.metricExclude[0] "${SLOW}" may be too slow to match (testing a 256-character name can take more than 32 million steps)`]);
+    assert.deepEqual([slow.status, slow.json.error], [400, `liveScopes.prod: scope.metricExclude[0] "${SLOW}" may be too slow to match (testing a 256-character name can take more than 16 million steps)`]);
     assert.ok(Date.now() - t0 < 2000, `answered in ${Date.now() - t0} ms`);
     assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricExclude: [SLOW] } } })).status, 400, 'nor saved');
+    // Kept from an earlier release (written as that release's PATCH stored it): the map sent back with that
+    // environment unchanged saves another environment's scope — the unchanged one is read as stored, never
+    // timed again; changing it to another pattern the rule refuses is still refused.
+    const { updateService } = await import('./store/services.mjs');
+    runWithOrg('default', () => updateService(currentStore(), 'system', id, { liveScopes: { prod: { metricExclude: [SLOW] } } }));
+    const kept = await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricExclude: [SLOW] }, staging: { ruleGroups: ['shop'] } } });
+    assert.equal(kept.status, 200, kept.text);
+    assert.deepEqual(kept.json.service.liveScopes, { prod: { metricExclude: [SLOW] }, staging: { ruleGroups: ['shop'] } });
+    const changed = await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricExclude: [SLOW, '^.*:.*:.*:.*$'] } } });
+    assert.equal(changed.status, 400, changed.text);
+    assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: {} })).status, 200, 'cleared');
     // An environment not added yet: the service's own pack, no live read.
     const fresh = await check({ env: 'staging', scope: { ruleGroups: ['shop'] } });
     assert.equal(fresh.status, 200, fresh.text);

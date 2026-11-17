@@ -1208,7 +1208,7 @@ function svcFormHtml(f) {
 // whole reading is the toast it always was; each part of what a reading leaves out only when it holds.
 export function runToastText(m) {
   const parts = [
-    m.read, m.scoped, !m.unreachable && m.letter ? `grade ${m.letter}` : '',
+    m.read, m.scoped, m.notApplied, !m.unreachable && m.letter ? `grade ${m.letter}` : '',
     m.unreachable || (m.nothing ? 'nothing compared' : (typeof m.pct === 'number' && Number.isFinite(m.pct) ? `${Math.round(m.pct)}% matches live` : '')),
     m.livePart, m.notComparable ? 'not comparable with the check before' : '', m.filterWarn,
   ].filter(Boolean);

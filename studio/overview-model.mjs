@@ -2285,6 +2285,10 @@ function lastCheckNotes(journey, last) {
   if (last?.comparable && last.comparable.withPrevious === false) {
     notes.push({ text: `Not comparable with the check before${typeof last.comparable.reason === 'string' && last.comparable.reason ? `: ${last.comparable.reason}` : ''}`, tone: 'warn' });
   }
+  // Stored exclude patterns the last read went without (the listing's scopeNotApplied): the read was wider
+  // than the scope the service keeps, and the check says so until the patterns change.
+  const skipped = countOf(last?.scopeNotApplied);
+  if (skipped) notes.push({ text: `${skipped} stored exclude ${skipped === 1 ? 'pattern' : 'patterns'} not applied — may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the live scope`, tone: 'warn' });
   return notes;
 }
 function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
@@ -2347,7 +2351,7 @@ export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
 // scan read, the live read's scope, the grade where one exists, the match only over a comparison, and
 // what the reading leaves out. `row`: the list row ({ name, env, repository }); `answer`: POST
 // /api/services/:id/run's 200 body ({ record, scan }).
-//   → { head, read, scoped, letter, pct, nothing, unreachable, livePart, notComparable, filterWarn, tone }
+//   → { head, read, scoped, notApplied, letter, pct, nothing, unreachable, livePart, notComparable, filterWarn, tone }
 //   tone  'ok' only for a whole reading: nothing lost or capped by the scan, something compared, the
 //         live side whole, comparable with the check before, no filter warning; else ''
 export function runToastModel(row, answer) {
@@ -2366,10 +2370,14 @@ export function runToastModel(row, answer) {
   const filterWarn = s?.excludedMost ? `the ${surfaceLabel(s.filter?.surface)} filter excluded more than half of the files the scan recognised` : '';
   const nothing = comparedOf(record?.drift) === 0;
   const notComparable = record?.comparable?.withPrevious === false;
+  // A stored exclude pattern the read went without (packB.notApplied, one sentence each): said, so the
+  // scope the toast names is the one applied and nobody takes the wider read for the narrow one.
+  const skipped = Array.isArray(record?.packB?.notApplied) ? record.packB.notApplied.length : 0;
   return {
     head: `${row?.name ?? '?'} · ${row?.env ?? '?'} checked`,
     read,
     scoped: record?.packB?.liveScope ? `live read scoped to ${scopeSummary(record.packB.liveScope)}` : '',
+    notApplied: skipped ? `${skipped} stored exclude pattern${skipped === 1 ? '' : 's'} not applied (may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the service's live scope)` : '',
     letter: !lost && typeof record?.grade?.letter === 'string' && record.grade.letter ? record.grade.letter : null,
     pct: matchPctOf(record),
     nothing,
@@ -2377,7 +2385,7 @@ export function runToastModel(row, answer) {
     livePart: vantage === 'partial' ? (failed.length ? `live answered in part (its ${listWords(inProbeOrder(failed).map(familyWord))} not read)` : 'live answered in part') : '',
     notComparable,
     filterWarn,
-    tone: !loss && scan?.partial !== true && !nothing && !lost && vantage !== 'partial' && !notComparable && !filterWarn ? 'ok' : '',
+    tone: !loss && scan?.partial !== true && !nothing && !lost && vantage !== 'partial' && !notComparable && !filterWarn && !skipped ? 'ok' : '',
   };
 }
 

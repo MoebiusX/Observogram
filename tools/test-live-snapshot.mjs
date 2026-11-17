@@ -798,7 +798,7 @@ test('the exclude patterns: names dropped after the prefixes and before the cap,
   // timedExcludeErrors, which the server runs on a start, the scope check and PATCH, refuses it so too.
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricExclude: ['up'] } }), /scope\.metricExclude\[0\] "up" is not anchored \(an exclude pattern starts with \^\)/);
   const SLOW = '^a*a*a*a*b$';
-  const WHY = 'may be too slow to match (testing a 256-character name can take more than 32 million steps)';
+  const WHY = 'may be too slow to match (testing a 256-character name can take more than 16 million steps)';
   const TOO_SLOW = (i, p) => `scope.metricExclude[${i}] "${p}" ${WHY}`;
   assert.deepEqual(normalizeScope({ metricExclude: [SLOW] }).errors, [TOO_SLOW(0, SLOW)], 'the static half bounds its work');
   assert.deepEqual(timedExcludeErrors(['^alertmanager_', '^app_event_\\d+_total$']), []);
@@ -819,7 +819,7 @@ test('the exclude patterns: names dropped after the prefixes and before the cap,
 
 test('an exclude pattern never stalls the thread: its steps over a 256-character name are bounded where new input is parsed — four wildcards that take the same characters, long chains of optional atoms or alternatives, a class of an astral character repeated, a backreference are refused; three wildcards pass, a literal ending counted by where it can start; a stored scope loads whatever it holds; the timed half times names the pattern itself opens; a name past the bound is never matched, by the fetcher and the diff alike', async () => {
   // A refused value is quoted as normalizeScope quotes it (cut at 60 characters).
-  const WHY = 'may be too slow to match (testing a 256-character name can take more than 32 million steps)';
+  const WHY = 'may be too slow to match (testing a 256-character name can take more than 16 million steps)';
   const TOO_SLOW = (p) => [`scope.metricExclude[0] ${JSON.stringify(p.length > 60 ? `${p.slice(0, 60)}…` : p)} ${WHY}`];
   // The pattern the review found: every adversarial id fails at its first character, so the clock timed nothing,
   // and one declared 24-character name of q's stalled the scope check for seconds.
@@ -838,7 +838,7 @@ test('an exclude pattern never stalls the thread: its steps over a 256-character
   // What people write passes: one quantifier, quantifiers apart by a character the one before cannot take, two or
   // three that share (every recording rule's name, `level:metric:operation`), a literal ending of any length.
   const fine = ['^go_', '^demo_event_(?:\\d+|blank)_total$', '^app_event_\\d+_total$', '^a{2,5}_', '^.*_bucket$', '^[a-z]+_[a-z]+_[a-z]+_total$', '^.*_.*_total$', '^kube_.*_info$', '^go_|process_', '^(?=go_)', '^[^_]*_[^_]*_total$',
-    '^.*:.*:.*$', '^.*_.*_.*_total$', '^.*grpc.*server.*$', '^.*_.*_.*_seconds_bucket$'];
+    '^.*:.*:.*$', '^.*_.*_.*_total$', '^.*grpc.*server.*$', '^.*_.*_.*_seconds_bucket$', '^.*grpc.*server.*handled.*$'];
   assert.deepEqual(normalizeScope({ metricExclude: fine }).errors, []);
   assert.deepEqual(timedExcludeErrors(fine), []);
   // A stored scope (a saved check's, an environment's, a pack's record) reads by the rule earlier releases had: the
@@ -862,8 +862,30 @@ test('an exclude pattern never stalls the thread: its steps over a 256-character
   const { pack } = await snapshotOf(fullTools({ [T.metricNames]: () => ({ ...metrics, values: [...metrics.values, 'go_goroutines', long] }) }), { scope: { metricExclude: ['^go_'] } });
   const kept = JSON.parse(pack.metadata.annotations['mcp.discovered.metric_names']);
   assert.deepEqual([kept.includes(long), kept.includes('go_goroutines'), kept.length], [true, false, metrics.values.length + 1], 'the fetcher keeps the long name and drops the short one');
-  // A pack annotation carrying a refused pattern (an older pack) is read without it: never run.
-  assert.equal(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [Q] }) }).get('metric'), undefined);
+  // A pack's recorded patterns are read back by the rule they were recorded under: an older pack keeps a
+  // pattern the bound refuses now, so the diff parks what its own read excluded (a new pack records only
+  // what its read applied); a shape no release accepted is still dropped.
+  assert.deepEqual(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [Q] }) }).get('metric'), { by: 'prefix', values: [], exclude: [Q] });
+  assert.equal(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: ['up'] }) }).get('metric'), undefined);
+  // The third review's holes: a legacy octal escape is one unit (\060 is '0', so five of them starred are five
+  // overlapping quantifiers), and a class's set is sampled at every unit it can change at, non-ASCII ones
+  // included — both refused at once; before, the first passed and its timing never returned, the second
+  // passed both halves and stalled on a name of accented letters.
+  const OCTAL = `^${String.raw`\060*`.repeat(5)}$`;
+  const NON_ASCII = `^${String.raw`[^\x00-\x7f]*[^\s\x00-\x7e]+`.repeat(3)}$`;
+  const t1 = performance.now();
+  assert.deepEqual(normalizeScope({ metricExclude: [OCTAL] }).errors, TOO_SLOW(OCTAL));
+  assert.deepEqual(normalizeScope({ metricExclude: [NON_ASCII] }).errors, TOO_SLOW(NON_ASCII));
+  assert.deepEqual(normalizeScope({ metricExclude: [`^${String.raw`\060`}[a-z]+$`] }).errors, [], 'a single octal unit is still a pattern');
+  assert.ok(performance.now() - t1 < 1000, 'refused at once');
+  // One budget per call: 32 patterns that each pass the bound but take tens of milliseconds over their
+  // names are answered within the call's budget — each refused as slow, or left untimed once the budget
+  // is spent — never one after another for many seconds.
+  const many = Array.from({ length: 32 }, (_, i) => `^[a-z]*[a-z]*[a-z]*x${String.fromCharCode(97 + (i % 26))}${i}$`);
+  const t2 = performance.now();
+  const slowErrors = timedExcludeErrors(many);
+  assert.ok(performance.now() - t2 < 3000, `answered in ${Math.round(performance.now() - t2)} ms`);
+  for (const e of slowErrors) assert.match(e, /(?:is too slow to match \(testing it on 256-character names took more than 50 ms\)|was not timed \(the scope's exclude patterns took more than 1 s to test together: send fewer, or simpler\))$/);
 });
 
 test('Grafana-managed rules (the recorded provisioning answer) join vmalert\'s: unioned by title, engine grafana, the recording rule left out; the folder scope is not applied while vmalert names no folder', async () => {

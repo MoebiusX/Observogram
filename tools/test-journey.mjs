@@ -1317,10 +1317,13 @@ try {
     writeFileSync(join(TMP, 'journeys', 'old-scope.journey.yaml'), ['name: old-scope', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: ${fakeUrl}, scope: { metricPrefixes: [shop_], metricExclude: ['^.*:.*:.*$', '${Q}'] } } }`].join('\n'));
     const to = await runJourney(loadJourneyDef('old-scope'));
     const oldNote = JSON.parse(readLivePack('old-scope', to)?.metadata?.annotations?.['observogram.live.scope'] || '{}');
-    assert(to.outcome === 'pass' && JSON.stringify(to.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], metricExclude: ['^.*:.*:.*$', Q] })
+    // The record says what the read applied, never what was stored: the scope less the pattern it went
+    // without, and that pattern named (packB.notApplied) — the listing, the toast and the row read them.
+    assert(to.outcome === 'pass' && JSON.stringify(to.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], metricExclude: ['^.*:.*:.*$'] })
+      && to.packB.notApplied?.length === 1 && to.packB.notApplied[0].startsWith(`exclude pattern "${Q}" not applied — it may be too slow to match`)
       && JSON.stringify(oldNote.metricExclude) === JSON.stringify(['^.*:.*:.*$']) && oldNote.notApplied?.length === 1
-      && oldNote.notApplied[0].startsWith(`exclude pattern "${Q}" not applied — it may be too slow to match`),
-      'a stored scope loads and runs whatever it holds: the bounded pattern applied, the other read without and named', { outcome: to.outcome, record: to.packB.liveScope, oldNote });
+      && oldNote.notApplied[0] === to.packB.notApplied[0],
+      'a stored scope loads and runs whatever it holds: the bounded pattern applied, the other read without and named — on the record as on the pack', { outcome: to.outcome, record: to.packB, oldNote });
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,

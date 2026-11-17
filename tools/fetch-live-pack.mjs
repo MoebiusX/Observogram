@@ -2887,41 +2887,80 @@ const STAGE_OF_PROBE = Object.freeze({
 // within; then the timed half, on names built from the pattern itself
 // (live-fetch.mjs excludeProbes) beside the four adversarial ids, so a pattern
 // that opens with a literal no id carries is timed doing its work, not nothing.
-// Before the timed half, a pass over the same names that stops at the first
-// one after which the pattern has spent EXCLUDE_STOP_MS on both the wall clock
-// and the process's CPU time: a pattern that slow is refused without the rest,
-// which would only hold the server's thread longer (some thirty names, each
-// within the static bound's steps). Both clocks, so neither a descheduled
-// thread nor another thread's work stops a fast one.
+// The timed half times the pattern itself, compiled and warmed first (V8 runs a pattern's first test in
+// its interpreter, about ten times slower than the native code a second test gets), over all its names
+// in one pass: within EXCLUDE_TIME_MS on the smaller of the wall clock and the CPU time plus its tick
+// (artefact-classify's id clocks), a pass over it but within twice it timed again, up to twice. A pass
+// stops at the first name after which the pattern has spent EXCLUDE_STOP_MS on both clocks (refused: the
+// names left would only hold the server's thread longer), or once the call's shared budget is spent.
+//
+// One budget per call (`budget`, a plain object the first pattern starts): a scope holds up to 32
+// patterns, a PATCH many environments' worth, so the call stops timing once it has spent
+// EXCLUDE_BUDGET_MS on both clocks — a pattern left untimed is refused as new input and not applied
+// from a stored scope, with its own sentence. Verdicts that say something about the pattern alone (the
+// static half's, and an acceptance) are remembered for the process (EXCLUDE_VERDICTS, bounded), so a
+// stored scope is not timed again on every Run; a timed refusal is not, so a loaded machine's slow pass
+// is tried again next time.
 const EXCLUDE_TIMED_OUT = 'is too slow to match (testing it on 256-character names took more than 50 ms)';
+const EXCLUDE_UNTIMED = 'was not timed (the scope\'s exclude patterns took more than 1 s to test together: send fewer, or simpler)';
+const EXCLUDE_TIME_MS = 50;
+const EXCLUDE_RETIMES = 2;
 const EXCLUDE_STOP_MS = 200;
+const EXCLUDE_BUDGET_MS = 1000;
+const EXCLUDE_SLACK_MS = process.platform === 'win32' ? 15.625 + 1 : 0;
+const EXCLUDE_VERDICTS_MAX = 512;
+const EXCLUDE_VERDICTS = new Map();
 const cpuNowMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
-function stopsEarly(re, ids) {
+const budgetStarted = (budget) => {
+  if (budget && budget.wall0 === undefined) { budget.wall0 = performance.now(); budget.cpu0 = cpuNowMs(); }
+  return budget;
+};
+const budgetSpent = (budget) => !!budget && budget.wall0 !== undefined
+  && performance.now() - budget.wall0 > EXCLUDE_BUDGET_MS && cpuNowMs() - budget.cpu0 > EXCLUDE_BUDGET_MS;
+const remembered = (pattern, verdict) => {
+  if (EXCLUDE_VERDICTS.size >= EXCLUDE_VERDICTS_MAX) EXCLUDE_VERDICTS.delete(EXCLUDE_VERDICTS.keys().next().value);
+  EXCLUDE_VERDICTS.set(pattern, verdict);
+  return verdict;
+};
+// One timed pass of `re` over `ids` → { ms, stopped: null | 'slow' | 'budget' }.
+function excludePass(re, ids, budget) {
   const wall0 = performance.now();
   const cpu0 = cpuNowMs();
   for (const id of ids) {
     re.test(id);
-    if (performance.now() - wall0 > EXCLUDE_STOP_MS && cpuNowMs() - cpu0 > EXCLUDE_STOP_MS) return true;
+    if (performance.now() - wall0 > EXCLUDE_STOP_MS && cpuNowMs() - cpu0 > EXCLUDE_STOP_MS) return { ms: Infinity, stopped: 'slow' };
+    if (budgetSpent(budget)) return { ms: Infinity, stopped: 'budget' };
   }
-  return false;
+  return { ms: Math.min(performance.now() - wall0, cpuNowMs() - cpu0 + EXCLUDE_SLACK_MS), stopped: null };
 }
-function excludeRefusal(pattern) {
+function excludeRefusal(pattern, budget = null) {
+  if (EXCLUDE_VERDICTS.has(pattern)) return EXCLUDE_VERDICTS.get(pattern);
   const problem = excludeProblem(pattern);
-  if (problem) return problem;
+  if (problem) return remembered(pattern, problem);
+  budgetStarted(budget);
+  if (budgetSpent(budget)) return EXCLUDE_UNTIMED;
   const ids = excludeProbes(pattern);
-  if (stopsEarly(new RegExp(pattern), ids)) return EXCLUDE_TIMED_OUT;
-  return compileBoundedPattern(pattern, { ids }).re ? null : EXCLUDE_TIMED_OUT;
+  const re = new RegExp(pattern);
+  re.test('');   // compiled to native code before any name is timed
+  let pass = excludePass(re, ids, budget);
+  for (let k = 0; pass.stopped === null && pass.ms > EXCLUDE_TIME_MS && pass.ms <= 2 * EXCLUDE_TIME_MS && k < EXCLUDE_RETIMES; k += 1) {
+    pass = excludePass(re, ids, budget);
+  }
+  if (pass.stopped === 'budget') return EXCLUDE_UNTIMED;
+  if (pass.stopped === 'slow' || pass.ms > EXCLUDE_TIME_MS) return EXCLUDE_TIMED_OUT;
+  return remembered(pattern, null);
 }
 
 // The exclude-pattern rule over a normalized scope's `metricExclude`: one
 // sentence per pattern it refuses, in the shape of normalizeScope's own errors
 // (`scope.metricExclude[i] "…" …`), so the server's start route, the scope
 // check, PATCH and its configured-scope reader refuse it the same way as any
-// other bad scope value, before a job starts.
-export function timedExcludeErrors(patterns) {
+// other bad scope value, before a job starts. `budget`: one plain object shared by every call that answers
+// one request (a PATCH's environments), so the request as a whole stops timing at EXCLUDE_BUDGET_MS.
+export function timedExcludeErrors(patterns, { budget = {} } = {}) {
   const errors = [];
   (Array.isArray(patterns) ? patterns : []).forEach((pattern, i) => {
-    const why = excludeRefusal(pattern);
+    const why = excludeRefusal(pattern, budget);
     if (why) errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} ${why}`);
   });
   return errors;
@@ -3004,8 +3043,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const normalized = draftScope || normalizeScope(scope, { stored: true });
     if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
     const applying = [];
+    const budget = {};
     for (const pattern of normalized.scope.metricExclude) {
-      const why = excludeRefusal(pattern);
+      const why = excludeRefusal(pattern, budget);
       if (why) excludesNotApplied.push(`exclude pattern ${JSON.stringify(pattern)} not applied — it ${why}`);
       else applying.push(pattern);
     }
