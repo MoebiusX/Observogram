@@ -11,11 +11,15 @@
  *     allowed. Data from another candidate still wins.
  *   - Scrape targets whose store answers 400 / 404 / 405 (a federated or
  *     remote-write store keeps none) are UNSUPPORTED, never failed; an
- *     Alertmanager status that answers without its configuration makes the
- *     routes unsupported the same way. Neither degrades the vantage.
- *   - A journey's memory of such a family (fetchMcp's probeMemory) keeps it
- *     unsupported when it answers a mere error next time; data, an empty
- *     answer or a refusal still decide.
+ *     Alertmanager status object with no configuration key at all makes the
+ *     routes unsupported the same way. Neither degrades the vantage. Not
+ *     served needs that positive signal: an error, an envelope, a missing
+ *     datasource, an empty configuration or one in a shape the reader does
+ *     not read is a failure.
+ *   - A journey's memory (fetchMcp's probeMemory) never absorbs an outage: a
+ *     family remembered as not served that answers a 503 next time fails;
+ *     and a tool the journey saw answer a family whose answer now says "not
+ *     served" fails, saying when it answered.
  *   - metrics_metadata is never called without its metric.
  *   - A declared alert rule is "not checked", never "declared, not live",
  *     when the alert-rule family could not be read.
@@ -30,7 +34,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFakeMcp } from '../server/fixtures/fake-mcp.mjs';
 import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool } from './lib/contracts/mcp-capabilities.mjs';
-import { fetchMcp, buildCanonicalPack, isProbeRefusal, notServedStatus } from './fetch-live-pack.mjs';
+import { fetchMcp, buildCanonicalPack, isProbeRefusal, notServedStatus, pingMcp } from './fetch-live-pack.mjs';
 import { partialLiveEvidence } from '../studio/diagnostic-grade.mjs';
 import { liveEvidenceFacts } from './lib/journey.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -176,6 +180,44 @@ test('the texts a refusal comes in (one rule for the probe cascade and the ping)
   }
 });
 
+test('a refusal in the words of other client libraries is one too — the Prometheus Go client, a generated Grafana client, gRPC, AWS — and a bare 401 or 403 in other words still is not (E4)', () => {
+  for (const yes of [
+    'client_error: client error: 403',
+    '[GET /search][403] searchForbidden {"message":"You\'ll need additional permissions to perform this action.","title":"Access denied"}',
+    '[GET /search][401] searchUnauthorized {"message":"Invalid API key","messageId":"api-keys.invalid","statusCode":401}',
+    'rpc error: code = PermissionDenied desc = permission denied',
+    'rpc error: code = Unauthenticated desc = invalid bearer token',
+    'Grafana API error (403): Access denied',
+    'received 403 from upstream',
+    'AccessDeniedException: User: arn:aws:sts::123:assumed-role/x is not authorized to perform: aps:QueryMetrics',
+    'x: {"status":403,"message":"denied"}',
+  ]) {
+    assert.equal(isProbeRefusal(yes), true, yes);
+  }
+  for (const no of ['execution: the query hit the max number of chunks limit (limit: 2000000) - 403 series matched',
+    'client_error: client error: 404', '[GET /search][404] searchNotFound', 'x: HTTP 502: Bad Gateway', 'x: (404) not here']) {
+    assert.equal(isProbeRefusal(no), false, no);
+  }
+});
+
+test('a dashboard search refused in a generated client\'s words beside a fallback that answers empty is failed, never an honest empty; the ping reads the Go client\'s refusal as the backend refusing the MCP (E4)', async () => {
+  const { ann, pack } = await fetchFrom({
+    [T.names]: NAMES,
+    [T.search]: { __isError: '[GET /search][403] searchForbidden {"message":"You\'ll need additional permissions to perform this action.","title":"Access denied"}' },
+    [T.dashList]: [],
+  });
+  assert.ok(list(ann, 'mcp.probesFailed').includes('dashboards') && !list(ann, 'mcp.probesEmpty').includes('dashboards'), 'the refused search leaves a hole');
+  assert.match(ann['observogram.unobserved.dashboard'], /\[403\] searchForbidden/, 'declared dashboards are not checked, never "declared, not live"');
+  assert.equal(partialLiveEvidence(pack).vantage, 'partial');
+  const fake = await startFakeMcp([T.health, T.topology, T.search], (name) => (name === T.search ? { __isError: 'client_error: client error: 403' } : {}));
+  try {
+    const ping = await pingMcp({ mcpUrl: fake.url });
+    assert.deepEqual([ping.verdict, ping.read?.outcome, ping.read?.backendAuthRefused], ['connected', 'failed', true]);
+  } finally {
+    await fake.close();
+  }
+});
+
 test('the statuses a store answers when it keeps no such thing', () => {
   const S = [400, 404, 405];
   assert.equal(notServedStatus('x: Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets', S), 404);
@@ -187,6 +229,54 @@ test('the statuses a store answers when it keeps no such thing', () => {
   assert.equal(notServedStatus('x: HTTP 404', []), null, 'no statuses, no match');
   assert.equal(notServedStatus('x: dashboard d not found', S), null, 'a word is not a status');
   assert.equal(notServedStatus('x: HTTP 503 Service Unavailable', S), null);
+});
+
+test('a 404 that names a missing datasource is never "not served": a wrong datasource uid is a failure, its text kept as the probe error (E2)', async () => {
+  const S = [400, 404, 405];
+  assert.equal(notServedStatus('x: Error: HTTP 404: {"message":"Data source not found"} — http://grafana.example.com/api/datasources/proxy/uid/promm/api/v1/targets', S), null);
+  assert.equal(notServedStatus('x: HTTP 404: {"message":"Unable to find datasource"}', S), null);
+  assert.equal(notServedStatus('x: HTTP 404: datasource with uid "promm" does not exist', S), null);
+  assert.equal(notServedStatus('x: Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets', S), 404,
+    'a datasource in the URL\'s path is no missing datasource: the store answered 404');
+  assert.equal(notServedStatus('x: HTTP 404: the datasource proxy returned Not Found', S), 404, 'the store behind the datasource answered 404');
+  const { ann, pack } = await fetchFrom({
+    [T.names]: NAMES,
+    [T.targets]: { __isError: 'Error: HTTP 404: {"message":"Data source not found"} — http://grafana.example.com/api/datasources/proxy/uid/promm/api/v1/targets' },
+  });
+  assert.ok(list(ann, 'mcp.probesFailed').includes('scrape_configs') && !list(ann, 'mcp.probesUnsupported').includes('scrape_configs'));
+  assert.match(ann['mcp.probeErrors.scrape_configs'], /Data source not found/);
+  assert.equal(ann['mcp.probeUnsupported.scrape_configs'], undefined);
+  assert.equal(partialLiveEvidence(pack).vantage, 'partial');
+});
+
+test('a not-served answer from a tool the journey saw answer the family is a failure that says when it answered; a tool never seen answering is still "not served" (E2)', async () => {
+  const at = '2026-11-15T09:00:00.000Z';
+  const NOT_FOUND = { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' };
+  const seen = { answered: { scrape_configs: { tools: [T.targets], at } } };
+  const lostRoute = await fetchFrom({ [T.names]: NAMES, [T.targets]: NOT_FOUND }, { probeMemory: seen });
+  assert.ok(list(lostRoute.ann, 'mcp.probesFailed').includes('scrape_configs'), 'the store served the targets: a 404 now is a failure');
+  assert.equal(lostRoute.ann['mcp.probeErrors.scrape_configs'],
+    `${T.targets}: it answered on 2026-11-15; now Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets`);
+  assert.equal(lostRoute.ann['mcp.probeUnsupported.scrape_configs'], undefined);
+  assert.equal(partialLiveEvidence(lostRoute.pack).vantage, 'partial');
+  // Another tool, one the journey never saw answer: its store may keep none.
+  const otherTool = await fetchFrom({ [T.names]: NAMES, [T.targets2]: NOT_FOUND }, { probeMemory: seen });
+  assert.ok(list(otherTool.ann, 'mcp.probesUnsupported').includes('scrape_configs'));
+  // An older record that did not say which tool answered: every tool's not-served answer fails.
+  const anyTool = await fetchFrom({ [T.names]: NAMES, [T.targets2]: NOT_FOUND }, { probeMemory: { answered: { scrape_configs: { tools: [], at, anyTool: true } } } });
+  assert.ok(list(anyTool.ann, 'mcp.probesFailed').includes('scrape_configs'));
+  // The Alertmanager status the same way: a status that served its configuration and now trims it.
+  const trimmed = await fetchFrom({ [T.names]: NAMES, [T.status]: { versionInfo: { version: '0.27.0' }, cluster: { status: 'ready' } } },
+    { probeMemory: { answered: { alerting_routes: { tools: [T.status], at } } } });
+  assert.ok(list(trimmed.ann, 'mcp.probesFailed').includes('alerting_routes'));
+  assert.equal(trimmed.ann['mcp.probeErrors.alerting_routes'], `${T.status}: it answered on 2026-11-15; now the Alertmanager status carries no configuration`);
+  // What a journey remembers it from: the tool that answered a family that can read "not served" — data or an honest empty.
+  const data = await fetchFrom({ [T.names]: NAMES, [T.targets]: { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] } });
+  assert.equal(data.ann['mcp.probeAnsweredBy.scrape_configs'], T.targets);
+  assert.equal(data.ann['mcp.probeAnsweredBy.metric_names'], undefined, 'a family that never reads "not served" needs no memory');
+  assert.deepEqual(liveEvidenceFacts(data.pack).probeAnsweredBy, { scrape_configs: [T.targets] });
+  const empty = await fetchFrom({ [T.names]: NAMES, [T.targets2]: { targets: [] } });
+  assert.equal(empty.ann['mcp.probeAnsweredBy.scrape_configs'], T.targets2);
 });
 
 test('scrape targets answered 400, 404 or 405 are unsupported, the status the reason; the vantage stays full', async () => {
@@ -237,15 +327,51 @@ test('an Alertmanager status that answers without its configuration makes the ro
   assert.ok(list(whole.ann, 'mcp.probesSucceeded').includes('alerting_routes'));
 });
 
-test('a remembered family is asked again: a mere error keeps it unsupported as remembered; data, an empty answer and a refusal decide (P6, S1)', async () => {
+test('"not served" needs a positive signal: an Alertmanager answer that is an error, an envelope, no status at all, an empty configuration or one in a shape the reader does not read fails the routes, the vantage partial (E1)', async () => {
+  const status = { versionInfo: { version: '0.27.0' }, cluster: { status: 'ready', peers: [] }, uptime: '2026-11-16T09:00:00.000Z' };
+  // Grafana's built-in Alertmanager states its configuration as a JSON object (GettableStatus).
+  const grafanaConfig = { route: { receiver: 'shop-oncall', routes: [{ receiver: 'shop-oncall', object_matchers: [['severity', '=', 'critical']] }] }, receivers: [{ name: 'shop-oncall', grafana_managed_receiver_configs: [{ type: 'webhook', settings: { url: 'https://hooks.example.com/shop' } }] }] };
+  const cases = [
+    ['an error as content', { error: 'dial tcp 10.0.0.7:9093: connect: connection refused' }, 'the status answer carries an error'],
+    ['an error envelope', { status: 'error', errorType: 'unavailable', error: 'alertmanager unavailable' }, 'the status answer is an error envelope (errorType unavailable)'],
+    ['plain text', 'Error: could not reach the Alertmanager', 'the answer is no Alertmanager status'],
+    ['an empty object', {}, 'the answer is no Alertmanager status'],
+    ['an empty list', [], 'the answer is no Alertmanager status'],
+    ['a bare status word', { status: 'down' }, 'the answer is no Alertmanager status'],
+    ['an empty configuration text', { ...status, config: { original: '' } }, 'the Alertmanager status carries an empty configuration'],
+    ['a null configuration', { ...status, config: null }, 'the Alertmanager status carries an empty configuration'],
+    ['a configuration as a JSON object', { ...status, config: grafanaConfig }, 'the Alertmanager status carries its configuration in a shape this reader does not read'],
+  ];
+  for (const [what, answer, why] of cases) {
+    const { ann, pack } = await fetchFrom({ [T.names]: NAMES, [T.status]: answer });
+    assert.ok(list(ann, 'mcp.probesFailed').includes('alerting_routes') && !list(ann, 'mcp.probesUnsupported').includes('alerting_routes'), `${what}: failed, never "not served"`);
+    assert.equal(ann['mcp.probeErrors.alerting_routes'], `${T.status}: ${why}`, `${what}: the reason, not the answer's text`);
+    assert.equal(ann['mcp.probeUnsupported.alerting_routes'], undefined);
+    assert.equal(partialLiveEvidence(pack).vantage, 'partial', `${what}: a hole in the live read`);
+  }
+  // A status object with no configuration key at all is the one positive signal (A16).
+  const trimmed = await fetchFrom({ [T.names]: NAMES, [T.status]: status });
+  assert.ok(list(trimmed.ann, 'mcp.probesUnsupported').includes('alerting_routes'));
+  assert.equal(partialLiveEvidence(trimmed.pack).vantage, 'full');
+});
+
+test('a family the journey remembers as not served is asked again and its answer alone decides: a 503 is a failure, never absorbed; the not-served answer again keeps its first instant; data, an empty answer and a refusal decide (P6, E1)', async () => {
   const since = '2026-11-01T08:00:00.000Z';
   const probeMemory = { unsupported: { scrape_configs: { reason: `${T.targets}: HTTP 404 Not Found`, since, tools: [T.targets] } } };
   const busy = await fetchFrom({ [T.names]: NAMES, [T.targets]: { __isError: 'Error: HTTP 503: Service Unavailable' } }, { probeMemory });
   assert.ok(busy.calls.some((c) => c.name === T.targets), 'the family is asked again');
-  assert.ok(list(busy.ann, 'mcp.probesUnsupported').includes('scrape_configs'), 'a 503 is no new failure');
-  assert.deepEqual(JSON.parse(busy.ann['mcp.probeUnsupported.scrape_configs']), { reason: `${T.targets}: HTTP 404 Not Found`, since, tools: [T.targets], remembered: true });
-  assert.match(busy.ann['observogram.unobserved.scrape_job'], /answered so since 2026-11-01/);
-  assert.equal(partialLiveEvidence(busy.pack).vantage, 'full');
+  assert.ok(list(busy.ann, 'mcp.probesFailed').includes('scrape_configs') && !list(busy.ann, 'mcp.probesUnsupported').includes('scrape_configs'), 'a 503 is an outage, not "not served"');
+  assert.equal(busy.ann['mcp.probeUnsupported.scrape_configs'], undefined);
+  assert.equal(busy.ann['mcp.probeErrors.scrape_configs'], `${T.targets}: Error: HTTP 503: Service Unavailable`);
+  assert.equal(partialLiveEvidence(busy.pack).vantage, 'partial');
+  const status = { versionInfo: { version: '0.27.0' }, cluster: { status: 'ready' } };
+  const amDown = await fetchFrom({ [T.names]: NAMES, [T.status]: { __isError: 'Error: HTTP 503: Service Unavailable' } },
+    { probeMemory: { unsupported: { alerting_routes: { reason: `${T.status}: the Alertmanager status carries no configuration`, since, tools: [T.status] } } } });
+  assert.ok(list(amDown.ann, 'mcp.probesFailed').includes('alerting_routes'), 'a trimmed Alertmanager that is now down is down');
+  assert.equal(partialLiveEvidence(amDown.pack).vantage, 'partial');
+  const amAgain = await fetchFrom({ [T.names]: NAMES, [T.status]: status },
+    { probeMemory: { unsupported: { alerting_routes: { reason: `${T.status}: the Alertmanager status carries no configuration`, since, tools: [T.status] } } } });
+  assert.equal(JSON.parse(amAgain.ann['mcp.probeUnsupported.alerting_routes']).since, since);
   const again = await fetchFrom({ [T.names]: NAMES, [T.targets]: { __isError: 'Error: HTTP 404: Not Found' } }, { probeMemory });
   assert.equal(JSON.parse(again.ann['mcp.probeUnsupported.scrape_configs']).since, since, 'the same answer again keeps the first instant');
   const answered = await fetchFrom({ [T.names]: NAMES, [T.targets]: { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] } }, { probeMemory });

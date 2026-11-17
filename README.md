@@ -3175,7 +3175,7 @@ gate:
   requireGradePass: true
   maxLiveAgeHours: 24
   failOnPartialEvidence: true   # a probe family FAILED (a refused read included) → the verdict is not trustworthy
-  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
+  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire (a health family that failed fails it)
   stack:                        # thresholds on the stack's own self-metric samples (early warning)
     requireSampled: true        # breach unless the MCP tier let the run sample them
     rows:

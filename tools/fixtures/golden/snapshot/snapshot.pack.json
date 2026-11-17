@@ -31,6 +31,7 @@
       "mcp.toolsExposedCount": "11",
       "mcp.toolsUnmatched": "",
       "mcp.probeUnsupported.alerting_routes": "{\"reason\":\"alertmanager_status: the Alertmanager status carries no configuration\",\"since\":\"<time>\",\"tools\":[\"alertmanager_status\"]}",
+      "mcp.probeAnsweredBy.scrape_configs": "metrics_targets",
       "observogram.unread.alert_rule": "{\"grafana\":\"this MCP offers no Grafana alert-rule tool, so Grafana-managed rules were not read\",\"loki\":\"no alert-rule tool reads a Loki ruler, so Loki rules were not read\"}",
       "observogram.unread.recording_rule": "{\"grafana\":\"no recording-rule tool reads Grafana-managed recording rules, so they were not read\"}",
       "mcp.discovered.rule_groups": "[{\"group\":\"finops:capacity\",\"alert\":0,\"recording\":3},{\"group\":\"finops:ingestion\",\"alert\":0,\"recording\":6},{\"group\":\"genai:operations\",\"alert\":0,\"recording\":6},{\"group\":\"krystalinex.application\",\"alert\":5,\"recording\":0},{\"group\":\"krystalinex.cold-wallet\",\"alert\":6,\"recording\":0},{\"group\":\"krystalinex.container_health\",\"alert\":4,\"recording\":0}]",

@@ -146,7 +146,9 @@ export const CAPABILITIES = Object.freeze({
     // federated or remote-write store answers 400 / 404 / 405: there are no
     // targets to list there. A candidate whose answer says so makes the
     // family unsupported, never failed (tools/fetch-live-pack.mjs
-    // notServedStatus), and a journey remembers it for the endpoint.
+    // notServedStatus) — unless the answer names a missing datasource, or the
+    // journey's records saw that tool answer the family (a lost route then,
+    // not a store that keeps none): those are failures.
     unsupportedOnHttpStatus: Object.freeze([400, 404, 405]),
     // metrics_targets is the canonical otel-mcp-server tool (metrics skill);
     // returns the Prometheus /api/v1/targets shape. The rest are legacy.
@@ -186,8 +188,10 @@ export const CAPABILITIES = Object.freeze({
     // (API v2 /status → `config`: the text itself, or { original: <text> }),
     // secrets already redacted by Alertmanager. The probe reads the ROUTES
     // out of it — the same reading the crawler gives a config file — and
-    // keeps nothing else of the text. An answer without a configuration
-    // (a tier that trims it) is no answer for this probe.
+    // keeps nothing else of the text. An answer without a configuration is
+    // no answer for this probe: a status object with no `config` key at all
+    // (a tier that trims it) reads not served here; an error, an empty
+    // configuration or one in a shape the reader does not read fails it.
     candidates: [{ tool: 'alertmanager_status', attests: 'alertmanager' }],
   },
 

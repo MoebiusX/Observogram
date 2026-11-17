@@ -15,9 +15,13 @@
  *     recorded no probe table has none;
  *   - a lost vantage is a lost run: one record, no grade, no match, thrown on
  *     (exit 2 on the command line);
- *   - a family the endpoint answered it does not serve is remembered by the
- *     journey and does not read as a new failure;
- *   - the gate fails closed on every absent figure.
+ *   - a family the endpoint answered it does not serve is not served on
+ *     every run it says so, and fails on every run it does not (a 503 is an
+ *     outage); a tool the journey saw answer a family never reads "not
+ *     served" after;
+ *   - the gate fails closed on every absent figure, and on a health count a
+ *     failed family leaves a hole in;
+ *   - a probe error keeps no query or credential, whatever quotes it.
  *
  * Pack A is the vendored spec example (payment-service), never a crawl: what
  * a scan reads is another track's business. Live sides are built with the
@@ -264,6 +268,27 @@ test('the gate fails closed on every absent figure', () => {
   assert.deepEqual(detail({ minAlignmentPct: 50, maxDeclaredNotLive: 3 }, { alignmentPct: 60, declaredNotLive: 2 }), [], 'a host\'s facts without `compared` are read as given');
 });
 
+test('maxUnhealthy cannot pass on a health count a failed family, or one answered in part, leaves a hole in; a family not offered or not served here is no hole (E6)', () => {
+  const detail = (facts) => evaluateGate({ maxUnhealthy: 0 }, facts).map((b) => `${b.criterion}: ${b.detail}`);
+  const facts = (probes, extra = {}) => ({ vantage: 'partial', scrapeJobsDown: 0, unhealthyRules: 0, probes: { attempted: [], succeeded: ['metric_names'], empty: [], failed: [], unsupported: [], ...probes }, ...extra });
+  assert.deepEqual(detail(facts({ empty: ['recording_rules'], failed: ['scrape_configs', 'alert_rules'] })), [
+    'maxUnhealthy: on-wire health was read in part — scrape targets were not read; alert rules were not read — the gate cannot pass on a partial count (0 scrape job(s) down + 0 unhealthy rule(s) seen, max 0)',
+  ], 'the targets and the alert rules failed beside an empty recording-rule read: no count to hold');
+  assert.deepEqual(detail(facts({ succeeded: ['metric_names', 'recording_rules', 'alert_rules'], failed: ['scrape_configs'] })), [
+    'maxUnhealthy: on-wire health was read in part — scrape targets were not read — the gate cannot pass on a partial count (0 scrape job(s) down + 0 unhealthy rule(s) seen, max 0)',
+  ], 'healthy rules say nothing of the jobs down');
+  assert.deepEqual(detail(facts({ succeeded: ['metric_names', 'scrape_configs', 'recording_rules', 'alert_rules'], partial: ['alert_rules'] })), [
+    'maxUnhealthy: on-wire health was read in part — alert rules were read in part — the gate cannot pass on a partial count (0 scrape job(s) down + 0 unhealthy rule(s) seen, max 0)',
+  ]);
+  assert.deepEqual(detail(facts({ succeeded: ['metric_names', 'scrape_configs'], failed: ['recording_rules', 'alert_rules'] }, { scrapeJobsDown: 1, scrapeJobsDownNames: ['shop-api'] })), [
+    'maxUnhealthy: 1 scrape job(s) down + 0 unhealthy rule(s) observed on the wire (max 0): job shop-api down — a lower bound: recording rules were not read; alert rules were not read',
+  ], 'a count already over the max says so, and that it is a lower bound');
+  assert.deepEqual(detail(facts({ empty: ['recording_rules', 'alert_rules'], unsupported: ['scrape_configs'] }, { vantage: 'full', probeUnsupported: { scrape_configs: { reason: 'x: HTTP 404 Not Found' } } })), [],
+    'scrape targets not served here: the store keeps none — the rules are the count');
+  assert.deepEqual(detail(facts({ succeeded: ['metric_names', 'scrape_configs'], unsupported: ['recording_rules', 'alert_rules'] }, { vantage: 'full' })), [],
+    'rule families this MCP does not offer: the jobs are the count');
+});
+
 test('inventory coverage over a kind the site expects none of: a kind the gate names cannot pass; an unnamed one is left out', () => {
   const inventory = { status: 'checked', kinds: { host: { mode: 'enumerated', title: 'host', status: 'checked', expected: 0, up: 0, down: [], silent: [], unexpected: [], coveragePct: null } } };
   const run = (gate) => { const out = []; evaluateInventoryGate(gate, inventory, (criterion, detail) => out.push(`${criterion}: ${detail}`)); return out; };
@@ -383,28 +408,46 @@ test('the run a run compares against is the newest that checked something: a sto
   assert.deepEqual([second.notify.status, second.notify.reason], ['skipped', `no transition since ${first.startedAt}`], 'compared against the run before the stopped one, never "outcome changed scan-partial → pass"');
 });
 
-test('scrape targets the store does not keep: unsupported on the first answer, remembered by the journey, asked again every run (P6)', async () => {
-  let answer = { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' };
+test('scrape targets the store does not keep: unsupported on every answer that says so, the first instant kept; a 503 is an outage, never absorbed by the memory (P6, E1)', async () => {
+  const NOT_FOUND = { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' };
+  let answer = NOT_FOUND;
   const fake = await fakeMcp({ [T.names]: { label: '__name__', values: ['up'] }, [T.targets]: () => answer });
   try {
-    journeyFile('mb-targets', [`packB: { mcp: { url: ${fake.url} } }`]);
+    journeyFile('mb-targets', [`packB: { mcp: { url: ${fake.url} } }`, 'gate: { failOnPartialEvidence: true }']);
     const targetCalls = () => fake.calls.filter((c) => c.name === T.targets).length;
     const r1 = await runJourney(loadJourneyDef('mb-targets'));
-    assert.deepEqual([r1.vantage, r1.probes.unsupported.includes('scrape_configs'), r1.probes.failed.includes('scrape_configs')], ['full', true, false], 'unsupported after the first answer, the vantage full');
+    assert.deepEqual([r1.vantage, r1.probes.unsupported.includes('scrape_configs'), r1.probes.failed.includes('scrape_configs'), r1.outcome], ['full', true, false, 'pass'], 'unsupported after the first answer, the vantage full');
     const first = r1.probeUnsupported.scrape_configs;
     assert.deepEqual([first.reason, first.tools, first.remembered], [`${T.targets}: HTTP 404 Not Found`, [T.targets], undefined]);
+    const r2 = await runJourney(loadJourneyDef('mb-targets'));
+    assert.deepEqual([r2.vantage, r2.probeUnsupported.scrape_configs.since], ['full', first.since], 'the same answer again: not served since the first answer');
     answer = { __isError: 'Error: HTTP 503: Service Unavailable' };
     const before = targetCalls();
-    const r2 = await runJourney(loadJourneyDef('mb-targets'));
-    assert.ok(targetCalls() > before, 'asked again');
-    assert.deepEqual([r2.vantage, r2.probes.failed.includes('scrape_configs'), r2.probeUnsupported.scrape_configs.remembered, r2.probeUnsupported.scrape_configs.since],
-      ['full', false, true, first.since], 'a 503 next time is no new failure: remembered, since the first answer');
-    answer = { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] };
     const r3 = await runJourney(loadJourneyDef('mb-targets'));
-    assert.ok(r3.probes.succeeded.includes('scrape_configs') && !('probeUnsupported' in r3), 'data wins, and the memory is gone');
-    answer = { __isError: 'Error: HTTP 503: Service Unavailable' };
-    const r4 = await runJourney(loadJourneyDef('mb-targets'));
-    assert.deepEqual([r4.vantage, r4.probes.failed.includes('scrape_configs')], ['partial', true], 'without the memory a 503 is a failure');
+    assert.ok(targetCalls() > before, 'asked again');
+    assert.deepEqual([r3.vantage, r3.probes.failed.includes('scrape_configs'), 'probeUnsupported' in r3, r3.outcome, r3.gate.breaches.map((b) => b.criterion)],
+      ['partial', true, false, 'gate-failed', ['failOnPartialEvidence']], 'a 503 is an outage: a failure, whatever the journey remembers');
+    assert.equal(r3.probeErrors.scrape_configs, `${T.targets}: Error: HTTP 503: Service Unavailable`);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('a store that answered with scrape targets and answers 404 an hour later is failed, the probe error saying when it answered — never "not served" (E2)', async () => {
+  let answer = { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] };
+  const fake = await fakeMcp({ [T.names]: { label: '__name__', values: ['up'] }, [T.targets]: () => answer });
+  try {
+    journeyFile('mb-lost-route', [`packB: { mcp: { url: ${fake.url} } }`, 'gate: { failOnPartialEvidence: true }']);
+    const r1 = await runJourney(loadJourneyDef('mb-lost-route'));
+    assert.deepEqual([r1.probes.succeeded.includes('scrape_configs'), r1.probeAnsweredBy], [true, { scrape_configs: [T.targets] }], 'the record keeps the tool that answered');
+    answer = { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' };
+    for (const run of [2, 3]) {
+      const rec = await runJourney(loadJourneyDef('mb-lost-route'));
+      assert.deepEqual([rec.vantage, rec.probes.failed.includes('scrape_configs'), rec.probes.unsupported.includes('scrape_configs'), 'probeUnsupported' in rec, rec.outcome],
+        ['partial', true, false, false, 'gate-failed'], `run ${run}: the store served its targets — a 404 now is a lost route or a changed datasource`);
+      assert.equal(rec.probeErrors.scrape_configs,
+        `${T.targets}: it answered on ${r1.startedAt.slice(0, 10)}; now Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets`);
+    }
   } finally {
     await fake.close();
   }
@@ -451,6 +494,23 @@ test('probeMemoryOf: the newest record of the same live source that carries a pr
   assert.equal(probeMemoryOf([rec('mcp:a', {}), rec('mcp:a', { probeUnsupported: { scrape_configs: entry } })], 'mcp:a'), null, 'the newest answered: nothing remembered');
   assert.equal(probeMemoryOf([rec('mcp:a', { probeUnsupported: { scrape_configs: { reason: '', tools: ['x'] }, alerting_routes: { reason: 'y', tools: [] } } })], 'mcp:a'), null, 'a malformed entry is passed over');
   assert.equal(probeMemoryOf(null, 'mcp:a'), null);
+});
+
+test('probeMemoryOf: every record read names the tools that answered a family — data or an honest empty — and an older record that did not say which answers for every tool (E2)', () => {
+  const rec = (source, startedAt, probes, extra = {}) => ({ packB: { source }, startedAt, probes: { attempted: [], succeeded: [], empty: [], failed: [], unsupported: [], ...probes }, ...extra });
+  const records = [
+    rec('mcp:a', '2026-11-16T10:00:00.000Z', { failed: ['scrape_configs'] }),
+    rec('mcp:a', '2026-11-16T09:00:00.000Z', { empty: ['scrape_configs'] }, { probeAnsweredBy: { scrape_configs: ['t2'] } }),
+    rec('mcp:b', '2026-11-16T08:30:00.000Z', { succeeded: ['scrape_configs'] }, { probeAnsweredBy: { scrape_configs: ['other'] } }),
+    rec('mcp:a', '2026-11-16T08:00:00.000Z', { succeeded: ['scrape_configs'] }, { probeAnsweredBy: { scrape_configs: ['t1'] } }),
+  ];
+  assert.deepEqual(probeMemoryOf(records, 'mcp:a'), { answered: { scrape_configs: { tools: ['t2', 't1'], at: '2026-11-16T09:00:00.000Z' } } },
+    'the newest answer\'s start, every tool that answered; another source is not this one');
+  assert.deepEqual(probeMemoryOf([rec('mcp:a', '2026-11-16T08:00:00.000Z', { succeeded: ['scrape_configs'] })], 'mcp:a'),
+    { answered: { scrape_configs: { tools: [], at: '2026-11-16T08:00:00.000Z', anyTool: true } } }, 'a record written before the tool was recorded');
+  const entry = { reason: 'x: HTTP 404 Not Found', since: AT, tools: ['x'] };
+  assert.deepEqual(probeMemoryOf([rec('mcp:a', AT, {}, { probeUnsupported: { scrape_configs: entry } }), records[3]], 'mcp:a'),
+    { unsupported: { scrape_configs: entry }, answered: { scrape_configs: { tools: ['t1'], at: '2026-11-16T08:00:00.000Z' } } }, 'both memories, side by side');
 });
 
 test('firstProbeError: the first failed family in stage order, a lost run\'s own error, or null; one rule for the studio and the server', () => {
@@ -525,6 +585,43 @@ test('a probe error keeps no query string, userinfo or token of a URL — in the
   // not parse keeps what precedes its query, its userinfo masked.
   assert.equal(maskProbeErrorUrls('see https://grafana.example.com and http://h.example.test:9090/api/v1/targets'), 'see https://grafana.example.com and http://h.example.test:9090/api/v1/targets');
   assert.equal(maskProbeErrorUrls('dial http://u:p@[bad/x?token=1 failed'), 'dial http://***@[bad/x failed');
+});
+
+test('a probe error that quotes its request without a scheme — urllib3\'s "Max retries exceeded with url: /path?api_key=…" — keeps no query or credential in the pack, the lost run\'s record, its thrown error or its notification (E3)', async () => {
+  const { maskProbeErrorUrls } = await import('./fetch-live-pack.mjs');
+  const SECRET = 'QueryValue-mb-5';
+  const urllib3 = (path) => ({ __isError: `HTTPSConnectionPool(host='prom.example.com', port=443): Max retries exceeded with url: ${path}?api_key=${SECRET}&limit=5 (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f>: Failed to establish a new connection: [Errno 111] Connection refused'))` });
+  const fake = await fakeMcp({ [T.names]: urllib3('/api/v1/label/__name__/values'), [T.search]: urllib3('/api/search'), [T.rules]: urllib3('/api/v1/rules'), [T.targets]: urllib3('/api/v1/targets') });
+  const posted = [];
+  let err = null;
+  try {
+    journeyFile('mb-urllib3', [`packB: { mcp: { url: ${fake.url} } }`, 'gate: { minAlignmentPct: 85 }', 'notify: { urlEnv: MB_HOOK_URL, on: breach, format: text }']);
+    try {
+      await runJourney(loadJourneyDef('mb-urllib3'), {
+        resolveNotify: (n) => notifyTargetOf(n, { url: 'https://hooks.example.com/journey' }),
+        notifier: async ({ body }) => { posted.push(body); return { sent: true, httpStatus: 200, attempts: 1, tookMs: 1 }; },
+      });
+    } catch (e) { err = e; }
+  } finally {
+    await fake.close();
+  }
+  const [lost] = readJourneyRuns('mb-urllib3');
+  assert.equal(lost.outcome, 'vantage-lost');
+  assert.equal(lost.error, `${T.names}: HTTPSConnectionPool(host='prom.example.com', port=443): Max retries exceeded with url: /api/v1/label/__name__/values (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f>: Failed to establish a new connection: [Errno 111] Connection refused'))`.slice(0, 200),
+    'the reason stays — the host, the path, the cause — cut at 200 characters; the query goes');
+  for (const [where, text] of [['the record', JSON.stringify(lost)], ['the thrown error (the 502 body)', String(err?.message)], ['the notification', posted.join('\n')]]) {
+    assert.ok(!text.includes(SECRET) && !text.includes('api_key') && !text.includes('limit=5'), `${where} keeps no query`);
+  }
+  assert.equal(posted.length, 1, 'the loss was posted');
+  // The rule's new edges: a credential-named pair anywhere, a Bearer or Basic value, a //user:pass@ link
+  // with no scheme; idempotent; nothing else touched.
+  const masked = maskProbeErrorUrls('connect failed: host=db user=shop password=hunter2 sslmode=require; Authorization: Bearer abc.def-123 at //viewer:pw@grafana/x (read timeout=10)');
+  assert.equal(masked, 'connect failed: host=db user=shop password=*** sslmode=require; Authorization: Bearer *** at //***@grafana/x (read timeout=10)');
+  assert.equal(maskProbeErrorUrls(masked), masked, 'masking twice changes nothing');
+  for (const kept of ['metrics_label_values: MCP error -32602: Input validation error: is the label set?', 'x: HTTP 404: Not Found — http://grafana.example.com/api/v1/targets', '[GET /search][403] searchForbidden']) {
+    assert.equal(maskProbeErrorUrls(kept), kept, kept);
+  }
+  assert.equal(maskProbeErrorUrls('[GET /search?limit=1&token=t-mb-6][403] searchForbidden'), '[GET /search][403] searchForbidden');
 });
 
 // ---------------------------------------------------------------------------

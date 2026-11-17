@@ -915,8 +915,9 @@ function hoursSince(iso) {
 
 // The probe families whose answers the on-wire health counts are read from
 // (maxUnhealthy): scrape targets (jobs down) and the two rule families
-// (rules failing to evaluate).
+// (rules failing to evaluate), and their words in a breach.
 const HEALTH_FAMILIES = Object.freeze(['scrape_configs', 'recording_rules', 'alert_rules']);
+const HEALTH_FAMILY_WORDS = Object.freeze({ scrape_configs: 'scrape targets', recording_rules: 'recording rules', alert_rules: 'alert rules' });
 
 // C5: every key whose figure is absent breaches — the gate never passes on
 // an absent figure. A run's own facts carry `compared` (the union its counts
@@ -1004,6 +1005,16 @@ export function evaluateGate(gate, facts) {
           : 'no scrape-job or rule-health count was given';
       add('maxUnhealthy', `no on-wire health was read — ${why} — the gate cannot pass on an absent count (max ${gate.maxUnhealthy})`);
     } else {
+      // C5 by the family each half rests on (E6): a health family that failed,
+      // or answered only in part, leaves a hole of unknown size in the count —
+      // jobs down or rules unhealthy nobody saw — so the count is a lower
+      // bound and the gate cannot pass on it. A family this MCP does not
+      // offer, or whose store keeps none (not served here), is no hole of
+      // this read: the count is read over the families that answered.
+      const failed = new Set(Array.isArray(probes?.failed) ? probes.failed : []);
+      const inPart = new Set(Array.isArray(probes?.partial) ? probes.partial : []);
+      const holes = HEALTH_FAMILIES.filter((family) => failed.has(family) || inPart.has(family))
+        .map((family) => `${HEALTH_FAMILY_WORDS[family]} ${failed.has(family) ? 'were not read' : 'were read in part'}`);
       const down = f.scrapeJobsDown ?? 0;
       const unhealthy = f.unhealthyRules ?? 0;
       if (down + unhealthy > gate.maxUnhealthy) {
@@ -1012,7 +1023,10 @@ export function evaluateGate(gate, facts) {
           ...(f.unhealthyRuleNames || []).map(n => `rule ${n} unhealthy`),
         ];
         add('maxUnhealthy', `${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) observed on the wire (max ${gate.maxUnhealthy})`
-          + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
+          + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : '')
+          + (holes.length ? ` — a lower bound: ${holes.join('; ')}` : ''));
+      } else if (holes.length) {
+        add('maxUnhealthy', `on-wire health was read in part — ${holes.join('; ')} — the gate cannot pass on a partial count (${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) seen, max ${gate.maxUnhealthy})`);
       }
     }
   }
@@ -1179,7 +1193,9 @@ export const NO_PROBE_DATA = 'no probe family returned data';
 
 // One not-served entry (the fetcher's mcp.probeUnsupported.<family> JSON, or
 // a record's probeUnsupported.<family>), validated: { reason, since, tools,
-// remembered? } — reasons and tool names only — or null.
+// remembered? } — reasons and tool names only — or null. `remembered` only
+// on a pack or record written before a remembered family stopped absorbing
+// outages (the fetcher no longer writes it).
 function notServedEntry(e) {
   if (!isPlainObject(e) || typeof e.reason !== 'string' || !e.reason) return null;
   return {
@@ -1206,6 +1222,24 @@ function probeUnsupportedOf(ann, unsupported) {
   return out;
 }
 
+// E2: the tools that answered a family that answered (data or an honest
+// empty) and whose answer can say "not served here" (scrape targets, alert
+// routes), from Pack B's mcp.probeAnsweredBy.<family> annotations:
+// { family: [tool, …] }; {} when none. The record keeps it, and the next run
+// remembers which tools serve a family (probeMemoryOf).
+function probeAnsweredByOf(ann, answeredFamilies) {
+  const prefix = 'mcp.probeAnsweredBy.';
+  const out = {};
+  for (const key of Object.keys(ann).sort()) {
+    if (!key.startsWith(prefix) || key.length <= prefix.length) continue;
+    const family = key.slice(prefix.length);
+    if (!answeredFamilies.includes(family)) continue;
+    const tools = [...new Set(String(ann[key] || '').split(',').map((t) => t.trim()).filter(Boolean))];
+    if (tools.length) out[family] = tools;
+  }
+  return out;
+}
+
 // The probe table in a sentence's parts, each list in stage order: failed ·
 // empty · not exposed (no tool offered) · not served (the store answered it
 // keeps none). [] when every list is empty.
@@ -1221,23 +1255,54 @@ function probeTableParts(live) {
   ].filter(([, xs]) => Array.isArray(xs) && xs.length).map(([word, xs]) => `${word}: ${inStageOrder(xs).join(', ')}`);
 }
 
-// P6: what this journey's records remember about its live source — the
-// probe families the endpoint answered it does not serve (C6). The newest
-// record of the same Pack B source that carries a probe table decides (a
-// read that threw carries none and is passed over; a family that answered
-// since is no longer in it). → { unsupported: { family: { reason, since,
-// tools } } } | null. Pure; per journey and live source — two journeys on
-// one endpoint each learn it from their own first answer.
+// P6: what this journey's records remember about its live source (C6), from
+// the records of the same Pack B source that carry a probe table (a read
+// that threw carries none and is passed over), newest first:
+//   unsupported  the families the endpoint answered it does not serve, from
+//                the newest such record (a family that answered since is no
+//                longer in it) — { family: { reason, since, tools } }; the
+//                read keeps `since`, and never absorbs an outage with it
+//   answered     E2: the tools every record read saw answer each family —
+//                data or an honest empty — and the newest such answer's
+//                start: { family: { tools, at, anyTool? } } (`anyTool` when a
+//                record that answered does not say which tool — one written
+//                before the tools were recorded; only a family whose answer
+//                can read "not served" records them, and the read asks the
+//                memory for those alone). Such a tool's not-served answer is
+//                a failure, never "not served": the store served the family.
+//                The records read are the run's (readJourneyRuns'
+//                BASELINE_SCAN_LIMIT newest), so a store that stopped serving
+//                a family for good reads "not served" again once its last
+//                answer is that many runs old.
+// → { unsupported?, answered? } | null. Pure; per journey and live source —
+// two journeys on one endpoint each learn it from their own answers.
 export function probeMemoryOf(records, packBSource) {
   if (typeof packBSource !== 'string' || !packBSource) return null;
-  const newest = (Array.isArray(records) ? records : []).find((r) => isPlainObject(r) && r.packB?.source === packBSource && isPlainObject(r.probes));
-  if (!newest || !isPlainObject(newest.probeUnsupported)) return null;
-  const unsupported = {};
-  for (const [family, raw] of Object.entries(newest.probeUnsupported)) {
-    const entry = notServedEntry(raw);
-    if (entry && entry.tools.length) unsupported[family] = { reason: entry.reason, since: entry.since, tools: entry.tools };
+  const mine = (Array.isArray(records) ? records : []).filter((r) => isPlainObject(r) && r.packB?.source === packBSource && isPlainObject(r.probes));
+  const out = {};
+  const newest = mine[0];
+  if (newest && isPlainObject(newest.probeUnsupported)) {
+    const unsupported = {};
+    for (const [family, raw] of Object.entries(newest.probeUnsupported)) {
+      const entry = notServedEntry(raw);
+      if (entry && entry.tools.length) unsupported[family] = { reason: entry.reason, since: entry.since, tools: entry.tools };
+    }
+    if (Object.keys(unsupported).length) out.unsupported = unsupported;
   }
-  return Object.keys(unsupported).length ? { unsupported } : null;
+  const answered = {};
+  const familyNames = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
+  for (const r of mine) {
+    const by = isPlainObject(r.probeAnsweredBy) ? r.probeAnsweredBy : {};
+    for (const family of new Set([...familyNames(r.probes.succeeded), ...familyNames(r.probes.empty)])) {
+      const entry = answered[family] || (answered[family] = { tools: [], at: null });
+      if (!entry.at && typeof r.startedAt === 'string' && r.startedAt) entry.at = r.startedAt;
+      const tools = familyNames(by[family]);
+      if (!tools.length) entry.anyTool = true;
+      for (const t of tools) if (!entry.tools.includes(t)) entry.tools.push(t);
+    }
+  }
+  if (Object.keys(answered).length) out.answered = answered;
+  return Object.keys(out).length ? out : null;
 }
 
 // On-wire liveness facts read from Pack B's fetcher annotations
@@ -1279,6 +1344,10 @@ export function liveEvidenceFacts(canonicalB) {
     // tools, remembered? } }; {} when none. The record keeps it (when not
     // empty) and the next run remembers it (probeMemoryOf).
     probeUnsupported: probeUnsupportedOf(ann, ev.unsupported),
+    // E2: the tools that answered a family that can read "not served" (data
+    // or an honest empty): { family: [tool, …] }; {} when none. The record
+    // keeps it (when not empty) and the next run remembers it (probeMemoryOf).
+    probeAnsweredBy: probeAnsweredByOf(ann, [...ev.succeeded, ...ev.empty]),
     vantage: ev.vantage,
     toolsExposedCount: ann['mcp.toolsExposedCount'] != null && String(ann['mcp.toolsExposedCount']) !== '' && Number.isFinite(exposed) ? exposed : null,
     scrapeJobsDown: scrapeJobsDownNames.length,
@@ -1548,8 +1617,8 @@ const lostPackA = (a, scan) => ({ source: a.source, name: a.canonical?.metadata?
 // no drift: nothing was compared. Write → post → rewrite, as the main path;
 // the delivery is left on `err` for a caller that rows it (the server's 502).
 // Key order: journey, startedAt, tookMs, outcome, error, packA, packB, scope,
-// vantage, [probes, probeErrors, probeUnsupported?, toolsExposedCount], gate,
-// notify.
+// vantage, [probes, probeErrors, probeUnsupported?, probeAnsweredBy?,
+// toolsExposedCount], gate, notify.
 async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource, liveTarget, live, error, err, notifyTarget, notifier }) {
   const lost = {
     journey: def.name,
@@ -1565,6 +1634,7 @@ async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, pac
       probes: live.probes,
       probeErrors: live.probeErrors,
       ...(Object.keys(live.probeUnsupported || {}).length ? { probeUnsupported: live.probeUnsupported } : {}),
+      ...(Object.keys(live.probeAnsweredBy || {}).length ? { probeAnsweredBy: live.probeAnsweredBy } : {}),
       toolsExposedCount: live.toolsExposedCount,
     } : {}),
     gate: { thresholds: def.gate || {}, breaches: [{ criterion: 'vantage', detail: lostVantageDetail(live) }] },
@@ -1866,6 +1936,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     probeErrors: live.probeErrors,
     // P6: only when a family was not served here — what was answered, since when, by which tools.
     ...(Object.keys(live.probeUnsupported).length ? { probeUnsupported: live.probeUnsupported } : {}),
+    // E2: the tools that answered a family that can read "not served" — the next run's memory of who serves it.
+    ...(Object.keys(live.probeAnsweredBy || {}).length ? { probeAnsweredBy: live.probeAnsweredBy } : {}),
     vantage: live.vantage,
     toolsExposedCount: live.toolsExposedCount,
     scrapeJobsDown: live.scrapeJobsDown,
