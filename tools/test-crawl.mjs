@@ -1480,6 +1480,12 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   const t0 = Date.now();
   crawlFiles({ 'docker-compose.yml': `services:\n  x:\n    image: "${':'.repeat(200000)}x"\n  y:\n    image: "\${${'A'.repeat(200000)}"\n` }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
   assert(Date.now() - t0 < 2000, `image values of 200,000 characters read in ${Date.now() - t0} ms`, Date.now() - t0);
+  // A run of unclosed pipeline tokens in a label value, a rule's name and a wait reads in linear time too.
+  const t1 = Date.now();
+  const run = '#{a'.repeat(70000);
+  crawlFiles({ 'prometheus/rules/recording.yml': 'groups:\n  - name: rec\n    rules:\n      - record: shop:checkout:error_ratio_5m\n        expr: sum(rate(e[5m])) / sum(rate(t[5m]))\n',
+    'prometheus/rules/ops.yml': `groups:\n  - name: ops\n    rules:\n      - alert: 'Api${run}'\n        expr: up == 0\n        for: '${run}'\n        labels:\n          team: '${run}'\n` }, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  assert(Date.now() - t1 < 2000, `runs of 210,000 characters of unclosed tokens read in ${Date.now() - t1} ms`, Date.now() - t1);
 }
 
 // ---------- a Prometheus Operator PrometheusRule is read as a rule file is ----------
@@ -1725,6 +1731,8 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     ...alert('ODataErrors', 'rate(http_requests_total{route="/odata/$metadata",code=~"5.."}[5m]) > 1'),
     ...alert('RetryErrors', 'rate(errors_total{class="PaymentClient$Retry"}[5m]) > 0'),
     '      - alert: Commented', '        expr: |', '          # paged by $TEAM', '          up{job="api"} == 0', '        labels:', '          severity: warning',
+    '      - alert: CommentedToken', '        expr: |', '          # was > #{Threshold}# per environment; see $(RunbookUrl)', '          up{job="api"} == 0', '        labels:', '          severity: warning',
+    '      - alert: CalcToken', '        expr: |', '          rate(errors_total[5m]) > #{calc {MaxPerMin} / 60}', '        labels:', '          severity: warning',
     ...alert('NodeNamed', 'up{job="node"} == 0', ['severity: warning', 'node_name: \'{{ reReplaceAll ":[0-9]{2,5}" "" $labels.instance }}\'']),
     ...alert('NamespaceDown', 'up{namespace="${NAMESPACE}"} == 0'),
     ...alert('NamespaceEnvDown', 'up{namespace="$NAMESPACE"} == 0'),
@@ -1740,7 +1748,7 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     ...alert('KeyFilled', 'up{job="api"} == 0', ['severity: warning', '${TEAM_KEY}: payments']),
   ].join('\n') + '\n' });
   assert(JSON.stringify(partialOf(dollars)) === JSON.stringify({
-    HostDown: null, HostDownBraced: null, ODataErrors: null, RetryErrors: null, Commented: null, NodeNamed: null,
+    HostDown: null, HostDownBraced: null, ODataErrors: null, RetryErrors: null, Commented: null, CommentedToken: null, CalcToken: 'expr=', NodeNamed: null,
     NamespaceDown: 'expr=', NamespaceEnvDown: 'expr=', FluxDown: 'expr=;labels.filled=cluster;labels=severity',
     TokenWindow: 'expr=', OctopusEnv: 'expr=;labels.filled=severity;labels=', MacroEnv: 'expr=', KeyFilled: 'labels=severity',
   }) && (dollars.canonical.spec.alerting.rules.find((r) => r.name === 'NodeNamed')?.labels?.node_name ?? '').includes('reReplaceAll')
@@ -1761,6 +1769,7 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   const prometheusRule = (lines) => ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', 'spec:', ...lines.map((l) => `  ${l}`)].join('\n') + '\n';
   for (const [where, files, shown] of [
     ['a deploy step', { 'prometheus/rules/recording.yml': recording, 'prometheus/rules/slo.rules.yml': sloRules('${SLO_PAGE_FOR}').join('\n') + '\n' }, '${SLO_PAGE_FOR}'],
+    ['a replace step\'s pattern the scan does not name', { 'prometheus/rules/recording.yml': recording, 'prometheus/rules/slo.rules.yml': sloRules('__SloPageFor__').join('\n') + '\n' }, '__SloPageFor__'],
     ['the chart', { ...chart, 'charts/shop/templates/slo.yaml': prometheusRule(sloRules('{{ .Values.slo.pageFor | default "2m" }}')) }, '…'],
   ]) {
     const out = scan(files);
@@ -1792,6 +1801,13 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(validateCanonical(histogram.canonical, SCHEMA).length === 0 && histogram.summary.inferred.slis === 4
     && new Set(histogramIds('slis')).size === 4 && new Set(histogramIds('slos')).size === 4 && histogramIds('slos').every((id) => id.length <= 64 && id.endsWith('_99')),
   'recorded bases that agree on their first 64 characters keep an SLI and an SLO each, each a Slug of its own', [histogramIds('slis'), histogramIds('slos'), histogram.summary.inferred]);
+  // A fingerprint is never all digits: readers that strip an SLO id's trailing digit groups (`_99_9`: the deploy
+  // verifier, chain history) still find its SLI (the Loki mixin's request-duration count series hashes to digits).
+  const digitHash = scan({ 'prometheus/rules/loki.rules.yml': ['groups:', '  - name: loki_rules', '    rules:',
+    '      - record: cluster_namespace_job_route:loki_request_duration_seconds_count:sum_rate',
+    '        expr: sum(rate(loki_request_duration_seconds_count[1m])) by (cluster, namespace, job, route)'].join('\n') + '\n' });
+  assert((digitHash.canonical.spec.slos || []).length === 1 && digitHash.canonical.spec.slos.every((s) => s.id.replace(/_\d+(?:_\d+)*$/, '') === String(s.sli).replace(/^ref:slis\./, '')),
+    'a cut SLO id with its digit groups stripped is its SLI id', (digitHash.canonical.spec.slos || []).map((s) => [s.id, s.sli]));
   // The chart's values in a group's name, its interval and a recording rule's name never reach the pack or the summary
   // as the placeholder.
   const groupValues = scan({ ...chart, 'charts/shop/templates/rules.yaml': prometheusRule(['groups:', '  - name: {{ .Values.prefix }}.rules', '    interval: {{ .Values.interval }}', '    rules:',

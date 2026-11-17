@@ -38,6 +38,8 @@ assert(!equiv('# down\nup == 0', '# down\nup == 1'), 'what a comment leaves is s
 assert(!equiv('sum(rate(x[#{Window}#])) > 5', 'sum(rate(x[#{Window}#])) > 50'), 'an Azure DevOps token (#{Name}#) is no comment');
 assert(!equiv('rate(x{job="api"}[#{AlertWindow}]) > 0.05', 'rate(x{job="api"}[#{AlertWindow}]) > 0.5'), 'an Octopus Deploy token (#{Name}) is no comment');
 assert(equiv('rate(x[#{W}#]) > 5 # page', 'rate(x[#{W}#]) > 5'), 'a comment after a token is still dropped');
+assert(equiv('up{job="api"} == 0\n#{{ $labels.instance }} is down', 'up{job="api"} == 0'), 'a ruler template after a # is a comment, no token');
+assert(!equiv('rate(x[5m]) > #{calc {MaxPerMin} / 60}', 'rate(x[5m]) > #{calc {MaxPerMin} / 6}'), 'an Octopus Deploy calc token (#{calc {Name} / 60}) is no comment');
 assert(equiv('rate( x{b="2", a="1"} [5m] )', 'rate(x{a="1",b="2"}[5m])'),
   'whitespace + matcher order combine');
 assert(equiv('SUM BY (b, a) (x)', 'SUM BY (a, b) (x)'),

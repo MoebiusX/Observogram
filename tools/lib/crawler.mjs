@@ -2751,7 +2751,7 @@ function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
 // `${var:0:7}`, `${var/a/b}`: Flux's post-build substitution, envsubst); its
 // tail stops at the next `$` or line end, so a run of unclosed `${x:` reads
 // in linear time. A pipeline's token is one too (DEPLOY_TOKEN_RE).
-const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}$\n]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*|#\{[^}\n]+\}#?|\$\([A-Za-z_][\w.]*\)/;
+const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}$\n]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*|#\{(?!\{)(?:[^}\n#]|#(?!\{))+\}#?|\$\([A-Za-z_][\w.]*\)/;
 
 // A value of an operational rule's that a chart or a deploy step fills in:
 // the placeholder stripGoTemplate leaves, or a variable a deploy step
@@ -2768,13 +2768,14 @@ const HELM_VALUE_RE = new RegExp(`\\b${HELM_VALUE}\\b`);
 // A token a pipeline's replace step fills in: Azure DevOps' Replace Tokens
 // (`#{Name}#`), Octopus Deploy (`#{Name}`) or an Azure Pipelines macro
 // (`$(Name)`) — the forms promql-canon.mjs's comment stripper keeps as text.
-const DEPLOY_TOKEN_RE = /#\{[^}\n]+\}#?|\$\([A-Za-z_][\w.]*\)/;
+const DEPLOY_TOKEN_RE = /#\{(?!\{)(?:[^}\n#]|#(?!\{))+\}#?|\$\([A-Za-z_][\w.]*\)/;
 function filledAtDeploy(value, { expression = false } = {}) {
   if (typeof value !== 'string') return false;
   let own = withoutRulerTemplates(value);
-  // A pipeline's token wherever it stands, in a string or outside one.
-  if (DEPLOY_TOKEN_RE.test(own)) return true;
   if (expression) own = withoutPromqlComments(own);
+  // A pipeline's token wherever it stands, in a string or outside one (the
+  // comment stripper keeps it); never one a comment names.
+  if (DEPLOY_TOKEN_RE.test(own)) return true;
   if (HELM_VALUE_RE.test(own)) return true;
   const groups = new Set([...own.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g)].map((m) => m[1]));
   for (const m of own.matchAll(DEPLOY_VARIABLE_RE)) {
@@ -2813,6 +2814,11 @@ function notStatedAsWritten({ rule, labelsUnread }) {
   for (const v of [rule.alert, rule.title, rule.for]) {
     if (injected(text(v)) || text(v).includes('{{')) return true;
   }
+  // A wait no ruler lists as written — no spec Duration (`__PageFor__`, a
+  // replace step's pattern the line above does not know): left out of the
+  // windows (alertRuleWindows), and of the statement too.
+  const wait = rule.for === undefined || rule.for === null ? null : canonicalRuleDuration(rule.for);
+  if (wait !== null && !SPEC_DURATION_RE.test(wait)) return true;
   // The expression less its comments: a variable a comment names is no
   // deploy step's (the ruler lists the query re-printed without it).
   if (injected(withoutPromqlComments(text(rule.expr))) || text(rule.expr).includes('{{')) return true;

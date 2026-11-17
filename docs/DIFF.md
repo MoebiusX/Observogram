@@ -292,7 +292,10 @@ a label the rendered rule adds reads uncompared, never as a difference. A
 rule writes, it cannot add to it: that rule is whole. Into the rules list or
 the groups (more rules, more groups from values, an indentless list's too —
 the include right after `rules:`, or the list's first item in the key's own
-column): the rules written around it are whole. Right after a block
+column): the rules written around it are whole. Written at the margin with
+an indent the chart computes, closing a ConfigMap's block, it is read as
+extending the block's last rule (where it renders the ConfigMap's next data
+key instead, that rule is held to the labels it writes). Right after a block
 scalar, at the scalar's key or left of it, it ends the scalar. An action that
 prints a scalar — a threshold on the line below its expression, a value on
 the line below its key — is the chart's value there, never YAML (*A value the
@@ -350,7 +353,7 @@ helmvalue` from kube-prometheus-stack's `dig … .Values.customRules`), or as
 a variable a deploy step substitutes — any `${…}` (`${VAR}`, Flux's
 `${var:=default}`), a bare `$NAME` in capitals, or a pipeline's token
 (Azure DevOps' `#{Name}#`, Octopus Deploy's `#{Name}`, an Azure Pipelines
-macro `$(Name)`), never a capture group (`$1`, `$host` naming a group the
+macro `$(Name)`, read in linear time, never one a comment names), never a capture group (`$1`, `$host` naming a group the
 expression's regex defines), text PromQL holds itself (`/odata/$metadata`),
 a comment, or the ruler's own templating. A label key a deploy step names is
 no key written: the rule is held to the labels it writes. An unquoted token
@@ -370,8 +373,9 @@ the chart writes, and the pair names the rest, a wait or a label key the
 ruler lists none of included. Comparing the expression with the placeholder
 as a wildcard is not done here. An SLO's rules holding one state nothing
 (below), so none of them is compared, and the scan's warning says so for a
-wait it left out; an SLO's rule whose comment names a variable still states
-its rules.
+wait it left out; a wait that is no spec Duration, whatever writes it
+(`__PageFor__`), makes its SLO state nothing too, and an SLO's rule whose
+comment names a variable still states its rules.
 
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and

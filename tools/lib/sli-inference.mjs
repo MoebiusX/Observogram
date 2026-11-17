@@ -60,10 +60,13 @@ const POLICY_SEGMENT = 'errorbudget';
 // the schema refuses. The live fetch derives its ids with the same
 // functions, so both sides agree; an id that fits is unchanged.
 const SLI_ID_MAX = 61;
+// Never all digits: those readers strip every trailing digit group (`_99_9`),
+// so an all-digit hash's first digit is spelt as a letter past hex (0 → g).
 const fingerprint = (s) => {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-  return h.toString(16).padStart(8, '0');
+  const hex = h.toString(16).padStart(8, '0');
+  return /^\d+$/.test(hex) ? `${'ghijklmnop'[hex[0]]}${hex.slice(1)}` : hex;
 };
 /** An SLI id from its text: a spec Slug with room for its SLO's `_99`, cut with a fingerprint when it is longer. */
 export function sliSlug(text) {

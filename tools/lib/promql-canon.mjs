@@ -205,7 +205,7 @@ function isStructurallySound(expr) {
 // An expression less its comments: `#` to the end of the line, outside a
 // string literal. No part of what a ruler runs — it lists the query
 // re-printed without them — nor of what a rule file states.
-const DEPLOY_TOKEN_RE = /#\{[^}\n]*\}#?/y;
+const DEPLOY_TOKEN_RE = /#\{(?!\{)[^}\n]*\}#?/y;
 export function withoutPromqlComments(text) {
   let out = '';
   let quote = null;

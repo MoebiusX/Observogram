@@ -17,6 +17,7 @@ import {
 } from './artefact-model.mjs';
 import { extractPromqlMetricNames, parsePromqlDependencies } from './promql-lezer.mjs';
 import { blastRadiusIndex } from './blast-radius.mjs';
+import { ruleNameToSliId } from './sli-inference.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -556,13 +557,17 @@ function resolveRecordingRuleEdges(graph) {
 
     const ruleMetrics = new Set(extractPromqlMetricNames([rule.artefact?.spec?.name, rule.artefact?.spec?.expr]));
     const ruleNeedle = compact(`${rule.artefact?.title || ''} ${rule.artefact?.spec?.name || ''}`);
+    // The SLI the rule's name derives (sli-inference.mjs, the scan's and the
+    // live fetch's own reading): a long name's id ends in a fingerprint no
+    // needle finds in the name.
+    const ruleSliId = ruleNameToSliId(rule.artefact?.spec?.name);
     for (const sliKey of sliKeys) {
       const sli = graph.nodes.get(sliKey);
       const sliMetrics = new Set(metricsFromArtefact(sli.artefact));
       const sliNeedle = compact(labelOf(sli));
       if (intersects(ruleMetrics, sliMetrics)) {
         addEdge(graph, ruleKey, sliKey, 'materialises', 'derived-promql');
-      } else if (sliNeedle && ruleNeedle.includes(sliNeedle)) {
+      } else if ((sliNeedle && ruleNeedle.includes(sliNeedle)) || (ruleSliId && ruleSliId === sli.artefact?.spec?.id)) {
         addEdge(graph, ruleKey, sliKey, 'materialises', 'inferred');
       }
     }

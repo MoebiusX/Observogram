@@ -519,7 +519,8 @@ export function slosOfPack(canonical) {
       // The SLI a recorded name gives, as the scan derived it (a long name is
       // cut with a fingerprint, sli-inference.mjs), or its base slugged.
       if (at <= 0 || (ruleNameToSliId(name) !== sliId && slugOf(name.slice(0, at)) !== sliId)) return null;
-      return { name, ...seriesSense(name.slice(at + 1), { durationish }) };
+      // A cut id may have lost the words: the recorded name still says them.
+      return { name, ...seriesSense(name.slice(at + 1), { durationish: durationish || /duration|latency|seconds|time/.test(name.slice(0, at).toLowerCase()) }) };
     }).filter(Boolean);
     // A budget series is recorded against one objective; with several SLOs on this SLI it is no one row's.
     const budget = (slosPerSli.get(sliId) || 0) > 1 ? null : mine.find((x) => x.kind === 'budget') || null;

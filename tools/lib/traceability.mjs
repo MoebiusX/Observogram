@@ -10,6 +10,7 @@
 // layered pack so both Node-side tests and the studio can read the same model.
 
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
+import { ruleNameToSliId } from './sli-inference.mjs';
 
 const TRACE_STOP_WORDS = new Set([
   ...PROMQL_KEYWORDS,
@@ -157,7 +158,8 @@ function buildChain({
   for (const rule of recordingRules) {
     const text = `${rule.name || ''} ${rule.expr || ''}`;
     const ruleMetrics = extractMetricNames([rule.name, rule.expr]);
-    if (matchesAnyNeedle(text, baseNeedles) || intersects(ruleMetrics, metricMap.keys())) {
+    // Or the SLI its name derives (sli-inference.mjs): a long name's id ends in a fingerprint no needle finds.
+    if (matchesAnyNeedle(text, baseNeedles) || (sliId && ruleNameToSliId(rule.name) === sliId) || intersects(ruleMetrics, metricMap.keys())) {
       relatedRules.push(rule);
       for (const m of ruleMetrics) addMetric(metricMap, m, 'recording_rule');
     }

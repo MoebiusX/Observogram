@@ -475,8 +475,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/control-room.mjs": {
-      "sha256": "c3119355a3c84d46ea0d773e1965058c9acd52ffba5573c3f978dd710170515d",
-      "bytes": 61632,
+      "sha256": "c166c4a1a0a82ea599b4a1e12745d774f1281584d1c7bf8ae3cb4528574cec93",
+      "bytes": 61796,
       "exports": [
         "CONTROL_ROOM_LIMITS",
         "cleanError",
@@ -508,8 +508,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "2801fb4e211371697150d23c308a72d583f636ce03ce2103c95357c2bf9c7792",
-      "bytes": 228740,
+      "sha256": "abd5397f3713e07d728bb370527c9f91cb9d8137659f5899e879fa112ff83a6c",
+      "bytes": 229220,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -1111,8 +1111,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-canon.mjs": {
-      "sha256": "78fe0ce18ff0432010c5a7ab9910eab7229c72a2b3334b36c88a578e9126a5e5",
-      "bytes": 10367,
+      "sha256": "df9d22c5e2f24aafa55fb8179a81101820b774ed8780ebb3959ad978b33a966f",
+      "bytes": 10373,
       "exports": [
         "canonicalizePromql",
         "withoutPromqlComments"
@@ -1362,8 +1362,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "75a7135af1cd3652cfe7004f73844a7688baf4c741f0666c7f0b4da9cf7290fc",
-      "bytes": 23738,
+      "sha256": "23044c5200130e77610c1b10d6496508fbe7f574c9b10f51732e20ea72321a25",
+      "bytes": 23978,
       "exports": [
         "SPEC_DURATION_RE",
         "SPEC_RECORDING_RULE_NAME_RE",
@@ -1451,8 +1451,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/traceability-graph.mjs": {
-      "sha256": "c6a993c552044d6dd7e446f5fb5e043208bf252ff920863ad3a7fcf396fed197",
-      "bytes": 62652,
+      "sha256": "e07b4437960f95318fe76beb01aca9f48edbc6f337821cde17e59599b3293d6b",
+      "bytes": 63017,
       "exports": [
         "buildBranch",
         "buildDependencyGraph",
@@ -1464,21 +1464,23 @@
       "imports": [
         "tools/lib/artefact-model.mjs",
         "tools/lib/blast-radius.mjs",
-        "tools/lib/promql-lezer.mjs"
+        "tools/lib/promql-lezer.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
     },
     "tools/lib/traceability.mjs": {
-      "sha256": "1c236a6173f8a2b817a25308249c6d75174438460d595927b894b8cfc9de4371",
-      "bytes": 18481,
+      "sha256": "c487a5d792d32b8c45829a126256d91ecbd5b297f9f7228fabbd43624cb60685",
+      "bytes": 18699,
       "exports": [
         "annotationList",
         "buildRequirementTraceability",
         "extractMetricNames"
       ],
       "imports": [
-        "tools/lib/promql.mjs"
+        "tools/lib/promql.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
