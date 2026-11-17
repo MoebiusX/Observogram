@@ -26,7 +26,7 @@ import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml, withAli
 import {
   inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
-  operationalAlertRules, sourceRuleTerms, isGrafanaManagedRule, alertRuleExpr,
+  operationalAlertRules, sourceRuleTerms, isGrafanaManagedRule, alertRuleExpr, grafanaRuleFacts,
   isSpecRecordingRuleName, canonicalRuleDuration, SPEC_DURATION_RE,
 } from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
@@ -114,7 +114,47 @@ export const SCAN_WHY = Object.freeze({
   tooLarge: (limit = SCAN_MAX_FILE_BYTES) => `it is larger than ${mbOf(limit)}`,
   totalCap: (limit) => `the scan stops at ${mbOf(limit)} in all`,
   notText: 'it is not UTF-8 text',
+  // A file past a host read's file cap (server/github-crawl.mjs HOST_READ_CAPS): named in a record's cappedFiles.
+  fileCap: (n) => `past the read's ${Number.isInteger(n) && n > 0 ? `${n}-file` : 'file'} cap (the likely artefacts are read first)`,
 });
+
+/**
+ * What a skipped entry's `why` says of the file, by the one wording every
+ * door writes (SCAN_WHY, a reader's "it could not be … (…)"):
+ *   'on-purpose'  a rule left it out — its name says it holds secrets, git
+ *                 ignores it or a folder on the way to it, or it lies in
+ *                 another org's part of the workspace: never a loss;
+ *   'lost'        the read failed — "it could not be downloaded (…)", "…
+ *                 read (…)", "… listed (…)" (a host refused or dropped it, the
+ *                 read's budget ran out, the disk would not give it): the scan
+ *                 is partial, and a Run says so;
+ *   'limit'       anything else — too large, past the total, not text, an
+ *                 archive entry the reader cannot open: counted as not read,
+ *                 the same on every read of the same files, never partial.
+ * A wording nobody planned for is a limit, so it never stops a Run for ever.
+ */
+export const SCAN_SKIP_KINDS = Object.freeze(['on-purpose', 'lost', 'limit']);
+const SKIP_LOST = /^it could not be (?:downloaded|read|listed) \(/;
+const SKIP_GITIGNORED_FOLDER = /^git ignores the folder .+\/ \(\.gitignore\)$/;
+const SKIP_REFUSED_PART = /^it (?:belongs to another org's part of the workspace|is not a path on a local drive)\b/;
+export function scanSkipKind(why) {
+  const w = String(why ?? '');
+  if (w === SCAN_WHY.secret || w === SCAN_WHY.gitignored || w === SCAN_WHY.gitignoredFolder || SKIP_GITIGNORED_FOLDER.test(w) || SKIP_REFUSED_PART.test(w)) return 'on-purpose';
+  if (SKIP_LOST.test(w)) return 'lost';
+  return 'limit';
+}
+
+/**
+ * The deployment surfaces an environment may read alone (a service
+ * environment's explicit setting, server/service-admin.mjs envSurfaces; the
+ * Run passes it to crawlFiles as `surface`), each mapped onto the filter's
+ * profile, and the words a sentence names it by. A surface is never named by
+ * an environment's name: "prod" is a name, not a surface.
+ */
+export const DEPLOYMENT_SURFACES = Object.freeze({ kubernetes: 'prod', eks: 'eks', 'local-kubernetes': 'local-k8s', compose: 'local-docker' });
+export const DEPLOYMENT_SURFACE_LABELS = Object.freeze({ kubernetes: 'Kubernetes and Helm', eks: 'Amazon EKS', 'local-kubernetes': 'local Kubernetes', compose: 'Docker Compose' });
+const SURFACE_OF_PROFILE = Object.freeze(Object.fromEntries(Object.entries(DEPLOYMENT_SURFACES).map(([id, profile]) => [profile, id])));
+const surfaceWords = (id) => DEPLOYMENT_SURFACE_LABELS[id] || String(id);
 
 // The folder and extension rule alone (scanReadsPath without the refusals).
 function scanTakesParts(parts, skipRoot) {
@@ -500,6 +540,14 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
   summary.discovered.pipelineExporters = (summary.discovered.pipelineExporters || 0) + 1;
 }
 
+// A rules document: `groups` of rules, one of which is a recording rule, a
+// Prometheus alerting rule or a Grafana-managed one (a provisioning file or
+// Grafana's alert-rule export, in YAML or JSON).
+function isRuleGroupsDocument(obj) {
+  return !!obj && typeof obj === 'object' && Array.isArray(obj.groups)
+    && obj.groups.some(g => g && Array.isArray(g.rules) && g.rules.some(r => r && typeof r === 'object' && ('record' in r || 'alert' in r || isGrafanaManagedRule(r))));
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -513,6 +561,7 @@ function registerMetricsExporterFromBackend(pattern, pipelines, relPath, evidenc
  *   catalogue ({ exporters: [...] } or the array), merged with the built-in
  *   entries; the built-in one when omitted
  * @returns {string} kind: 'prometheus-rules' | 'alertmanager' | 'grafana-dashboard' |
+ *                          'grafana-dashboard-provider' |
  *                          'otel-collector' | 'docker-compose' | 'helm-chart' |
  *                          'helm-template' | 'metrics-manifest' | 'exposition-snapshot' |
  *                          'exporter-config' | 'unknown'
@@ -530,13 +579,15 @@ export function detectArtefactKind(relPath, content, opts) {
   if (isExpositionSnapshotPath(lower)) {
     return !isTestOrFixturePath(relPath) && parseExposition(content).families.length ? 'exposition-snapshot' : 'unknown';
   }
-  // JSON first — Grafana dashboards are the only json we care about.
+  // JSON first — Grafana dashboards, and Grafana's alert-rule export written
+  // as JSON (the same groups of rules as the YAML one).
   if (lower.endsWith('.json')) {
     try {
       const obj = JSON.parse(content);
       if (obj && Array.isArray(obj.panels) && typeof obj.schemaVersion === 'number') {
         return 'grafana-dashboard';
       }
+      if (isRuleGroupsDocument(obj)) return 'prometheus-rules';
     } catch (_) { /* not json */ }
     return 'unknown';
   }
@@ -596,9 +647,12 @@ export function detectArtefactKind(relPath, content, opts) {
   // The document parse() answers: the first with content.
   const obj = docs.find((d) => d !== null && d !== undefined) ?? docs[docs.length - 1];
   if (obj && typeof obj === 'object') {
-    if (obj.groups && Array.isArray(obj.groups)
-        && obj.groups.some(g => g.rules?.some(r => r && typeof r === 'object' && ('record' in r || 'alert' in r || isGrafanaManagedRule(r))))) {
-      return 'prometheus-rules';
+    if (isRuleGroupsDocument(obj)) return 'prometheus-rules';
+    // A Grafana dashboard provider (provisioning/dashboards/<file>.yaml): the
+    // folder each provider files its dashboards under (walkDashboardProvider).
+    if (Array.isArray(obj.providers)
+        && obj.providers.some(p => p && typeof p === 'object' && (typeof p.options?.path === 'string' || p.type === 'file'))) {
+      return 'grafana-dashboard-provider';
     }
     if (Array.isArray(obj.scrape_configs)
         && obj.scrape_configs.some(s => s?.job_name)) return 'prometheus-scrape-config';
@@ -679,13 +733,17 @@ function normalizeDiffScopeMode(value) {
   return 'service';
 }
 
+// `chartRoots`: the folder of every Chart.yaml ('' for the repository's root,
+// else its path with a trailing `/`): a Helm chart, whatever folder it is in.
 function detectDeploymentSurfaces(files) {
   const out = {
     docker: false,
     k8s: false,
     eksSpecific: false,
     localK8sSpecific: false,
+    chartRoots: [],
   };
+  const roots = new Set();
   for (const relPath of files.keys()) {
     const p = normalizeRepoPath(relPath);
     const base = basenameOf(p);
@@ -695,6 +753,7 @@ function detectDeploymentSurfaces(files) {
     if (hasPathSegment(p, 'k8s') || hasPathSegment(p, 'helm') || hasPathSegment(p, 'charts') || base === 'chart.yaml') {
       out.k8s = true;
     }
+    if (base === 'chart.yaml') roots.add(p.slice(0, p.length - base.length));
     if (isEksSpecificPath(p)) {
       out.eksSpecific = true;
       out.k8s = true;
@@ -704,26 +763,38 @@ function detectDeploymentSurfaces(files) {
       out.k8s = true;
     }
   }
+  out.chartRoots = [...roots].sort();
   return out;
 }
 
-function isRootDockerConfig(relPath) {
+// What a Helm chart ships, under the folder its Chart.yaml is in: its
+// templates, files, dashboards, CRDs and subcharts, and its values schema —
+// the Kubernetes surface, never another one (a root chart's files/collector.yaml
+// is the chart's collector config, not a root Docker config).
+const CHART_CONTENT = /^(?:templates|files|dashboards|crds|charts)\//;
+function inChart(p, roots) {
+  return Array.isArray(roots) && roots.some((root) => p.startsWith(root) && (CHART_CONTENT.test(p.slice(root.length)) || p.slice(root.length) === 'values.schema.json'));
+}
+
+function isRootDockerConfig(relPath, surfaces = null) {
   const p = normalizeRepoPath(relPath);
   const base = basenameOf(p);
   if (/(^|\/)(docker-)?compose\.ya?ml$/.test(p) || /(^|\/)compose\.ya?ml$/.test(p)) return true;
+  if (inChart(p, surfaces?.chartRoots)) return false;
   if (hasPathSegment(p, 'k8s') || hasPathSegment(p, 'helm') || hasPathSegment(p, 'charts')) return false;
   if (hasPathSegment(p, 'config')) return true;
   return /^(prometheus|alertmanager|otel|otelcol|collector|loki|promtail)[\w.-]*\.ya?ml$/.test(base);
 }
 
-function isK8sPath(relPath) {
+function isK8sPath(relPath, surfaces = null) {
   const p = normalizeRepoPath(relPath);
   const base = basenameOf(p);
   return hasPathSegment(p, 'k8s')
       || hasPathSegment(p, 'helm')
       || hasPathSegment(p, 'charts')
       || base === 'chart.yaml'
-      || /^values[\w.-]*\.ya?ml$/.test(base);
+      || /^values[\w.-]*\.ya?ml$/.test(base)
+      || inChart(p, surfaces?.chartRoots);
 }
 
 function isSourceCodePath(relPath) {
@@ -742,58 +813,67 @@ function shouldIncludeForEnvironment(relPath, profile, surfaces) {
 
   if (profile === 'local-docker') {
     if (!surfaces.docker) return true;
-    return isRootDockerConfig(p);
+    return isRootDockerConfig(p, surfaces);
   }
 
   if (profile === 'local-k8s') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isEksSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   if (profile === 'prod') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isLocalK8sSpecificPath(p)) return false;
     if (isEksSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   if (profile === 'eks') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isLocalK8sSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   return true;
 }
 
-function scopeFilesForEnvironment(files, environment) {
-  const profile = normalizeEnvironmentProfile(environment);
+// The files a deployment profile reads (null: every file). `excluded` names
+// the files left out only when the filter applied: a filter that would leave
+// nothing (`emptied`) reads every file and leaves out none, and so does one
+// that drops nothing.
+function scopeFilesForProfile(files, profile) {
   const surfaces = detectDeploymentSurfaces(files);
   const result = {
     files,
     profile,
     surfaces,
     applied: false,
+    emptied: false,
     excluded: [],
   };
   if (!profile) return result;
 
   const scoped = new Map();
+  const excluded = [];
   for (const [relPath, content] of files) {
     if (shouldIncludeForEnvironment(relPath, profile, surfaces)) {
       scoped.set(relPath, content);
     } else {
-      result.excluded.push(relPath);
+      excluded.push(relPath);
     }
   }
 
-  if (scoped.size === 0 || scoped.size === files.size) return result;
+  if (scoped.size === 0 || scoped.size === files.size) {
+    result.emptied = scoped.size === 0 && files.size > 0;
+    return result;
+  }
   result.files = scoped;
   result.applied = true;
+  result.excluded = excluded;
   return result;
 }
 
@@ -835,8 +915,21 @@ export function crawlFiles(filesInput, opts = {}) {
   const binding = !opts.binding || bindingIgnored ? 'otel-elastic-prometheus-grafana' : opts.binding;
   const criticalityIgnored = opts.criticality !== undefined && opts.criticality !== null && !SPEC_CRITICALITIES.has(opts.criticality);
   const diffScopeMode = normalizeDiffScopeMode(opts.diffScopeMode || opts.diffScope || opts.liveScope);
-  // Profile detection reads the environment as given (it lowercases itself).
-  const envScope = scopeFilesForEnvironment(rawFiles, envRaw);
+  // Which files the crawl reads. `surface` given (a service environment's Run
+  // passes its setting, null for none): that deployment surface alone, or
+  // every file — the environment's name chooses nothing. Not given (the
+  // command line, Expert's crawl panel, POST /api/crawl and /api/crawl-github,
+  // a journey's crawl: source): the profile the environment's name maps to,
+  // prod by default, as before. Profile detection reads the name as given
+  // (it lowercases itself).
+  const explicitSurface = Object.hasOwn(opts, 'surface');
+  const surfaceGiven = explicitSurface && opts.surface !== null && opts.surface !== undefined && opts.surface !== '' && opts.surface !== 'none' ? String(opts.surface) : null;
+  const surfaceUnknown = surfaceGiven && !Object.hasOwn(DEPLOYMENT_SURFACES, surfaceGiven) ? surfaceGiven : null;
+  const profile = explicitSurface
+    ? (surfaceGiven && !surfaceUnknown ? DEPLOYMENT_SURFACES[surfaceGiven] : null)
+    : normalizeEnvironmentProfile(envRaw);
+  const envScope = scopeFilesForProfile(rawFiles, profile);
+  const askedSurface = profile ? SURFACE_OF_PROFILE[profile] : null;
   const files = envScope.files;
   const catalogue = resolveExporterCatalogue(opts.exporterCatalogue);
   const inputWarnings = [...catalogue.warnings];
@@ -878,8 +971,14 @@ export function crawlFiles(filesInput, opts = {}) {
       requested: envRaw,
       profile: envScope.profile,
       scoped: envScope.applied,
-      surfaces: envScope.surfaces,
+      surfaces: { docker: envScope.surfaces.docker, k8s: envScope.surfaces.k8s, eksSpecific: envScope.surfaces.eksSpecific, localK8sSpecific: envScope.surfaces.localK8sSpecific },
       excluded: envScope.excluded.slice(0, 40),
+      // The deployment surface whose files alone were read (kubernetes | eks | local-kubernetes | compose),
+      // or null: every file. `asked`: a surface asked for that would have left no file, so every file was read.
+      surface: askedSurface && !envScope.emptied ? askedSurface : null,
+      ...(askedSurface && envScope.emptied ? { asked: askedSurface } : {}),
+      // The filter left out more than half the files the scan recognises (set after the files are classified).
+      excludedMost: false,
     },
     comparison: {
       diffScopeMode,
@@ -900,8 +999,18 @@ export function crawlFiles(filesInput, opts = {}) {
     scaffold: [],
   };
   summary.warnings.push(...inputWarnings);
+  // The filter's words: an explicit surface by its label (the setting a person chose), a name's
+  // profile as it always read.
+  const scopeName = explicitSurface ? `The ${surfaceWords(askedSurface)} filter` : `Environment scope "${envScope.profile}"`;
+  const readsEvery = explicitSurface ? 'An environment with no deployment surface set reads every file.' : 'An environment that names no deployment profile (e.g. `all`) reads every file.';
+  if (surfaceUnknown) {
+    summary.warnings.push(`deployment surface "${surfaceUnknown}" is not one the scan knows (${Object.keys(DEPLOYMENT_SURFACES).join(', ')}); every file was read.`);
+  }
+  if (explicitSurface && envScope.emptied) {
+    summary.warnings.push(`The ${surfaceWords(askedSurface)} filter would leave no file, so every file was read.`);
+  }
   if (envScope.applied) {
-    summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
+    summary.warnings.push(`${scopeName} excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
     // A file the scope leaves out may be the only one that shows how the
     // metrics are collected: say which, never drop them silently.
     const collection = envScope.excluded
@@ -909,7 +1018,7 @@ export function crawlFiles(filesInput, opts = {}) {
       .filter(Boolean);
     if (collection.length) {
       const shown = collection.slice(0, 8).join('; ') + (collection.length > 8 ? `; … (${collection.length - 8} more)` : '');
-      summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${collection.length} file(s) that carry scrape jobs or exporter evidence: ${shown}. An environment that names no deployment profile (e.g. \`all\`) reads every file.`);
+      summary.warnings.push(`${scopeName} excluded ${collection.length} file(s) that carry scrape jobs or exporter evidence: ${shown}. ${readsEvery}`);
     }
   }
   const evidence = {};   // <artefact-id> -> <relPath>
@@ -928,6 +1037,10 @@ export function crawlFiles(filesInput, opts = {}) {
   // declares them in another file) — settleCollectorGuesses.
   const collectorState = newCollectorState();
   const dashboards = [];
+  // Where the repository provisions its dashboards (resolveDashboardFolders): provider files, compose bind mounts, sidecar ConfigMaps.
+  const dashboardProviders = [];
+  const composeMounts = [];
+  const helmFolders = [];
   const alertingRoutes = [];
   const repoPacks = [];        // the repository's own packs (.observability/*.yaml): their declared chaos experiments
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
@@ -966,16 +1079,55 @@ export function crawlFiles(filesInput, opts = {}) {
     summary.files.byKind[kind] = (summary.files.byKind[kind] || 0) + 1;
   }
 
+  // A filter that left out more than half the files the scan recognises: said, so a
+  // row can warn that most of the repository was not read for this environment.
+  if (envScope.applied) {
+    const excludedClassified = envScope.excluded
+      .filter((relPath) => detectArtefactKind(relPath, rawFiles.get(relPath), { exporterCatalogue: catalogue }) !== 'unknown').length;
+    summary.files.excludedClassified = excludedClassified;
+    if (excludedClassified > summary.files.classified) {
+      summary.environment.excludedMost = true;
+      summary.warnings.push(`${scopeName} left out ${excludedClassified} of the ${excludedClassified + summary.files.classified} files the scan recognises — more than half of them. ${readsEvery}`);
+    }
+  }
+
   // Honor Helm `enabled: false`: a component the selected environment disables
   // must not be declared as a live backend. The toggle often lives in an env
   // overlay (values-eks) while the image lives in base values.yaml, so merge
-  // `enabled` across the in-scope values files (overlays win) before walking.
-  const disabledComponents = collectDisabledComponents(
-    classified.filter((f) => f.kind === 'helm-values'),
-  );
+  // `enabled` across the in-scope values files (overlays win) before walking —
+  // when a deployment profile chose the files. With none (every file read, as a
+  // service environment reads by default), an overlay is some environment's,
+  // never every environment's: only the base values decide, and each overlay
+  // switch they override is named in one warning — one that would switch a
+  // component off (it stays declared), and one that switches on a component
+  // the base values switch off (it is not declared: what it deploys is that
+  // environment's, read through its deployment surface), never left unsaid.
+  const valuesFiles = classified.filter((f) => f.kind === 'helm-values');
+  const disabledComponents = collectDisabledComponents(envScope.profile ? valuesFiles : valuesFiles.filter((f) => isBaseValuesPath(f.relPath)));
+  if (!envScope.profile) {
+    const overlaid = overlaySwitches(valuesFiles, disabledComponents);
+    if (overlaid.length) {
+      const said = (o) => (o.switches === 'off' ? `${o.relPath} switches ${o.components.join(', ')} off`
+        : `${o.relPath} switches ${o.components.join(', ')} on, which ${o.components.length === 1 ? 'is' : 'are'} not declared`);
+      const shown = overlaid.slice(0, 8).map(said).join('; ') + (overlaid.length > 8 ? `; … (${overlaid.length - 8} more)` : '');
+      summary.warnings.push(`Every file is read, so only the base Helm values decide what is deployed: ${shown}. An environment that deploys with one of these overlays reads it alone through its deployment surface.`);
+    }
+  }
   if (disabledComponents.size) {
     summary.discovered.disabledComponents = [...disabledComponents];
   }
+
+  // A dashboard export kept under a documentation folder (docs/, examples/, samples/) that repeats
+  // the uid of a dashboard file the repository holds elsewhere is a copy, not a second dashboard:
+  // set aside before the walk, so it neither takes the deployed dashboard's uid (pushing that one to
+  // a -2 id no Grafana holds) nor declares the metrics its panels query, and named. A documentation
+  // dashboard that is the only holder of its uid is declared as before.
+  const docCopies = documentationDashboardCopies(classified);
+  if (docCopies.length) {
+    const shown = docCopies.slice(0, 8).map((c) => `${c.relPath} repeats ${c.holder} (uid ${c.id})`).join('; ') + (docCopies.length > 8 ? `; … (${docCopies.length - 8} more)` : '');
+    summary.warnings.push(`${docCopies.length} dashboard file(s) under a documentation folder repeat a dashboard the repository holds elsewhere and are not declared: ${shown}.`);
+  }
+  const setAside = new Set(docCopies.map((c) => c.relPath));
 
   // ----- pass 2: walk per kind -----
   // One alias budget for every file the walk reads: it keeps what it reads,
@@ -984,13 +1136,15 @@ export function crawlFiles(filesInput, opts = {}) {
   // are bounded each on its own.
   withAliasBudget(() => walkClassified());
   function walkClassified() { for (const f of classified) {
+    if (setAside.has(f.relPath)) continue;
     // Where the reader stopped in this file, by its own lines: one warning
     // for the file, whichever walker (or a second reading) met them.
     const stops = new Set();
     noteStop = (line) => { stops.add(line); };
     try {
       switch (f.kind) {
-        case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary); break;
+        case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary, composeMounts); break;
+        case 'grafana-dashboard-provider': walkDashboardProvider(f, dashboardProviders, summary); break;
         case 'prometheus-rules':
           walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
           // A manifest holding workloads beside its PrometheusRule resources: their images too.
@@ -1005,7 +1159,7 @@ export function crawlFiles(filesInput, opts = {}) {
         case 'exposition-snapshot': walkExpositionSnapshot(f, metricDefinitions, exporters, summary, evidence); break;
         case 'exporter-config':  walkExporterConfig(f, catalogue, metricDefinitions, exporters, summary, evidence); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
-        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName }, evidence, summary); break;
+        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName, helmFolders }, evidence, summary); break;
         case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents, { scrapeJobs, collectorState }); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
@@ -1030,6 +1184,7 @@ export function crawlFiles(filesInput, opts = {}) {
   } }
 
   settleCollectorGuesses(collectorState, pipelines, evidence, summary);
+  resolveDashboardFolders(dashboards, { providers: dashboardProviders, mounts: composeMounts, helmFolders }, summary);
 
   // Rules read the same from several places, declared as often as one place
   // holds them; a resource named alike in several files whose rules differ
@@ -1069,7 +1224,12 @@ export function crawlFiles(filesInput, opts = {}) {
   //      SLO (the exact inverse of compile.mjs) — link it; or
   //   2. no recording-rule SLIs were discovered at all (a tier-3 repo) — in
   //      that case fall back to the legacy alert-name synthesis so the pack
-  //      still has at least one contract.
+  //      still has at least one contract. What it invents — the SLO, its SLI
+  //      and the burn-rate entry, all from the alert's name — is marked a
+  //      placeholder (crawler.scaffold.*): no live read can hold a burn-rate
+  //      entry no recorded SLO series names, so it is never compared. The
+  //      alert rule itself is declared in alerting.rules (below), as live
+  //      lists it, and that is what compares.
   // Operational alerts (CPU, disk, pod, queue-down, …) in a repo that DOES
   // define recorded SLIs are NOT SLOs; they're dropped from the burn-rate
   // policy rather than manufacturing junk L1 contracts that can never match
@@ -1110,6 +1270,7 @@ export function crawlFiles(filesInput, opts = {}) {
 
     const sloId = symbolId(alert.slo, `${repoNs}_slo`);
     alert.slo = sloId;
+    alert._invented = true;
     if (!sloMap.has(sloId)) {
       const sliId = symbolId(sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId, `${repoNs}_sli`);
       sloMap.set(sloId, {
@@ -1143,6 +1304,7 @@ export function crawlFiles(filesInput, opts = {}) {
     if (burnRateAlerts[i]._drop) burnRateAlerts.splice(i, 1);
   }
   mergeBurnAlertsBySlo(burnRateAlerts);
+  const inventedBurn = markInventedBurnAlerts(burnRateAlerts, markInvented);
 
   // The operational alerts are not lost: spec 1.4 keeps them in
   // spec.alerting.rules, one entry per rule with its EXACT name (the key a
@@ -1152,23 +1314,27 @@ export function crawlFiles(filesInput, opts = {}) {
   // fetcher applies to a ruler's rules). The classification is the one
   // above, exactly: a rule whose expression references a recorded SLO
   // series is a burn-rate alert and stays in the policy; every other rule
-  // is operational, when the repo records SLIs at all — a repo with no
-  // recording rules still reads every alert as an SLO contract (the tier-3
-  // fallback), and then declares no operational rules.
+  // is operational — in every repository. A repo with no recording rules
+  // declares every alert rule here (the live fetch lists each as an
+  // operational rule, having no recorded SLO either); the SLO, SLI and
+  // burn-rate entry the tier-3 fallback derives from each name stay beside
+  // them as marked placeholders.
   // A rule a chart's include gives labels the scan does not read is held to
   // the labels it writes: `observogram.partial.alerting.rules[i]` names them
   // (tools/lib/artefact-model.mjs, PARTIALLY OBSERVED FIELDS, mirrored here
   // as the source-rule annotation is), and the comparison reads no other.
-  const operational = { kept: [], skipped: [] };
+  // `keptRules[i]` is the rule `kept[i]` was read from (its Grafana facts ride beside it: grafanaRuleAnnotations).
+  const operational = { kept: [], skipped: [], keptRules: [] };
   const partialRules = {};
-  if (recordsSeries) {
+  {
     for (const r of alertRules) {
-      const one = operationalAlertRules([r.rule], (id) => sloMap.has(id), {
-        engineOf: () => r.engine ?? alertRuleEngine(r.rule, r.relPath),
+      const one = operationalAlertRules([r.rule], (id) => haveRecordedSlis && sloMap.has(id), {
+        engineOf: () => r.engine ?? alertRuleEngine(r.rule),
         sourceOf: () => r.source,
       });
       operational.skipped.push(...one.skipped);
-      for (const entry of one.kept) {
+      for (const [j, entry] of one.kept.entries()) {
+        operational.keptRules.push(one.keptRules?.[j] ?? r.rule);
         // What a chart or a deploy step fills in is no statement of the
         // repository's: a wait that is no spec Duration is left out (said),
         // a label it fills in is no label written, and the rule is held to
@@ -1214,7 +1380,7 @@ export function crawlFiles(filesInput, opts = {}) {
   if (operational.kept.length) {
     const names = operational.kept.map(r => r.name);
     const shown = names.slice(0, 8).join(', ') + (names.length > 8 ? `, … (${names.length - 8} more)` : '');
-    summary.warnings.push(`${operational.kept.length} operational alert rule(s) kept in alerting.rules — not SLO burn-rate alerts (no recorded-ratio reference): ${shown}. ${burnRateAlerts.length} burn-rate alert(s) in policy.burn_rate_alerts.`);
+    summary.warnings.push(`${operational.kept.length} operational alert rule(s) kept in alerting.rules — not SLO burn-rate alerts (no recorded-ratio reference): ${shown}. ${burnRateAlerts.length} burn-rate alert(s) in policy.burn_rate_alerts${inventedBurn ? `, ${inventedBurn} of them placeholders derived from alert names` : ''}.`);
   }
   if (operational.skipped.length) {
     summary.warnings.push(`${operational.skipped.length} alert rule(s) state no expression and are not declared: ${operational.skipped.slice(0, 8).join(', ')}.`);
@@ -1262,6 +1428,8 @@ export function crawlFiles(filesInput, opts = {}) {
   if (burnRateAlerts.length === 0) {
     for (const slo of sloMap.values()) {
       burnRateAlerts.push({ slo: slo.id, windows: defaultBurnWindows() });
+      // No rule wrote it: a placeholder, as the live fetch marks its own (never "declared, not live").
+      markInvented(`policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`, 'schema-required fallback; no burn-rate alerting rule in the repository');
     }
     summary.warnings.push('Synthesized two-window burn-rate alerts for stub SLOs (Google SRE pattern).');
   } else {
@@ -1555,9 +1723,11 @@ export function crawlFiles(filesInput, opts = {}) {
         // triggered and gated, and whether this environment switches it off.
         ...(chaosDiscovered.length ? { 'crawler.discovered.chaos_experiments': annotationJson(chaosDiscovered) } : {}),
         // Every alert rule's exact name the repository declares — the burn-rate ones folded into the
-        // policy and a repository's with no recording rules (the tier-3 fallback) included, which
-        // alerting.rules does not keep: the control room's scope reads it (server/routes/control-room.mjs).
+        // policy included, which alerting.rules does not keep: the control room's scope reads it
+        // (server/routes/control-room.mjs).
         ...alertNameAnnotations(alertRules),
+        // What each Grafana-managed rule states beyond the spec (uid, folder, group, condition).
+        ...grafanaRuleAnnotations(operational, recordingRules),
         // The rules each burn-rate entry was read from, with their own terms: the entry keeps only
         // { slo, windows }, and the windows are this reading's, so the comparison reads the rules here.
         ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id)) : {}),
@@ -1638,10 +1808,29 @@ export function crawlFiles(filesInput, opts = {}) {
  *     unclassified, unknownFiles what it read and recognised as nothing,
  *     environment: { profile, excluded, excludedFiles }  what the
  *                      environment's deployment profile left out,
- *     warnings }
+ *     warnings,
+ *     partial          the read LOST files (a host refused or dropped them, the
+ *                      read's budget ran out, the disk would not give them):
+ *                      such a scan stops a Run, fails its gate and is not
+ *                      comparable with another (scanSkipKind 'lost'),
+ *     lost             how many,
+ *     notRead          every file the scan takes and did not read but those left
+ *                      out on purpose: the lost ones, those over the size caps
+ *                      or not text, and those past the file cap,
+ *     notReadReasons   the first 5 of them, lost first: [{ path, why }] — reasons
+ *                      only, never a host's body,
+ *     cappedFiles      the first 20 past the file cap,
+ *     treeTruncated    the host's own flag (`truncated`, kept for older readers),
+ *     filter: { surface, excluded[, asked] }  the deployment surface whose files
+ *                      alone were read (null: every file) and how many it left out,
+ *     excludedMost     it left out more than half the files the scan recognises }
+ * Each skippedFiles entry names its `kind` (scanSkipKind). `candidates` with no
+ * count from the read is the files read and those not read.
  * Without a summary (the scan read nothing) only the read's part is filled.
  */
 export const SCAN_REPORT_SHOWN = 50;
+export const SCAN_REASONS_SHOWN = 5;
+export const SCAN_CAPPED_SHOWN = 20;
 export function scanReport(read = {}, summary = null) {
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const fileCount = read.files && typeof read.files === 'object' ? Object.keys(read.files).length : n(read.files);
@@ -1650,15 +1839,24 @@ export function scanReport(read = {}, summary = null) {
   const env = summary?.environment || {};
   const excluded = Array.isArray(env.excluded) ? env.excluded : [];
   const short = (s, max = 500) => { const t = String(s ?? ''); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
+  const kinds = skipped.map((s) => scanSkipKind(s?.why));
+  const lost = skipped.filter((_, i) => kinds[i] === 'lost');
+  const limited = skipped.filter((_, i) => kinds[i] === 'limit');
+  const capped = n(read.capped);
+  const cappedPaths = (Array.isArray(read.cappedFiles) ? read.cappedFiles : []).filter((p) => typeof p === 'string');
+  const capWhy = SCAN_WHY.fileCap(Number.isInteger(read.fileCap) ? read.fileCap : null);
+  const notRead = lost.length + limited.length + capped;
+  const reasons = [...lost, ...limited, ...cappedPaths.slice(0, SCAN_REASONS_SHOWN).map((path) => ({ path, why: capWhy }))].slice(0, SCAN_REASONS_SHOWN);
   return {
     source: read.source ?? null,
     ref: read.ref ?? null,
     files: fileCount,
-    candidates: read.candidates === undefined ? fileCount : n(read.candidates),
-    capped: n(read.capped),
+    candidates: Number.isFinite(Number(read.candidates)) && read.candidates !== null && read.candidates !== undefined ? n(read.candidates) : fileCount + notRead,
+    capped,
     truncated: read.truncated === true,
     skipped: skipped.length,
-    skippedFiles: skipped.slice(0, SCAN_REPORT_SHOWN).map((s) => ({ path: short(s?.path, 300), why: short(s?.why, 200) })),
+    // A reason at most 300 characters: a host's sentence with the tries after it fits whole.
+    skippedFiles: skipped.slice(0, SCAN_REPORT_SHOWN).map((s, i) => ({ path: short(s?.path, 300), why: short(s?.why, 300), kind: kinds[i] })),
     classified: n(f.classified),
     byKind: f.byKind && typeof f.byKind === 'object' ? { ...f.byKind } : {},
     unclassified: n(f.unclassified),
@@ -1669,7 +1867,44 @@ export function scanReport(read = {}, summary = null) {
       excludedFiles: excluded.slice(0, SCAN_REPORT_SHOWN).map((p) => short(p, 300)),
     },
     warnings: (Array.isArray(summary?.warnings) ? summary.warnings : []).slice(0, 20).map((w) => short(w)),
+    partial: lost.length > 0,
+    lost: lost.length,
+    notRead,
+    notReadReasons: reasons.map((s) => ({ path: short(s?.path, 300), why: short(s?.why, 300) })),
+    cappedFiles: cappedPaths.slice(0, SCAN_CAPPED_SHOWN).map((p) => short(p, 300)),
+    treeTruncated: read.truncated === true,
+    filter: {
+      surface: typeof env.surface === 'string' ? env.surface : null,
+      excluded: n(f.excludedByEnvironment),
+      ...(typeof env.asked === 'string' ? { asked: env.asked } : {}),
+    },
+    excludedMost: env.excludedMost === true,
   };
+}
+
+/**
+ * A scan's loss in one sentence, for a stopped Run's answer and its record:
+ *   "<n> of <m> files not read: <path> — <why>"  (the first reason; lost first)
+ *   "<lost> of <m> files could not be read: <path> — <why> (<k> more not read: …)"
+ *     when files were also left out by the caps;
+ * "files or folders" when a folder is among them; '' when nothing is missing.
+ */
+export function notReadSentence(scan) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const notRead = n(scan?.notRead);
+  if (!notRead) return '';
+  const lost = n(scan?.lost);
+  const capped = n(scan?.capped);
+  const limited = Math.max(0, notRead - lost - capped);
+  const reasons = Array.isArray(scan?.notReadReasons) ? scan.notReadReasons : [];
+  const first = reasons[0] ? `: ${reasons[0].path} — ${reasons[0].why}` : '';
+  const noun = reasons.some((r) => String(r?.path ?? '').endsWith('/')) ? 'files or folders' : 'files';
+  const of = `of ${n(scan?.candidates)} ${noun}`;
+  if (lost && lost < notRead) {
+    const more = [limited ? `${limited} over the scan's limits` : '', capped ? `${capped} past the file cap` : ''].filter(Boolean).join(', ');
+    return `${lost} ${of} could not be read${first} (${notRead - lost} more not read: ${more})`;
+  }
+  return `${notRead} ${of} not read${first}`;
 }
 
 export function crawlToYaml(filesInput, opts) {
@@ -2674,6 +2909,39 @@ function buildMetricDefinitionAnnotations(metricDefinitions) {
 
 const JSON_ANNOTATION_BLOCK_LENGTH = 4096;
 
+// The burn-rate entries the tier-3 fallback derived from alert names, marked
+// placeholders (crawler.scaffold.policy.burn_rate_alerts[<i>]) like the SLO and
+// SLI derived with them: a live read derives a burn-rate entry only from a
+// recorded SLO series, so these can never pair — never "declared, not live".
+// The alert rules themselves are declared in alerting.rules and compare there.
+// Answers how many were marked.
+function markInventedBurnAlerts(burnRateAlerts, markInvented) {
+  let marked = 0;
+  burnRateAlerts.forEach((a, i) => {
+    if (!a._invented) return;
+    markInvented(`policy.burn_rate_alerts[${i}]`, 'derived from the alert name only; the alert rule is declared in alerting.rules, and a live read derives burn-rate entries only from recorded SLO series');
+    marked += 1;
+  });
+  return marked;
+}
+
+// observogram.grafana_rule.<symbol>: what each Grafana-managed rule states
+// beyond the spec's closed shapes (sli-inference.mjs grafanaRuleFacts) — for
+// each operational rule declared, by its alerting.rules index, and for each
+// Grafana-managed recording rule, by its queries.recording_rules index. The
+// adapter lifts it onto the artefact as `grafana` (tools/lib/artefact-model.mjs).
+function grafanaRuleAnnotations(operational, recordingRules) {
+  const out = {};
+  (operational.keptRules || []).forEach((rule, i) => {
+    if (rule?.grafana) out[`observogram.grafana_rule.alerting.rules[${i}]`] = JSON.stringify(rule.grafana);
+  });
+  recordingRules.forEach((entry, i) => {
+    const facts = GRAFANA_RECORDING_FACTS.get(entry);
+    if (facts) out[`observogram.grafana_rule.queries.recording_rules[${i}]`] = JSON.stringify(facts);
+  });
+  return out;
+}
+
 // The names of every alert rule read, each once, sorted — none when there are none.
 function alertNameAnnotations(alertRules) {
   const names = [...new Set(alertRules.map((r) => String(r.name || '').trim()).filter(Boolean))].sort();
@@ -2966,6 +3234,8 @@ function buildLifecycleAnnotations(classified, { recordingRules, alertRules, bur
       own(`policy.burn_rate_alerts.${sloId}`, file);
       own(`slos.${sloId}`, file);
       own(`slis.${sliId}`, file);
+      // The rule itself is declared in alerting.rules too (crawlFiles).
+      own(`alerting.rules.${String(alertName).trim()}`, file);
     } else {
       own(`alerting.rules.${String(alertName).trim()}`, file);
     }
@@ -3033,26 +3303,70 @@ function recordExporter(exporters, name, source, summary) {
 // toggles, which is the convention these charts use.
 function collectDisabledComponents(valuesFiles) {
   const ordered = [...valuesFiles].sort((a, b) => {
-    const rank = (p) => (/(^|\/)values\.ya?ml$/i.test(normalizeRepoPath(p)) ? 0 : 1);
+    const rank = (p) => (isBaseValuesPath(p) ? 0 : 1);
     return rank(a.relPath) - rank(b.relPath);
   });
   const effective = new Map(); // top-level component -> enabled boolean
   for (const f of ordered) {
-    let docs;
-    try { docs = parseYamlDocs(f.content); } catch { continue; }
-    for (const obj of docs) {
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
-      for (const [key, val] of Object.entries(obj)) {
-        if (val && typeof val === 'object' && !Array.isArray(val)
-            && typeof val.enabled === 'boolean') {
-          effective.set(key, val.enabled);
-        }
-      }
-    }
+    for (const [key, on] of enabledTogglesOf(f)) effective.set(key, on);
   }
   const disabled = new Set();
   for (const [key, on] of effective) if (on === false) disabled.add(key);
   return disabled;
+}
+
+// A chart's base values (`values.yaml`), as against an overlay (`values-eks.yaml`, …).
+function isBaseValuesPath(relPath) {
+  return /(^|\/)values\.ya?ml$/i.test(normalizeRepoPath(relPath));
+}
+
+// A values file's top-level `<component>.enabled` toggles, in document order.
+function enabledTogglesOf(f) {
+  const out = [];
+  let docs;
+  try { docs = parseYamlDocs(f.content); } catch { return out; }
+  for (const obj of docs) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+    for (const [key, val] of Object.entries(obj)) {
+      if (val && typeof val === 'object' && !Array.isArray(val) && typeof val.enabled === 'boolean') out.push([key, val.enabled]);
+    }
+  }
+  return out;
+}
+
+// The overlay switches the base values override when every file is read —
+// said, never applied: an overlay that would switch off a component the base
+// values leave on (`switches: 'off'`), and one that switches on a component
+// the base values switch off (`switches: 'on'`). [{ relPath, switches,
+// components }] in path order, an overlay's switches off before its
+// switches on.
+function overlaySwitches(valuesFiles, baseDisabled) {
+  const out = [];
+  for (const f of [...valuesFiles].filter((x) => !isBaseValuesPath(x.relPath)).sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))) {
+    const toggles = enabledTogglesOf(f);
+    const off = [...new Set(toggles.filter(([key, on]) => on === false && !baseDisabled.has(key)).map(([key]) => key))];
+    const on = [...new Set(toggles.filter(([key, enabled]) => enabled === true && baseDisabled.has(key)).map(([key]) => key))];
+    if (off.length) out.push({ relPath: f.relPath, switches: 'off', components: off });
+    if (on.length) out.push({ relPath: f.relPath, switches: 'on', components: on });
+  }
+  return out;
+}
+
+// The top-level folders a repository keeps documentation and samples in (the
+// host reader's own list orders by the same names: server/github-crawl.mjs).
+const DOCUMENTATION_FOLDERS = new Set(['docs', 'doc', 'examples', 'example', 'samples', 'sample']);
+const isDocumentationPath = (relPath) => DOCUMENTATION_FOLDERS.has(normalizeRepoPath(relPath).split('/')[0].toLowerCase());
+
+// The dashboard files under a documentation folder whose dashboard id (its
+// uid, else its title: dashboardSpecId) a dashboard file outside those folders
+// also holds: [{ relPath, id, holder }] in path order, `holder` the first such
+// file in path order.
+function documentationDashboardCopies(classified) {
+  const idOf = (f) => { try { return dashboardSpecId(JSON.parse(f.content)); } catch { return null; } };
+  const dashboards = classified.filter((f) => f.kind === 'grafana-dashboard').map((f) => ({ relPath: f.relPath, id: idOf(f), doc: isDocumentationPath(f.relPath) }));
+  const holders = new Map();
+  for (const d of dashboards) if (d.id && !d.doc && !holders.has(d.id)) holders.set(d.id, d.relPath);
+  return dashboards.filter((d) => d.doc && d.id && holders.has(d.id)).map((d) => ({ relPath: d.relPath, id: d.id, holder: holders.get(d.id) }));
 }
 
 function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorState = newCollectorState() } = {}) {
@@ -3157,6 +3471,14 @@ function walkHelmTemplate(f, buckets, evidence, summary) {
 
 function walkStrippedTemplate(f, buckets, evidence, summary) {
   const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, collectorState, repoName } = buckets;
+  // The Grafana sidecar's folder each annotated document states: its own dashboard keys (here), the chart files it ships (resolveDashboardFolders).
+  const sidecar = helmSidecarFolders(f);
+  buckets.helmFolders?.push(...sidecar.filter((s) => s.files.length));
+  const folderOfKey = (key) => {
+    const titles = [...new Set(sidecar.filter((s) => s.keys.includes(key)).map((s) => s.title))];
+    return titles.length === 1 ? sidecar.find((s) => s.keys.includes(key)) : null;
+  };
+  let provisioned = null;
   // `resources` false: the text's PrometheusRule resources are read apart
   // (prometheusRuleResources below), not with its other rule groups.
   const route = (kind, sub, { resources = true } = {}) => {
@@ -3169,7 +3491,7 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
       case 'otel-collector':   walkOtelCollector(sub, pipelines, scrapeJobs, evidence, summary, collectorState); return true;
-      case 'grafana-dashboard':walkGrafanaDashboard(sub, dashboards, metricDefinitions, evidence, summary); return true;
+      case 'grafana-dashboard':walkGrafanaDashboard(sub, dashboards, metricDefinitions, evidence, summary, provisioned); return true;
       case 'docker-compose':   walkDockerCompose(sub, backends, pipelines, evidence, summary); return true;
       case 'k8s-workload':     walkK8sWorkload(sub, backends, pipelines, evidence, summary); return true;
       default: return false;
@@ -3189,6 +3511,8 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     const body = rulesBlock ? whole : plain;
     if (!body.trim()) continue;
     const lk = key.toLowerCase();
+    const placed = folderOfKey(key);
+    provisioned = placed ? { title: placed.title, source: placed.source } : null;
     let kind = 'unknown';
 
     if (/rule/.test(lk) || /^groups:\s*$/m.test(clean))                              kind = 'prometheus-rules';
@@ -3253,10 +3577,12 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
 // Per-kind walkers
 // ============================================================
 
-function walkDockerCompose(f, backends, pipelines, evidence, summary) {
+function walkDockerCompose(f, backends, pipelines, evidence, summary, mounts = null) {
   for (const obj of parseYamlDocs(f.content)) {
     if (!obj?.services) continue;
     for (const [svcName, svc] of Object.entries(obj.services)) {
+    // The folders it bind-mounts from the repository: where a dashboard provider reads its files.
+    if (mounts) mounts.push(...composeBindMounts(f.relPath, svc, svcName));
     // The image as `docker compose config` resolves it with the variables
     // unset (resolvedImage); a service's `image:` holds only an image, so a
     // name alone is that image (backendPatternFor's `bare`).
@@ -3315,6 +3641,244 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
   }
 }
 
+// ---- where a crawled dashboard is provisioned (the folder a live read files it under) ----
+//
+// A live read's folder scope keeps the dashboards of some Grafana folders; a
+// crawled dashboard that does not say which folder it is provisioned into can
+// only be "not checked" under it. The repository says so in three places, and
+// only those are read (never a guess from a path alone):
+//   - a dashboard provider file (provisioning/dashboards/*.yaml): each
+//     provider's folder (a title; none is General), folder uid, the container
+//     path it reads and foldersFromFilesStructure — matched to a dashboard file
+//     through a compose bind mount of the folder holding it;
+//   - a Helm chart's ConfigMap annotated (or labelled) for the Grafana sidecar
+//     (`grafana_folder`, `k8s-sidecar-target-directory`): its own dashboard
+//     data keys, and the chart files it ships with .Files.Glob / .Files.Get.
+// A dashboard so placed carries `folder` (the title) and params folderTitle,
+// folderUid (when stated) and folderSource (the file that says so).
+
+// A repository path made plain: `.` and `..` resolved; null when it leaves the repository.
+function normalizeRelPath(path) {
+  const out = [];
+  for (const seg of String(path).replace(/\\/g, '/').split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (!out.length) return null; out.pop(); continue; }
+    out.push(seg);
+  }
+  return out.join('/');
+}
+const containerPath = (path) => `/${normalizeRelPath(String(path).replace(/^\/+/, '')) ?? ''}`;
+
+// A compose service's bind mounts of repository folders and files: { source (repository path), target
+// (container path), service (`<compose file>#<service>`: whose container it is), provisioning (where
+// that container's Grafana reads its provisioning files: GF_PATHS_PROVISIONING, else
+// /etc/grafana/provisioning) }.
+// Short syntax `<host>:<container>[:<mode>]` with a relative host path; long syntax `{ type: bind, source, target }`.
+// A named volume, an absolute or home path and a templated value are not the repository's.
+function composeBindMounts(composePath, svc, svcName = '') {
+  const dir = composePath.includes('/') ? composePath.slice(0, composePath.lastIndexOf('/')) : '';
+  const service = `${composePath}#${svcName}`;
+  const provisioning = grafanaProvisioningPath(svc);
+  const out = [];
+  for (const v of Array.isArray(svc?.volumes) ? svc.volumes : []) {
+    let source = null;
+    let target = null;
+    if (typeof v === 'string') [source, target] = v.split(':');
+    else if (v && typeof v === 'object' && v.type === 'bind') ({ source, target } = v);
+    if (typeof source !== 'string' || typeof target !== 'string') continue;
+    source = source.trim();
+    target = target.trim();
+    if (!source || !target.startsWith('/') || source.startsWith('/') || /[$~{}\\]/.test(source)) continue;
+    if (!source.startsWith('./') && !source.startsWith('../') && !source.includes('/')) continue;   // a named volume
+    const resolved = normalizeRelPath(dir ? `${dir}/${source}` : source);
+    if (resolved === null) continue;
+    out.push({ source: resolved, target: containerPath(target), service, provisioning });
+  }
+  return out;
+}
+
+// Where a compose service's Grafana reads its provisioning files: its GF_PATHS_PROVISIONING (a map
+// or `NAME=value` list entry, its compose default when templated), else Grafana's own default.
+function grafanaProvisioningPath(svc) {
+  const env = svc?.environment;
+  let value = null;
+  if (Array.isArray(env)) {
+    for (const e of env) if (typeof e === 'string' && e.startsWith('GF_PATHS_PROVISIONING=')) value = e.slice('GF_PATHS_PROVISIONING='.length);
+  } else if (env && typeof env === 'object' && (typeof env.GF_PATHS_PROVISIONING === 'string' || typeof env.GF_PATHS_PROVISIONING === 'number')) {
+    value = String(env.GF_PATHS_PROVISIONING);
+  }
+  const path = value === null ? '' : composeDefaults(value).trim();
+  return path.startsWith('/') ? containerPath(path) : '/etc/grafana/provisioning';
+}
+
+// Where a repository file sits in a container that mounts it (a mount of the file itself, or of a folder
+// holding it), or null.
+function mountedAt(relPath, mount) {
+  if (relPath === mount.source) return mount.target;
+  const under = mount.source === '' ? relPath : relPath.startsWith(`${mount.source}/`) ? relPath.slice(mount.source.length + 1) : null;
+  return under === null ? null : `${mount.target}/${under}`.replace(/\/+/g, '/');
+}
+
+// A dashboard provider file's providers.
+function walkDashboardProvider(f, providers, summary) {
+  let n = 0;
+  for (const obj of parseYamlDocs(f.content)) {
+    for (const p of Array.isArray(obj?.providers) ? obj.providers : []) {
+      if (!p || typeof p !== 'object') continue;
+      const path = typeof p.options?.path === 'string' && p.options.path.trim() ? containerPath(p.options.path.trim()) : null;
+      providers.push({
+        relPath: f.relPath,
+        folder: typeof p.folder === 'string' ? p.folder.trim() : '',
+        folderUid: typeof p.folderUid === 'string' && p.folderUid.trim() ? p.folderUid.trim() : null,
+        path,
+        fromStructure: p.options?.foldersFromFilesStructure === true,
+      });
+      n += 1;
+    }
+  }
+  summary.discovered.dashboardProviders = (summary.discovered.dashboardProviders || 0) + n;
+}
+
+// The Grafana sidecar's folder a chart template's documents state: per document, the title (the
+// last segment of `grafana_folder` / `k8s-sidecar-target-directory`, an annotation or a label; a
+// value the chart fills in at deploy time says nothing), its own data keys and the chart files it
+// ships (.Files.Glob "<pattern>" / .Files.Get "<path>", relative to the chart's root). The value is
+// read as YAML reads it (sidecarValue); one that does not read as a single scalar says nothing.
+function helmSidecarFolders(f) {
+  const out = [];
+  const chartRoot = f.relPath.includes('/templates/') ? f.relPath.slice(0, f.relPath.indexOf('/templates/'))
+    : f.relPath.startsWith('templates/') ? '' : null;
+  for (const doc of f.content.split(/^---\s*$/m)) {
+    const m = /^([ \t]*)["']?(grafana_folder|k8s-sidecar-target-directory)["']?[ \t]*:(.*)$/m.exec(doc);
+    if (!m) continue;
+    const raw = sidecarValue(m[3], doc.slice(m.index + m[0].length).split(/\r?\n/).slice(1), m[1].length);
+    if (!raw || raw.includes('{{') || raw.includes('$')) continue;
+    const title = raw.replace(/\/+$/, '').split('/').pop().trim();
+    if (!title) continue;
+    const keys = extractConfigMapData(doc).map((b) => b.key);
+    const files = chartRoot === null ? [] : [...doc.matchAll(/\.Files\.(Glob|Get)\s+"([^"]+)"/g)].map((x) => ({ pattern: x[2], chartRoot }));
+    out.push({ title, source: `${f.relPath} (ConfigMap ${m[2]})`, keys, files });
+  }
+  return out;
+}
+
+// A sidecar annotation's value as YAML reads it, from the text after its key's colon (`rest`) and
+// the lines below it (`below`; `indent`, the key's own): a double-quoted value's content (its
+// escapes read as JSON's), a single-quoted one's (`''` a quote), a plain one up to a comment
+// (` #…`); a block scalar (`|`, `>` with its indicators) or a plain value on the lines below, from
+// the lines indented past the key — a folded one joined by spaces, a literal one only when it is one
+// line. Null for anything else (a flow collection, an anchor or alias, a tag, text after a closing
+// quote): no claim is made from a value that does not read as one scalar.
+function sidecarValue(rest, below, indent) {
+  const text = String(rest).trim();
+  const stripComment = (s) => s.replace(/(^|[ \t])#.*$/, '').trim();
+  const following = () => {
+    const lines = [];
+    for (const line of below) {
+      if (!line.trim()) { if (lines.length) break; continue; }
+      if ((line.length - line.trimStart().length) <= indent) break;
+      lines.push(line.trim());
+    }
+    return lines;
+  };
+  if (text === '' || text.startsWith('#')) {
+    const lines = following().map(stripComment).filter(Boolean);
+    return lines.length && !/^["'|>[{&*!%@`]/.test(lines[0]) ? lines.join(' ') : null;
+  }
+  if (text[0] === '"') {
+    const m = /^"((?:[^"\\]|\\.)*)"(.*)$/.exec(text);
+    if (!m || stripComment(m[2]) !== '') return null;
+    try { return JSON.parse(`"${m[1]}"`).trim(); } catch { return null; }
+  }
+  if (text[0] === "'") {
+    const m = /^'((?:[^']|'')*)'(.*)$/.exec(text);
+    if (!m || stripComment(m[2]) !== '') return null;
+    return m[1].replace(/''/g, "'").trim();
+  }
+  if (/^[|>]/.test(text)) {
+    if (!/^[|>](?:[+-]?[1-9]?|[1-9][+-]?)$/.test(stripComment(text))) return null;
+    const lines = following();
+    if (!lines.length) return null;
+    return text[0] === '>' ? lines.join(' ') : lines.length === 1 ? lines[0] : null;
+  }
+  if (/^[[{&*!%@`]/.test(text)) return null;
+  return stripComment(text) || null;
+}
+
+// A glob of .Files.Glob (`*` within a segment, `**` across them) as a test on a chart-relative path.
+function chartGlob(pattern) {
+  const p = String(pattern);
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '*' && p[i + 1] === '*') {
+      i += 1;
+      if (p[i + 1] === '/') { i += 1; re += '(?:.*/)?'; } else re += '.*';
+    } else if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+}
+
+// Each crawled dashboard file the repository provisions into a folder, placed there. A provider
+// places a dashboard only in a container that reads both: the compose service mounting the
+// provider file into its Grafana's provisioning folder (<provisioning>/dashboards/<file>) mounts the
+// dashboard under the provider's path too. A provider file nothing mounts, or mounted into another
+// service than the dashboard, provisions nothing there; a dashboard two providers of one container
+// read (the same path, or one inside the other: Grafana reads a provider's sub-folders too) is
+// provisioned twice, and one two containers place differently has no one folder — none, never a guess.
+function resolveDashboardFolders(dashboards, { providers, mounts, helmFolders }, summary) {
+  const place = (d, title, folderUid, source) => {
+    d.folder = title;
+    d.params = { ...(d.params || {}), folderTitle: title, ...(folderUid ? { folderUid } : {}), folderSource: source };
+  };
+  // Per compose service: its mounts, and the providers its Grafana reads.
+  const services = new Map();
+  for (const m of mounts) {
+    if (!services.has(m.service)) services.set(m.service, { mounts: [], provisioning: m.provisioning });
+    services.get(m.service).mounts.push(m);
+  }
+  for (const s of services.values()) {
+    s.providers = providers.filter((p) => s.mounts.some((m) => {
+      const at = mountedAt(p.relPath, m);
+      return at !== null && at.slice(0, at.lastIndexOf('/')) === `${s.provisioning}/dashboards`;
+    }));
+  }
+  const placementOf = (p, at) => (p.fromStructure
+    ? (() => { const under = at.slice(p.path.length + 1).split('/'); return { title: under.length > 1 ? under[under.length - 2] : 'General', folderUid: null, source: p.relPath }; })()
+    : { title: p.folder || 'General', folderUid: p.folderUid, source: p.relPath });
+  for (const d of dashboards) {
+    const relPath = typeof d.source === 'string' && d.source.startsWith('file://') ? d.source.slice('file://'.length) : null;
+    if (!relPath || relPath.includes('#') || d.params?.folderTitle) continue;
+    // A chart's sidecar ConfigMap shipping this file.
+    const shipped = helmFolders.flatMap((h) => h.files.filter((x) => {
+      const under = x.chartRoot ? (relPath.startsWith(`${x.chartRoot}/`) ? relPath.slice(x.chartRoot.length + 1) : null) : relPath;
+      return under !== null && chartGlob(x.pattern).test(under);
+    }).map(() => h));
+    const titles = [...new Set(shipped.map((h) => h.title))];
+    if (titles.length === 1) { place(d, titles[0], null, shipped[0].source); continue; }
+    if (titles.length > 1) continue;   // two folders say they ship it: none
+    // The providers reading it, container by container.
+    const placements = [];
+    let twice = false;
+    for (const s of services.values()) {
+      for (const m of s.mounts) {
+        const at = mountedAt(relPath, m);
+        if (at === null) continue;
+        const fits = s.providers.filter((p) => p.path && (at === p.path || at.startsWith(`${p.path}/`)));
+        if (fits.length > 1) twice = true;
+        else if (fits.length === 1) placements.push(placementOf(fits[0], at));
+      }
+    }
+    const distinct = [...new Map(placements.map((x) => [`${x.title}\u0000${x.folderUid ?? ''}`, x])).values()];
+    if (twice || distinct.length !== 1) continue;
+    place(d, distinct[0].title, distinct[0].folderUid, distinct[0].source);
+  }
+  const stated = dashboards.filter((d) => d.params?.folderTitle).length;
+  if (stated) summary.discovered.dashboardFolders = stated;
+}
+
 // Compose interpolation with the variables unset: each `${VAR:-default}` or
 // `${VAR-default}` its default, any other `${…}` nothing — innermost first.
 // One pass is linear in the text: the default and the rest of a `${…}` are
@@ -3357,26 +3921,53 @@ function containerPort(entry) {
   return m ? m[1] : null;
 }
 
-// A LogQL condition: a stream selector (`{app="x"}`) that is not a metric's
-// label matcher — it opens the expression or follows an operator / paren —
-// and is followed by a line filter (`|=`, `|~`, `!=`, `!~`), a parser stage
-// (`| json`, `| logfmt`, …) or a range (`[5m]`), as `rate({app="x"}[5m])` is.
-const LOGQL_STAGE_RE = /\{[^}]*\}\s*(?:\|[=~]|![=~]|\|\s*(?:json|logfmt|pattern|regexp|unpack|unwrap|line_format|label_format|drop|keep|decolorize)\b)/;
-const LOGQL_RANGE_RE = /(?:^|[(\s,])\{[^}]*\}\s*\[/;
-function looksLikeLogQL(expr) {
-  const e = String(expr || '');
-  return LOGQL_STAGE_RE.test(e) || LOGQL_RANGE_RE.test(e);
+// LogQL the expression itself states: a stream selector (`{app="x"}`)
+// followed by a pipeline stage PromQL has no operator for — a line filter
+// (`|=`, `|~`, `|>`, `!~`, `!>`, or `!=` against a string: `!= "debug"`), a
+// parser or format stage (`| json`, `| logfmt`, …) or a label filter
+// (`| level="error"`). No Prometheus-compatible ruler can evaluate it. Never a
+// guess from a shape PromQL has too: a selector over a range
+// (`rate({app="x"}[5m])`) or before `!=` and a number or a series
+// (`up{job="x"} != 1`) is valid PromQL, and a rule about Loki written in PromQL
+// (a mixin's alerts on loki_* series) is a Prometheus rule wherever it ships.
+const LOGQL_PIPELINE_RE = /\{[^}]*\}\s*(?:\||![~>]|!=\s*["`])/;
+function statesLogQL(expr) {
+  return LOGQL_PIPELINE_RE.test(String(expr || ''));
+}
+
+// What each Grafana-managed recording rule read states (grafanaRuleFacts), by
+// its spec entry: the entry is the spec's closed RecordingRule, so the facts
+// ride beside it (observogram.grafana_rule.queries.recording_rules[<i>]).
+const GRAFANA_RECORDING_FACTS = new WeakMap();
+
+// What a Grafana-managed rule states beyond the spec, as the repository writes
+// it (sli-inference.mjs grafanaRuleFacts, given what its group states): its
+// uid, folder and group, and its condition only when the repository states
+// that whole — a node holding a value a chart fills in at deploy time (the
+// placeholder stripGoTemplate leaves: a math expression's, a query's) states
+// no condition, as a threshold that is not a number does not. Held against
+// what Grafana runs, it would read as a difference that is not there; the
+// pair says the condition went uncompared instead.
+function grafanaFactsAsWritten(rule, group) {
+  const facts = grafanaRuleFacts(rule, { folder: group.folder, folderUid: group.folderUid ?? group.folderUID, group: group.name });
+  if (!facts?.condition || !new RegExp(`\\b${HELM_VALUE}\\b`).test(facts.condition)) return facts;
+  const { condition: _notStated, ...stated } = facts;
+  return Object.keys(stated).length ? stated : null;
 }
 
 // The engine that evaluates an alert rule, in the Product registry's words
-// (spec 1.4 $defs/AlertEngine): a Grafana-managed rule by its shape
-// (`title` + `data[]`), a Loki rule by the path it ships under or by its
-// LogQL, everything else the Prometheus rule-file format — `prometheus`,
-// the default, since a rule file cannot tell a Prometheus ruler from a
-// Mimir, Thanos or VictoriaMetrics one (the backends do).
-function alertRuleEngine(rule, relPath) {
+// (spec 1.4 $defs/AlertEngine), as the rule's own source states it: a
+// Grafana-managed rule by its shape (`title` + `data[]`), a Loki rule by the
+// LogQL its expression is written in, everything else the Prometheus
+// rule-file format — `prometheus`, the default, since a rule file cannot tell
+// a Prometheus ruler from a Mimir, Thanos or VictoriaMetrics one (the backends
+// do). Never by the path a file ships under: `loki/alerts.yml` and
+// `loki-mixin.yaml` hold the PromQL rules a Prometheus evaluates about Loki,
+// and a comparison parks a `loki` rule as not checked (no tool reads a Loki
+// ruler), so a guess would hide a rule missing live.
+function alertRuleEngine(rule) {
   if (isGrafanaManagedRule(rule)) return 'grafana';
-  if (/(^|[/_.-])loki([/_.-]|$)/i.test(String(relPath || '')) || looksLikeLogQL(alertRuleExpr(rule))) return 'loki';
+  if (statesLogQL(alertRuleExpr(rule))) return 'loki';
   return 'prometheus';
 }
 
@@ -3384,20 +3975,21 @@ function alertRuleEngine(rule, relPath) {
 // carries no `expr`; its queries sit in `data[].model`, one entry per
 // datasource query or expression node. The model is a mapping in Grafana's
 // own export and a JSON string in files written by other tooling (the HTTP
-// provisioning API, Terraform). Returns the first query model's `expr`, or
-// null when the rule states none. Throws when a model is a JSON string that
-// does not parse: that rule cannot be read, the caller decides what to do.
+// provisioning API, Terraform). Returns the query the live reader reads too
+// (sli-inference.mjs alertRuleExpr: the first node that is a query, never an
+// expression step), or null when the rule has no query node. Throws when a
+// model is a JSON string that does not parse: that rule cannot be read, the
+// caller decides what to do.
 function grafanaRuleExpr(rule) {
   if (!Array.isArray(rule?.data)) return null;
   for (const item of rule.data) {
-    let model = item?.model;
-    if (typeof model === 'string') {
-      try { model = JSON.parse(model); }
-      catch (e) { throw new Error(`model JSON could not be parsed (${e.message})`, { cause: e }); }
-    }
-    if (model && typeof model.expr === 'string' && model.expr.trim()) return model.expr;
+    if (typeof item?.model !== 'string') continue;
+    try { JSON.parse(item.model); }
+    catch (e) { throw new Error(`model JSON could not be parsed (${e.message})`, { cause: e }); }
   }
-  return null;
+  const expr = alertRuleExpr({ data: rule.data });
+  // alertRuleExpr stands a ref (`A`) in for a rule with no query node: that is no query.
+  return expr && !rule.data.some(n => n?.refId === expr) ? expr : null;
 }
 
 // An alerting rule as the ruler lists it. Its labels: the labels its group
@@ -3595,6 +4187,10 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
   // rules survive, and one warning per file says how many were lost and why.
   let ruleCount = 0;
   const skipped = [];
+  // Grafana's alert-rule export written as JSON reads as the YAML one (a
+  // ConfigMap key reaches here as `<file>#<key>.json`); JSON states its
+  // numbers and booleans as typed, so it is its own as-written reading.
+  const json = /\.json$/i.test(f.relPath);
   // The same file read with numbers and booleans as written, only once a
   // rule's labels or annotations hold one (asListed) — and once: a second
   // reading of a text the walk has already been charged for, so apart from
@@ -3602,11 +4198,11 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
   let written = null;
   const writtenDocs = () => {
     if (written === null) {
-      try { written = apartFromAliasBudget(() => parseYamlDocs(f.content, { asWritten: true })); } catch { written = []; }
+      try { written = json ? [JSON.parse(f.content)] : apartFromAliasBudget(() => parseYamlDocs(f.content, { asWritten: true })); } catch { written = []; }
     }
     return written;
   };
-  parseYamlDocs(f.content).forEach((obj, d) => {
+  (json ? [JSON.parse(f.content)] : parseYamlDocs(f.content)).forEach((obj, d) => {
     const groups = groupsOf(obj);
     if (!groups) return;
     // A PrometheusRule resource's rules run on the Prometheus (or the Thanos
@@ -3704,6 +4300,9 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     noteResourceRule(summary, from.resource, f.relPath, `record ${name}`, key);
     if (ruleCopy(summary, f.relPath, key, name).copy) return;
     recordingRules.push(entry);
+    // A Grafana-managed recording rule says so beside the entry (no ruler a live read lists holds it).
+    const facts = grafanaFactsAsWritten(rule, group);
+    if (facts) GRAFANA_RECORDING_FACTS.set(entry, facts);
     evidence[id] = origin;
     summary.discovered.recordingRules++;
   } else if (rule.alert || rule.title) {
@@ -3722,7 +4321,11 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     }
     const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
     const listed = asListed(rule, group, twin, mergeGroup);
-    const read = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
+    const base = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
+    // A Grafana-managed rule's uid, folder (the group's, a title), group and
+    // condition (its threshold): what the spec's AlertRule cannot hold.
+    const facts = grafanaFactsAsWritten(rule, group);
+    const read = facts ? { ...base, grafana: facts } : base;
     const candidate = burnCandidateFromAlertRule(read);
     // A wait its window could not take — no spec Duration, a value a chart
     // or a deploy step fills in — is said where the rule binds an SLO
@@ -3734,7 +4337,7 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // Written the same in another place, for the same engine: declared as
     // often as one place holds it (ruleCopy); the place a copy is left out of
     // still speaks for it (`copies`, buildLifecycleAnnotations).
-    const ruleEngine = engine && !looksLikeLogQL(alertRuleExpr(read)) ? engine : alertRuleEngine(read, f.relPath);
+    const ruleEngine = engine && !statesLogQL(alertRuleExpr(read)) ? engine : alertRuleEngine(read, f.relPath);
     const key = ruleCopyKey('alert', ruleEngine, alertName, {
       expr: alertRuleExpr(read), wait: read.for, labels: read.labels, uid: isGrafanaManagedRule(read) ? read.uid : null,
     });
@@ -3758,7 +4361,7 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       // the guess from its path. A resource's rule in LogQL is a Loki ruler's
       // (Grafana Alloy loads PrometheusRule resources into one): its own
       // expression says so (alertRuleEngine).
-      ...(engine && !looksLikeLogQL(alertRuleExpr(read)) ? { engine } : {}),
+      ...(engine && !statesLogQL(alertRuleExpr(read)) ? { engine } : {}),
       // Which resource it was read from, and the places its left-out copies stood.
       resource: from.resource ?? null,
       copies: new Set(),
@@ -4272,7 +4875,7 @@ function dashboardId(dash, dashboards) {
   return dashboardSpecId(dash) ?? `dash-${dashboards.length + 1}`;
 }
 
-function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary) {
+function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary, provisioned = null) {
   const dash = JSON.parse(f.content);
   const id = dashboardId(dash, dashboards);
   const panels = dashboardPromqlQueries(dash);
@@ -4294,11 +4897,14 @@ function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summar
       kind: 'grafana',
       ...(declaredSchemaVersion !== null ? { schemaVersion: declaredSchemaVersion } : {}),
     },
-    folder: dash.tags?.[0] || 'crawled',
+    // The folder the repository provisions it into, where it says so (a sidecar ConfigMap here;
+    // provider files after the walk, resolveDashboardFolders); else a guess from its first tag.
+    folder: provisioned?.title || dash.tags?.[0] || 'crawled',
     source: `file://${f.relPath}`,
     params: {
       title: dash.title || id,
       uid: dash.uid || '',
+      ...(provisioned ? { folderTitle: provisioned.title, folderSource: provisioned.source } : {}),
       panel_count: countDashboardPanels(dash.panels),
       query_panel_count: panels.length,
       panels,

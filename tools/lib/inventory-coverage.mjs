@@ -198,6 +198,10 @@ export function evaluateInventoryGate(gate, inventory, add) {
       if (Number.isInteger(gate.maxDown) && c.down.length > gate.maxDown) add(`inventory.${k}.down`, `${c.down.length} inventoried ${c.title}${c.down.length === 1 ? '' : 's'} targeted but down (max ${gate.maxDown}): ${few(c.down)}`);
       if (Number.isInteger(gate.maxUnexpected) && c.unexpected.length > gate.maxUnexpected) add(`inventory.${k}.unexpected`, `${c.unexpected.length} ${c.title}${c.unexpected.length === 1 ? '' : 's'} answering but not in the inventory (max ${gate.maxUnexpected}): ${few(c.unexpected)}`);
       if (typeof gate.minCoveragePct === 'number' && c.coveragePct !== null && c.coveragePct < gate.minCoveragePct) add(`inventory.${k}.coverage`, `${c.up}/${c.expected} ${c.title}${c.expected === 1 ? '' : 's'} up = ${c.coveragePct}% (min ${gate.minCoveragePct}%)`);
+      // A kind the gate names by name and the site expects none of has no
+      // coverage figure: the gate cannot pass on it (an absent figure never
+      // passes). Unnamed, such a kind is left out, as before.
+      if (typeof gate.minCoveragePct === 'number' && c.coveragePct === null && Array.isArray(gate.kinds) && gate.kinds.includes(k)) add(`inventory.${k}.coverage`, `no ${c.title} is expected by the site, so there is no coverage figure (min ${gate.minCoveragePct}%)`);
     } else {
       // a floor is a declared expectation: below it breaches whatever else the gate says
       for (const b of c.below) add(`inventory.${k}.min`, `${b.count} ${c.title}${b.count === 1 ? '' : 's'} on ${b.parent} (min ${b.min})`);

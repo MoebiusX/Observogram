@@ -130,12 +130,15 @@ function liveRowHtml(s, primary) {
   const sentenceHtml = sentence.includes('\u0000')
     ? escapeHtml(sentence).replace('\u0000', termHtml('vantage', 'live side'))
     : escapeHtml(s.sentence);
-  // No leading newline: the simple layout's bytes stay those of its first release.
+  // No leading newline: the simple layout's bytes stay those of its first release. The reason the
+  // live side gave nothing, and a Run that stopped since, ride on the row's closing line, so a state
+  // without them keeps its bytes.
+  const below = `${s.reason ? `<p class="ov-live__reason og-muted">${escapeHtml(s.reason)}</p>` : ''}${s.stopped ? `<p class="ov-live__reason ov-live__reason--warn">${escapeHtml(s.stopped)}</p>` : ''}`;
   return `<div class="ov-live__row">
         ${pill}
         <p class="ov-live__sentence">${sentenceHtml}</p>
         ${button}
-      </div>
+      </div>${below}
       ${s.error ? `<div class="og-callout og-callout--warn ov-live__error" role="status">The check could not start: ${escapeHtml(s.error)}</div>` : ''}
       ${s.cadence ? `<p class="ov-live__cadence og-muted">${escapeHtml(s.cadence)}</p>` : ''}`;
 }
@@ -395,11 +398,12 @@ function discoverColHtml(L, S = null, C = null) {
 // the signals show — the alignment as a ring, the four counts, the promises
 // that hold, and the still-true row with its Check button.
 function statusStripHtml(g, s, f) {
-  const partial = f?.known && Array.isArray(f.partial) && f.partial.length ? f.partial : [];
+  // The families live could not read are named even when the counts are withheld (nothing compared).
+  const partial = Array.isArray(f?.partial) && f.partial.length ? f.partial : [];
   const tone = !s ? 'neutral'
     : s.status === 'unreachable' ? 'fail'
       : (s.status === 'never' || s.pending) ? 'neutral'
-        : (s.stale || partial.length) ? 'warn' : 'ok';
+        : (s.stale || partial.length || s.status === 'nothing') ? 'warn' : 'ok';
   const parts = [];
   if (g?.basis === 'live') parts.push(['source', 'Graded against live']);
   else if (g?.basis === 'recording') parts.push(['source', 'Graded against a recording']);
@@ -407,8 +411,9 @@ function statusStripHtml(g, s, f) {
   // A letter over fewer criteria says so beside its source ("on 6 of 7 criteria").
   if (g?.criteria) parts.push(['criteria', String(g.criteria).replace(/^Graded /, '')]);
   if (s?.running) parts.push(['when', 'checking now…']);
-  else if (s?.ago) parts.push(['when', `checked ${s.ago}`]);
+  else if (s?.ago) parts.push(['when', `${s.tried ? 'tried' : 'checked'} ${s.ago}`]);
   else if (s?.status === 'never') parts.push(['when', 'never checked against live']);
+  if (s?.status === 'nothing' && !s.running) parts.push(['nothing', 'nothing compared']);
   if (partial.length) parts.push(['partial', `live side partial: ${partial.join(', ')} not read`]);
   if (s?.stale) parts.push(['stale', 'older than a day']);
   // The cadence rides at the end; a short screen drops it (it is a fact about
@@ -811,19 +816,29 @@ function mxCellHtml(r, col, svc, canWrite) {
     ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
     : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
   const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
-  // The live read's scope, where it has one: the environment's own, or the server's snapshot scope.
-  const scope = r.scope ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
+  // The live read's scope, where it has one: the environment's own (an older host's model may still
+  // say the server's snapshot scope). An environment with none of its own while the server has a
+  // default (the model's `defaultIgnored`; `defaultSummary` what the default reads) says the default
+  // no longer applies to it; a scope with no text prints nothing.
+  const ignoredSummary = typeof r.scope?.defaultSummary === 'string' && r.scope.defaultSummary ? r.scope.defaultSummary : null;
+  const scope = r.scope?.defaultIgnored
+    ? `<span class="ov-mx__scope ov-mx__scope--unscoped" title="${attr(`This environment has no live scope of its own. The server default${ignoredSummary ? ` (${ignoredSummary})` : ''} applied to it before; it no longer applies to an environment that exists, so its Run reads the whole estate the endpoint serves. Change → Use the server default makes it this environment's own.`)}">No live scope — the server default no longer applies here; set one</span>`
+    : typeof r.scope?.text === 'string' && r.scope.text ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
   const l = r.last;
   let grade;
+  let why = '';
   if (r.run.running) grade = '<span class="ov-mx__grade" role="status"><span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">…</span><b>Running…</b></span>';
   else {
     const letter = l.letter ? `<span class="ov-svc__letter ov-tone-${attr(l.tone)}" aria-label="Grade ${attr(l.letter)}"${l.gradeLabel ? ` title="${attr(l.gradeLabel)}"` : ''}>${escapeHtml(l.letter)}</span>` : '<span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">–</span>';
-    const what = l.state === 'checked' && l.alignmentPct !== null ? `${Math.round(l.alignmentPct)}% match`
-      : l.state === 'unreachable' ? 'Live did not answer'
-        : l.state === 'never' ? 'Not checked yet' : l.state === 'checked' ? 'Match not known' : l.word;
-    grade = `<span class="ov-mx__grade">${letter}<b>${escapeHtml(what)}</b></span>`;
+    // The model's words in place of a figure (Live did not answer, Nothing compared, …); the figure
+    // only where something was compared. A row model without them (the listing could not be read) says its word.
+    const what = l.label || (typeof l.alignmentPct === 'number' ? `${Math.round(l.alignmentPct)}% match` : l.word);
+    grade = `<span class="ov-mx__grade">${letter}<b${l.reason ? ` title="${attr(`${what} — ${l.reason}`)}"` : ''}>${escapeHtml(what)}</b></span>`;
+    // Why, beneath: the first probe error, why nothing was compared, what a reading left out. It wraps.
+    why = `${l.reason ? `<span class="ov-mx__why">${escapeHtml(l.reason)}</span>` : ''}${(Array.isArray(l.notes) ? l.notes : []).map((n) => `<span class="ov-mx__note${n.tone === 'warn' ? ' ov-mx__note--warn' : ''}">${escapeHtml(n.text)}</span>`).join('')}`;
   }
-  const when = !r.run.running && l.ago ? `<span class="ov-mx__when og-muted">${svcIcon('clock')}${escapeHtml(l.state === 'unreachable' ? `Tried ${l.ago}` : `Checked ${l.ago}`)}</span>` : '';
+  const whenText = typeof l.when === 'string' ? l.when : (l.ago ? (l.state === 'unreachable' ? `Tried ${l.ago}` : `Checked ${l.ago}`) : '');
+  const when = !r.run.running && whenText ? `<span class="ov-mx__when og-muted">${svcIcon('clock')}${escapeHtml(whenText)}</span>` : '';
   const runBtn = r.run.enabled || r.run.running
     ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(r.name)} in ${attr(r.env)}">${r.run.running ? 'Running…' : 'Run'}</button>`
     : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}" aria-label="Run ${attr(r.name)} in ${attr(r.env)}">Run</button>`;
@@ -833,7 +848,7 @@ function mxCellHtml(r, col, svc, canWrite) {
   const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`;
   return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
             <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}${scope}</div>
-            ${grade}${when}
+            ${grade}${why}${when}
             <div class="ov-mx__acts">${runBtn}${openBtn}${editBtn}</div>
           </div>`;
 }
@@ -940,16 +955,39 @@ function uploadHtml(f) {
 }
 
 // The live scope under the endpoint (formModel's `scope`): what of the estate the endpoint serves
-// is this service's — the snapshot scope's five answers, prefilled as the model says, and the hint.
+// is this service's — the snapshot scope's five answers (each said "from the server default" while
+// it holds the pre-fill), the hint, what a save would not keep, Use the server default for an
+// environment with none of its own, and the scope check's answer.
 function scopeHtml(f, v) {
   const s = f.scope;
   const fields = s.fields.map((x) => `
-              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
+              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}${x.fromDefault ? '<span class="ov-form__scope-from og-muted"> · from the server default</span>' : ''}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
   return `
           <div class="ov-form__sub ov-form__scope" role="group" aria-labelledby="ov-form-scope-l">
             <span class="ov-form__l" id="ov-form-scope-l">Live scope — what of the estate is this service's</span>${fields}
-            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>
+            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>${s.dropped ? `
+            <span class="ov-form__scope-warn">${escapeHtml(s.dropped)}</span>` : ''}${s.offerDefault ? `
+            <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-scope-default">Use the server default</button>` : ''}
+            ${scopeCheckBlockHtml(s.check)}
           </div>`;
+}
+
+// The deployment surface this environment reads alone (formModel's `surface`): the choices, off by
+// default, and what the choice means. A select with data-field is wired as every answer is.
+function surfaceHtml(f) {
+  const s = f.surface;
+  return `
+            <label class="ov-form__f ov-form__surface"><span class="ov-form__l">${escapeHtml(s.label)}</span><select class="og-input" data-field="surface" aria-describedby="ov-form-surface-hint">${s.options.map((o) => `<option value="${attr(o.id)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select>
+              <span class="ov-form__hint og-muted" id="ov-form-surface-hint">${escapeHtml(s.hint)}</span></label>`;
+}
+
+// The scope check's answer (formModel's scope.check, overview-model.mjs scopeCheckView): always drawn,
+// so the host can replace it in place when the answer arrives — the form is not drawn again while
+// the person types.
+export function scopeCheckBlockHtml(check) {
+  const warnings = Array.isArray(check?.warnings) ? check.warnings : [];
+  const notes = Array.isArray(check?.notes) ? check.notes : [];
+  return `<div class="ov-form__scope-check" role="status">${warnings.length ? `<ul class="ov-form__scope-warn">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}${notes.map((n) => `<span class="ov-form__hint og-muted">${escapeHtml(n)}</span>`).join('')}</div>`;
 }
 
 // A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
@@ -1141,7 +1179,7 @@ function svcFormHtml(f) {
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="${attr(f.branch?.placeholder || 'branch (default)')}" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
-            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' && f.kind.kind !== 'pack' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}
+            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' && f.kind.kind !== 'pack' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}${f.surface?.shown ? surfaceHtml(f) : ''}
             ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}${auth}
           </div>
         </li>
@@ -1164,6 +1202,17 @@ function svcFormHtml(f) {
         <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
       </div>
     </form>`;
+}
+
+// The Run's toast from its model (overview-model.mjs runToastModel): the renderer writes the sign. A
+// whole reading is the toast it always was; each part of what a reading leaves out only when it holds.
+export function runToastText(m) {
+  const parts = [
+    m.read, m.scoped, m.notApplied, !m.unreachable && m.letter ? `grade ${m.letter}` : '',
+    m.unreachable || (m.nothing ? 'nothing compared' : (typeof m.pct === 'number' && Number.isFinite(m.pct) ? `${Math.round(m.pct)}% matches live` : '')),
+    m.livePart, m.notComparable ? 'not comparable with the check before' : '', m.filterWarn,
+  ].filter(Boolean);
+  return `${m.head}: ${parts.join(', ')}.`;
 }
 
 export function serviceListHtml(list, form, ov = {}) {
@@ -1312,6 +1361,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
     'ov-form-pack-repo': () => ov.pickPackFile?.('repo'),
     'ov-form-pack-live': () => ov.pickPackFile?.('live'),
+    // An environment with no live scope of its own: the server default, made its own (the fields fill in).
+    'ov-form-scope-default': () => ov.useServerDefaultScope?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });

@@ -265,7 +265,7 @@ export function compareBranches(graphA, graphB) {
   const declaredTotal = declared.length;
   const integrityMean = declaredTotal
     ? round(declared.reduce((sum, branch) => sum + branch.integrity, 0) / declaredTotal, 4)
-    : 1;
+    : null;
 
   const rollup = {
     intact: branches.filter((branch) => branch.verdict === 'intact').length,
@@ -275,7 +275,8 @@ export function compareBranches(graphA, graphB) {
     declaredTotal,
     total: branches.length,
     integrityMean,
-    integrityPct: Math.round(integrityMean * 100),
+    // No declared commitment: no integrity figure (an empty set is not 100 % intact).
+    integrityPct: integrityMean === null ? null : Math.round(integrityMean * 100),
   };
   // Additive ladder rollup over the same declared branches. integrityMean
   // and the intact/partial/broken/undeclared counts above are the scored
@@ -427,8 +428,12 @@ function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB
     ladderPossible += missing.weight;
   }
 
+  // A declared branch always counts its root (an SLO or SLI, always
+  // live-verifiable): possible is never 0 here.
   const integrity = possible === 0 ? 1 : round(achieved / possible, 4);
-  const ladderIntegrity = ladderPossible === 0 ? 1 : round(ladderAchieved / ladderPossible, 4);
+  // The ladder leaves out what the vantage could not look at: a branch whose
+  // every node went unobserved has no ladder figure (null), never 100 %.
+  const ladderIntegrity = ladderPossible === 0 ? null : round(ladderAchieved / ladderPossible, 4);
   const counts = {
     aligned: nodeVerdicts.filter((node) => node.status === 'aligned').length,
     drifted: nodeVerdicts.filter((node) => node.status === 'drifted').length,
@@ -459,7 +464,7 @@ function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB
     integrityPct: Math.round(integrity * 100),
     ladderVerdict,
     ladderIntegrity,
-    ladderIntegrityPct: Math.round(ladderIntegrity * 100),
+    ladderIntegrityPct: ladderIntegrity === null ? null : Math.round(ladderIntegrity * 100),
     confidence: branchConfidence(branchA, branchB),
     edgeProvenance: combineProvenance(branchA.edgeProvenance, branchB?.edgeProvenance),
     missingRoles: branchA.missingRoles || [],
@@ -924,6 +929,14 @@ function livenessContext(liveGraph) {
     probesSucceeded: annotationSet(ann['mcp.probesSucceeded']),
     probesEmpty: annotationSet(ann['mcp.probesEmpty']),
     probeError: (family) => text(`mcp.probeErrors.${family}`),
+    // Why an unsupported family was not read when its store answered it
+    // keeps no such thing (mcp.probeUnsupported.<family>, the fetcher's P6
+    // JSON); null when it is simply not offered.
+    notServedReason: (family) => {
+      const raw = text(`mcp.probeUnsupported.${family}`);
+      if (!raw) return null;
+      try { const v = JSON.parse(raw); return typeof v?.reason === 'string' && v.reason ? v.reason : null; } catch { return null; }
+    },
     version: (product) => text(`mcp.versions.${product}`),
     // Names the MCP metric inventory attested (non-virtual METRIC-* nodes):
     // a declared metric can be in Pack B yet outside a branch whose
@@ -990,6 +1003,8 @@ function probeFamilyDetail(family, liveness) {
     const error = liveness.probeError(family);
     return `probe family ${family} failed${error ? ` (${error})` : ''}`;
   }
+  const notServed = liveness.notServedReason(family);
+  if (notServed) return `probe family ${family} not served here (${notServed}) — not counted as a failure`;
   return `probe family ${family} not exposed by this MCP tier`;
 }
 
@@ -1308,16 +1323,19 @@ function branchLadderVerdict(nodeVerdicts, counts, hasMissingLoadBearingRole) {
 
 function ladderRollup(declared) {
   const count = (verdict) => declared.filter((branch) => branch.ladderVerdict === verdict).length;
-  const integrityMean = declared.length
-    ? round(declared.reduce((sum, branch) => sum + branch.ladderIntegrity, 0) / declared.length, 4)
-    : 1;
+  // The mean of the branches that have a ladder figure; null when none has
+  // one (no declared branch, or none the vantage could look at).
+  const measured = declared.map((branch) => branch.ladderIntegrity).filter((v) => typeof v === 'number' && Number.isFinite(v));
+  const integrityMean = measured.length
+    ? round(measured.reduce((sum, v) => sum + v, 0) / measured.length, 4)
+    : null;
   return {
     healthy: count('healthy'),
     degraded: count('degraded'),
     broken: count('broken'),
     unobserved: count('unobserved'),
     integrityMean,
-    integrityPct: Math.round(integrityMean * 100),
+    integrityPct: integrityMean === null ? null : Math.round(integrityMean * 100),
   };
 }
 

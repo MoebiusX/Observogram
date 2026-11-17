@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import {
   LIVE_STAGES, LIVE_KINDS, STAGE_STATES, SCOPE_LIMITS, SNAPSHOT_LIMITS, SCOPE_FAMILIES,
   stagesFor, stageNoun, fetchPlan, normalizeScope, scopeIsEmpty, scopeAnnotations, scopeOf, inScope, scopeReason, folderUidOf, ruleGroupOf,
+  excludeProbes, excludedBy,
 } from './lib/live-fetch.mjs';
 import {
   CAPABILITIES, capabilityInventory, probeCandidates, capabilityTool, candidateTool, productAttestedByTool,
@@ -475,11 +476,13 @@ async function snapshotOf(tools, { scope = null, fakeOpts = {}, mcpAuth = null, 
   return { fake, records, fetched, pack };
 }
 
-// A pack with every clock masked (the fetcher's own instants).
+// A pack with every clock masked (the fetcher's own instants, the first time
+// a not-served family was seen included).
 function masked(pack) {
   const out = JSON.parse(JSON.stringify(pack));
   for (const k of Object.keys(out.metadata.annotations)) {
     if (k === 'mcp.fetchStartedAt' || k.startsWith('mcp.observedAt.')) out.metadata.annotations[k] = '<time>';
+    if (k.startsWith('mcp.probeUnsupported.')) out.metadata.annotations[k] = JSON.stringify({ ...JSON.parse(out.metadata.annotations[k]), since: '<time>' });
   }
   return out;
 }
@@ -536,9 +539,13 @@ test('the mock-MCP golden: the snapshot pack is byte-identical to snapshot.pack.
   assert.deepEqual(JSON.parse(ann['observogram.live.scope']), { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, appliesTo: { metricPrefixes: ['metric'], folderUids: [] } });
   assert.deepEqual(JSON.parse(ann['observogram.scope.metric']), { by: 'prefix', values: ['alertmanager_', 'up'] });
   // The recorded Alertmanager status is scrubbed of its configuration: the
-  // routes stage is a gap, named and parked.
+  // routes are not served on that tier (A16) — a gap, named and parked, and
+  // the family unsupported, never failed.
   assert.deepEqual(JSON.parse(ann['observogram.live.gaps']).map((g) => g.stage), ['alerting_routes']);
-  assert.match(ann['observogram.unobserved.alert_route'], /^the alerting routes tool got no answer/);
+  assert.equal(ann['observogram.unobserved.alert_route'], 'alertmanager_status: the Alertmanager status carries no configuration — the alerting routes are not served here; not counted as a failure');
+  assert.equal(ann['mcp.probesUnsupported'], 'alerting_routes');
+  assert.equal(ann['mcp.probesFailed'], '');
+  assert.equal(ann['mcp.probeErrors.alerting_routes'], undefined, 'an unsupported family carries no probe error');
   assert.ok(!JSON.stringify(pack).includes(TOKEN), 'no token in the pack');
   // Real identities: the crawler's dashboard ids.
   assert.deepEqual(pack.spec.dashboards.map((d) => d.id).sort(), ['a--b', 'd-3b5d5c3712955042212316173ccf37be', 'd-9xyz-abc', 'node-exporter-full', 'orders-main']);
@@ -786,16 +793,99 @@ test('the exclude patterns: names dropped after the prefixes and before the cap,
   const notAm = all.filter((n) => !n.startsWith('alertmanager_'));
   assert.deepEqual(aloneLast.get('metric_names').counts, { listed: all.length, kept: notAm.length, excluded: all.length - notAm.length });
   assert.deepEqual(JSON.parse(alone.pack.metadata.annotations['observogram.scope.metric']), { by: 'prefix', values: [], exclude: ['^alertmanager_'] });
-  // Refused: unanchored at normalizeScope; a pattern that crawls (polynomial backtracking, no group, so the
-  // static half lets it through) at the timed half — timedExcludeErrors, which the server runs before a job
-  // starts and the fetcher runs again as its backstop, in the shape of normalizeScope's own errors.
+  // Refused: unanchored, at normalizeScope and in the fetch alike (the shape every release refused); a pattern
+  // whose steps over a 256-character name pass the bound at the static half, before anything is timed — and
+  // timedExcludeErrors, which the server runs on a start, the scope check and PATCH, refuses it so too.
   await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricExclude: ['up'] } }), /scope\.metricExclude\[0\] "up" is not anchored \(an exclude pattern starts with \^\)/);
   const SLOW = '^a*a*a*a*b$';
-  assert.deepEqual(normalizeScope({ metricExclude: [SLOW] }).errors, [], 'the static half admits it');
+  const WHY = 'may be too slow to match (testing a 256-character name can take more than 16 million steps)';
+  const TOO_SLOW = (i, p) => `scope.metricExclude[${i}] "${p}" ${WHY}`;
+  assert.deepEqual(normalizeScope({ metricExclude: [SLOW] }).errors, [TOO_SLOW(0, SLOW)], 'the static half bounds its work');
   assert.deepEqual(timedExcludeErrors(['^alertmanager_', '^app_event_\\d+_total$']), []);
   assert.deepEqual(timedExcludeErrors([]), []);
-  assert.deepEqual(timedExcludeErrors(['^go_', SLOW]), [`scope.metricExclude[1] "${SLOW}" is too slow to match (it crawls over a 256-character name)`]);
-  await assert.rejects(fetchMcp({ mcpUrl: URL_, transport: fakeMcp(fullTools()).transport, mode: 'snapshot', scope: { metricExclude: [SLOW] } }), new RegExp(`^TypeError: fetchMcp: scope\\.metricExclude\\[0\\] "\\${SLOW.replace(/[*$]/g, (c) => `\\${c}`)}" is too slow to match`));
+  assert.deepEqual(timedExcludeErrors(['^go_', SLOW]), [TOO_SLOW(1, SLOW)]);
+  // A stored scope holding one — a saved check's, an environment's, kept from before the bound — reaches the fetch:
+  // the read goes on without that pattern, and the metric stage and the pack's live scope say which and why; the
+  // rest of the scope applies, and the record lists only what was applied.
+  const stored = await snapshotOf(fullTools(), { scope: { metricPrefixes: ['alertmanager_'], metricExclude: [SLOW, '^alertmanager_cluster_'] } });
+  const notApplied = `exclude pattern "${SLOW}" not applied — it ${WHY}`;
+  const storedStage = new Map(stored.records.map((r) => [r.stage, r])).get('metric_names');
+  assert.ok(storedStage.message.startsWith(`${notApplied}; excluded `), storedStage.message);
+  assert.ok(storedStage.counts.excluded > 0, 'the pattern that passes is applied');
+  const storedScope = JSON.parse(stored.pack.metadata.annotations['observogram.live.scope']);
+  assert.deepEqual([storedScope.metricExclude, storedScope.notApplied], [['^alertmanager_cluster_'], [notApplied]]);
+  assert.deepEqual(JSON.parse(stored.pack.metadata.annotations['observogram.scope.metric']), { by: 'prefix', values: ['alertmanager_'], exclude: ['^alertmanager_cluster_'] });
+});
+
+test('an exclude pattern never stalls the thread: its steps over a 256-character name are bounded where new input is parsed — four wildcards that take the same characters, long chains of optional atoms or alternatives, a class of an astral character repeated, a backreference are refused; three wildcards pass, a literal ending counted by where it can start; a stored scope loads whatever it holds; the timed half times names the pattern itself opens; a name past the bound is never matched, by the fetcher and the diff alike', async () => {
+  // A refused value is quoted as normalizeScope quotes it (cut at 60 characters).
+  const WHY = 'may be too slow to match (testing a 256-character name can take more than 16 million steps)';
+  const TOO_SLOW = (p) => [`scope.metricExclude[0] ${JSON.stringify(p.length > 60 ? `${p.slice(0, 60)}…` : p)} ${WHY}`];
+  // The pattern the review found: every adversarial id fails at its first character, so the clock timed nothing,
+  // and one declared 24-character name of q's stalled the scope check for seconds.
+  const Q = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
+  // The one the second review found: a class of one astral character is two UTF-16 units that no sampled
+  // character was, so its set was empty, two empty sets counted as apart, and the timed half never returned.
+  const ASTRAL = `^${'[😀]+'.repeat(12)}$`;
+  const t0 = performance.now();
+  assert.deepEqual(normalizeScope({ metricExclude: [Q] }).errors, TOO_SLOW(Q));
+  assert.deepEqual(timedExcludeErrors([Q]), [`scope.metricExclude[0] "${Q}" ${WHY}`], 'never timed: its time has no bound to time within');
+  assert.deepEqual(normalizeScope({ metricExclude: [ASTRAL] }).errors, TOO_SLOW(ASTRAL));
+  assert.deepEqual(timedExcludeErrors([ASTRAL]), [`scope.metricExclude[0] ${JSON.stringify(ASTRAL)} ${WHY}`]);
+  assert.ok(performance.now() - t0 < 1000, 'refused at once');
+  for (const p of ['^.*:.*:.*:.*$', '^[a-z]*[a-z]*[a-z]*[a-z]*x$', `^${'a?'.repeat(24)}${'a'.repeat(24)}$`, `^${'(?:a|aa)'.repeat(24)}b`, `^${'a?'.repeat(21)}${'a'.repeat(150)}$`]) assert.deepEqual(normalizeScope({ metricExclude: [p] }).errors, TOO_SLOW(p), p);
+  assert.deepEqual(normalizeScope({ metricExclude: ['^(a)\\1'] }).errors, ['scope.metricExclude[0] "^(a)\\\\1" refers back to a group (a backreference has no bound on its work)']);
+  // What people write passes: one quantifier, quantifiers apart by a character the one before cannot take, two or
+  // three that share (every recording rule's name, `level:metric:operation`), a literal ending of any length.
+  const fine = ['^go_', '^demo_event_(?:\\d+|blank)_total$', '^app_event_\\d+_total$', '^a{2,5}_', '^.*_bucket$', '^[a-z]+_[a-z]+_[a-z]+_total$', '^.*_.*_total$', '^kube_.*_info$', '^go_|process_', '^(?=go_)', '^[^_]*_[^_]*_total$',
+    '^.*:.*:.*$', '^.*_.*_.*_total$', '^.*grpc.*server.*$', '^.*_.*_.*_seconds_bucket$', '^.*grpc.*server.*handled.*$'];
+  assert.deepEqual(normalizeScope({ metricExclude: fine }).errors, []);
+  assert.deepEqual(timedExcludeErrors(fine), []);
+  // A stored scope (a saved check's, an environment's, a pack's record) reads by the rule earlier releases had: the
+  // bound and the backreference refuse new input only, never a scope saved before them — the fetch reads without
+  // such a pattern and says so. The shape every release refused still refuses.
+  for (const p of [Q, ASTRAL, '^(a)\\1', '^.*:.*:.*:.*$']) {
+    assert.deepEqual(normalizeScope({ metricExclude: [p] }, { stored: true }), { scope: { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [p], ruleGroups: [] }, errors: [] }, p);
+  }
+  assert.deepEqual(normalizeScope({ metricExclude: ['up'] }, { stored: true }).errors, ['scope.metricExclude[0] "up" is not anchored (an exclude pattern starts with ^)']);
+  // The timed half's names: each opens with the literal text the pattern opens with, beside the four adversarial ids.
+  const probes = excludeProbes('^demo_event_(?:\\d+|blank)_total$');
+  assert.ok(probes.length > 4 && probes.slice(4).every((n) => n.startsWith('demo_event_') && n.length === 256), probes.map((n) => n.slice(0, 14)));
+  assert.ok(excludeProbes(Q).includes(`${'q'.repeat(255)}\n`), 'a name of the pattern\'s own character');
+  assert.deepEqual(excludeProbes(Q).slice(0, 4), ['a'.repeat(256), 'ab'.repeat(128), '-'.repeat(256), `${'x'.repeat(255)}!`]);
+  // A name past the bound is never dropped: the diff (inScope) and the fetcher keep it alike.
+  const long = `go_${'x'.repeat(300)}`;
+  assert.deepEqual([excludedBy([/^go_/], long), excludedBy([/^go_/], long.slice(0, 256)), excludedBy([/^go_/], 'go_x'), excludedBy([], 'go_x')], [false, true, true, false]);
+  const entry = scopeOf(scopeAnnotations({ metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: ['^go_'] })).get('metric');
+  assert.deepEqual([inScope('metric', { spec: { name: long } }, entry), inScope('metric', { spec: { name: 'go_goroutines' } }, entry)], [true, false]);
+  const metrics = recorded('metrics_label_values.json');
+  const { pack } = await snapshotOf(fullTools({ [T.metricNames]: () => ({ ...metrics, values: [...metrics.values, 'go_goroutines', long] }) }), { scope: { metricExclude: ['^go_'] } });
+  const kept = JSON.parse(pack.metadata.annotations['mcp.discovered.metric_names']);
+  assert.deepEqual([kept.includes(long), kept.includes('go_goroutines'), kept.length], [true, false, metrics.values.length + 1], 'the fetcher keeps the long name and drops the short one');
+  // A pack's recorded patterns are read back by the rule they were recorded under: an older pack keeps a
+  // pattern the bound refuses now, so the diff parks what its own read excluded (a new pack records only
+  // what its read applied); a shape no release accepted is still dropped.
+  assert.deepEqual(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [Q] }) }).get('metric'), { by: 'prefix', values: [], exclude: [Q] });
+  assert.equal(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: ['up'] }) }).get('metric'), undefined);
+  // The third review's holes: a legacy octal escape is one unit (\060 is '0', so five of them starred are five
+  // overlapping quantifiers), and a class's set is sampled at every unit it can change at, non-ASCII ones
+  // included — both refused at once; before, the first passed and its timing never returned, the second
+  // passed both halves and stalled on a name of accented letters.
+  const OCTAL = `^${String.raw`\060*`.repeat(5)}$`;
+  const NON_ASCII = `^${String.raw`[^\x00-\x7f]*[^\s\x00-\x7e]+`.repeat(3)}$`;
+  const t1 = performance.now();
+  assert.deepEqual(normalizeScope({ metricExclude: [OCTAL] }).errors, TOO_SLOW(OCTAL));
+  assert.deepEqual(normalizeScope({ metricExclude: [NON_ASCII] }).errors, TOO_SLOW(NON_ASCII));
+  assert.deepEqual(normalizeScope({ metricExclude: [`^${String.raw`\060`}[a-z]+$`] }).errors, [], 'a single octal unit is still a pattern');
+  assert.ok(performance.now() - t1 < 1000, 'refused at once');
+  // One budget per call: 32 patterns that each pass the bound but take tens of milliseconds over their
+  // names are answered within the call's budget — each refused as slow, or left untimed once the budget
+  // is spent — never one after another for many seconds.
+  const many = Array.from({ length: 32 }, (_, i) => `^[a-z]*[a-z]*[a-z]*x${String.fromCharCode(97 + (i % 26))}${i}$`);
+  const t2 = performance.now();
+  const slowErrors = timedExcludeErrors(many);
+  assert.ok(performance.now() - t2 < 3000, `answered in ${Math.round(performance.now() - t2)} ms`);
+  for (const e of slowErrors) assert.match(e, /(?:is too slow to match \(testing it on 256-character names took more than 50 ms\)|was not timed \(the scope's exclude patterns took more than 1 s to test together: send fewer, or simpler\))$/);
 });
 
 test('Grafana-managed rules (the recorded provisioning answer) join vmalert\'s: unioned by title, engine grafana, the recording rule left out; the folder scope is not applied while vmalert names no folder', async () => {
@@ -958,13 +1048,14 @@ test('the folder push-down: an engine whose tool takes a folder uid is asked onc
   const besidesAlerts = besides.records.filter((r) => r.stage === 'alert_rules').pop();
   assert.deepEqual([besidesAlerts.state, besidesAlerts.counts, besidesAlerts.message], ['done', { listed: 0, kept: 0, engines: 0 }, 'the folder scope was pushed down to grafana (1 folder asked for; no rule in them)']);
   assert.deepEqual(JSON.parse(besides.pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'nope', title: null }] });
-  // The draft is untouched: the registry resolves the candidate argless, and the draft's reader keeps no group.
+  // The draft's candidates resolve argless; every reader — a draft's as a snapshot's — keeps each rule's group
+  // (the canonical never carries it).
   const alertProbe = PROBES.find((p) => p.name === 'alert_rules');
   assert.ok(alertProbe.candidates.every((c) => typeof c === 'string'), 'no draft candidate carries a folder argument');
-  assert.ok(alertProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.deepEqual(alertProbe.adapt(VM()), alertProbe.adaptSnapshot(VM()));
   assert.ok(alertProbe.adaptSnapshot(VM()).every((r) => typeof r.group === 'string' && r.group !== ''));
   const recordingProbe = PROBES.find((p) => p.name === 'recording_rules');
-  assert.ok(recordingProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.deepEqual(recordingProbe.adapt(VM()), recordingProbe.adaptSnapshot(VM()));
   assert.deepEqual([...new Set(recordingProbe.adaptSnapshot(VM()).map((r) => r.group))].sort(), ['finops:capacity', 'finops:ingestion', 'genai:operations']);
   assert.deepEqual(alertProbe.adaptSnapshot(PROVISIONED).map((r) => r.group), ['stack-validation', 'payments']);
   // A name listed under two groups carries each (the group is positional, never joined by name); a flat listing names none.

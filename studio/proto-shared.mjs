@@ -37,6 +37,9 @@ import {
 } from './diagnostic-grade.mjs';
 import { catalogEntryFor, loadDiff, LAYERS_FOR_DIFF } from './compare-view.mjs';
 import { host as appHost } from './host.mjs';
+// No figure without a comparison: the weighted health and a run's match (verdict-ui.mjs).
+import { healthPctOf, historyAlignmentPct } from './verdict-ui.mjs';
+export { healthPctOf };
 import { LAYER_NAMES } from './constants.mjs';
 
 export const PROTO_LAYER_NAMES = LAYER_NAMES;
@@ -302,7 +305,7 @@ export function loadRunHistory(onReady) {
             : typeof r.grade?.score === 'number' ? r.grade.score : null;
           return {
             gradeScore,
-            alignmentPct: typeof r.drift?.alignmentPct === 'number' ? r.drift.alignmentPct : null,
+            alignmentPct: historyAlignmentPct(r),
             at: r.at || r.startedAt || null,
             outcome: r.outcome || null,
           };

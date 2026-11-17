@@ -30,13 +30,21 @@ export function computeOverviewDiagnostic(layered, posture = null, { off = [] } 
 
 // loadOverviewFacts({ pack, env, journeyFor, fetchFn }) → the facts the model
 // projects, each failure captured as a sentence, never thrown:
-//   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, runError }
+//   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, stopped, runError }
 // `journeyFor(journeys)` picks this service's journey (the model's rule), so
 // the run is read for the right one. The conformance (the pack against the
 // specification's clauses for its tier) is Remediate's "Required by the
 // specification" block; a failure there costs that block and nothing else.
+// `run` is the journey's newest run that checked something; a Run stopped on
+// a scan that lost files (outcome 'scan-partial': the service kept its last
+// complete scan) is `stopped` when it is the newest, never `run` — the board
+// keeps showing the check of the pack the service kept, however many stops
+// came after it (the runs route's `checked=1`; a server without it answers
+// with its newest runs, and the newest 25 are read as before).
+const STOPPED = 'scan-partial';
+const STOPPED_LOOK_BACK = 25;
 export async function loadOverviewFacts({ pack = null, env = null, journeyFor = () => null, fetchFn = requestJson } = {}) {
-  const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null };
+  const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, stopped: null, runError: null };
   const reads = [];
   if (pack?.id) {
     const q = env ? `?env=${enc(env)}` : '';
@@ -52,10 +60,24 @@ export async function loadOverviewFacts({ pack = null, env = null, journeyFor = 
     .catch((e) => { out.journeysError = sentence(e); }));
   await Promise.all(reads);
   out.journey = journeyFor(out.journeys) || null;
-  if (out.journey?.lastRun) {
+  // The listing's lastRun is its last check (never a stopped Run): a journey whose only runs are stops
+  // names them as stoppedRun alone, and its stop is read too.
+  if (out.journey?.lastRun || out.journey?.stoppedRun) {
     try {
-      const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?limit=1`);
-      out.run = Array.isArray(body?.runs) ? body.runs[0] || null : null;
+      const runsOf = async (query) => {
+        const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?${query}`);
+        return Array.isArray(body?.runs) ? body.runs : [];
+      };
+      // The newest record alone, as before; only when it is a stop, the newest that checked something
+      // behind it, past every stop (checked=1) — from a server that answers with a stop all the same
+      // (it does not know checked=1), the 25 newest.
+      let runs = await runsOf('limit=1');
+      out.stopped = runs[0]?.outcome === STOPPED ? runs[0] : null;
+      if (out.stopped) {
+        runs = await runsOf('limit=1&checked=1');
+        if (runs.some((r) => r?.outcome === STOPPED)) runs = await runsOf(`limit=${STOPPED_LOOK_BACK}`);
+      }
+      out.run = runs.find((r) => r && r.outcome !== STOPPED) || null;
     } catch (e) { out.runError = sentence(e); }
   }
   return out;
@@ -123,4 +145,16 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
 // a folder the server refuses throws its sentence with its status.
 export async function loadRepositoryFolders(path = null, { fetchFn = requestJson } = {}) {
   return fetchFn(`/api/repository-folders${path ? `?path=${enc(path)}` : ''}`);
+}
+
+// POST /api/services/:id/scope-check — what a live scope would leave out of the environment's Run,
+// asked before it is saved (overview-model.mjs scopeCheckOf / scopeChecked): the declared families
+// with nothing inside it, the rule groups the environment's last live read did not list. Stored
+// packs only (no MCP call); a scope that does not parse throws the server's sentence (400).
+export async function checkServiceScope(serviceId, { env, scope }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(String(serviceId))}/scope-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ env, scope }),
+  });
 }

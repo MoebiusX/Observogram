@@ -16,7 +16,7 @@ import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, verificationNote, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel, healthPctOf,
 } from './proto-shared.mjs';
 
 // Session-only "addressed" marks for the Remediate worklist progress
@@ -129,6 +129,8 @@ function renderActionBar(host, m) {
 function renderChapters(host, m, projection) {
   const d = m.diagnostic;
   const chapters = [];
+  // The weighted health only over a comparison (null: nothing compared).
+  const hpA = m.weighted ? healthPctOf(m.weighted, m.totals?.aligned) : null;
 
   // --- chapter 1: signal drift (only with a diff) ---
   if (m.haveB && m.diff) {
@@ -149,10 +151,10 @@ function renderChapters(host, m, projection) {
     const projSentence = projection ? projectionSentence(projection, m.items.length) : '';
     chapters.push({
       id: 'drift', title: 'Signal drift — declared vs live', open: !!m.biggestGap,
-      meta: `${chip(m.weighted.healthPct >= 85 ? 'pass' : m.weighted.healthPct >= 60 ? 'partial' : 'fail', m.weighted.healthPct + '% health')} ${fmtUnits(m.weighted.totalBadness)} badness units`,
+      meta: `${hpA === null ? chip('info', 'nothing compared') : chip(hpA >= 85 ? 'pass' : hpA >= 60 ? 'partial' : 'fail', hpA + '% health')} ${fmtUnits(m.weighted.totalBadness)} badness units`,
       body: `
         <div class="pa-drift-charts">
-          <figure>${donutSvg([{ value: m.totals.aligned, color: C_ALIGNED }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], m.weighted.healthPct + '%')}<figcaption>weighted health</figcaption></figure>
+          <figure>${donutSvg([{ value: m.totals.aligned, color: C_ALIGNED }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], hpA === null ? '—' : hpA + '%')}<figcaption>weighted health</figcaption></figure>
           <figure>${donutSvg([
             { value: m.weighted.driftedUnits, color: C_DRIFTED },
             { value: m.weighted.onlyInAUnits, color: C_DECL },
@@ -182,7 +184,8 @@ function renderChapters(host, m, projection) {
     const r = g.rollup;
     chapters.push({
       id: 'chains', title: 'Requirement chains — SLO/SLI derivation integrity', open: false,
-      meta: `${chip(r.broken ? 'fail' : r.partial ? 'partial' : 'pass', `${r.intact}/${r.declaredTotal} intact`)} ${Math.round((r.integrityMean || 0) * 100)}% integrity`,
+      // No declared chain: no integrity figure (null), never 0%.
+      meta: `${chip(r.broken ? 'fail' : r.partial ? 'partial' : 'pass', `${r.intact}/${r.declaredTotal} intact`)} ${Number.isFinite(r.integrityMean) ? `${Math.round(r.integrityMean * 100)}% integrity` : 'integrity not measured'}`,
       body: `
         <div class="pa-chain-rollup">
           ${chip('pass', `${r.intact} INTACT`)} ${chip('partial', `${r.partial} PARTIAL`)}

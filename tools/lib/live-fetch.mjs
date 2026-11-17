@@ -55,6 +55,37 @@ export function stageNoun(stage) {
   return String(stage.label).replace(/\s*\(.*\)\s*$/, '').toLowerCase();
 }
 
+// The capability ids in the order the stages read them — the probe families'
+// order wherever a record names "the first" of them.
+const STAGE_CAPABILITY_ORDER = Object.freeze(LIVE_STAGES.flatMap((stage) => stage.capabilities));
+const familyRank = (family) => {
+  const i = STAGE_CAPABILITY_ORDER.indexOf(family);
+  return i === -1 ? STAGE_CAPABILITY_ORDER.length : i;
+};
+// `families` in stage order (an unknown family last, by name); a copy.
+export function inStageOrder(families) {
+  return [...(Array.isArray(families) ? families : [])]
+    .sort((x, y) => familyRank(x) - familyRank(y) || String(x).localeCompare(String(y), 'en'));
+}
+
+const isPlainRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// The first probe error a run record carries (or the live facts a journey
+// derives from Pack B: { probes, probeErrors }), in stage order:
+// { family, error } for the first failed family that names one; a lost run's
+// own `error` when no failed family does (the read failed before any probe,
+// or no family failed and none returned data); { family, error: null } when
+// a family failed without a message; null when nothing failed and the run
+// was not lost. A reader shows it as the reason a row reads "did not answer".
+export function firstProbeError(record) {
+  const failed = inStageOrder((Array.isArray(record?.probes?.failed) ? record.probes.failed : []).filter((f) => typeof f === 'string' && f));
+  const errors = isPlainRecord(record?.probeErrors) ? record.probeErrors : {};
+  for (const family of failed) {
+    if (typeof errors[family] === 'string' && errors[family]) return { family, error: errors[family] };
+  }
+  if (record?.outcome === 'vantage-lost' && typeof record.error === 'string' && record.error) return { family: failed[0] ?? null, error: record.error };
+  return failed.length ? { family: failed[0], error: null } : null;
+}
+
 // What a fetch of `kind` will do, from an MCP's mapped inventory
 // (capabilityInventory(names).capabilities: { <capabilityId>: [advertised
 // names] }). `complete` is false when tools/list was not read whole (a cursor
@@ -126,14 +157,304 @@ const checkUid = (what) => (value) => (value.length <= SCOPE_LIMITS.uidLength &&
 // compileBoundedPattern — anchored, short, no quantified group, compiles).
 // This module imports nothing, so the rule is restated here; the fetcher runs
 // the timed half against adversarial names before a pattern touches a list.
+// A pattern is matched against every metric name a scope reads, on the
+// server's own thread (the fetcher's filter, the diff's and the scope check's
+// inScope), so its work is bounded too, statically: no backreference, and at
+// most EXCLUDE_WORK_MAX steps to test a name of EXCLUDE_NAME_MAX characters
+// (excludeWork) — `^q*q*q*q*q*q*q*q*q*q*q*q*$`, which every timed id fails at
+// its first character, runs for seconds over a 24-character name and is
+// refused here, before anything is timed. Three unbounded wildcards
+// (`^.*:.*:.*$`, every recording rule's name) take milliseconds and pass; a
+// fourth that can take the same characters does not. A name longer than
+// EXCLUDE_NAME_MAX is never matched by an exclude pattern (excludedBy).
+//
+// A scope already stored — a saved check's, an environment's, a pack's record
+// (normalizeScope's `stored`) — is read under the rule earlier releases had
+// (length, anchored, no quantified group, compiles): loading it never fails on
+// the work bound or a backreference, which came later. Such a pattern is kept
+// as written and not applied: the fetcher reads without it and says so in the
+// metric stage.
 const QUANTIFIED_GROUP = /\)[+*{]/;
-const checkExclude = (value) => {
+export const EXCLUDE_NAME_MAX = 256;
+const EXCLUDE_WORK_MAX = 16_000_000;
+const EXCLUDE_TOO_SLOW = `may be too slow to match (testing a ${EXCLUDE_NAME_MAX}-character name can take more than ${EXCLUDE_WORK_MAX / 1_000_000} million steps)`;
+const checkExcludeStored = (value) => {
   if (value.length > SCOPE_LIMITS.excludeLength) return `is longer than ${SCOPE_LIMITS.excludeLength} characters`;
   if (!value.startsWith('^')) return 'is not anchored (an exclude pattern starts with ^)';
   if (QUANTIFIED_GROUP.test(value)) return 'has a quantified group (nested quantifier)';
   try { new RegExp(value); } catch (e) { return `is not a regular expression (${e.message})`; }
   return null;
 };
+const checkExclude = (value) => {
+  const problem = checkExcludeStored(value);
+  if (problem) return problem;
+  const terms = excludeTerms(value);
+  if (terms && hasBackreference(terms)) return 'refers back to a group (a backreference has no bound on its work)';
+  if (excludeWork(value) > EXCLUDE_WORK_MAX) return EXCLUDE_TOO_SLOW;
+  return null;
+};
+// The static half as a sentence for a pattern (null when it passes): the same rule normalizeScope
+// applies, for a caller that checks one pattern (the fetcher's timed half, before it times).
+export const excludeProblem = (pattern) => (typeof pattern === 'string' && pattern !== '' ? checkExclude(pattern) : 'is not a pattern');
+
+// Whether an exclude pattern drops `name`: one of `matchers` (compiled patterns that passed the
+// rule above) matches it, and it is at most EXCLUDE_NAME_MAX characters long — a longer name is
+// never dropped, so no pattern works over more than the bound counts. The fetcher's filter and the
+// diff's inScope read names by this one rule.
+export function excludedBy(matchers, name) {
+  return typeof name === 'string' && name.length <= EXCLUDE_NAME_MAX && (Array.isArray(matchers) ? matchers : []).some((re) => re.test(name));
+}
+
+// ---------- an exclude pattern's work ----------
+//
+// The pattern read as terms (a source new RegExp accepted, no flags): an alternation of sequences,
+// each term { type: 'char', src, min, max } (a literal, an escape, a class or '.', with its
+// repetition), { type: 'group', look, alts, min, max }, { type: 'assert', src } (^, $, \b, \B) or
+// { type: 'backref' }. null when it does not read so.
+const HEX_DIGIT = /[0-9a-fA-F]/;
+function excludeTerms(pattern) {
+  let i = 0;
+  const quantify = (term) => {
+    let q = null;
+    if (pattern[i] === '*') q = [0, Infinity, 1];
+    else if (pattern[i] === '+') q = [1, Infinity, 1];
+    else if (pattern[i] === '?') q = [0, 1, 1];
+    else if (pattern[i] === '{') {
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(pattern.slice(i));
+      if (m) q = [Number(m[1]), m[2] === undefined ? Number(m[1]) : m[3] === '' ? Infinity : Number(m[3]), m[0].length];
+    }
+    if (!q) return;
+    i += q[2];
+    if (pattern[i] === '?') i += 1;   // lazy: the same splits, tried in another order
+    term.min = q[0];
+    term.max = q[1];
+  };
+  const atom = () => {
+    const start = i;
+    const c = pattern[i];
+    if (c === '(') {
+      i += 1;
+      let look = false;
+      if (pattern[i] === '?') {
+        if (pattern.startsWith('?:', i)) i += 2;
+        else if (pattern.startsWith('?=', i) || pattern.startsWith('?!', i)) { i += 2; look = true; }
+        else if (pattern.startsWith('?<=', i) || pattern.startsWith('?<!', i)) { i += 3; look = true; }
+        else if (pattern.startsWith('?<', i) && pattern.indexOf('>', i) > i) i = pattern.indexOf('>', i) + 1;
+        else throw new SyntaxError('group');
+      }
+      const alts = alternation(true);
+      if (pattern[i] !== ')') throw new SyntaxError('group');
+      i += 1;
+      return { type: 'group', look, alts, min: 1, max: 1 };
+    }
+    if (c === '[') {
+      let j = i + 1;
+      if (pattern[j] === '^') j += 1;
+      while (j < pattern.length && pattern[j] !== ']') j += pattern[j] === '\\' ? 2 : 1;
+      if (j >= pattern.length) throw new SyntaxError('class');
+      i = j + 1;
+      return { type: 'char', src: pattern.slice(start, i), min: 1, max: 1 };
+    }
+    if (c === '\\') {
+      const d = pattern[i + 1];
+      if (d === undefined) throw new SyntaxError('escape');
+      if (/[1-9k]/.test(d)) { i += 2; return { type: 'backref' }; }
+      if (d === 'b' || d === 'B') { i += 2; return { type: 'assert', src: pattern.slice(start, i) }; }
+      let len = 2;
+      // A legacy octal escape (\0 and up to two more octal digits, without the u flag) is one unit, as V8 reads it.
+      if (d === '0') { while (len < 4 && /[0-7]/.test(pattern[i + len] ?? '')) len += 1; }
+      else if (d === 'x' && HEX_DIGIT.test(pattern[i + 2] ?? '') && HEX_DIGIT.test(pattern[i + 3] ?? '')) len = 4;
+      else if (d === 'u' && [2, 3, 4, 5].every((k) => HEX_DIGIT.test(pattern[i + k] ?? ''))) len = 6;
+      else if (d === 'c' && /[A-Za-z]/.test(pattern[i + 2] ?? '')) len = 3;
+      i += len;
+      return { type: 'char', src: pattern.slice(start, i), min: 1, max: 1 };
+    }
+    i += 1;
+    if (c === '^' || c === '$') return { type: 'assert', src: c };
+    return { type: 'char', src: c, min: 1, max: 1 };
+  };
+  const alternation = (inGroup) => {
+    const alts = [[]];
+    while (i < pattern.length && !(inGroup && pattern[i] === ')')) {
+      if (pattern[i] === '|') { alts.push([]); i += 1; continue; }
+      if (pattern[i] === ')') throw new SyntaxError('group');
+      const term = atom();
+      quantify(term);
+      alts[alts.length - 1].push(term);
+    }
+    return alts;
+  };
+  try {
+    const alts = alternation(false);
+    return i === pattern.length ? alts : null;
+  } catch { return null; }
+}
+const hasBackreference = (alts) => alts.some((seq) => seq.some((t) => t.type === 'backref' || (t.type === 'group' && hasBackreference(t.alts))));
+
+// The most steps a backtracking matcher takes to test `pattern` on a name of `n` characters, counted
+// from the end of each sequence for every number of characters left (0…n): a character term takes
+// what it matches one step each; a quantified one tries every length it can take, and the rest of
+// the pattern after each — but the lengths share one name, so three wildcards split it about n³/6
+// ways, not n³. An atom that can only stop before a character it cannot take, or at the end of the
+// name (`$`, or the end of the pattern, where the test succeeds), runs the rest once (added); one
+// whose next term can take what it takes runs it once per length (summed). A group tries each
+// alternative and the rest after it (a lookaround its alternatives once, apart). Two terms share a
+// character when they share one of every ASCII character and every UTF-16 unit the pattern writes
+// (without the u flag a class matches one unit, so an astral character is two); a term that matches
+// none of those is never apart from another. Where literal characters follow a quantified atom
+// (`.*_seconds_bucket`), the lengths it tries are consecutive starts, and a word starts again only a
+// period of it later — so the run costs each start one step and each further character only where the
+// text so far starts there, and the rest only where the whole run does: the smaller of that and the
+// sum. Infinity for what does not read as terms, a backreference, a repeated group, or more than
+// EXCLUDE_WORK_MAX.
+function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
+  const alts = excludeTerms(pattern);
+  if (!alts) return Infinity;
+  // Every unit a class can turn on or off at: without flags a class's membership changes only at a unit
+  // the pattern names (a literal, a range's ends, an escape) or at a built-in class's edge (ASCII for \w
+  // and \d, the \s set, the line terminators '.' leaves out, the surrogate blocks). Each such unit and its
+  // two neighbours, with every ASCII unit, are sampled, so two sets that share any unit share a sampled one.
+  const sample = new Set();
+  const unit = (u) => { if (u >= 0 && u <= 0xffff) sample.add(String.fromCharCode(u)); };
+  const edges = [0, 0x80, 0xd800, 0xdc00, 0xe000, 0xffff];
+  for (const ch of '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff') edges.push(ch.charCodeAt(0));
+  for (let k = 0; k < pattern.length; k += 1) edges.push(pattern.charCodeAt(k));
+  for (const m of pattern.matchAll(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([0-3][0-7]{0,2}|[4-7][0-7]?)/g)) {
+    edges.push(m[3] !== undefined ? parseInt(m[3], 8) : parseInt(m[1] ?? m[2], 16));
+  }
+  for (let c = 0; c < 128; c += 1) unit(c);
+  for (const e of edges) { unit(e - 1); unit(e); unit(e + 1); }
+  const chars = [...sample];
+  const setOf = (t) => {
+    if (t.set === undefined) {
+      let re = null;
+      try { re = new RegExp(`^(?:${t.src})$`); } catch { /* not read alone: never apart */ }
+      t.set = re ? chars.filter((ch) => re.test(ch)) : null;
+    }
+    return t.set;
+  };
+  const disjoint = (a, b) => {
+    const sa = setOf(a);
+    const sb = setOf(b);
+    return !!sa && !!sb && sa.length > 0 && sb.length > 0 && !sa.some((ch) => sb.includes(ch));
+  };
+  const stops = (t, next, atEnd) => (!next ? atEnd
+    : next.type === 'assert' ? next.src === '$'
+      : next.type === 'char' && next.min >= 1 && disjoint(t, next));
+  const ones = new Array(n + 1).fill(1);
+  // A term that matches one character exactly → that character, else null.
+  const literalOf = (t) => {
+    if (t.type !== 'char' || t.min !== 1 || t.max !== 1) return null;
+    const src = t.src;
+    if (src.length === 1) return '.^$|()[]{}*+?\\'.includes(src) ? null : src;
+    if (src.length === 2 && src[0] === '\\' && !/[A-Za-z0-9]/.test(src[1])) return src[1];
+    if (/^\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4})$/.test(src)) return String.fromCharCode(parseInt(src.slice(2), 16));
+    return null;
+  };
+  // The smallest shift at which a word matches itself (its length when none does).
+  const periodOf = (word) => {
+    for (let p = 1; p < word.length; p += 1) if (word.slice(p) === word.slice(0, word.length - p)) return p;
+    return word.length;
+  };
+  // `after[m]`: the steps of what follows the sequence with m characters left → the same for the
+  // sequence and what follows it; null past the bound or for what has none.
+  const seqSteps = (seq, after, atEnd) => {
+    const vecs = new Array(seq.length + 1);
+    vecs[seq.length] = after;
+    let w = after;
+    for (let k = seq.length - 1; k >= 0; k -= 1) {
+      const t = seq[k];
+      if (t.type === 'backref') return null;
+      if (t.type === 'assert') { vecs[k] = w; continue; }
+      const out = new Array(n + 1).fill(0);
+      if (t.type === 'char') {
+        const lo = Math.min(t.min, n);
+        const hi = Math.min(t.max, n);
+        let run = '';
+        while (k + 1 + run.length < seq.length && literalOf(seq[k + 1 + run.length]) !== null) run += literalOf(seq[k + 1 + run.length]);
+        const periods = [...run].map((_, j) => periodOf(run.slice(0, j + 1)));
+        const rest = vecs[k + 1 + run.length];
+        for (let m = 0; m <= n; m += 1) {
+          if (m < lo) { out[m] = m + 1; continue; }
+          const top = Math.min(hi, m);
+          if (lo === top) out[m] = lo + w[m - lo];
+          else if (stops(t, seq[k + 1], atEnd)) out[m] = 2 * top - lo + 1 + w[m - lo];
+          else {
+            let sum = top;
+            for (let len = lo; len <= top; len += 1) sum += w[m - len];
+            if (run) {
+              const starts = top - lo + 1;
+              let byRun = top + starts;
+              for (let j = 0; j < run.length - 1; j += 1) byRun += Math.ceil(starts / periods[j]);
+              for (let at = 0; at < starts && m - lo - at - run.length >= 0; at += periods[run.length - 1]) byRun += rest[m - lo - at - run.length];
+              sum = Math.min(sum, byRun);
+            }
+            out[m] = sum;
+          }
+        }
+      } else if (t.type === 'group') {
+        if (t.max > 1) return null;
+        if (t.look) {
+          let inner = 0;
+          for (const alt of t.alts) {
+            const v = seqSteps(alt, ones, false);
+            if (!v) return null;
+            inner += 1 + v[n];
+          }
+          for (let m = 0; m <= n; m += 1) out[m] = inner + w[m];
+        } else {
+          if (t.min === 0) for (let m = 0; m <= n; m += 1) out[m] = w[m];
+          for (const alt of t.alts) {
+            const v = seqSteps(alt, w, false);
+            if (!v) return null;
+            for (let m = 0; m <= n; m += 1) out[m] += 1 + v[m];
+          }
+        }
+      }
+      w = out;
+      vecs[k] = w;
+      if (!(w[n] <= EXCLUDE_WORK_MAX)) return null;   // the most characters left costs the most
+    }
+    return w;
+  };
+  const anchored = (seq) => seq[0]?.type === 'assert' && seq[0].src === '^';
+  const tried = alts.some((seq) => !anchored(seq));   // an unanchored alternative: every start is tried
+  let total = 0;
+  for (const seq of alts) {
+    const v = seqSteps(seq, ones, true);
+    if (!v) return Infinity;
+    if (anchored(seq)) total += v[n] + (tried ? n : 0);
+    else for (let m = 0; m <= n; m += 1) total += v[m];
+  }
+  return total <= EXCLUDE_WORK_MAX ? total : Infinity;
+}
+
+// Names to time an exclude pattern on (the fetcher's timed half), so the clock times the pattern's
+// own work: a name that opens with the literal text the pattern opens with, then one character
+// over and over, then a line break no pattern takes at the end — one name per character the
+// pattern writes (and a letter, a digit, `_`, `:`, `-`) — beside the four adversarial ids every
+// bounded pattern is timed on. A pattern that must open with `q` fails every one of those at its
+// first character, and was timed doing nothing.
+export function excludeProbes(pattern) {
+  const n = EXCLUDE_NAME_MAX;
+  const out = ['a'.repeat(n), 'ab'.repeat(n / 2), '-'.repeat(n), `${'x'.repeat(n - 1)}!`];
+  const alts = typeof pattern === 'string' ? excludeTerms(pattern) : null;
+  if (!alts) return out;
+  let prefix = '';
+  const first = alts[0] || [];
+  for (const t of first.slice(first[0]?.type === 'assert' && first[0].src === '^' ? 1 : 0)) {
+    if (t.type !== 'char' || t.min !== 1 || t.max !== 1) break;
+    const ch = t.src.length === 1 && t.src !== '.' ? t.src : t.src.length === 2 && t.src[0] === '\\' && !/[A-Za-z0-9]/.test(t.src[1]) ? t.src[1] : null;
+    if (ch === null) break;
+    prefix += ch;
+  }
+  prefix = prefix.slice(0, n - 2);
+  const fills = new Set(['a', '0', '_', ':', '-']);
+  for (const ch of pattern) if (!'\\^$|()[]{}*+?.'.includes(ch) && ch.trim()) fills.add(ch);
+  // Cut to the bound in UTF-16 units: an astral character is two, and a longer name is never matched.
+  for (const c of [...fills].slice(0, 24)) out.push(`${`${prefix}${c.repeat(n)}`.slice(0, n - 1)}\n`);
+  return out;
+}
 // A rule group's name as the engine lists it (`ruleGroup` of a Grafana-managed
 // rule, `groups[].name` of a Prometheus or vmalert listing): any text without
 // a control character, up to the limit. Compared exactly, case and all.
@@ -151,8 +472,11 @@ const checkGroup = (value) => {
 // values are trimmed and deduplicated in order. `errors` holds one sentence
 // per refused field or value, naming it and the rule; the scope keeps only the
 // values that passed, and a caller refuses the whole scope when `errors` is
-// not empty.
-export function normalizeScope(input) {
+// not empty. `stored`: a scope already saved (a check's, an environment's, a
+// pack's record) — its exclude patterns are read by the rule earlier releases
+// had, so one refused only by the work bound or a backreference is kept as
+// written (the fetcher does not apply it, and says so) and loading never fails.
+export function normalizeScope(input, { stored = false } = {}) {
   const errors = [];
   const scope = { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] };
   if (input === undefined || input === null) return { scope, errors };
@@ -172,7 +496,7 @@ export function normalizeScope(input) {
       else scope.datasourceUid = value;
     }
   }
-  scope.metricExclude = normalizeList(input.metricExclude, 'metricExclude', { limit: SCOPE_LIMITS.excludes, check: checkExclude, split: wordsOf }, errors);
+  scope.metricExclude = normalizeList(input.metricExclude, 'metricExclude', { limit: SCOPE_LIMITS.excludes, check: stored ? checkExcludeStored : checkExclude, split: wordsOf }, errors);
   scope.ruleGroups = normalizeList(input.ruleGroups, 'ruleGroups', { limit: SCOPE_LIMITS.groups, check: checkGroup }, errors);
   return { scope, errors };
 }
@@ -217,7 +541,9 @@ const FOLDER_TITLE_CHARS = 100;
 // dashboards when folders are) — `appliedGroups`, the rule families the rule
 // groups were applied to (default none: only the fetcher can tell that every
 // rule named its group), and `folderTitles` ({ <uid>: <title> }, from the
-// dashboard search answers). `observogram.live.scope` is always written (an
+// dashboard search answers) — and `notApplied`, a sentence per exclude pattern
+// the fetch read without (a stored one the rule refuses now), kept in
+// `observogram.live.scope` when there is one. `observogram.live.scope` is always written (an
 // unscoped snapshot says so; `metricExclude`, `ruleGroups` and their
 // `appliesTo` entries appear only when set, so a pack without them reads as
 // before); a family's `observogram.scope.<kind>` only when the scope was
@@ -248,6 +574,8 @@ export function scopeAnnotations(scope, learned = {}) {
       ...(excludes.length ? { metricExclude: excludes } : {}),
       ...(groups.length ? { ruleGroups: groups } : {}),
       appliesTo,
+      ...(Array.isArray(learned.notApplied) && learned.notApplied.length
+        ? { notApplied: learned.notApplied.filter((v) => typeof v === 'string').slice(0, SCOPE_LIMITS.excludes).map((v) => v.slice(0, 400)) } : {}),
     }),
   };
   const metricKinds = new Set([...appliesTo.metricPrefixes, ...(appliesTo.metricExclude || [])]);
@@ -296,7 +624,7 @@ export function scopeOf(annotations) {
     if (parsed.by === 'prefix') {
       const values = parsed.values.filter((v) => typeof v === 'string' && v !== '');
       const exclude = (Array.isArray(parsed.exclude) ? parsed.exclude : [])
-        .filter((v) => typeof v === 'string' && v !== '' && checkExclude(v) === null)
+        .filter((v) => typeof v === 'string' && v !== '' && checkExcludeStored(v) === null)
         .slice(0, SCOPE_LIMITS.excludes);
       if (values.length || exclude.length) {
         out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values, ...(exclude.length ? { exclude } : {}) });
@@ -328,13 +656,24 @@ function metricNamesOf(artefact) {
 
 // The folder uid an artefact states, or null. A dashboard read from Grafana
 // carries `params.folderUid`; a rule read through the provisioning API its
-// `folderUid`. A crawled dashboard states none (its `folder` is a name).
+// `folderUid`; a Grafana-managed rule its `grafana.folderUid` (the adapter's
+// reading of observogram.grafana_rule.*). A crawled dashboard states one only
+// when the repository says where it is provisioned (its `folder` is a name).
 export function folderUidOf(artefact) {
   const spec = artefact?.spec || {};
-  for (const v of [spec.params?.folderUid, spec.folderUid, spec.params?.folder_uid, spec.folder_uid]) {
+  for (const v of [spec.params?.folderUid, spec.folderUid, spec.params?.folder_uid, spec.folder_uid, artefact?.grafana?.folderUid]) {
     if (typeof v === 'string' && v !== '') return v;
   }
   return null;
+}
+
+// The folder TITLE a repository states for an artefact, or null: a Grafana
+// provisioning file's group `folder` (a rule's `grafana.folder`), the folder a
+// dashboard provider files a crawled dashboard under (`params.folderTitle`).
+// Never a dashboard's `folder`, which may be a tag the crawler guessed.
+export function folderTitleOf(artefact) {
+  const t = artefact?.grafana?.folder ?? artefact?.spec?.params?.folderTitle;
+  return typeof t === 'string' && t.trim() ? t.trim() : null;
 }
 
 // The rule group a rule artefact states, or null. A rule read from an engine
@@ -350,6 +689,8 @@ export function folderUidOf(artefact) {
 export function ruleGroupOf(artefact) {
   const spec = artefact?.spec || {};
   if (typeof spec.group === 'string' && spec.group.trim() !== '') return spec.group.trim();
+  // A Grafana-managed rule states its group beside the spec (observogram.grafana_rule.*).
+  if (typeof artefact?.grafana?.group === 'string' && artefact.grafana.group.trim() !== '') return artefact.grafana.group.trim();
   const source = typeof spec.source === 'string' ? spec.source : '';
   const name = typeof spec.name === 'string' ? spec.name : '';
   if (!name || !source.endsWith(`/${name}`)) return null;
@@ -365,7 +706,10 @@ export function ruleGroupOf(artefact) {
 // what the scope needs — a metric without a name, a dashboard without a
 // folder uid, a rule without a group). No entry: true, nothing was narrowed.
 // A folder entry that also names groups asks both: outside either is outside;
-// inside the folders but silent on the group is not known.
+// inside the folders but silent on the group is not known. An artefact that
+// states its folder only by TITLE (a provisioning file's rule, a provisioned
+// dashboard) is inside when the live read named one of its folders so, outside
+// when it named every folder and none so, and not known otherwise.
 export function inScope(kind, artefact, scopeEntry) {
   if (!scopeEntry) return true;
   if (scopeEntry.by === 'prefix') {
@@ -373,13 +717,18 @@ export function inScope(kind, artefact, scopeEntry) {
     if (!names.length) return null;
     const excluded = excludeMatchers(scopeEntry);
     // A name is inside when it carries a prefix (any name, when no prefix was
-    // set) and no exclude pattern matches it: the fetcher kept exactly those.
+    // set) and no exclude pattern drops it (excludedBy: a name over the bound
+    // never is): the fetcher kept exactly those.
     return names.some((n) => (scopeEntry.values.length === 0 || scopeEntry.values.some((p) => n.startsWith(p)))
-      && !excluded.some((re) => re.test(n)));
+      && !excludedBy(excluded, n));
   }
   if (scopeEntry.by === 'folder') {
     const uid = folderUidOf(artefact);
-    const verdicts = [uid === null ? null : scopeEntry.values.some((v) => v.uid === uid)];
+    const title = uid === null ? folderTitleOf(artefact) : null;
+    const verdicts = [uid !== null ? scopeEntry.values.some((v) => v.uid === uid)
+      : title === null ? null
+        : scopeEntry.values.some((v) => v.title === title) ? true
+          : scopeEntry.values.every((v) => v.title !== null) ? false : null];
     if (Array.isArray(scopeEntry.groups) && scopeEntry.groups.length) verdicts.push(groupVerdict(artefact, scopeEntry.groups));
     if (verdicts.includes(false)) return false;
     return verdicts.includes(null) ? null : true;
@@ -420,9 +769,10 @@ const folderNames = (values) => values.map((v) => v.title || v.uid).join(', ');
 
 // The diff's notObserved reason for a verdict of inScope: `false` states what
 // the snapshot read; `null` states only what is known — which folders were
-// read, and that the holder pack does not say where this artefact is. `holder`
-// is the side holding the artefact ('a' or 'b'). `true` has no reason.
-export function scopeReason(kind, verdict, scopeEntry, { holder = 'a' } = {}) {
+// read, and that the holder pack does not say where this artefact is (or, with
+// `folderTitle`, that the folder it names is not known to be one of them).
+// `holder` is the side holding the artefact ('a' or 'b'). `true` has no reason.
+export function scopeReason(kind, verdict, scopeEntry, { holder = 'a', folderTitle = null } = {}) {
   if (verdict === true || !scopeEntry) return null;
   const [one, many] = nounOf(kind);
   const pack = `Pack ${String(holder).toUpperCase() === 'B' ? 'B' : 'A'}`;
@@ -438,6 +788,12 @@ export function scopeReason(kind, verdict, scopeEntry, { holder = 'a' } = {}) {
   if (scopeEntry.by === 'folder') {
     const list = folderNames(scopeEntry.values);
     const groups = Array.isArray(scopeEntry.groups) && scopeEntry.groups.length ? scopeEntry.groups.join(', ') : '';
+    const titled = verdict === null && typeof folderTitle === 'string' && folderTitle !== '';
+    if (titled) {
+      return groups
+        ? `the snapshot read only the folders ${list} and the rule groups ${groups}; ${pack} puts this ${one} in the folder "${folderTitle}", which is not known to be one of them, so it was not checked`
+        : `the snapshot read only the folders ${list}; ${pack} puts this ${one} in the folder "${folderTitle}", which is not known to be one of them (the live read did not give every folder's title), so it was not checked`;
+    }
     if (!groups) {
       return verdict === false
         ? `outside the snapshot's ${one} folders (${list})`

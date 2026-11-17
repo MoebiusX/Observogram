@@ -24,6 +24,8 @@ import { spawn } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The run's figure in words (the match only over a comparison): never "?%" or "null%".
+import { alignmentWords } from './lib/run-basis.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // --port N / --workspace DIR on the command line win over the environment,
@@ -217,7 +219,7 @@ async function runJourney(why) {
     const r = await json(`/api/journeys/${encodeURIComponent(DEMO.journey)}/run`, { method: 'POST' });
     const rec = r.record || {};
     const failed = rec.probes?.failed || [];
-    log(`${why}: ${rec.outcome || '?'} · grade ${rec.grade?.letter || '?'} (${rec.grade?.score ?? '?'}%) · alignment ${rec.drift?.alignmentPct ?? '?'}% · ${rec.tookMs ?? '?'} ms${failed.length ? ` · probe families failed: ${failed.join(', ')}` : ''}`);
+    log(`${why}: ${rec.outcome || '?'} · grade ${rec.grade?.letter || '?'} (${rec.grade?.score ?? '?'}%) · ${alignmentWords(rec)} · ${rec.tookMs ?? '?'} ms${failed.length ? ` · probe families failed: ${failed.join(', ')}` : ''}`);
     return rec;
   } catch (e) {
     if (e.status === 502) { log(`${why}: the live side did not answer (${e.message.slice(0, 300)}) — Overview reads Unreachable until a check succeeds; press Check again on the page in a minute, or start again`); return null; }

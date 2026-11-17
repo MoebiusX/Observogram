@@ -992,9 +992,10 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
   const lost = await lostRes.json();
-  assert(lostRes.status === 502 && lost.ok === false, 'a run whose live Pack B is unreachable → 502', [lostRes.status, lost]);
+  assert(lostRes.status === 502 && lost.ok === false && lost.outcome === 'vantage-lost', 'a run whose live Pack B is unreachable → 502, the body naming the outcome', [lostRes.status, lost]);
   const lostRuns = await getJson(base, '/api/journeys/smoke-lost/runs?limit=5');
-  assert(lostRuns.runs.length === 1 && lostRuns.runs[0].outcome === 'vantage-lost', 'the engine kept a vantage-lost run record', lostRuns.runs);
+  assert(lostRuns.runs.length === 1 && lostRuns.runs[0].outcome === 'vantage-lost' && lostRuns.runs[0].vantage === 'lost'
+         && lostRuns.runs[0].gate?.breaches?.[0]?.criterion === 'vantage', 'the engine kept a vantage-lost run record, vantage lost, its one breach the vantage\'s', lostRuns.runs);
   const lostRow = auditRows({ action: 'journey.run', limit: 1 })[0];
   assert(lostRow && lostRow.actor === 'local' && lostRow.targetId === 'smoke-lost'
          && JSON.stringify(Object.keys(lostRow.detail)) === JSON.stringify(['startedAt', 'outcome', 'alignmentPct', 'gradeScore', 'gradePass', 'breaches', 'tookMs'])

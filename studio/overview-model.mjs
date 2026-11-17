@@ -16,7 +16,11 @@
 // was ever checked. Every input is explicit, so the same functions run under
 // node:test (tools/test-overview-model.mjs) and in the browser.
 //
-// Four status words, ever: Never checked · Unchanged · Changed · Unreachable.
+// Five status words, ever: Never checked · Unchanged · Changed · Unreachable ·
+// Nothing compared — what the last check found. A service row's last check is
+// in one of five states, which say what it rests on (lastCheckOf): Never
+// checked · Unreachable · Nothing compared · Checked (partial) · Checked. No
+// match figure without a comparison, no gate passed over nothing.
 // No layer code, no artefact id, no percentage reaches a string this module
 // returns (the test holds it to that). The formal terms live behind
 // termHtml hovers in the renderer, never in the sentence.
@@ -55,6 +59,7 @@ export const OVERVIEW_STATUS = Object.freeze({
   unchanged: 'Unchanged',
   changed: 'Changed',
   unreachable: 'Unreachable',
+  nothing: 'Nothing compared',
 });
 
 // The grade engine's freshness window (diagnostic-grade.mjs, the `fresh`
@@ -179,12 +184,167 @@ const listWords = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).joi
 export function vantageShrank(run) {
   const v = run?.causes?.vantage;
   if (!v || !v.changed) return [];
-  // The check before saw nothing at all: there is no earlier picture to have
-  // shrunk from (the first good check after an outage is a recovery).
-  if (v.from?.vantage === 'lost') return [];
+  // The check before saw nothing at all, or carried no live picture (a Run that stopped on a
+  // partial scan): there is no earlier picture to have shrunk from (the first good check after
+  // an outage is a recovery).
+  if (!v.from || v.from.vantage === 'lost') return [];
   const from = Array.isArray(v.from?.failed) ? v.from.failed : [];
   const to = Array.isArray(v.to?.failed) ? v.to.failed : [];
   return to.filter((f) => !from.includes(f));
+}
+
+// ---------- what a run's figures rest on ----------
+//
+// The studio's copy of tools/lib/run-basis.mjs (a studio module never imports tools/lib;
+// tools/test-run-basis.mjs pins the two equal): no figure without its basis. A run's match is a
+// figure only over a comparison (drift.compared, or the four counts of an older record) and a
+// live side that returned data; a vantage is lost when no probe family returned data, whatever an
+// older record says; the first probe error is shown on one line, credentials masked.
+const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const finiteOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const countOf = (v) => { const n = finiteOf(v); return n !== null && n >= 0 ? Math.floor(n) : null; };
+const namesOf = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : null);
+const DRIFT_COUNTS = ['aligned', 'drifted', 'declaredNotLive', 'liveNotDeclared'];
+const PROBE_ORDER = ['metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'scrape_configs', 'alerting_routes'];
+const probeRank = (f) => { const i = PROBE_ORDER.indexOf(f); return i < 0 ? PROBE_ORDER.length : i; };
+const inProbeOrder = (xs) => xs.slice().sort((a, b) => probeRank(a) - probeRank(b) || a.localeCompare(b, 'en'));
+// tools/lib/mcp-url-safety.mjs credentialParamName, restated: a name that is or ends in a credential word.
+const CREDENTIAL_WORDS = ['token', 'tokens', 'key', 'keys', 'secret', 'secrets', 'pass', 'passwd', 'password', 'passphrase', 'passcode', 'pwd', 'auth', 'authorization', 'sig', 'signature', 'credential', 'credentials', 'jwt', 'session', 'sessionid', 'sessid', 'cookie', 'bearer', 'sas'];
+const ORDINARY_WORDS = ['bypass', 'compass', 'overpass', 'surpass', 'monkey', 'donkey', 'turkey', 'hockey', 'jockey', 'whiskey', 'hotkey', 'obsession'];
+const credentialWord = (w) => CREDENTIAL_WORDS.some((c) => w.endsWith(c)) && !ORDINARY_WORDS.some((o) => w.endsWith(o));
+export function credentialName(name) {
+  const text = String(name ?? '');
+  const words = text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').split(/[^A-Za-z]+/).filter(Boolean).map((w) => w.toLowerCase());
+  return words.some(credentialWord) || credentialWord(text.replace(/[^A-Za-z]+/g, '').toLowerCase());
+}
+const decodedParam = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+export function safeErrorText(text, max = 200) {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim()
+    .replace(/\/\/[^/\s@]+@/g, '//***@')
+    .replace(/([?&;])([^=&;#\s]+)=([^&;#\s]*)/g, (m, sep, name) => (credentialName(decodedParam(name)) ? `${sep}${name}=***` : m))
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***');
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+export const NOTHING_REASON = 'Neither side had anything this check could compare';
+
+export function comparedOf(drift) {
+  if (!isPlain(drift)) return null;
+  const c = countOf(drift.compared);
+  if (c !== null) return c;
+  if (!DRIFT_COUNTS.some((k) => finiteOf(drift[k]) !== null)) return null;
+  return DRIFT_COUNTS.reduce((s, k) => s + Math.max(0, finiteOf(drift[k]) ?? 0), 0);
+}
+export function vantageOf(record) {
+  if (!isPlain(record)) return null;
+  const p = isPlain(record.probes) ? record.probes : null;
+  const attempted = p ? namesOf(p.attempted) : null;
+  const succeeded = p ? namesOf(p.succeeded) : null;
+  if (record.vantage === 'lost' || (attempted?.length && succeeded && !succeeded.length)) return 'lost';
+  const v = typeof record.vantage === 'string' && record.vantage ? record.vantage : null;
+  return v === 'restricted' ? 'full' : v;
+}
+export function matchPctOf(record) {
+  if (!isPlain(record) || !isPlain(record.drift)) return null;
+  if (comparedOf(record.drift) === 0 || vantageOf(record) === 'lost') return null;
+  return finiteOf(record.drift.alignmentPct);
+}
+export function firstProbeErrorOf(record) {
+  if (!isPlain(record)) return null;
+  const errs = isPlain(record.probeErrors) ? record.probeErrors : {};
+  const text = (v) => (typeof v === 'string' && v.trim() ? v : '');
+  const raw = inProbeOrder(namesOf(record.probes?.failed) || []).map((f) => text(errs[f])).find(Boolean)
+    || inProbeOrder(Object.keys(errs)).map((f) => text(errs[f])).find(Boolean) || '';
+  if (raw) return safeErrorText(raw.split(' · ')[0]);
+  if (!isPlain(record.probes) && (record.outcome === 'vantage-lost' || record.outcome === 'error') && text(record.error)) return safeErrorText(record.error);
+  return null;
+}
+export function liveLossOf(record) {
+  const error = firstProbeErrorOf(record);
+  if (error) return { cause: 'error', error };
+  const lost = vantageOf(record) === 'lost';
+  if (lost && isPlain(record?.probes) && !(namesOf(record.probes.failed) || []).length) return { cause: 'no-data', error: null };
+  return { cause: lost || record?.outcome === 'vantage-lost' || record?.outcome === 'error' ? 'error' : 'unknown', error: null };
+}
+export function readingOutcome(x) {
+  if (!isPlain(x)) return null;
+  const outcome = typeof x.outcome === 'string' && x.outcome ? x.outcome : null;
+  if (outcome === 'scan-partial' || outcome === 'error') return outcome;
+  if (outcome === 'vantage-lost' || vantageOf(x) === 'lost') return 'vantage-lost';
+  const compared = isPlain(x.drift) ? comparedOf(x.drift) : countOf(x.compared);
+  if ((outcome === 'pass' || outcome === 'gate-failed') && compared === 0) return 'nothing-compared';
+  return outcome;
+}
+const lineOf = (v, max) => (typeof v === 'string' && v.trim() ? safeErrorText(v, max) : null);
+// An older record's environment scope, by the surface its crawler profile stood for (never an environment's name).
+const SURFACE_OF_PROFILE = Object.freeze({ prod: 'kubernetes', eks: 'eks', 'local-k8s': 'local-kubernetes', 'local-docker': 'compose' });
+const surfaceOfProfile = (profile) => (profile && Object.hasOwn(SURFACE_OF_PROFILE, profile) ? SURFACE_OF_PROFILE[profile] : profile);
+export function scanFactsOf(scan) {
+  if (!isPlain(scan)) return null;
+  let filter = null;
+  if (isPlain(scan.filter) && lineOf(scan.filter.surface, 40)) filter = { surface: lineOf(scan.filter.surface, 40), excluded: countOf(scan.filter.excluded) ?? 0 };
+  else if (isPlain(scan.environment) && (countOf(scan.environment.excluded) ?? 0) > 0) filter = { surface: surfaceOfProfile(lineOf(scan.environment.profile, 40)), excluded: countOf(scan.environment.excluded) };
+  return {
+    partial: scan.partial === true, notRead: countOf(scan.notRead), candidates: countOf(scan.candidates), files: countOf(scan.files),
+    treeTruncated: scan.treeTruncated === true || scan.truncated === true, filter, excludedMost: scan.excludedMost === true,
+  };
+}
+export function filesNotReadWords(s) {
+  if (!isPlain(s)) return '';
+  const known = s.notRead !== null && s.notRead > 0 && s.candidates !== null;
+  const head = known ? `${s.notRead} of ${s.candidates} files not read` : s.partial ? 'The scan did not read every file' : '';
+  const cut = s.treeTruncated ? 'the host cut its file list short' : '';
+  return head && cut ? `${head}; ${cut}` : head || (cut ? `${cut[0].toUpperCase()}${cut.slice(1)}` : '');
+}
+export const stoppedRunKept = (record) => isPlain(record?.packA) && typeof record.packA.source === 'string' && record.packA.source !== '';
+export function scanPartialReading(scan, { kept = true } = {}) {
+  const s = scanFactsOf(scan);
+  const tail = kept === false ? 'no complete scan of this repository is kept' : 'the previous pack is kept';
+  return s && s.notRead !== null && s.candidates !== null
+    ? `Partial scan — ${s.notRead} of ${s.candidates} files not read; ${tail}`
+    : `Partial scan — ${tail}`;
+}
+export function basisFactsOf(record) {
+  const r = isPlain(record) ? record : {};
+  const tiers = isPlain(r.drift?.tiers) ? r.drift.tiers : null;
+  const aside = isPlain(r.drift?.setAside) ? (countOf(r.drift.setAside.declaredNotLive) ?? 0) + (countOf(r.drift.setAside.liveNotDeclared) ?? 0) : 0;
+  return {
+    notReadLive: tiers ? Object.values(tiers).reduce((s, t) => s + (isPlain(t) ? countOf(t.notRead) ?? 0 : 0), 0) : null,
+    probesFailed: inProbeOrder(namesOf(r.probes?.failed) || []).slice(0, 8).map((f) => f.slice(0, 40)),
+    scoped: isPlain(r.packB?.liveScope) && Object.keys(r.packB.liveScope).length > 0,
+    setAsideCount: aside,
+    scan: scanFactsOf(r.packA?.scan),
+  };
+}
+export function nothingReason(facts) {
+  const x = isPlain(facts) ? facts : {};
+  const unread = countOf(x.notReadLive);
+  if (unread) return `${unread} declared ${unread === 1 ? 'thing' : 'things'} not read live`;
+  const failed = namesOf(x.probesFailed) || [];
+  if (failed.length) return `Live answered in part: ${listWords(failed.map(familyWord))} not read`;
+  const files = filesNotReadWords(x.scan);
+  if (files) return files;
+  if (x.scoped === true) return 'The live read was scoped to part of the estate';
+  if (countOf(x.setAsideCount)) return 'Every difference was set aside';
+  return NOTHING_REASON;
+}
+export function partialParts(facts, vantage) {
+  const x = isPlain(facts) ? facts : {};
+  const failed = namesOf(x.probesFailed) || [];
+  return [
+    vantage === 'partial' ? (failed.length ? `Live answered in part: ${listWords(failed.map(familyWord))} not read` : 'Live answered in part') : '',
+    filesNotReadWords(x.scan),
+  ].filter(Boolean);
+}
+// The line a stopped Run adds beside the last check (the journeys listing's stoppedRun, or the
+// record itself): "Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept."
+// A Run that kept no complete scan (the listing's `kept: false`, a record with no packA.source) says so.
+export function stoppedNote(stopped) {
+  if (!isPlain(stopped)) return '';
+  const record = isPlain(stopped.packA);
+  const s = record && isPlain(stopped.packA.scan) ? scanFactsOf(stopped.packA.scan) : { notRead: countOf(stopped.notRead), candidates: countOf(stopped.candidates) };
+  const files = s && s.notRead !== null && s.candidates !== null ? ` — ${s.notRead} of ${s.candidates} files not read` : '';
+  const kept = record ? stoppedRunKept(stopped) : stopped.kept !== false;
+  return `Last Run stopped: partial scan${files}; ${kept ? 'the previous pack is kept' : 'no complete scan of this repository is kept'}.`;
 }
 
 // ---------- the grade ----------
@@ -234,8 +394,10 @@ const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.o
 // not this engine's either. A record that names no schema is not judged by it.
 const otherSchema = (schema) => schema != null && Number(schema) !== GRADE_SCHEMA;
 const sameTerms = (run, off, aside, targets = '') => !otherSchema(run?.grade?.schema) && offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '') && runTargetsKey(run) === (targets || '');
+// A run whose live side returned no data (an older record whose every probe failed still carried a
+// letter) is never the board's letter either.
 export function runGradesBoard(run, pack, off = [], aside = '', targets = '') {
-  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
+  return runFinishedWithLetter(run) && vantageOf(run) !== 'lost' && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
 }
 // The key of a service's MTTD / MTTR targets now ('' for none).
 export const serviceTargetsKey = (service) => targetsTermKey(service?.targets ?? null);
@@ -382,8 +544,13 @@ function chaosLine(crit, liveUnobserved) {
 // "zero hours old", and would count a point the engine never gave.
 function liveGradeLines(run, { against, where, now }) {
   if (run?.grade?.driftConstruct !== 'requirement-chain' || !(Number(run.traceability?.declaredTotal) > 0)) return null;
+  // Nothing compared (drift.compared 0, or an older record's four counts): the engine scores Drift-free
+  // nothing and backs it with no figure — the chains' declared links would read broken for want of
+  // anything compared (studio/diagnostic-grade.mjs) — so the line says nothing was compared, and why,
+  // never "0 in 100 hold up".
+  const nothing = comparedOf(run.drift) === 0;
   const pct = Number(run.traceability.integrityPct);
-  if (!Number.isFinite(pct)) return null;
+  if (!nothing && !Number.isFinite(pct)) return null;
   const ageHours = run.freshness?.liveAgeHours;
   const dated = typeof ageHours === 'number' && Number.isFinite(ageHours);
   const fresh = dated && ageHours * 3600e3 <= FRESH_WINDOW_MS;
@@ -397,8 +564,10 @@ function liveGradeLines(run, { against, where, now }) {
   // two measures, not a contradiction.
   const promises = Number(run.traceability.declaredTotal);
   return [
-    { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
-      text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
+    nothing
+      ? { ok: 'no', score: 0, text: `Nothing was compared on the last check, so no promise is confirmed ${where}. ${nothingReason(basisFactsOf(run))}.` }
+      : { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
+        text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
       text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
         : dated ? `The ${picture} was more than a day old when it was checked.`
@@ -509,9 +678,11 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
     const recording = journey ? !journeyIsLive(journey) : !/^mcp:/i.test(String(run.packB?.source || ''));
     const against = recording ? 'against a live recording' : 'against live';
+    // A run the record marks not comparable with the one before (its scan read other files) says so.
+    const notComparable = run.comparable?.withPrevious === false ? ` Not comparable with the check before${typeof run.comparable.reason === 'string' && run.comparable.reason.trim() ? `: ${safeErrorText(run.comparable.reason)}` : ''}.` : '';
     return {
       letter, label, word: verdictWordFor(run.grade.score),
-      source: `Graded ${against}, ${agoText(run.startedAt, now)}.`,
+      source: `Graded ${against}, ${agoText(run.startedAt, now)}.${notComparable}`,
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
       ...criteria,
@@ -525,8 +696,11 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     return { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending', why: [], points: '' };
   }
   const ig = diagnostic.overall.instrumentGrade || instrumentGradeFor(diagnostic.overall.audit?.scorePctExact ?? 0);
-  const lost = run && run.outcome === 'vantage-lost' && runGradedPack(run, pack);
-  const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
+  // A live side that gave no data — a lost run, or an older record whose every probe failed.
+  const lost = run && (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') && runGradedPack(run, pack);
+  // A Run that stopped on a partial scan checked nothing (the board reads the last check that did).
+  const stopped = !lost && run?.outcome === 'scan-partial';
+  const partial = !lost && !stopped && run && shrank.length > 0 && runGradedPack(run, pack);
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
   const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
@@ -541,6 +715,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   return {
     letter: ig.letter, label: shortGradeLabel(ig), word: diagnostic.overall.verdict?.word || verdictWordFor(diagnostic.overall.audit?.scorePctExact),
     source: lost ? 'Graded from the repository alone; the last live check could not see production.'
+      : stopped ? 'Graded from the repository alone; the last Run read the repository in part and stopped before checking.'
       : partial ? 'Graded from the repository alone; the last live check saw only part of production.'
         : regraded ? (liveCheck ? `Graded from the repository alone: ${whatChanged} since the last live check. Check again to grade against live.`
           : `Graded from the repository alone: ${whatChanged} since the last check.`)
@@ -548,7 +723,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
     ...criteria,
-    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off, checked: !!(lost || partial || regraded) }),
+    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off, checked: !!(lost || stopped || partial || regraded) }),
   };
 }
 
@@ -609,12 +784,39 @@ export function chainWords(split) {
 }
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-// stillTrueModel({ journey, run, now, running, startError, journeysError })
+// stillTrueModel({ journey, run, now, running, startError, journeysError, stopped })
 //   journey   the GET /api/journeys entry for this service (or null)
-//   run       its newest run record (GET /api/journeys/:name/runs?limit=1), or null
+//   run       its newest run record that checked something (GET /api/journeys/:name/runs), or null
+//   stopped   a Run newer than `run` that stopped on a partial scan (outcome scan-partial), or null
 // Returns { status (one of OVERVIEW_STATUS keys or null), pill, sentence, note,
-//   cadence, stale, canCheck, checkLabel, checkPrimary, tone, error }.
-export function stillTrueModel({ journey = null, run = null, now = Date.now(), running = false, startError = null, journeysError = null, pending = false } = {}) {
+//   cadence, stale, canCheck, checkLabel, checkPrimary, tone, error } and, only when there is one,
+//   `reason` (why the live side gave nothing: its first probe error) and `stopped` (the stopped
+//   Run's line). Nothing compared is never "it matches"; a run the record marks not comparable
+//   with the one before says so in place of what moved since.
+export function stillTrueModel(input = {}) {
+  const s = stillTrueCore(input);
+  const run = input.run || null;
+  const stopped = input.stopped?.outcome === 'scan-partial' && run?.outcome !== 'scan-partial'
+    && (!run || String(input.stopped.startedAt || '') > String(run.startedAt || '')) ? stoppedNote(input.stopped) : '';
+  return stopped && s.status !== null ? { ...s, stopped } : s;
+}
+
+const declaredSideCompared = (run) => {
+  const d = run?.drift || {};
+  return (Number(d.aligned) || 0) + (Number(d.drifted) || 0) + (Number(d.declaredNotLive) || 0) > 0;
+};
+// Only live-only things were compared (every declared one of their families set aside, or none left in
+// the comparison): something was compared (C2 — a figure, 0, over it), nothing the repository declares
+// was. The board reads it Changed with that sentence, never "it matches" and never Nothing compared — the
+// row (lastCheckOf), the ring (fidelityModel) and the Run's toast show the figure, and one record reads
+// one way everywhere.
+const liveOnlyAlone = (run) => {
+  const compared = comparedOf(run?.drift);
+  return compared !== null && compared > 0 && differenceCount(run) === 0 && (Number(run?.drift?.liveNotDeclared) || 0) > 0 && !declaredSideCompared(run);
+};
+const asideCountOf = (run) => (Number(run?.drift?.setAside?.declaredNotLive) || 0) + (Number(run?.drift?.setAside?.liveNotDeclared) || 0);
+
+function stillTrueCore({ journey = null, run = null, now = Date.now(), running = false, startError = null, journeysError = null, pending = false } = {}) {
   const live = journeyIsLive(journey);
   // The cadence line belongs to a check this screen can run; a recording has nothing to click.
   const cadence = journey && live ? (journey.schedule ? 'Checks run on a schedule.' : 'Checks run only when you click.') : '';
@@ -639,10 +841,23 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   base.ago = ago;
   const startedMs = Date.parse(run.startedAt || '');
   const stale = Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS;
-  if (run.outcome === 'vantage-lost') {
+  // A live side that gave nothing — a lost run, or an older record whose every probe failed: the
+  // reason beneath names the first probe error; a live side that answered with no data says so.
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') {
+    const loss = liveLossOf(run);
     return { ...base, status: 'unreachable', pill: OVERVIEW_STATUS.unreachable, tone: 'warn', stale,
-      sentence: `Last check ${ago}: the live side did not answer, so nothing is known about it right now.`,
-      canCheck: false, checkLabel: '' };
+      sentence: loss.cause === 'no-data'
+        ? `Last check ${ago}: the live side answered but returned nothing this check reads, so nothing is known about it right now.`
+        : `Last check ${ago}: the live side did not answer, so nothing is known about it right now.`,
+      canCheck: false, checkLabel: '', ...(loss.error ? { reason: `Live did not answer — ${loss.error}` } : {}) };
+  }
+  // A Run that stopped on a partial scan compared nothing: the previous pack is kept.
+  if (run.outcome === 'scan-partial') {
+    const s = scanFactsOf(run.packA?.scan);
+    const files = s && s.notRead !== null && s.candidates !== null ? ` (${s.notRead} of ${s.candidates} files not read)` : '';
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Last Run ${ago}: the repository was read in part${files}, so nothing was compared; the previous pack is kept.`,
+      canCheck: false, checkLabel: '', tried: true };
   }
   const recording = !live;
   const when = run.packB?.refreshedAt ? dayMonth(run.packB.refreshedAt) : '';
@@ -663,6 +878,11 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   if (!firstRun && worseCount > 0) since = ` ${worseCount} got worse since the check before.`;
   else if (!firstRun && changedCount > 0 && betterCount === changedCount) since = ` ${changedCount} recovered since the check before.`;
   else if (!firstRun && changedCount > 0) since = ` ${changedCount} changed since the check before.`;
+  // Not comparable with the check before (its scan read other files): nothing moved "since" it.
+  if (run.comparable?.withPrevious === false) {
+    const why = typeof run.comparable.reason === 'string' && run.comparable.reason.trim() ? `: ${safeErrorText(run.comparable.reason)}` : '';
+    since = ` Not comparable with the check before${why}.`;
+  }
   // The live side showed less than the check before: the counts are not
   // comparable, so the sentence says so instead of announcing a difference,
   // and Check again (the next step's primary) is the one thing to do.
@@ -675,6 +895,29 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   // A record that counts the chain says it in the chain's words: exporters, alerts, dashboards.
   const split = chainDifferences(run);
   const cw = chainWords(split);
+  // Nothing compared: never "it matches". The first reason that holds is said.
+  const compared = comparedOf(run.drift);
+  const asideN2 = asideCountOf(run);
+  const asideIs = asideN2 ? ` ${asideN2} ${asideN2 === 1 ? 'is' : 'are'} set aside for this service.` : '';
+  if (compared === 0) {
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing was compared. ${nothingReason(basisFactsOf(run))}.${asideIs}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
+  // Only live-only things were compared: nothing the repository declares was, so nothing of it "matches";
+  // what live runs undeclared was compared, and differs (liveOnlyAlone).
+  if (liveOnlyAlone(run)) {
+    return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing the repository declares was compared: ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.${asideIs}${since}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one:
+  // the union is the four counts): never "it matches" over it.
+  if (k === 0 && compared !== null && !declaredSideCompared(run)) {
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing was compared. ${nothingReason(basisFactsOf(run))}.${asideIs}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
   if (k === 0 && cw) {
     const said = cw.unread
       ? `${cw.matched ? `its ${cw.matched} match live; ` : ''}not read live, so not compared: ${cw.unread}.`
@@ -712,15 +955,22 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
 
 function statusOf(run) {
   if (!run) return 'never';
-  if (run.outcome === 'vantage-lost') return 'unreachable';
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') return 'unreachable';
+  if (run.outcome === 'scan-partial' || comparedOf(run.drift) === 0) return 'nothing';
+  if (liveOnlyAlone(run)) return 'changed';
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one).
+  if (differenceCount(run) === 0 && comparedOf(run.drift) !== null && !declaredSideCompared(run)) return 'nothing';
   return differenceCount(run) === 0 ? 'unchanged' : 'changed';
 }
 
 // ---------- what to do next ----------
 
-// nextActionModel({ still, grade, decision, run, journey })
+// nextActionModel({ still, grade, decision, run, journey, stopped })
 //   decision  buildAssessmentDecision(...) for the pack alone (its causes name
 //             what keeps the grade down when nothing live was checked)
+//   stopped   a Run newer than `run` that stopped on a partial scan (its record), as stillTrueModel
+//             takes it: the stop is the next step's news (still.stopped says one is there; the record
+//             gives its counts and first reason)
 // Returns { sentence, button: { label, action } | null, why: [string] (≤ 3),
 //   primary: boolean } — across the whole screen exactly one primary button
 //   exists: this one, or the still-true panel's Check button when that is the
@@ -735,7 +985,7 @@ export function nextActionModel(input = {}) {
 
 // `rulesLeft`: the specification's rules Remediate lists as not met (rulesModel's `missing`): with
 // live in agreement, the next step says those are what is left, never "nothing to do".
-function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now(), rulesLeft = 0 } = {}) {
+function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now(), rulesLeft = 0, stopped = null } = {}) {
   const live = journeyIsLive(journey);
   if (grade?.basis === 'none' || grade?.basis === 'error') {
     return { sentence: 'Open Expert mode to register or repair the pack.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
@@ -753,10 +1003,16 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
       : { sentence: 'The saved check reads a recording; open Expert mode to run it.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
   if (still.status === 'unreachable') {
+    const noData = liveLossOf(run).cause === 'no-data';
     return live
-      ? { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
+      ? noData
+        ? { sentence: 'Check again once the live side returns data; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side answered the last check, but returned nothing this check reads.'], primary: true }
+        : { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
       : { sentence: 'The recording could not be read; open Expert mode to look.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
+  // A Run stopped on a partial scan after the check on screen: the check shown is the one before it,
+  // and the stop is what is new — never "nothing to do" beside it.
+  if (still.stopped) return stoppedNext(stopped?.outcome === 'scan-partial' ? stopped : null, live, { after: true });
   // The live side showed less than the check before: the one thing to do is
   // to check again; the differences are not worth a trip until it answers.
   const shrank = vantageShrank(run);
@@ -769,6 +1025,7 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     const ago = run?.startedAt ? agoText(run.startedAt, now) : '';
     return { sentence: 'Check it against live now.', button: { label: 'Check now', action: 'ov-check' }, why: [`The last check is ${ago.replace(/ ago$/, '')} old; readings older than a day are not trusted.`], primary: true };
   }
+  if (still.status === 'nothing') return nothingNext(run, live);
   if (still.status === 'unchanged') {
     // The still-true panel's Check again is the primary when there is one.
     const extra = Number(run?.drift?.liveNotDeclared) || 0;
@@ -791,6 +1048,12 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     return { sentence: 'Nothing to do right now: live matches what the repository declares.', button: null, why: [], primary: false };
   }
   // changed
+  // Live-only things alone (liveOnlyAlone): nothing the repository declares was compared, and what runs
+  // live undeclared is the thing to look at — never "fix 0 things".
+  if (liveOnlyAlone(run)) {
+    const extra = Number(run.drift.liveNotDeclared) || 0;
+    return { sentence: `Nothing the repository declares was compared; ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: nothingWhy(run), primary: true };
+  }
   // A record that counts the chain: the chain's differences are the thing to fix; the
   // details beyond it are one line.
   const split = chainDifferences(run);
@@ -805,11 +1068,14 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     if (cw.unread) why.push(`Not read live, so not compared: ${cw.unread}.`);
     const beyondWhy = split.beyond ? `Beyond the chain, ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'}.` : '';
     // In the chain's words: never "things", never "the chain matches" over a link live did not read.
+    // "The chain matches" only when a link of it matched; a chain with nothing compared says so.
     const sentence = split.chain
       ? `Fix the ${cw.differ} the live side does differently.`
       : cw.unread
         ? `${cw.matched ? `${cap(cw.matched)} match live, ${cw.unread} could not be read` : `Nothing in the chain could be compared: ${cw.unread} could not be read`}; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond the chain.`
-        : `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
+        : cw.matched
+          ? `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`
+          : `Nothing in the chain was compared; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
     const shown = beyondWhy ? [...why.slice(0, 2), beyondWhy] : why.slice(0, 3);
     return { sentence, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: shown, primary: true };
   }
@@ -823,6 +1089,48 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
   if (Array.isArray(run?.probes?.failed) && run.probes.failed.length) why.push('Part of the live side could not be read.');
   const k = differenceCount(run);
   return { sentence: `Fix the ${things(k)} the live side does differently.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
+}
+
+// The next step after a Run that stopped on a partial scan (`stopped`, its record; null when the host
+// gave only the panel's line): check against live again, and run the service again once its
+// repository answers in full. `after`: the stop came after the check on screen, which is the one
+// before it; else the stop is the newest record itself, and the previous pack is kept.
+function stoppedNext(stopped, live, { after = false } = {}) {
+  const s = scanFactsOf(stopped?.packA?.scan);
+  const first = Array.isArray(stopped?.packA?.scan?.notReadReasons) ? stopped.packA.scan.notReadReasons.find(isPlain) : null;
+  const why = [
+    s && s.notRead !== null && s.candidates !== null ? `${s.notRead} of ${s.candidates} files were not read.` : '',
+    first ? `The first not read: ${safeErrorText(`${first.path ?? '?'} — ${first.why ?? '?'}`)}.` : '',
+  ].filter(Boolean);
+  const head = after
+    ? 'The last Run read the repository in part and stopped, so the check shown is the one before it'
+    : 'The last Run read the repository in part and stopped, so the previous pack is kept';
+  return live
+    ? { sentence: `${head}: check it against live again, and run the service again once its repository answers in full.`, button: { label: 'Check again', action: 'ov-check' }, why, primary: true }
+    : { sentence: `${head}; run the service again once its repository answers in full.`, button: null, why, primary: false };
+}
+
+// Why nothing the repository declares was compared, in at most three plain items: the declared things
+// live could not read, the families it could not read, the files the scan did not read, a scoped live
+// read, the differences set aside.
+function nothingWhy(run) {
+  const facts = basisFactsOf(run);
+  const cw = chainWords(chainDifferences(run));
+  const aside = asideCountOf(run);
+  return [
+    facts.notReadLive ? (cw?.unread ? `Not read live, so not compared: ${cw.unread}.` : `${things(facts.notReadLive)} the repository declares could not be read live.`) : '',
+    facts.probesFailed.length ? `Part of the live side could not be read: its ${listWords(facts.probesFailed.map(familyWord))}.` : '',
+    filesNotReadWords(facts.scan) ? `${filesNotReadWords(facts.scan)}.` : '',
+    facts.scoped ? 'The live read was scoped to part of the estate; what lies outside it was not compared.' : '',
+    aside ? `${aside} ${aside === 1 ? 'difference is' : 'differences are'} set aside for this service.` : '',
+  ].filter(Boolean).slice(0, 3);
+}
+
+// The next step when the last check compared nothing: a stopped Run checks the kept pack again;
+// otherwise what each side holds, in Diagnose, with the reasons nothing was compared.
+function nothingNext(run, live) {
+  if (run?.outcome === 'scan-partial') return stoppedNext(run, live);
+  return { sentence: 'Nothing was compared, so nothing is confirmed live: see what each side holds.', button: { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, why: nothingWhy(run), primary: true };
 }
 
 // ---------- the board: what is in place ----------
@@ -1212,12 +1520,13 @@ export function rulesModel(conformance, { error = null } = {}) {
 //              not running live · live only, the run's drift counts
 //   chains     { total, intact, partial, broken, integrityPct, sentence } | null
 //   note       beside the numbers: the probe families that could not be read,
-//              the rules compared in part (labels a live listing does not show,
-//              values a chart or a deploy step fills in),
-//              and a reading older than a day, which the engine does not trust
+//              the rules compared in part (labels or a Grafana rule's condition
+//              the live side does not show, values a chart or a deploy step
+//              fills in), and a reading older than a day, which the engine
+//              does not trust
 //   partial    what of the live side was not read, in the strip's words: the
-//              failed probe families, and "rule labels" when the run compared
-//              rules on part of their labels (drift.partlyCompared)
+//              failed probe families, and "rule labels or conditions" when the
+//              run compared rules on part of them (drift.partlyCompared)
 //   chain      the chain's links against live (chainLive), when the record
 //              counts them (drift.tiers); the board then draws the links and
 //              their alignment, and says the rest in one line
@@ -1225,8 +1534,19 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
   const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [], chain: null };
   if (!run || !runGradedPack(run, pack)) return { ...base, note: 'Never checked against live.' };
-  if (run.outcome === 'vantage-lost') return { ...base, note: 'The live side did not answer the last check, so nothing is known about it right now.' };
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') {
+    return { ...base, note: liveLossOf(run).cause === 'no-data'
+      ? 'The live side answered the last check but returned nothing this check reads, so nothing is known about it right now.'
+      : 'The live side did not answer the last check, so nothing is known about it right now.' };
+  }
+  // Nothing compared: the counts are withheld with the reason, never drawn as zeros; the families
+  // the live side could not read are still named (the status strip says them).
+  if (run.outcome === 'scan-partial') return { ...base, nothing: true, note: 'The last Run read the repository in part and stopped before comparing anything; the previous pack is kept.' };
   if (vantageShrank(run).length) return { ...base, note: 'The live side showed less than the check before, so the counts cannot be compared yet.' };
+  if (comparedOf(run.drift) === 0) {
+    const failedWords = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
+    return { ...base, nothing: true, note: `Nothing was compared on the last check, so there is nothing to count. ${nothingReason(basisFactsOf(run))}.`, partial: failedWords };
+  }
   const n = (x) => Number(x) || 0;
   const d = run.drift || {};
   const tiles = [
@@ -1244,21 +1564,24 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
     // (partial), a link the promise rests on is missing (broken).
     sentence: `${n(t.intact)} of ${total} promises hold in every link${n(t.partial) ? `, ${n(t.partial)} in part` : ''}${n(t.broken) ? `, ${n(t.broken)} broken` : ''}.`,
   } : null;
-  const pct = Number(d.alignmentPct);
+  // A figure only where the record has one (Number(null) is 0).
+  const pct = typeof d.alignmentPct === 'number' ? d.alignmentPct : NaN;
   // A live side that answered only in part (a probe family failed) is said
   // beside the numbers: they count what could be seen.
   const failed = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
   const notes = [];
   if (failed.length) notes.push(`The live side answered only in part: its ${listWords(failed)} could not be read.`);
   // Rules matched on what each side showed of them: a listing that gives a
-  // severity and no other label never showed the rest, a chart that fills in
-  // a value never showed it, so "match" says nothing about those — and the
-  // board says that.
+  // severity and no other label never showed the rest, one that gives a
+  // Grafana-managed rule's query without its condition (its threshold) never
+  // showed that, and a chart that fills in a value never showed it — so
+  // "match" says nothing about those parts, and the board says that
+  // (drift.partlyCompared counts them all).
   const partly = n(d.partlyCompared);
-  if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared in part: labels a live listing does not show, or values a chart or a deploy step fills in, were not compared.`);
+  if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.`);
   const startedMs = Date.parse(run.startedAt || '');
   if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
-  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels'] : [])], chain: chainLive(run) };
+  return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels or conditions'] : [])], chain: chainLive(run) };
 }
 
 // ---------- the board: what the scan read ----------
@@ -1272,12 +1595,47 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
 // board says it beside the layers, so a grade never rests on files nobody
 // was told were missing.
 
+// The deployment surfaces an environment may read alone — tools/lib/crawler.mjs
+// DEPLOYMENT_SURFACES, mirrored here (a studio module never imports tools/lib;
+// tools/test-overview-model.mjs pins the ids): the service form's choices, the
+// first ('') reading every file, and the words a sentence names each by.
+export const DEPLOYMENT_SURFACE_CHOICES = Object.freeze([
+  Object.freeze({ id: '', label: 'No — every file the scan reads (default)' }),
+  Object.freeze({ id: 'kubernetes', label: 'Kubernetes and Helm' }),
+  Object.freeze({ id: 'eks', label: 'Kubernetes on Amazon EKS' }),
+  Object.freeze({ id: 'local-kubernetes', label: 'A local Kubernetes cluster (kind, minikube)' }),
+  Object.freeze({ id: 'compose', label: 'Docker Compose' }),
+]);
+const SURFACE_IDS = DEPLOYMENT_SURFACE_CHOICES.map((c) => c.id).filter(Boolean);
+const SURFACE_WORDS = Object.freeze({ kubernetes: 'Kubernetes and Helm', eks: 'Amazon EKS', 'local-kubernetes': 'local Kubernetes', compose: 'Docker Compose' });
+// A surface in a sentence ("14 left out by the Kubernetes and Helm filter"); 'environment' for anything else.
+export function surfaceLabel(id) {
+  return Object.hasOwn(SURFACE_WORDS, id) ? SURFACE_WORDS[id] : 'environment';
+}
+
 // The losses of a scan, in a few words ("347 past the 200-file cap, 3 not
 // read, …"), or '' when it read everything it takes. The Run's toast says it.
+// A record whose scan counts what it did not read (`notRead`, from this
+// release on) is said by kind — could not be read, over the scan's limits,
+// past the file cap — and a file left out on purpose (a secrets file, one git
+// ignores) is no loss; an older record reads as it always did.
 export function scanLossText(scan) {
   if (!scan || typeof scan !== 'object') return '';
   const n = (v) => Number(v) || 0;
   const parts = [];
+  if (typeof scan.notRead === 'number') {
+    const lost = n(scan.lost);
+    const capped = n(scan.capped);
+    const limit = Math.max(0, n(scan.notRead) - lost - capped);
+    if (lost) parts.push(`${lost} could not be read`);
+    if (limit) parts.push(`${limit} over the scan's limits`);
+    if (capped) parts.push(`${capped} past the file cap`);
+    if (scan.treeTruncated || scan.truncated) parts.push('the host cut its file list short');
+    const excluded = n(scan.filter?.excluded ?? scan.environment?.excluded);
+    if (excluded) parts.push(`${excluded} left out by the ${surfaceLabel(scan.filter?.surface)} filter`);
+    if (n(scan.unclassified)) parts.push(`${n(scan.unclassified)} recognised as nothing`);
+    return parts.join(', ');
+  }
   if (n(scan.capped)) parts.push(`${n(scan.capped)} past the file cap`);
   if (n(scan.skipped)) parts.push(`${n(scan.skipped)} not read`);
   if (scan.truncated) parts.push('the host cut its file list short');
@@ -1287,9 +1645,12 @@ export function scanLossText(scan) {
 }
 
 // scanModel({ run }) → null when the record carries no scan, else
-//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings }
-//   tone  'warn' when the scan lost files it takes (cap, not read, a cut
-//         list), else 'neutral'
+//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings,
+//     partial, notRead, candidates }
+//   tone  'warn' when the scan did not read files it takes (could not, over
+//         a limit, past the cap, a cut list) or its deployment surface left
+//         out most of the repository, else 'neutral' — a file left out on
+//         purpose never warns
 export function scanModel({ run = null } = {}) {
   const scan = run?.packA?.scan;
   if (!scan || typeof scan !== 'object') return null;
@@ -1302,12 +1663,30 @@ export function scanModel({ run = null } = {}) {
   const rowsOf = (list, why = '') => (Array.isArray(list) ? list : []).map((x) => (typeof x === 'string' ? { path: x, why } : { path: String(x?.path || ''), why: String(x?.why || why) }));
   const group = (key, title, count, rows) => ({ key, title, count, rows, more: Math.max(0, count - rows.length) });
   const groups = [];
+  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
+  if (typeof scan.notRead === 'number') {
+    const skippedOf = (kind) => rowsOf((Array.isArray(scan.skippedFiles) ? scan.skippedFiles : []).filter((x) => x?.kind === kind));
+    const lost = n(scan.lost);
+    const capped = n(scan.capped);
+    const limit = Math.max(0, n(scan.notRead) - lost - capped);
+    const onPurpose = Math.max(0, n(scan.skipped) - lost - limit);
+    const excluded = n(scan.filter?.excluded ?? scan.environment?.excluded);
+    const label = surfaceLabel(scan.filter?.surface);
+    if (lost) groups.push(group('lost', 'Could not be read — the host or the disk failed these; run it again', lost, skippedOf('lost')));
+    if (limit) groups.push(group('limit', 'Not read — over what a scan reads (too large, past the total, not text, an archive entry it cannot open)', limit, skippedOf('limit')));
+    if (capped) groups.push(group('capped', 'Past the file cap — the read takes the likely artefacts first and stops at its cap', capped, rowsOf(scan.cappedFiles, 'past the file cap')));
+    if (scan.treeTruncated || scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
+    if (onPurpose) groups.push(group('onPurpose', 'Skipped on purpose — a name that says it holds secrets, or git ignores it', onPurpose, skippedOf('on-purpose')));
+    if (excluded) groups.push(group('excluded', `Left out by the ${label} filter — files for other deployment surfaces`, excluded, rowsOf(scan.environment?.excludedFiles)));
+    if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
+    const warn = lost || limit || capped || scan.treeTruncated || scan.truncated || scan.excludedMost === true;
+    return { sentence, tone: warn ? 'warn' : 'neutral', groups, warnings, partial: scan.partial === true, notRead: n(scan.notRead), candidates };
+  }
   if (n(scan.skipped)) groups.push(group('skipped', 'Not read', n(scan.skipped), rowsOf(scan.skippedFiles)));
   if (n(scan.capped)) groups.push(group('capped', `Past the file cap — the read takes the likely artefacts first and stops at its cap`, n(scan.capped), []));
   if (scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
   if (n(scan.environment?.excluded)) groups.push(group('excluded', `Left out by the ${scan.environment.profile || 'environment'} scope — files for other deployment surfaces`, n(scan.environment.excluded), rowsOf(scan.environment.excludedFiles)));
   if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
-  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
   return { sentence, tone: n(scan.capped) || n(scan.skipped) || scan.truncated ? 'warn' : 'neutral', groups, warnings };
 }
 
@@ -1321,7 +1700,7 @@ export function scanModel({ run = null } = {}) {
 //   chain's links alone and `beyond` says the rest in one line ('' when the
 //   record counts everything together).
 export function changesModel({ fidelity = null } = {}) {
-  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.', beyond: '' };
+  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: fidelity?.nothing ? 'Nothing was compared on the last check, so there is nothing to change yet.' : 'Check against live to count what to change.', beyond: '' };
   const chain = fidelity.chain;
   if (chain) {
     const num = (l, k) => Number(l.counts?.[k]) || 0;
@@ -1420,6 +1799,8 @@ export function buildOverviewModel(input = {}) {
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
     layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
     listable = false, gradeSwitches = false, controlRoom = false, controlRoomOpen = false,
+    // A Run newer than `run` that stopped on a partial scan (its record, outcome scan-partial), or null.
+    stopped = null,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -1471,7 +1852,7 @@ export function buildOverviewModel(input = {}) {
     switches: { enabled: access?.canWrite !== false, reason: access?.canWrite !== false ? null : (access?.reason || 'Not available for your role here.') },
     graded: GRADE_CRITERIA.filter((c) => !offKeys.includes(c.key)).map((c) => ({ key: c.key, label: c.label })),
   } : graded0;
-  const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending });
+  const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending, stopped: journey ? stopped : null });
   // A service with no pack at all has nothing to grade: the drift check
   // starts here, as with no service, under the service's own header — the
   // start's cards are the way in, not "Open Expert mode". (A member-only row,
@@ -1479,7 +1860,7 @@ export function buildOverviewModel(input = {}) {
   const startHere = startable && picked.how === 'none';
   // The specification's rules not met, which Remediate lists (read before the next step, which names them when live agrees).
   const rules = picked.how === 'primary' && !pending ? rulesModel(conformance, { error: conformanceError }) : null;
-  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now, rulesLeft: rules && !rules.unknown ? rules.missing.length : 0 });
+  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now, rulesLeft: rules && !rules.unknown ? rules.missing.length : 0, stopped: journey ? stopped : null });
   // One primary button on the screen: the next step's when it has one, else
   // the still-true panel's Check button; none over the start.
   const primary = startHere ? null : (next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null));
@@ -1615,10 +1996,211 @@ export function liveScopeDefaultsOf(answer) {
 
 // The scope an environment's read applies and where it comes from: its own, else the server's
 // configured snapshot scope (`defaults`, compact), else none → { scope, from: 'environment' | 'server' | null }.
+// Kept for hosts that call it; the board no longer does — the server default never applies to an
+// environment that exists (envScopeCell, formScopeOf below).
 export function resolvedScope(own, defaults) {
   if (own && typeof own === 'object' && Object.keys(own).length) return { scope: own, from: 'environment' };
   if (defaults && typeof defaults === 'object' && Object.keys(defaults).length) return { scope: defaults, from: 'server' };
   return { scope: null, from: null };
+}
+
+// ---------- the server default, the save and the check of a live scope ----------
+//
+// The server's configured snapshot scope (OBSERVOGRAM_SNAPSHOT_*, GET /api/mcp/jobs) never applies
+// to a service environment on its own: a Run reads the environment's own scope, else none. It
+// pre-fills the form of a NEW environment, each field said "from the server default", and saved it
+// is that environment's own. It is not pre-filled for a service whose environments read other
+// metric prefixes, nor kept for one whose repository declares no metric it would read (the scope
+// check, below); an environment that exists and has none opens empty, says so, and offers
+// Use the server default.
+export const SCOPE_DEFAULT_IGNORED = 'No live scope — the server default no longer applies here; set one';
+
+const prefixesOf = (scope) => (Array.isArray(scope?.metricPrefixes) ? scope.metricPrefixes : []);
+const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+
+// The pre-fill a new environment of `service` (null: a new service) opens with: { values } — the
+// default's five answers — or { refused: { defaultPrefixes, servicePrefixes } } when the service's
+// environments read other metric prefixes of their own, or null (no default). A default that names
+// no metric prefixes cannot show it is this service's (SPEC P5: never pre-filled for a service whose
+// prefixes differ from the default's) — its folders, rule groups and patterns are one service's — so
+// it is never pre-filled: { refused: { defaultPrefixes: [], servicePrefixes: null, unprefixed: true } },
+// and the form offers Use the server default instead.
+export function scopePrefillOf(service, defaults) {
+  if (!defaults || typeof defaults !== 'object' || !scopeFromValues(scopeFormValues(defaults))) return null;
+  const dp = prefixesOf(defaults);
+  if (!dp.length) return { refused: { defaultPrefixes: [], servicePrefixes: null, unprefixed: true } };
+  const mine = (Array.isArray(service?.environments) ? service.environments : []).map((e) => prefixesOf(e?.liveScope)).filter((p) => p.length);
+  if (mine.some((p) => !sameSet(p, dp))) return { refused: { defaultPrefixes: dp, servicePrefixes: [...new Set(mine.flat())] } };
+  return { values: scopeFormValues(defaults) };
+}
+
+// The scope answers a form opens with, and what the form keeps about them: an environment that
+// exists (`env`, with its liveScope) on its own scope, empty when it has none; a new one
+// pre-filled (scopePrefillOf). → { values, from, form: { scopeFrom, scopePrefill, scopePrefillRefused, scopeCheck } }
+export function formScopeOf(service, env, defaults) {
+  if (env) {
+    const own = env.liveScope && typeof env.liveScope === 'object' && Object.keys(env.liveScope).length ? env.liveScope : null;
+    return { values: scopeFormValues(own), from: own ? 'environment' : null, form: { scopeFrom: own ? 'environment' : null, scopePrefill: null, scopePrefillRefused: null, scopeCheck: null } };
+  }
+  const prefill = scopePrefillOf(service, defaults);
+  if (prefill?.values) return { values: prefill.values, from: 'server', form: { scopeFrom: 'server', scopePrefill: defaults, scopePrefillRefused: null, scopeCheck: null } };
+  return { values: scopeFormValues(null), from: null, form: { scopeFrom: null, scopePrefill: null, scopePrefillRefused: prefill?.refused || null, scopeCheck: null } };
+}
+
+// Use the server default (an environment that exists, with none of its own): its five answers on
+// the form, said "from the server default" — saved, they are the environment's own.
+export function useServerDefaultScope(form) {
+  if (!form?.open || !form.scopeDefaults) return form;
+  return { ...form, values: { ...form.values, ...scopeFormValues(form.scopeDefaults) }, scopePrefill: form.scopeDefaults, scopePrefillRefused: null, scopeFrom: 'server', scopeCheck: null, error: null };
+}
+
+// The answers still holding the pre-fill that a save would NOT keep: all of them when the save
+// would write over a scope the environment has of its own, or onto a record the form was not
+// opened on (`known` false: a blank Add naming an existing service); all but the prefixes when
+// the prefixes typed differ from the default's — a default that names none included, once any are
+// typed (its rule groups, folders and patterns are another service's then); none otherwise.
+function scopeDropped(values, { prefill, known = true, was = null }) {
+  if (!prefill) return [];
+  const pre = scopeFormValues(prefill);
+  const held = SCOPE_FIELDS.filter((f) => pre[f.value] !== '' && String(values?.[f.value] ?? '') === pre[f.value]);
+  if (!held.length) return [];
+  if (!known || was) return held;
+  const typed = scopeList(values?.scopePrefixes, 'comma');
+  const preset = scopeList(pre.scopePrefixes, 'comma');
+  return !sameSet(typed, preset) ? held.filter((f) => f.field !== 'metricPrefixes') : [];
+}
+
+// The scope a save keeps for an environment (savePlan): an untouched scope of its own as kept (a
+// rule group with a comma, say, is never split by a save that did not touch it); else what is
+// typed, less the pre-filled answers it must not keep (scopeDropped) — a scope typed equal to the
+// server default IS saved: the default never applies on its own. Over a scope of its own, a
+// pre-fill that leaves nothing typed keeps that scope (it is never cleared by answers not saved).
+// Null for none.
+export function scopeSaveOf(values, { was = null, prefill = null, known = true } = {}) {
+  const untouched = was && SCOPE_FIELDS.every((f) => String(values?.[f.value] ?? '') === scopeFormValues(was)[f.value]);
+  if (untouched) return was;
+  const dropped = scopeDropped(values, { prefill, known, was });
+  if (!dropped.length) return scopeFromValues(values);
+  const kept = { ...values };
+  for (const f of dropped) kept[f.value] = '';
+  return scopeFromValues(kept) ?? (was || null);
+}
+
+// The matrix cell's live scope for an environment (serviceListModel): its own, said in a few words;
+// none of its own while the server has a default — said so (`defaultIgnored`, the row's sentence:
+// the default no longer applies); else none.
+function envScopeCell(own, defaults) {
+  if (own && typeof own === 'object' && Object.keys(own).length) return { text: scopeSummary(own), from: 'environment' };
+  if (defaults && typeof defaults === 'object' && Object.keys(defaults).length) return { text: null, from: null, defaultIgnored: SCOPE_DEFAULT_IGNORED, defaultSummary: scopeSummary(defaults) };
+  return null;
+}
+
+// The scope check (POST /api/services/:id/scope-check): what a scope would leave out, asked before
+// it is saved. scopeCheckOf(form) → { serviceId, env, scope, key } — a service with a record, an
+// environment named (one not added yet is checked against the service's own pack), an MCP
+// endpoint and a scope typed — or null. The host sends it and hands the answer back with the key:
+// an answer for another key (an older scope) is dropped.
+export function scopeCheckOf(form) {
+  if (!form?.open || form.chaosRun || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
+  const v = form.values || {};
+  const env = trimmed(v.env);
+  if (!env || !v.endpointId || v.endpointId === LIVE_PACK) return null;
+  const scope = scopeFromValues(v);
+  if (!scope) return null;
+  return { serviceId: form.serviceId, env, scope, key: JSON.stringify([form.serviceId, env, SCOPE_FIELDS.map((f) => scope[f.field] ?? null)]) };
+}
+export function scopeChecking(form, key) {
+  return form?.open ? { ...form, scopeCheck: { state: 'checking', key, answer: null, error: null } } : form;
+}
+export function scopeCheckFailed(form, error, key) {
+  if (!form?.open || form.scopeCheck?.key !== key) return form;
+  return { ...form, scopeCheck: { state: 'failed', key, answer: null, error: sentenceOf(error) } };
+}
+// The answer, kept with when its live read was (`readAgo`, as `now` says it). A pre-fill whose
+// prefixes no declared metric of the service carries is another service's: its answers still
+// holding the default are cleared, and the form says why (scopePrefillRefused).
+export function scopeChecked(form, answer, key, { now = Date.now() } = {}) {
+  if (!form?.open || form.scopeCheck?.key !== key) return form;
+  const readAt = answer?.live?.readAt;
+  const check = { state: 'done', key, answer: answer && typeof answer === 'object' ? answer : null, error: null, readAgo: readAt ? agoText(readAt, now) : null };
+  const metric = check.answer?.declared?.families?.find((x) => x.family === 'metric');
+  const pre = form.scopePrefill ? scopeFormValues(form.scopePrefill) : null;
+  if (pre && pre.scopePrefixes && String(form.values?.scopePrefixes ?? '') === pre.scopePrefixes && metric?.declared > 0 && metric.inside === 0) {
+    const values = { ...form.values };
+    for (const f of SCOPE_FIELDS) if (pre[f.value] !== '' && String(values[f.value] ?? '') === pre[f.value]) values[f.value] = '';
+    return { ...form, values, scopePrefill: null, scopeFrom: null, scopeCheck: null, scopePrefillRefused: { defaultPrefixes: prefixesOf(form.scopePrefill), servicePrefixes: null, declared: metric.declared } };
+  }
+  return { ...form, scopeCheck: check };
+}
+
+const SCOPE_NOUNS = Object.freeze({ metric: ['metric', 'metrics'], dashboard: ['dashboard', 'dashboards'], alert_rule: ['alert rule', 'alert rules'], recording_rule: ['recording rule', 'recording rules'] });
+const quotedList = (names) => names.map((n) => `"${n}"`).join(', ');
+const shortList = (names) => (names.length > 6 ? `${names.slice(0, 6).join(', ')}, … (${names.length - 6} more)` : names.join(', '));
+
+// The scope check's answer as the form words it (scopeModel's `check`), for a host that redraws only that.
+export function scopeCheckView(form) {
+  return form?.open ? scopeCheckModel(form, form.values || {}) : null;
+}
+
+// formModel's scope `check`: { state, warnings: [text], notes: [text] } as §5 of the design words them, or null.
+function scopeCheckModel(form, v) {
+  const c = form.scopeCheck;
+  if (!c) return null;
+  if (c.state === 'checking') return { state: 'checking', warnings: [], notes: ['Checking the scope…'] };
+  if (c.state === 'failed') return { state: 'failed', warnings: [], notes: [`The scope could not be checked: ${c.error || 'no answer'}`] };
+  const env = trimmed(v.env) || 'this environment';
+  const scope = scopeFromValues(v) || {};
+  const groups = Array.isArray(scope.ruleGroups) ? scope.ruleGroups : [];
+  const warnings = [];
+  const notes = [];
+  const live = c.answer?.live || null;
+  const ago = c.readAgo ? ` (${c.readAgo})` : '';
+  if (groups.length) {
+    if (!live) notes.push(`No live read of ${env} yet: Run it once to check the rule groups against live.`);
+    else if (live.ruleGroups === null) notes.push(`The last live read of ${env}${ago} did not record its rule groups: Run it again to check them.`);
+    else if (Array.isArray(live.foldersNotRead) && live.foldersNotRead.length) {
+      notes.push(`The last live read of ${env} read only the folders ${shortList(live.folders || [])}: Run it with this scope once to check the rule groups of ${shortList(live.foldersNotRead)}.`);
+    } else if (live.ruleGroupsKept && Number.isInteger(live.ruleGroupsKept.of) && Number.isInteger(live.ruleGroupsKept.kept)) {
+      // The live read listed more rule groups than its record keeps: a group not among those kept may be there.
+      const unlisted = groups.filter((g) => !(Array.isArray(live.ruleGroups) && live.ruleGroups.includes(g)));
+      if (unlisted.length) notes.push(`The last live read of ${env}${ago} listed ${live.ruleGroupsKept.of} rule groups and kept the first ${live.ruleGroupsKept.kept}: ${quotedList(unlisted)} ${unlisted.length === 1 ? 'is' : 'are'} not among them, so whether ${unlisted.length === 1 ? 'it is' : 'they are'} there is not known.`);
+    } else if (Array.isArray(live.missingGroups) && live.missingGroups.length) {
+      const missing = live.missingGroups;
+      const where = Array.isArray(scope.folderUids) && scope.folderUids.length ? ` in the folders ${shortList(scope.folderUids)}` : '';
+      warnings.push(live.ruleGroups.length
+        ? `Not in the last live read of ${env}${ago}: the rule group${missing.length === 1 ? '' : 's'} ${quotedList(missing)}. It listed ${shortList(live.ruleGroups)}${where}.`
+        : `The last live read of ${env}${ago} listed no rule group${where}, so ${quotedList(missing)} ${missing.length === 1 ? 'is' : 'are'} not there.`);
+    }
+  }
+  const declared = c.answer?.declared || null;
+  if (!declared) notes.push(`No scan of ${form.values?.name ? trimmed(form.values.name) : 'this service'} in ${env} yet: Run it once to check this scope against what the repository declares.`);
+  for (const x of declared?.families || []) {
+    if (!(x.declared > 0) || x.inside > 0) continue;
+    const [one, many] = SCOPE_NOUNS[x.family] || [x.family, `${x.family}s`];
+    const noun = x.declared === 1 ? one : many;
+    if (!x.unknown) warnings.push(`None of the ${x.declared} declared ${noun} is inside this scope: a Run would compare none of them.`);
+    else {
+      const what = x.family === 'dashboard' ? 'folder' : x.family === 'metric' ? 'name' : (Array.isArray(scope.folderUids) && scope.folderUids.length && groups.length ? 'folder or group' : groups.length ? 'group' : 'folder');
+      // Those the repository files under a folder TITLE the live read gave no uid of (server/scope-check.mjs
+      // byTitle): their place is not known, which is no fault of the repository's — said apart.
+      const byTitle = Number.isInteger(x.byTitle) && x.byTitle > 0 ? Math.min(x.byTitle, x.unknown) : 0;
+      const silent = x.unknown - byTitle;
+      const parts = [];
+      if (byTitle) {
+        const titles = Array.isArray(x.titles) && x.titles.length ? ` (${quotedList(x.titles)})` : '';
+        const folders = Array.isArray(x.untitledFolders) && x.untitledFolders.length ? x.untitledFolders : (Array.isArray(scope.folderUids) ? scope.folderUids : []);
+        const read = live ? `the last live read of ${env}${ago} did not give the title of the folder${folders.length === 1 ? '' : 's'} ${shortList(folders)}` : `no live read of ${env} has given the titles of its folders yet`;
+        parts.push(`${byTitle === x.declared ? 'they name' : `${byTitle} of them name`} their folder by its title only${titles}, and ${read}`);
+      }
+      if (silent) parts.push(`${silent} of them do not say which ${what} they are in`);
+      if (x.outside) parts.push(`${x.outside} are outside`);
+      const sentence = `None of the ${x.declared} declared ${noun} is known to be inside this scope: ${parts.join(byTitle ? '; ' : ', ')}.`;
+      // Every one filed by a title alone, none outside: not known to be wrong — a note, not a warning.
+      if (byTitle === x.unknown && !x.outside) notes.push(`${sentence} A Run with it compares those it finds in these folders; one it does not find reads not checked.`);
+      else warnings.push(sentence);
+    }
+  }
+  return { state: 'done', warnings, notes };
 }
 const KIND_LABEL = Object.fromEntries(REPOSITORY_KINDS.map((k) => [k.kind, k.label]));
 // The org's repository sources (GET /api/repository-sources: { github, ado,
@@ -1673,12 +2255,59 @@ const targetsDiffer = (runTargets, targets) => {
   const was = targetsTermKey(runTargets ?? null);
   return !!was && was !== (targets || '');
 };
+// The row's five states (the listing's lastRun is the newest run that is not a stopped Run; its
+// facts are tools/lib/run-basis.mjs basisSummary's — an older server's listing has none, and its
+// row reads as before):
+//   never        no run                       label 'Not checked yet'
+//   unreachable  the live side gave nothing   label 'Live did not answer' (reason: its first probe
+//                                             error) or 'Live returned no data'; no letter; the gate failed
+//   nothing      nothing was compared         label 'Nothing compared', reason the first that holds
+//   partial      a match, live answered in part or the scan lost files: the figure, and what was
+//                not read beside it (reason)
+//   checked      the figure; files the scan did not read (its caps) beside it
+// → { state, word, ago, letter, tone, gradeLabel?, alignmentPct, gate, label, reason, notes, when }
+//   label   the cell's words in place of the figure ('' when the figure is the words)
+//   notes   [{ text, tone }]: a Run that stopped since, the files a surface filter excluded (a
+//           warning past half), not comparable with the check before
+// No figure without a comparison; a gate never passes over nothing.
+const stoppedNoteOf = (journey) => (journey?.stoppedRun && typeof journey.stoppedRun === 'object' ? stoppedNote(journey.stoppedRun) : '');
+function lastCheckNotes(journey, last) {
+  const notes = [];
+  const stopped = stoppedNoteOf(journey);
+  if (stopped) notes.push({ text: stopped, tone: 'warn' });
+  const f = last?.scan?.filter;
+  const excluded = countOf(f?.excluded);
+  if (f && excluded) {
+    // The surface by its words (surfaceLabel: 'Kubernetes and Helm'), never its id or an environment's name.
+    const said = `${excluded} ${excluded === 1 ? 'file' : 'files'} excluded by the ${surfaceLabel(f.surface)} filter`;
+    notes.push(last.scan.excludedMost === true ? { text: `${said} — more than half of the files the scan recognised`, tone: 'warn' } : { text: said, tone: 'neutral' });
+  }
+  if (last?.comparable && last.comparable.withPrevious === false) {
+    notes.push({ text: `Not comparable with the check before${typeof last.comparable.reason === 'string' && last.comparable.reason ? `: ${last.comparable.reason}` : ''}`, tone: 'warn' });
+  }
+  // Stored exclude patterns the last read went without (the listing's scopeNotApplied): the read was wider
+  // than the scope the service keeps, and the check says so until the patterns change.
+  const skipped = countOf(last?.scopeNotApplied);
+  if (skipped) notes.push({ text: `${skipped} stored exclude ${skipped === 1 ? 'pattern' : 'patterns'} not applied — may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the live scope`, tone: 'warn' });
+  return notes;
+}
 function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
   const last = journey?.lastRun || null;
-  if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
+  const notes = lastCheckNotes(journey, last);
+  if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: 'Not checked yet', reason: '', notes, when: '' };
   const ago = agoText(last.startedAt, now);
-  if (last.outcome === 'vantage-lost' || last.outcome === 'error') {
-    return { state: 'unreachable', word: OVERVIEW_STATUS.unreachable, ago, letter: null, tone: 'warn', alignmentPct: null, gate: null };
+  const reading = readingOutcome(last);
+  // A stopped Run as the last run (a listing that names one): it compared nothing.
+  if (reading === 'scan-partial') {
+    return { state: 'nothing', word: OVERVIEW_STATUS.nothing, ago, letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: OVERVIEW_STATUS.nothing, reason: scanPartialReading(last.scan), notes, when: ago ? `Tried ${ago}` : '' };
+  }
+  if (reading === 'vantage-lost' || reading === 'error') {
+    const error = typeof last.firstProbeError === 'string' && last.firstProbeError ? last.firstProbeError : '';
+    return {
+      state: 'unreachable', word: OVERVIEW_STATUS.unreachable, ago, letter: null, tone: 'warn', alignmentPct: null,
+      gate: reading === 'vantage-lost' ? 'fail' : null,
+      label: !error && last.liveLoss === 'no-data' ? 'Live returned no data' : 'Live did not answer', reason: error, notes, when: ago ? `Tried ${ago}` : '',
+    };
   }
   const score = Number.isFinite(last.gradeScore) ? last.gradeScore : null;
   const ig = score === null ? null : instrumentGradeFor(score);
@@ -1695,15 +2324,99 @@ function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
         : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';
   const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
   const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
+  // How much it compared: the listing's count (null from an older server, which is read as before).
+  const compared = countOf(last.compared);
+  const alignmentPct = compared === 0 ? null : (Number.isFinite(last.alignmentPct) ? last.alignmentPct : null);
+  const graded = {
+    ago, letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${asideSaid}${before}` : '',
+    alignmentPct,
+    gate: last.outcome === 'gate-failed' ? 'fail' : (last.outcome === 'pass' && compared !== 0 ? 'pass' : null),
+  };
+  const facts = { notReadLive: last.notReadLive, probesFailed: last.probesFailed, scan: last.scan, scoped: last.scoped, setAsideCount: last.setAsideCount };
+  const when = ago ? `Checked ${ago}` : '';
+  if (compared === 0) {
+    return { state: 'nothing', word: OVERVIEW_STATUS.nothing, ...graded, label: OVERVIEW_STATUS.nothing, reason: nothingReason(facts), notes, when };
+  }
+  const vantage = vantageOf(last);
+  const partial = vantage === 'partial' || last.scan?.partial === true;
   return {
-    state: 'checked', word: ago ? `Checked ${ago}` : 'Checked', ago,
-    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${asideSaid}${before}` : '',
-    alignmentPct: Number.isFinite(last.alignmentPct) ? last.alignmentPct : null,
-    gate: last.outcome === 'pass' ? 'pass' : (last.outcome === 'gate-failed' ? 'fail' : null),
+    state: partial ? 'partial' : 'checked', word: ago ? `Checked${partial ? ' (partial)' : ''} ${ago}` : `Checked${partial ? ' (partial)' : ''}`, ...graded,
+    label: alignmentPct === null ? 'Match not known' : '', reason: partialParts(facts, vantage).join(' · '), notes, when,
   };
 }
 
 export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
+
+// The Run's toast, as facts (overview-view.mjs runToastText writes the words and the signs): what the
+// scan read, the live read's scope, the grade where one exists, the match only over a comparison, and
+// what the reading leaves out. `row`: the list row ({ name, env, repository }); `answer`: POST
+// /api/services/:id/run's 200 body ({ record, scan }).
+//   → { head, read, scoped, notApplied, letter, pct, nothing, unreachable, livePart, notComparable, filterWarn, tone }
+//   tone  'ok' only for a whole reading: nothing lost or capped by the scan, something compared, the
+//         live side whole, comparable with the check before, no filter warning; else ''
+export function runToastModel(row, answer) {
+  const record = isPlain(answer?.record) ? answer.record : null;
+  const scan = isPlain(answer?.scan) ? answer.scan : null;
+  const of = scan && Number(scan.candidates) > Number(scan.files) ? ` of ${scan.candidates}` : '';
+  const loss = scanLossText(scan);
+  const read = scan
+    ? `${scan.files ?? '?'}${of} files from ${scan.source || 'the repository'}${loss ? ` (${loss})` : ''}${scan.partial === true ? ' — a partial scan' : ''}`
+    : `the pack file${row?.repository?.text ? ` ${row.repository.text}` : ''}`;
+  const vantage = vantageOf(record);
+  const lost = vantage === 'lost';
+  const gone = lost ? liveLossOf(record) : null;
+  const failed = namesOf(record?.probes?.failed) || [];
+  const s = scanFactsOf(scan);
+  const filterWarn = s?.excludedMost ? `the ${surfaceLabel(s.filter?.surface)} filter excluded more than half of the files the scan recognised` : '';
+  const nothing = comparedOf(record?.drift) === 0;
+  const notComparable = record?.comparable?.withPrevious === false;
+  // A stored exclude pattern the read went without (packB.notApplied, one sentence each): said, so the
+  // scope the toast names is the one applied and nobody takes the wider read for the narrow one.
+  const skipped = Array.isArray(record?.packB?.notApplied) ? record.packB.notApplied.length : 0;
+  return {
+    head: `${row?.name ?? '?'} · ${row?.env ?? '?'} checked`,
+    read,
+    scoped: record?.packB?.liveScope ? `live read scoped to ${scopeSummary(record.packB.liveScope)}` : '',
+    notApplied: skipped ? `${skipped} stored exclude pattern${skipped === 1 ? '' : 's'} not applied (may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the service's live scope)` : '',
+    letter: !lost && typeof record?.grade?.letter === 'string' && record.grade.letter ? record.grade.letter : null,
+    pct: matchPctOf(record),
+    nothing,
+    unreachable: lost ? (gone.error ? `live did not answer — ${gone.error}` : gone.cause === 'no-data' ? 'live returned no data' : 'live did not answer') : '',
+    livePart: vantage === 'partial' ? (failed.length ? `live answered in part (its ${listWords(inProbeOrder(failed).map(familyWord))} not read)` : 'live answered in part') : '',
+    notComparable,
+    filterWarn,
+    tone: !loss && scan?.partial !== true && !nothing && !lost && vantage !== 'partial' && !notComparable && !filterWarn && !skipped ? 'ok' : '',
+  };
+}
+
+// A Run the server answered with an error but recorded (502: the live side gave nothing; 409: the scan
+// lost files and the Run stopped): what the refreshed listing says of it; else, when the listing does
+// not show it, what the answer itself said — the 502's `outcome` 'vantage-lost' (its body's: the loss
+// was recorded) with `error`, the server's sentence, or the 409's `outcome` 'scan-partial' with its
+// scan (`unlisted: true`: the row's cell is not its reading yet); else null (nothing says this Run
+// was recorded: it did not finish). `before` / `after`: the
+// row's journeys-listing entry before the Run and after it (null when there was none). `scan` and
+// `kept`: a 409's own (services-api.mjs servicesRefusal — what the stopped Run's scan read, and the
+// scan the service keeps, { id, label } or null): whether a complete scan is kept is the 409's answer
+// where it gives one, else the listing's; a stop the listing does not show yet (a first Run that kept
+// none saves no check) is said from the 409's scan.
+//   → { text, tone: 'error', unlisted? } | null (the toast's own tones: 'ok' · 'error' · '')
+export function runRecordedToast({ name = '?', env = '?', before = null, after = null, outcome = null, error = '', scan = null, kept = undefined } = {}) {
+  const newer = (a, b) => isPlain(a) && typeof a.startedAt === 'string' && a.startedAt !== (isPlain(b) ? b.startedAt : undefined);
+  const head = `${name} · ${env}`;
+  const keptOf = (listed) => (kept !== undefined ? !!kept : listed?.kept !== false);
+  if (isPlain(after) && newer(after.stoppedRun, before?.stoppedRun)) return { text: `${head}: ${scanPartialReading(after.stoppedRun, { kept: keptOf(after.stoppedRun) })}.`, tone: 'error' };
+  if (isPlain(after) && newer(after.lastRun, before?.lastRun) && readingOutcome(after.lastRun) === 'vantage-lost') {
+    const first = typeof after.lastRun.firstProbeError === 'string' && after.lastRun.firstProbeError ? after.lastRun.firstProbeError : '';
+    return { text: `${head}: ${first ? `Live did not answer — ${first}` : after.lastRun.liveLoss === 'no-data' ? 'Live returned no data' : 'Live did not answer'}.`, tone: 'error' };
+  }
+  if (outcome === 'vantage-lost') {
+    const said = safeErrorText(String(error ?? '').replace(/^\d{3}: /, ''));
+    return { text: `${head}: ${OVERVIEW_STATUS.unreachable} — ${said || 'the run is recorded'}.`, tone: 'error', unlisted: true };
+  }
+  if (outcome === 'scan-partial') return { text: `${head}: ${scanPartialReading(isPlain(scan) ? scan : null, { kept: keptOf(null) })}.`, tone: 'error', unlisted: true };
+  return null;
+}
 
 // serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack, journeys, journeysError,
 //   endpoints, access, now, running, results, showAll, heldTokens, repoSignIn })
@@ -1782,11 +2495,16 @@ export function serviceListModel(input = {}) {
       const remoteRepo = s.repository?.kind === 'github' || s.repository?.kind === 'ado';
       const ownRef = env ? ownRefOf(s, env.name) : null;
       const branch = remoteRepo ? { name: ownRef || s.repository.ref || null, own: !!ownRef } : null;
+      // The deployment surface this environment reads alone ({ id, label }), or null: every file.
+      const surfaceId = env ? ownSurfaceOf({ envSurfaces: s.envSurfaces }, env.name) : '';
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
         repository, live, livePack: exported, last, journey: journey?.name || null, branch,
-        // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from }, or null when unscoped.
-        scope: live && !exported ? (() => { const r = resolvedScope(env?.liveScope ?? null, liveScopeDefaults); return r.scope ? { text: scopeSummary(r.scope), from: r.from } : null; })() : null,
+        surface: surfaceId ? { id: surfaceId, label: surfaceLabel(surfaceId) } : null,
+        // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from: 'environment' }; none of its
+        // own while the server has a default: { text: null, from: null, defaultIgnored, defaultSummary }; else null.
+        // The server default never applies to it: none of its own is said as such (`defaultIgnored`) while one is configured.
+        scope: live && !exported ? envScopeCell(env?.liveScope ?? null, liveScopeDefaults) : null,
         run: { enabled: !why && !busy, reason: why, running: busy },
         open: { enabled: ownPack || !!journey },
         error: results[key]?.error || null,
@@ -1994,8 +2712,8 @@ export const FORM_CLOSED = Object.freeze({ open: false });
 // `env` or the first; choosing another loads that environment's endpoint and branch (formInput).
 // `addEnv`: Add environment on the service's row — its form with the environment to name (empty),
 // the service's own answers kept; the save adds it (formProblems refuses a name it already has).
-// `scopeDefaults`: the server's configured snapshot scope (compact), which prefills an environment
-// with none of its own (form.scopeFrom 'server').
+// `scopeDefaults`: the server's configured snapshot scope (compact), which pre-fills a NEW environment
+// (form.scopeFrom 'server', form.scopePrefill); an environment that exists opens on its own scope (formScopeOf).
 export function formOpened(services, { serviceId = null, env = null, endpoints = [], sources = null, pick = false, addEnv = false, scopeDefaults = null } = {}) {
   const s = Array.isArray(services) ? services.find((x) => x && x.id === serviceId) : null;
   const e = s && Array.isArray(s.environments) ? s.environments.find((x) => x.name === env) || null : null;
@@ -2013,9 +2731,10 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
     // The MTTD / MTTR targets (mttx-targets.mjs): a new service starts on the recommended profile.
     ...targetsFormValues(s?.targets ?? null, { isNew: !s }),
   };
-  // The live scope: this environment's own, else the server's configured one (prefilled), else empty.
-  const scoped = resolvedScope(addEnv ? null : e?.liveScope ?? null, scopeDefaults);
-  Object.assign(values, scopeFormValues(scoped.scope));
+  // The live scope: an environment that exists opens on its own (empty when it has none); a new one is
+  // pre-filled from the server default where it may be (formScopeOf).
+  const scoped = formScopeOf(s, addEnv ? null : e, scopeDefaults);
+  Object.assign(values, scoped.values);
   // A service whose repository is an upload: what was uploaded and when (kept while nothing new is chosen).
   const r = s?.repository;
   const uploaded = r?.kind === 'upload' ? { name: r.location, uploadedAt: r.uploadedAt || null, files: Number.isFinite(r.files) ? r.files : null } : null;
@@ -2026,14 +2745,25 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // branch where the rule makes it the environment's, else on the repository's.
   const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null, livePack: x?.livePack ? { name: x.livePack.name, uploadedAt: x.livePack.uploadedAt || null } : null, liveScope: x?.liveScope ?? null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
   values.ref = (branchIsEnvironments(values, record) && ownRefOf(record, values.env)) || r?.ref || '';
+  const adding = !!addEnv && !!s;
+  // The deployment surface this environment reads alone, '' for every file (the service's envSurfaces).
+  if (record) record.envSurfaces = s.envSurfaces && typeof s.envSurfaces === 'object' ? { ...s.envSurfaces } : {};
+  values.surface = adding ? '' : ownSurfaceOf(record, values.env);
   const original = r ? { kind: r.kind, location: r.location || '', ref: values.ref } : null;
   // The environments to choose from, when the service's Change is asked for one of two or more.
   const names = record ? record.environments.map((x) => x.name).filter((n) => typeof n === 'string' && n) : [];
   const envChoices = pick && names.length > 1 ? [...names].sort((a, b) => (envRank(a) - envRank(b)) || a.localeCompare(b)) : null;
   // `defaultRef`: the repository's own branch, which an environment left blank reads.
-  const adding = !!addEnv && !!s;
   if (adding) values.env = '';
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  // The server keeps a surface per environment (its ServiceView carries envSurfaces; for a new
+  // service, any listed one does): only then is the setting offered, so an older server never
+  // takes an answer it would drop.
+  const surfaceKnown = s ? !!(s.envSurfaces && typeof s.envSurfaces === 'object') : (Array.isArray(services) && services.some((x) => x && x.envSurfaces && typeof x.envSurfaces === 'object'));
+  // The services listed, by slug: a blank Add whose name keys one of them completes that record, and
+  // savePlan keeps no pre-filled scope answer onto it (scopeModel says so before the save).
+  const listedSlugs = s ? null : (Array.isArray(services) ? services : []).map((x) => x?.slug).filter((x) => typeof x === 'string' && x);
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, surfaceKnown, ...(listedSlugs ? { listedSlugs } : {}), ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  Object.assign(opened, scoped.form);
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
   return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
 }
@@ -2045,10 +2775,11 @@ function chooseEnvironment(form) {
   if (!e) return form;
   const values = { ...form.values, endpointId: e.livePack ? LIVE_PACK : e.endpointId != null ? String(e.endpointId) : form.values.endpointId };
   form = { ...form, packs: { ...(form.packs || {}), live: e.livePack ? { kept: e.livePack } : null } };
-  const scoped = resolvedScope(e.liveScope ?? null, form.scopeDefaults ?? null);
-  Object.assign(values, scopeFormValues(scoped.scope));
-  form = { ...form, scopeFrom: scoped.from };
+  const scoped = formScopeOf(null, e, form.scopeDefaults ?? null);
+  Object.assign(values, scoped.values);
+  form = { ...form, ...scoped.form };
   values.ref = (branchIsEnvironments(values, form.record) && ownRefOf(form.record, e.name)) || form.record.repository?.ref || '';
+  values.surface = ownSurfaceOf(form.record, e.name);
   return { ...form, envFixed: true, values, original: form.original ? { ...form.original, ref: values.ref } : form.original };
 }
 
@@ -2056,6 +2787,14 @@ function chooseEnvironment(form) {
 const ownRefOf = (record, envName) => {
   const refs = record?.envRefs;
   return refs && typeof refs === 'object' && Object.hasOwn(refs, envName) && typeof refs[envName] === 'string' && refs[envName] ? refs[envName] : null;
+};
+
+// The deployment surface an environment reads alone (the service's envSurfaces' own entry, a surface
+// this build knows), else '' — every file.
+const ownSurfaceOf = (record, envName) => {
+  const map = record?.envSurfaces;
+  const id = map && typeof map === 'object' && Object.hasOwn(map, envName) ? map[envName] : '';
+  return SURFACE_IDS.includes(id) ? id : '';
 };
 
 // Whether the form's branch answer is the environment's own (the service's envRefs) rather than the
@@ -2113,9 +2852,13 @@ const trimmed = (v) => String(v ?? '').trim();
 export const FORM_DRAFT_TTL_MS = 15 * 60_000;
 const FORM_DRAFT_VALUE_MAX = 2048;
 
+// The server default the scope answers were pre-filled with (form.scopePrefill: a new environment's
+// pre-fill, or Use the server default) rides along, compact, so the restored form keeps and drops on
+// save what it said it would before the round trip.
 export function formDraft(form, { now = Date.now() } = {}) {
   if (!form?.open || form.chaosRun) return null;
-  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched };
+  const prefill = form.scopePrefill ? scopeFromValues(scopeFormValues(form.scopePrefill)) : null;
+  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched, ...(prefill ? { scopePrefill: prefill } : {}) };
 }
 
 export function formRestored(services, draft, { endpoints = [], sources = null, scopeDefaults = null, now = Date.now() } = {}) {
@@ -2134,7 +2877,16 @@ export function formRestored(services, draft, { endpoints = [], sources = null, 
     // know (an older or a broken draft) stays as the form opened it.
     if (field.startsWith('target') && draft.targetsTouched !== true) continue;
     if (field === 'targetProfile' && value !== '' && value !== MTTX_CUSTOM && !MTTX_PROFILES.some((p) => p.id === value)) continue;
+    // A deployment surface this build does not know stays as the form opened it.
+    if (field === 'surface' && value !== '' && !SURFACE_IDS.includes(value)) continue;
     form = formInput(form, field, value);
+  }
+  // The pre-fill the draft's form held (formDraft), read back as a compact scope, each answer within
+  // the draft's bound: the form says and saves what it did before the round trip — an environment
+  // that exists opens with none, so Use the server default would otherwise be forgotten.
+  const pre = draft.scopePrefill && typeof draft.scopePrefill === 'object' && !Array.isArray(draft.scopePrefill) ? scopeFromValues(scopeFormValues(draft.scopePrefill)) : null;
+  if (pre && Object.values(scopeFormValues(pre)).every((x) => x.length <= FORM_DRAFT_VALUE_MAX)) {
+    form = { ...form, scopePrefill: pre, scopePrefillRefused: null, scopeFrom: 'server' };
   }
   return form;
 }
@@ -2422,6 +3174,8 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     // Pack files, opt-in as Upload is (`uploads`): `wired` draws the Live answer's choice, `offered` its button.
     // The live scope (shown once the Live answer is an MCP endpoint): its fields and where the values came from.
     scope: scopeModel(form, v),
+    // The deployment surface this environment reads alone (step 3, under the repository), or { shown: false }.
+    surface: surfaceFormModel(form, v),
     packs: { repo: { offered: canWrite && !!uploads, ...packModel(form.packs?.repo, { now }) }, live: { wired: !!uploads, offered: canWrite && !!uploads, chosen: v.endpointId === LIVE_PACK, ...packModel(form.packs?.live, { now }) } },
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
@@ -2613,18 +3367,71 @@ function packModel(p, { now }) {
 }
 const packReady = (p) => !!(p?.staged || p?.kept);
 
-// formModel's `scope`: { shown, from: 'environment' | 'server' | null, hint, fields: [{ value, label, placeholder }] }.
-// `from` is where the values now on the form stand: the server's prefill while they still equal it.
+// formModel's `scope`: { shown, from: 'environment' | 'server' | null, hint, fields: [{ value, label,
+// placeholder, fromDefault }], dropped, offerDefault, defaultIgnored, check }.
+// `from` is where the values now on the form stand: the server default's pre-fill while they still
+// equal it. `fromDefault`: the field still holds the pre-filled value. `dropped`: the sentence when a
+// save would not keep pre-filled answers (scopeDropped, read as savePlan reads it: a blank Add whose
+// name keys a service already listed keeps none of them). The hint says what a save keeps.
+// `offerDefault`: Use the server default — for an environment that exists with no scope of its own
+// while the server has a default, and for a new one whose default names no metric prefixes (never
+// pre-filled: scopePrefillOf). `defaultIgnored`: the row's sentence for the first
+// (SCOPE_DEFAULT_IGNORED). `check`: the scope check's answer, worded.
 function scopeModel(form, v) {
   const shown = !!v.endpointId && v.endpointId !== LIVE_PACK;
   const typed = scopeFromValues(v);
   const defaults = form.scopeDefaults || null;
-  const from = typed && defaults && sameScope(typed, defaults) ? 'server' : typed ? 'environment' : null;
-  const hint = from === 'server' ? "Prefilled from the server's snapshot scope; change it for this environment."
-    : typed ? `This environment's own scope: each Run reads only ${scopeSummary(typed)} of the estate, and the match counts only that.`
-      : defaults ? "Empty: the server's snapshot scope applies."
-        : 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.';
-  return { shown, from, hint, fields: SCOPE_FIELDS.map((f) => ({ value: f.value, label: f.label, placeholder: f.placeholder })) };
+  const prefill = form.scopePrefill || null;
+  const pre = prefill ? scopeFormValues(prefill) : null;
+  const fields = SCOPE_FIELDS.map((f) => ({ value: f.value, label: f.label, placeholder: f.placeholder, fromDefault: !!pre && pre[f.value] !== '' && String(v[f.value] ?? '') === pre[f.value] }));
+  const from = typed && prefill && sameScope(typed, prefill) ? 'server' : typed ? 'environment' : null;
+  const env = form.addEnv ? null : (form.record?.environments || []).find((x) => x?.name === trimmed(v.env)) || null;
+  const was = env?.liveScope && typeof env.liveScope === 'object' && Object.keys(env.liveScope).length ? env.liveScope : null;
+  const ignored = !!env && !was && !!defaults && !prefill;
+  // As savePlan reads it (scopeKnown || !existing): a form opened on no record whose name keys a
+  // service already listed completes that record, onto which no pre-filled answer is saved.
+  const known = !!form.record || !(Array.isArray(form.listedSlugs) && form.listedSlugs.includes(defaultKeyOf(v.name)));
+  const dropped = scopeDropped(v, { prefill, known, was });
+  const kept = dropped.length ? scopeSaveOf(v, { was, prefill, known }) : typed;
+  const fieldNames = { metricPrefixes: 'metric prefixes', folderUids: 'folder uids', metricExclude: 'exclude patterns', ruleGroups: 'rule groups', datasourceUid: 'datasource uid' };
+  const names = dropped.map((f) => fieldNames[f.field]);
+  const joined = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  const refused = form.scopePrefillRefused || null;
+  const service = trimmed(v.name) || 'this service';
+  const envName = trimmed(v.env) || 'this environment';
+  const hint = from === 'server' && !dropped.length ? "Pre-filled from the server default: saved as this environment's own scope. Change or clear any field — the server default never applies on its own."
+    : kept ? `This environment's own scope: each Run reads only ${scopeSummary(kept)} of the estate, and the match counts only that.`
+      : typed ? `None of these answers is saved as ${envName}'s live scope.`
+        : refused?.unprefixed ? `Empty: the server default (${scopeSummary(defaults) || 'set on the server'}) names no metric prefixes, so nothing shows it is ${service}'s — it is not pre-filled. Use the server default to make it this environment's own.`
+          : refused ? `Empty: the server default (prefixes ${refused.defaultPrefixes.join(', ')}) is for another service — ${refused.servicePrefixes ? `${service}'s environments read ${refused.servicePrefixes.join(', ')}` : `${service}'s repository declares no metric with those prefixes`}.`
+            : ignored ? `${SCOPE_DEFAULT_IGNORED}. Each Run reads the whole estate the endpoint serves; the server default (${scopeSummary(defaults)}) is not applied to an environment that exists — Use the server default to make it this environment's own.`
+              : 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.';
+  const presetPrefixes = prefixesOf(prefill);
+  const droppedText = !dropped.length ? null
+    : was ? `${envName} has a live scope of its own: the server default's ${joined} will not be saved over it.`
+      : !known ? `${service} is a service already listed, and this form was not opened on it: the server default's ${joined} will not be saved for ${envName} — type your own, or use Change on its row.`
+        : presetPrefixes.length ? `The server default is for the metric prefixes ${presetPrefixes.join(', ')}: its ${joined} will not be saved for this environment — type them again to keep them.`
+          : `The server default names no metric prefixes, so nothing says it is for ${scopeList(v.scopePrefixes, 'comma').join(', ')}: its ${joined} will not be saved for this environment — type them again to keep them.`;
+  return {
+    shown, from, hint, fields,
+    dropped: droppedText,
+    offerDefault: (ignored || (!!refused?.unprefixed && !!defaults && !prefill)) && !typed,
+    defaultIgnored: ignored ? SCOPE_DEFAULT_IGNORED : null,
+    check: scopeCheckModel(form, v),
+  };
+}
+
+// formModel's `surface`: { shown, label, options: [{ id, label, selected }], hint } — the deployment
+// surface this environment reads alone, off ('') by default: every environment of a service reads the
+// same files. Not shown for a pack file (no scan) or on a server that keeps none (form.surfaceKnown).
+function surfaceFormModel(form, v) {
+  if (v.kind === 'pack' || !form.surfaceKnown) return { shown: false };
+  const chosen = SURFACE_IDS.includes(v.surface) ? v.surface : '';
+  const env = trimmed(v.env) || 'this environment';
+  const hint = chosen
+    ? `${env} reads only the ${surfaceLabel(chosen)} files; its row says how many the filter left out.`
+    : `Off: every environment of ${trimmed(v.name) || 'the service'} reads the same files. Chosen, ${env} reads only that surface's files, and its row says how many the filter left out.`;
+  return { shown: true, label: 'Read only this deployment surface', options: DEPLOYMENT_SURFACE_CHOICES.map((c) => ({ id: c.id, label: c.label, selected: c.id === chosen })), hint };
 }
 
 // formModel's `upload`: { offered, state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, note, error }.
@@ -2669,12 +3476,15 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 // `packs`: the form's pack files ({ repo, live }); a staged one is sent after the record and the
 // environment exist (PUT /api/services/:id/repository-pack, PUT /api/environments/:id/live-pack):
 // `repoPack` / `livePack` { name, text } or null (a kept one is left as it is).
-// `scopeDefaults`: the server's configured snapshot scope (compact) — a scope typed equal to it is
-// none of the environment's own (it reads that one anyway); the service's liveScopes map is sent
+// `scopePrefill`: the server default the form was pre-filled with (form.scopePrefill; a host that
+// passes only `scopeDefaults` has it taken as the pre-fill) — the scope a save keeps is scopeSaveOf's:
+// a scope typed equal to it IS the environment's own (the default never applies on its own), its
+// answers never written over a scope of the environment's own; the service's liveScopes map is sent
 // whole (POST, PATCH) only when this environment's entry changes. An export of live has no scope.
 // `scopeKnown`: the form was opened on this service's record (false for a blank Add that names an
-// existing service — its environment's scope was never drawn, so an empty answer leaves it as it is).
-export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null, scopeDefaults = null, scopeKnown = true } = {}) {
+// existing service — its environment's scope was never drawn, so an empty answer leaves it as it is;
+// the same for its deployment surface, envSurfaces).
+export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null, scopeDefaults = null, scopePrefill = undefined, scopeKnown = true } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
   // A pack file is set by its own upload, never named in the record's create or patch — as an upload.
@@ -2718,21 +3528,32 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
   if (!liveExport) {
     const current = existing?.liveScopes && typeof existing.liveScopes === 'object' ? existing.liveScopes : {};
     const was = current[envName] ?? null;
-    // Answers exactly as the environment's own scope drew them: that scope, as kept (a rule group with a
-    // comma, say, is never split by a save that did not touch it).
-    const untouched = was && SCOPE_FIELDS.every((f) => String(values?.[f.value] ?? '') === scopeFormValues(was)[f.value]);
-    const typed = untouched ? was : scopeFromValues(values);
-    const own = typed && !sameScope(typed, scopeDefaults) ? typed : null;
+    // What the save keeps (scopeSaveOf): an untouched own scope as kept, else what is typed, never a
+    // pre-filled server default written over the environment's own or onto a record not drawn here.
+    const own = scopeSaveOf(values, { was, prefill: scopePrefill !== undefined ? scopePrefill : scopeDefaults, known: scopeKnown || !existing });
     const next = { ...current };
     if (own) next[envName] = own; else if (scopeKnown) delete next[envName];
     if (!sameScope(current[envName] ?? null, next[envName] ?? null)) liveScopes = next;
   }
+  // The deployment surface this environment reads alone (values.surface, '' for every file): the
+  // service's envSurfaces map, sent whole only when this environment's entry changes. A pack file
+  // is no scan, so it leaves the setting as it is; so does a blank Add naming an existing service
+  // that never drew it (scopeKnown false), unless one is chosen.
+  let envSurfaces = null;
+  if (values.kind !== 'pack' && Object.hasOwn(values, 'surface')) {
+    const current = existing?.envSurfaces && typeof existing.envSurfaces === 'object' ? existing.envSurfaces : {};
+    const chosen = SURFACE_IDS.includes(trimmed(values.surface)) ? trimmed(values.surface) : '';
+    const next = { ...current };
+    if (chosen) next[envName] = chosen; else if (scopeKnown) delete next[envName];
+    const key = (m) => JSON.stringify(Object.keys(m).sort().map((k) => [k, m[k]]));
+    if (key(next) !== key(current)) envSurfaces = next;
+  }
   const patchOf = (repo) => {
-    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}), ...(liveScopes ? { liveScopes } : {}) };
+    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}), ...(liveScopes ? { liveScopes } : {}), ...(envSurfaces ? { envSurfaces } : {}) };
     return Object.keys(p).length ? p : null;
   };
   let service;
-  const scopesOnCreate = liveScopes && Object.keys(liveScopes).length ? { liveScopes } : {};
+  const scopesOnCreate = { ...(liveScopes && Object.keys(liveScopes).length ? { liveScopes } : {}), ...(envSurfaces && Object.keys(envSurfaces).length ? { envSurfaces } : {}) };
   if (uploading) service = existing ? { id: existing.id, patch: patchOf(null) } : { create: { name, targets, ...scopesOnCreate } };
   else service = existing ? { id: existing.id, patch: patchOf(sameRepo(existing.repository) ? null : repository) } : { create: { name, repository, targets, ...scopesOnCreate } };
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;

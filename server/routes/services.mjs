@@ -57,6 +57,9 @@ import { mcpCallerOf, mcpTargetView } from '../mcp-target-policy.mjs';
 import { FOLDER_WAYS, listRepositoryFolders } from '../repository-folders.mjs';
 import { deleteUpload, parseUpload, saveUpload, setUploadedRepository } from '../repository-uploads.mjs';
 import { bodyOf, handler, pathId, refused } from './util.mjs';
+import { compactScope, normalizeScope } from '../../tools/lib/live-fetch.mjs';
+import { timedExcludeErrors } from '../../tools/fetch-live-pack.mjs';
+import { scopeCheckAnswer } from '../scope-check.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
 function pathService(req, res, db) {
@@ -86,17 +89,21 @@ function pathEnvironment(req, res, db) {
 const serviceSummary = (s) => ({ id: s.id, slug: s.slug, name: s.name, tier: s.tier });
 
 // `onGradeOffChanged(service)`: called after a PATCH changed a service's
-// grade criteria, its set-asides, its recorded chaos runs or its MTTD / MTTR
-// targets, and after a POST made one with targets, inside the request's org —
-// the server writes them into the service's saved checks there
-// (server/index.mjs).
+// grade criteria, its set-asides, its recorded chaos runs, its MTTD / MTTR
+// targets or its live scopes, after a POST made one (a check a service of that
+// name left takes its switches and scopes), and after one of its environments
+// was deleted (its scope leaves that environment's checks), inside the
+// request's org — the server writes them into the service's saved checks
+// there (server/index.mjs).
 // `onServiceDeleting(service)`: called before a DELETE, with the service as
 // it is; the function it returns runs once the delete went through (the
 // server takes the switches out of the checks that were the service's).
 // `readPackUpload(body)` → { name, canonical, bytes } and `registerPack(req, canonical, source, label, { environments })` → its
 // id: the server's own pack reader and register (server/index.mjs), for a pack file uploaded in place of
 // the repository or of live (server/service-packs.mjs).
-export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceDeleting = null, readPackUpload = null, registerPack = null }) {
+// `scopeBasisOf(service, envName)` → { declared, live }: the stored packs a scope check reads
+// (server/index.mjs; each { packId, label, canonical } or null).
+export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceDeleting = null, readPackUpload = null, registerPack = null, scopeBasisOf = null }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
   const router = express.Router({ caseSensitive: true });
 
@@ -109,8 +116,9 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
   router.post('/api/services', authorize('POST /api/services'), handler((req, res, { db, actor }) => {
     const service = createServiceFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
     const view = serviceViewOf(db, service);
-    // Its targets go into any check already saved under its name (one a service of that name left).
-    if (service.targets) onGradeOffChanged?.(view);
+    // Any check already saved under its name (one a service of that name left) takes its targets and its
+    // environments' live scopes — none, until it has its own: never the scope the earlier service read with.
+    onGradeOffChanged?.(view);
     res.status(201).json({ ok: true, service: view });
   }));
 
@@ -134,13 +142,34 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     res.json({ ok: true, service: view, changed });
   }));
 
+  // The live scope form's check (server/scope-check.mjs): what the scope would leave out of a Run of
+  // the environment — a declared family with nothing inside it, a rule group the environment's last
+  // live read did not list. Stored packs only: no MCP call, no row. An environment not added yet is
+  // checked against the service's own pack (and has no live read). A scope that does not parse is
+  // refused with the PATCH's text.
+  router.post('/api/services/:id/scope-check', authorize('POST /api/services/:id/scope-check'), handler((req, res, { db }) => {
+    const service = pathService(req, res, db);
+    if (!service) return;
+    const body = bodyOf(req);
+    const env = typeof body.env === 'string' ? body.env.trim() : '';
+    if (!env || env.length > 200) return res.status(400).json({ ok: false, error: 'env names the environment whose live scope is checked' });
+    const { scope, errors } = normalizeScope(body.scope ?? {});
+    if (!errors.length) errors.push(...timedExcludeErrors(scope.metricExclude));
+    if (errors.length) return res.status(400).json({ ok: false, error: WAYS.liveScope(env, errors) });
+    const known = listEnvironments(db, service.id).some((e) => e.name === env);
+    const basis = typeof scopeBasisOf === 'function' ? scopeBasisOf(service, env) : { declared: null, live: null };
+    const answer = scopeCheckAnswer({ scope: compactScope(scope) || {}, declared: basis.declared, live: known ? basis.live : null });
+    res.json({ ok: true, env, known, ...answer });
+  }));
+
   // The environments, the pack links and the waivers cascade (they write
   // no row of their own; the detail counts them); the packs stay registered.
   router.delete('/api/services/:id', authorize('DELETE /api/services/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
     const current = getService(db, id);
-    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length) || current.targets) ? onServiceDeleting?.(current) : null;
+    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length) || current.targets
+      || (current.liveScopes && typeof current.liveScopes === 'object' && Object.keys(current.liveScopes).length)) ? onServiceDeleting?.(current) : null;
     const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
     deleteUpload(id);   // its uploaded repository, if it had one
     if (typeof after === 'function') after();
@@ -276,7 +305,12 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
   router.delete('/api/environments/:id', authorize('DELETE /api/environments/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'environment');
     if (id === null) return;
+    const serviceId = getEnvironment(db, id)?.serviceId ?? null;
     const { environment } = deleteEnvironmentFromApi(db, actor, id);
+    // Its live scope left the service with it: the service's checks are written again with the scopes it
+    // keeps, so one made again under the name reads with none until it has its own.
+    const service = serviceId === null ? null : getService(db, serviceId);
+    if (service) onGradeOffChanged?.(serviceViewOf(db, service));
     res.json({ ok: true, deleted: environment });
   }));
 

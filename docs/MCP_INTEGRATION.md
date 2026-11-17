@@ -101,8 +101,13 @@ answers without the MCP's backend credentials, and the answer says so), else
 read from where a failure surfaced: HTTP 401/403 → `auth-refused`; no answer
 or a 5xx → `unreachable`; a timeout → `timeout`; any other status, a body that
 is not JSON-RPC, a JSON-RPC error or a redirect → `not-mcp`; else `connected`
-(a read whose tool answered an unauthorized text is kept as
-`backendAuthRefused`, the MCP's own credentials to its backend). Advertised
+(a read whose tool answered a refusal is kept as `backendAuthRefused`, the
+MCP's own credentials to its backend — by the probe cascade's own rule,
+`isProbeRefusal`, which reads a 401 or 403 in the words a client library
+gives it: `HTTP 403`, `status code 401`, the Prometheus Go client's `client
+error: 403`, a generated Grafana client's `[403] searchForbidden`, gRPC's
+`PermissionDenied` / `Unauthenticated`, AWS's `AccessDeniedException`; a bare
+401 in other words, `returned 401 series`, is none). Advertised
 tools are reported only through `capabilityInventory` (the capabilities a
 fetch reads; the rest a count). The answer lists what it `checked` and what it
 did `notChecked`; it writes no pack and no live file.
@@ -116,13 +121,20 @@ stage whose tools are missing is skipped with its gap and the fetch goes on);
 the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
 query are not read, while the recording-rule grep still runs over the whole
 metric-name list (it feeds the SLI and SLO inference); the scope narrows
-metric names (prefixes, then exclude patterns, then a 20 000-name cap),
+metric names (prefixes, then exclude patterns — each one's work bounded where
+the scope is parsed, and a name over 256 characters never dropped by one — then
+a 20 000-name cap),
 dashboards (folder uids, before the detail reads), alert rules (folder
 uids, when every rule names its folder; an engine whose tool takes a folder
 uid is asked once per folder) and alert and recording rules by rule group
-(when every rule the engines list names its group); every advertised alert-rule engine is read and the rules unioned
-by name, Grafana-managed rules read from the provisioning shape (`title`,
-`data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
+(when every rule the engines list names its group); every advertised alert-rule engine is read — by a draft too — and
+the rules unioned by store (Grafana's by uid, a ruler's by name; one Grafana rule two tools list is one, by its
+uid or its exact terms, never by name alone), Grafana-managed rules read from the provisioning
+shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles, whatever the titles), each stating its
+uid, folder, group and condition in `observogram.grafana_rule.*`; what the read could not cover in
+`observogram.unread.alert_rule` / `.recording_rule`, a store no engine read (one errored or was refused) beside
+one that answered in `mcp.probesPartial` — an engine whose store has no rules API (400 / 404 / 405) is not served
+and never counts — the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
 `buildSnapshotPack` writes `mcp.url` as the origin and the
 `observogram.live.*`, `observogram.scope.<kind>` and
@@ -133,8 +145,11 @@ byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
 in memory, so a restart loses them (docs/LIVE_FETCH.md §15.2 has the shapes
 and the stage table). The configured scope is
 `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID`,
-`_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
-is named in the gate log as not applied, since no advertised tool takes one.
+`_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org) — the Expert
+snapshot's default and a new service environment's pre-fill (only when it names metric prefixes: one that
+names none is offered, never pre-filled), never applied to a service environment that exists, and taken out
+of the saved checks that still carry it at the first start after that change; a datasource uid is named in
+the gate log as not applied, since no advertised tool takes one.
 
 ## Server settings (admin configuration)
 
@@ -678,10 +693,15 @@ metadata:
     mcp.toolsUnmatched: "logs_search"                # advertised, no probe pattern yet
     mcp.probesAttempted: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
     mcp.probesSucceeded: "recording_rules,alert_rules,metric_names,scrape_configs"
-    mcp.probesEmpty: ""                              # a probe answered with an empty list
-    mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
-    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
+    mcp.probesEmpty: ""                              # a probe answered with an empty list — from a read that was allowed
+    mcp.probesFailed: "dashboards"                   # every candidate errored, or one was refused (401/403) and none answered with data — a hole of unknown size
+    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage; or a family whose store answered it keeps none (below)
     mcp.probeErrors.dashboards: "grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503"   # every failed candidate of a FAILED family, first first, each trimmed to 200 chars
+    # mcp.probeUnsupported.scrape_configs: '{"reason":"metrics_targets: HTTP 404 Not Found","since":"…","tools":["metrics_targets"]}'
+    #   only for a family whose every candidate's store answered it keeps no such thing — scrape targets
+    #   answered 400 / 404 / 405 (a federated or remote-write store), an Alertmanager status object with no
+    #   configuration key at all — the reason is the tool and the status, never the answer's text
+    # mcp.probeAnsweredBy.scrape_configs: "metrics_targets"   # who answered a family that can read "not served" (a journey's memory)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
@@ -738,7 +758,9 @@ strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it |
+| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it. Every URL a message quotes keeps no query string, fragment or userinfo (`tools/fetch-live-pack.mjs` `maskProbeErrorUrls`, over `tools/lib/mcp-url-safety.mjs` `safeMcpUrl`); a path quoted without a scheme keeps no query or fragment either (urllib3 and requests name the request so: `Max retries exceeded with url: /api/v1/targets?…`), a `//user:pass@` link no userinfo, and every `name=value` pair whose name says it holds a credential (`credentialParamName`) and every Bearer or Basic value is masked — all before the cut, so the reasons a declared artefact is not checked, a gate log's gaps, a lost run's `error`, its thrown message (the server's 502 body) and a notification built from it carry none either. A not-served answer from a tool the journey saw answer the family reads `<tool>: it answered on <day>; now <the answer>` |
+| `mcp.probeUnsupported.<family>` | JSON `{ reason, since, tools }` | a family whose every candidate's store answered it keeps no such thing (P6): scrape targets answered 400 / 404 / 405 (or a Prometheus `bad_data` / `not_found` envelope), an Alertmanager status object with no configuration key at all, every alert-rule engine asked answering 400 / 404 / 405. Never for an error, a 503 or a timeout, an answer naming a missing datasource, an empty configuration or one in a shape the reader does not read, nor from a tool the journey saw answer the family — each of those is `failed` |
+| `mcp.probeAnsweredBy.<family>` | comma list of tool names | the tool(s) that answered a family that can read "not served" (`scrape_configs`, `alerting_routes`; for `alert_rules` the engines that answered with rules, or the one that answered empty) with data or an honest empty: a journey's memory of who serves it (`probeMemoryOf`) |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
@@ -759,7 +781,7 @@ strings at 200 chars.
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
 | `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
-| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part. The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
+| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, condition?, engine?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part; `condition` a Grafana-managed rule's threshold and other steps, `engine: grafana` its store (a comparison parks the entry, or leaves its windows uncompared, where the other side's read did not cover it). The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `observogram.partial.alerting.rules[<i>]` | `labels=<keys>` | an alert rule whose listing gave no `labels` object: of its labels, the keys the listing did show — `labels=severity`, written for every rule of a listing in which no rule carries a labels map and at least one carries a flat `severity`. The comparison holds the rule to those keys (docs/DIFF.md) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
@@ -851,7 +873,7 @@ all. Which annotation feeds which rung:
 | `mcp.observed.alert_rules` + `mcp.discovered.alert_rules_unhealthy` | `burn_rate` | linked by the observation's `labels` (`slo`, `burn_rate`, `window_short`, `window_long`) first, then by the compiler's `<slo>_burn_<factor>x_<short>_<long>` name convention on the SLO id (fractional factors accepted: `_burn_14_4x_` ↔ 14.4), narrowed to the declared windows — the `alert_rules_unhealthy` list is narrowed the same way and the detail names the matched / failing rule(s); judged stale against the longest linked `interval` when the entries carry one |
 | `mcp.discovered.slis_unhealthy` | `sli` | `present_unhealthy`; otherwise `exists` ("liveness rides on its recording rules") |
 | `mcp.versions.<product>` | `backend` | `alive` when the product answered its version probe |
-| `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed or is not exposed (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent" |
+| `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`, `mcp.probeUnsupported.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed, is not exposed, or is not served here (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent"; a not-served family's detail says what was answered (`probe family scrape_configs not served here (metrics_targets: HTTP 404 Not Found) — not counted as a failure`) |
 | `mcp.observedAt.<family>`, else `mcp.fetchStartedAt`, else `mcp.refreshedAt` | all | "now" for the staleness judgement — the instant the family answered, the fetch's own clock, or (older packs) the caller's refresh stamp, named in the detail only on that last fallback. No interval means `healthy` / `alive` only within a 1 h ceiling ("interval unknown; 1 h ceiling applied"), older reads `present_stale`; a timestamp more than 1 s past "now" reads `alive` with "timestamp <n>s in the future (clock skew); freshness not judged", never `healthy`; no clock at all means staleness is not judged ("no fetch timestamp on the wire (mcp.refreshedAt missing)" when the observation has a timestamp and the pack has none) |
 
 A pack without any `mcp.` annotation reads `exists` for every present node
@@ -938,8 +960,9 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   severity was shown, so a rule without one has none; no other label was),
   the comparison holds the rule to what was shown, and the pair names the
   labels that went uncompared (`unobserved` on the pair, a count in the
-  summary and the run record; the board's status strip adds *rule labels*
-  to what the live side did not show). A listing with neither states nothing
+  summary and the run record; the board's status strip adds *rule labels or
+  conditions* to what the live side did not show — the same count holds the
+  Grafana-managed rules a listing gave without their condition). A listing with neither states nothing
   and is compared whole. To have the labels compared, pass the ruler's
   `labels` through.
 - **Every rule the ruler lists is kept.** A ruler that lists two rules under
@@ -1020,7 +1043,7 @@ model's kind (tools/lib/artefact-model.mjs).
 | `pipeline_exporter_metrics` | no scrape target and no metric inventory attested it | same |
 | `dashboard`, `panel` · `burn_rate` · `metric` · `scrape_job` | the family's probe failed or is not offered | `the <family> probe got no answer: <its error>` / `this MCP offers no <family> tool` |
 | `recording_rule`, `sli`, `slo` | no recorded series at all and the rules probe failed or is not offered | same |
-| `alert_route` | the `alerting_routes` probe gave no routes | its failure, or that the status carries no configuration |
+| `alert_route` | the `alerting_routes` probe gave no routes | its failure — an error, an envelope, an answer that is no Alertmanager status, an empty configuration, or one in a shape the reader does not read (Grafana's built-in Alertmanager states it as a JSON object) — or that the status carries no configuration key at all (not served here) |
 | `backend`, `profiling`, `network`, `policy_engine`, `mesh`, `collection` | nothing evidenced any backend | `no version probe, scrape target or product tool answered` |
 
 `chaos` is the exception: the live side never holds an experiment's
@@ -1081,9 +1104,11 @@ an `mcp:` source reads the annotations above into its run record:
 
 | Record field | Source annotations |
 |---|---|
-| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names) |
+| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names); `probes.partial` only when a family answered in part (`mcp.probesPartial`) |
 | `probeErrors.<family>` | `mcp.probeErrors.<family>` |
-| `vantage` | derived — `full` / `partial` / `restricted` / `lost` / `none` (same rule as `partialLiveEvidence`) |
+| `probeUnsupported.<family>` | `mcp.probeUnsupported.<family>` — `{ reason, since, tools }`, only when a family was not served here (an older record's may say `remembered: true`) |
+| `probeAnsweredBy.<family>` | `mcp.probeAnsweredBy.<family>` — the tools that answered a family that can read "not served", only when one answered |
+| `vantage` | derived (`partialLiveEvidence`): `lost` when the probe table says no family returned data — whatever tools/list advertised, an endpoint whose every family answered empty included; `partial` when a family failed or answered in part; else `full` (a family not offered or not served never degrades it); `none` without a live read, or for a live export that recorded no probe table at all (no probe record). `restricted` is no longer produced; an older record that says it reads as `full` |
 | `toolsExposedCount` | `mcp.toolsExposedCount` (`null` when absent) |
 | `scrapeJobsDown` | count of `mcp.discovered.scrape_jobs_down` |
 | `unhealthyRules` | count of `mcp.discovered.recording_rules_unhealthy` + `mcp.discovered.alert_rules_unhealthy` |
@@ -1095,18 +1120,64 @@ Two gate keys act on them:
 
 ```yaml
 gate:
-  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size),
-                                # or when the vantage is entirely lost; EMPTY and UNSUPPORTED
-                                # families never breach on their own
-  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N
+  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size — a
+                                # refusal with nothing else included) or answered in part, or when
+                                # the vantage is entirely lost; EMPTY and UNSUPPORTED families never
+                                # breach on their own, and a Pack B that is no live read passes
+  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N — when no
+                                # health family (scrape targets, recording rules, alert rules) was
+                                # read at all, a Pack B that is no live read included — and when one
+                                # of them FAILED or answered in part: the count is then a lower
+                                # bound; a family not offered or not served here is no hole
 ```
 
-When the fetch itself fails (endpoint unreachable, core tools unavailable) the
-journey writes a run record with `outcome: vantage-lost` and the error before
-rethrowing — the CLI still exits `2`, the studio still answers 502 — so a total
-loss of the observation point shows in the drift history instead of leaving a
-gap. Configuration errors (missing pack file, unset `authEnv`) never reach the
-wire and leave no record.
+Every gate key fails closed on an absent figure: `minAlignmentPct` breaches
+on a run that compared nothing ("nothing was compared — no alignment figure
+to hold against the required 85%"), and so do `maxDeclaredNotLive` and
+`maxDrifted`; `requireGradePass` breaches without a grade and
+`maxLiveAgeHours` without a refresh time. Set-asides that empty the
+comparison leave the counts a true zero (a person's decision) and the figure
+none.
+
+A lost vantage is a lost run. When the fetch itself fails (endpoint
+unreachable, core tools unavailable) — or when the read answered and its probe
+table says no family returned data (a file holding such a live export
+included) — the journey writes ONE run record with `outcome: vantage-lost`:
+the error (the first probe error in stage order, or `no probe family returned
+data`), `vantage: lost`, the probe table when the read answered, and one gate
+breach `{ criterion: 'vantage', detail }` — no grade, no match. It then
+rethrows: the CLI still exits `2`, the server answers 502 (with `outcome:
+'vantage-lost'` in the body) and rows the attempt as `vantage-lost`, and a
+notification goes out as for any loss — so a total loss of the observation
+point shows in the drift history instead of leaving a gap, and never as a
+figure. Configuration errors (missing pack file, unset `authEnv`) never reach
+the wire and leave no record.
+
+"Not served" needs a positive signal, given on the run that reads it: scrape
+targets answered 400 / 404 / 405 (never an answer naming a missing datasource:
+a wrong datasource uid is a failure), an Alertmanager status object with no
+configuration key at all, or an alert-rule engine answered 400 / 404 / 405
+(its store has no rules API). The family is asked every run and its answer alone
+decides — data, an honest empty, a refusal, a failure or the not-served answer
+again: a family not served yesterday whose tool answers a 503 or a timeout
+today is a failure (an outage of the store it reads), never kept "not served"
+by the journey's memory. What the journey's records of the same Pack B source
+remember (`probeMemoryOf`, fetchMcp's `probeMemory`): the instant a not-served
+answer was first given (`since`, from the newest record that carries a probe
+table), and the tools each record saw answer a family with data or an honest
+empty (`probeAnsweredBy`; an older record that did not say which tool counts
+for every tool, and only where it answered with data — its empty answers may
+have been an error envelope or a refused read beside an empty fallback — but
+for no alert-rule engine: the union reads several stores, and such a record
+cannot say which served). A
+not-served answer from such a tool is a failure whose probe
+error says when it answered (`<tool>: it answered on <day>; now <the answer>`)
+— the store served the family, so the answer is a lost route or a changed
+datasource, not a store that keeps none. The records read are the run's own
+(the newest 25): a store that stopped serving a family for good reads "not
+served" again once its last answer is that old. The memory is per journey and
+live source: two journeys on one endpoint each learn it from their own
+answers.
 
 The journey grades on the same construct as the studio: the requirement-chain
 comparison (`comparePackBranches`) is attached to the diff as
@@ -1331,8 +1402,9 @@ The run reads its history *before* it is written (so the diff is against
 history, never against itself) and picks two records from it: the
 **previous run** — the newest record whatever it holds — and the
 **baseline** — the newest record that CARRIES chains (`BASELINE_SCAN_LIMIT`
-= 25 records back; a vantage-lost record or one written before chains were
-recorded cannot be diffed). The chain diff, the versions and the deploy
+= 25 records back, a Run stopped on a partial scan not counted among them,
+however many there are; a vantage-lost record or one written before chains
+were recorded cannot be diffed). The chain diff, the versions and the deploy
 window are compared against the baseline; the vantage against the previous
 run. `transition` is `diffRunBranches(baseline, { branches })` plus what
 the run knows about the choice, and is never `null` on a new record:
@@ -1413,9 +1485,11 @@ is score, then kind order, then evidence text — deterministic; every
 evidence string collapses whitespace (labels, actor, deploy id, artifact
 and product came off the wire or the request). `vantage` names what
 changed about the vantage itself since the PREVIOUS run — `vantage lost →
-restricted`, `probe family recording_rules newly failed (HTTP 502)` / `no
-longer exposed` / `no longer probed` / `answers again` / `now exposed`,
-`4 → 5 MCP tools exposed`, the `live` flips — and rides beside the causes,
+full`, `probe family recording_rules newly failed (HTTP 502)` / `no
+longer exposed` / `not served here (<reason>) — not counted as a failure` /
+`no longer probed` / `answers again` / `now exposed`,
+`4 → 5 MCP tools exposed`, the `live` flips (an older record's `restricted`
+reads as `full`) — and rides beside the causes,
 never among them; `null` when neither record carries vantage facts (two
 file-sourced runs) and no version flipped.
 
@@ -1607,22 +1681,42 @@ credentials: <redacted>`, and a failed lookup or connection reads
 docs/NOTIFY_HOOKS.md has the rule's every sentence and the migration of a
 journey that names another variable.
 
-The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
-`always` posts every run; `breach` posts a gate-failed or vantage-lost run
+The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe), over
+each run as every reader reads it (its `readingOutcome`, run-basis's rule
+restated so the module stays zero-import): a pass or a failed gate over
+nothing compared is `nothing-compared`, never a pass, and an older record
+whose every probe failed is `vantage-lost`.
+`always` posts every run; `breach` posts a gate-failed or vantage-lost run,
+a run that compared nothing (reason *nothing compared*, with `· gate
+failed: <criteria>` when its gate breached any; trigger `nothing-compared`),
+a Run that stopped on a partial scan (`scan-partial`, reason *partial scan*),
 and once when the breach clears; `transitions` (the default) posts when the
-outcome changed, a chain got worse (`transition.changed[].direction ===
+outcome read changed (`pass → nothing-compared` included), a chain got worse (`transition.changed[].direction ===
 'worse'`), a new candidate cause appeared (kind + evidence not on the
 previous run) or the vantage changed — a first run is a baseline, not a
 transition (skipped; deliberately unlike `keepLivePack`, which snapshots
 the first run), and a vantage-lost run after a vantage-lost run is skipped
-(nobody is paged every 15 minutes for one outage).
+(nobody is paged every 15 minutes for one outage), as is a stopped Run after
+a stopped Run; a run that compared nothing after another changes no outcome
+(its other triggers stand). A stopped Run before a run observed nothing: no outcome
+changed since it, no vantage changed from it (its record has no vantage), no
+breach cleared. A run whose record says it is not comparable with the one
+before (`comparable.withPrevious: false`: its scan read other files, or its
+live read applied another scope than the last graded run's) posts
+`not comparable with the previous run` in place of a chain that got worse or
+an outcome that changed across the pair.
 
 The payload (`kind: observogram.journey`, `version: 1`) copies the record —
 `transition`, `causes` (with its *not a root-cause verdict* note), `chains`,
-trimmed `stack` rows, `grade`, `drift`, `gate.breaches`, `packs` with
-`//user:pass@` redacted — plus `reason`, `triggers`, a one-line `text`
-(`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`) and
-`links` when `studioUrl` is set. It never carries a definition key, an env
+trimmed `stack` rows, `grade`, `drift` (with `compared`, the number of things
+compared; `alignmentPct` is `null` when nothing was, and the `format: text` body
+says `match: nothing compared`), `gate.breaches`, `packs` with
+`//user:pass@` redacted — plus `reading` beside the record's `outcome` (what
+the run is read as: `nothing-compared` for a pass or a failed gate over
+nothing compared), `reason`, `triggers`, a one-line `text`
+(`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`; a
+pass over nothing compared leads `<journey>: nothing compared · …`, never
+with *pass*) and `links` when `studioUrl` is set. It never carries a definition key, an env
 value or a `historyError` path. The POST is bounded: one `AbortController`
 per attempt, a second attempt only after a network error / timeout, a 429 or
 a 5xx (any other 4xx is final), worst case 2 × `timeoutMs` + connect.
@@ -1630,7 +1724,10 @@ a 5xx (any other 4xx is final), worst case 2 × `timeoutMs` + connect.
 Order on disk: the record is written FIRST, then posted, then rewritten with
 `notify` (same stem) — a record on disk before anything touches the wire.
 The outcome never changes the exit code (a failed delivery on a passing run
-still exits 0). `renderJourneyMarkdown` ends with `notify: sent (202) —
+still exits 0; a run that compared nothing exits 1 under a gate, whose own
+keys may have held, and 0 with no gate configured — none, or one whose every
+key is false or null — the report heads `NOTHING COMPARED` either way, never
+`✅ PASS`). `renderJourneyMarkdown` ends with `notify: sent (202) —
 <reason>` / `notify: skipped — …` / `notify: failed after N attempts —
 <error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
 carries `notify` as names (`{ urlEnv, authEnv, on, format }`, plus

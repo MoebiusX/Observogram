@@ -1,0 +1,201 @@
+{
+  "Shop": [
+    {
+      "name": "shop",
+      "interval": "1m",
+      "rules": [
+        {
+          "expr": "",
+          "for": "5m",
+          "labels": {
+            "severity": "critical",
+            "team": "shop"
+          },
+          "annotations": {
+            "summary": "Checkout errors above 5%"
+          },
+          "grafana_alert": {
+            "id": 1,
+            "orgId": 1,
+            "title": "CheckoutErrorRatioHigh",
+            "condition": "B",
+            "data": [
+              {
+                "refId": "A",
+                "datasourceUid": "prom",
+                "relativeTimeRange": {
+                  "from": 600,
+                  "to": 0
+                },
+                "model": {
+                  "refId": "A",
+                  "expr": "sum(rate(http_requests_total{job=\"checkout\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"checkout\"}[5m]))",
+                  "instant": true
+                }
+              },
+              {
+                "refId": "B",
+                "datasourceUid": "__expr__",
+                "model": {
+                  "refId": "B",
+                  "type": "threshold",
+                  "expression": "A",
+                  "conditions": [
+                    {
+                      "evaluator": {
+                        "type": "gt",
+                        "params": [
+                          0.05
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "uid": "checkout-errors",
+            "namespace_uid": "shop-alerts",
+            "rule_group": "shop",
+            "no_data_state": "NoData",
+            "exec_err_state": "Error",
+            "is_paused": false,
+            "intervalSeconds": 60,
+            "version": 1
+          }
+        },
+        {
+          "expr": "",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "team": "shop"
+          },
+          "grafana_alert": {
+            "id": 2,
+            "orgId": 1,
+            "title": "PaymentsLatencyHigh",
+            "condition": "C",
+            "data": [
+              {
+                "refId": "A",
+                "datasourceUid": "prom",
+                "relativeTimeRange": {
+                  "from": 600,
+                  "to": 0
+                },
+                "model": {
+                  "refId": "A",
+                  "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"payments\"}[5m])))",
+                  "instant": true
+                }
+              },
+              {
+                "refId": "B",
+                "datasourceUid": "__expr__",
+                "model": {
+                  "refId": "B",
+                  "type": "reduce",
+                  "expression": "A",
+                  "reducer": "last"
+                }
+              },
+              {
+                "refId": "C",
+                "datasourceUid": "__expr__",
+                "model": {
+                  "refId": "C",
+                  "type": "threshold",
+                  "expression": "B",
+                  "conditions": [
+                    {
+                      "evaluator": {
+                        "type": "gt",
+                        "params": [
+                          0.8
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "uid": "payments-latency",
+            "namespace_uid": "shop-alerts",
+            "rule_group": "shop",
+            "no_data_state": "NoData",
+            "exec_err_state": "Error",
+            "is_paused": false,
+            "intervalSeconds": 60,
+            "version": 1
+          }
+        },
+        {
+          "expr": "",
+          "for": "15m",
+          "labels": {
+            "severity": "warning",
+            "team": "shop"
+          },
+          "grafana_alert": {
+            "id": 3,
+            "orgId": 1,
+            "title": "CartPodRestarts #2",
+            "condition": "C",
+            "data": [
+              {
+                "refId": "A",
+                "datasourceUid": "prom",
+                "relativeTimeRange": {
+                  "from": 600,
+                  "to": 0
+                },
+                "model": {
+                  "refId": "A",
+                  "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"shop\",container=\"cart\"}[15m])",
+                  "instant": true
+                }
+              },
+              {
+                "refId": "B",
+                "datasourceUid": "__expr__",
+                "model": {
+                  "refId": "B",
+                  "type": "reduce",
+                  "expression": "A",
+                  "reducer": "last"
+                }
+              },
+              {
+                "refId": "C",
+                "datasourceUid": "__expr__",
+                "model": {
+                  "refId": "C",
+                  "type": "threshold",
+                  "expression": "B",
+                  "conditions": [
+                    {
+                      "evaluator": {
+                        "type": "gt",
+                        "params": [
+                          3
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "uid": "cart-restarts",
+            "namespace_uid": "shop-alerts",
+            "rule_group": "shop",
+            "no_data_state": "NoData",
+            "exec_err_state": "Error",
+            "is_paused": false,
+            "intervalSeconds": 60,
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

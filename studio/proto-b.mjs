@@ -17,7 +17,7 @@ import {
   loadRunHistory, runHistory, runSeries, deltaVsPrevious,
   kpiTile, ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel, healthPctOf,
 } from './proto-shared.mjs';
 
 // Panels the user has expanded (session-only).
@@ -55,6 +55,8 @@ export function renderProtoDiagnoseB(view) {
   const trustPct = d.trust.total ? Math.round((d.trust.passed / d.trust.total) * 100) : 0;
   const freshC = d.trust.criteria.find(c => c.key === 'fresh');
   const driftC = d.trust.criteria.find(c => c.key === 'drift-free');
+  // The weighted health only over a comparison (null: nothing compared).
+  const hpB = m.weighted ? healthPctOf(m.weighted, m.totals?.aligned) : null;
 
   const tiles = [
     kpiTile({ accent: 'cmp', label: 'SCORE', value: `${m.overallPct}`, unit: '%',
@@ -63,10 +65,10 @@ export function renderProtoDiagnoseB(view) {
       note: `${fmtScore(d.coverage.passed)}/${d.coverage.total} criteria` }),
     kpiTile({ accent: 'green', label: 'TRUST', value: `${trustPct}`, unit: '%',
       note: `${fmtScore(d.trust.passed)}/${d.trust.total} criteria` }),
-    kpiTile({ accent: 'amber', label: 'DRIFT FIDELITY', value: m.haveB && m.diff ? `${m.weighted.healthPct}` : '—', unit: m.haveB && m.diff ? '%' : '',
+    kpiTile({ accent: 'amber', label: 'DRIFT FIDELITY', value: m.haveB && m.diff && hpB !== null ? `${hpB}` : '—', unit: m.haveB && m.diff && hpB !== null ? '%' : '',
       series: alignSeries, deltaText: deltaVsPrevious(alignSeries),
       note: m.haveB && m.diff ? `${fmtUnits(m.weighted.totalBadness)} badness units` : 'load a Pack B to measure',
-      warn: m.haveB && m.diff && m.weighted.healthPct < 85 }),
+      warn: m.haveB && m.diff && hpB !== null && hpB < 85 }),
     kpiTile({ accent: 'cyan', label: 'FRESHNESS', value: freshC?.pass ? 'OK' : 'STALE', unit: '',
       note: freshC?.detail || '', warn: !freshC?.pass }),
     kpiTile({ accent: d.trust.hasMcpSource ? 'green' : 'red', label: 'VERIFIED', value: d.trust.hasMcpSource ? 'LIVE' : 'NO', unit: '',
@@ -112,6 +114,7 @@ function panel({ id, accent = 'cmp', title, question, micro = '', body, detail =
 function renderPanels(host, m) {
   const d = m.diagnostic;
   const panels = [];
+  const hpB = m.weighted ? healthPctOf(m.weighted, m.totals?.aligned) : null;
 
   // --- Signal Lattice (drift) ---
   if (m.haveB && m.diff) {
@@ -124,10 +127,10 @@ function renderPanels(host, m) {
     panels.push(panel({
       id: 'lattice', accent: 'amber', title: 'Signal Lattice',
       question: `does the declared pack match ${m.bName}?`,
-      micro: chip(m.weighted.healthPct >= 85 ? 'pass' : m.weighted.healthPct >= 60 ? 'partial' : 'fail', `${m.weighted.healthPct}%`),
+      micro: hpB === null ? chip('info', 'nothing compared') : chip(hpB >= 85 ? 'pass' : hpB >= 60 ? 'partial' : 'fail', `${hpB}%`),
       body: `
         <div class="pb-lattice">
-          ${donutSvg([{ value: m.totals.aligned, color: C_ALIGNED }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], m.weighted.healthPct + '%', { size: 92 })}
+          ${donutSvg([{ value: m.totals.aligned, color: C_ALIGNED }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], hpB === null ? '—' : hpB + '%', { size: 92 })}
           <ul class="pb-lattice-legend">
             <li><span class="sw" style="background:${C_ALIGNED}"></span>${m.totals.aligned} aligned</li>
             <li><span class="sw" style="background:${C_DRIFTED}"></span>${m.totals.drifted} drifted</li>
@@ -175,7 +178,8 @@ function renderPanels(host, m) {
     panels.push(panel({
       id: 'chains', accent: 'purple', title: 'Requirement Chains',
       question: 'do declared SLO/SLI derivations hold in live?',
-      micro: chip(r.broken ? 'fail' : r.partial ? 'partial' : 'pass', `${Math.round((r.integrityMean || 0) * 100)}%`),
+      // No declared chain: no integrity figure (null), never 0%.
+      micro: Number.isFinite(r.integrityMean) ? chip(r.broken ? 'fail' : r.partial ? 'partial' : 'pass', `${Math.round(r.integrityMean * 100)}%`) : chip('info', 'not measured'),
       body: `
         <div class="pb-chain-cells">
           <span class="pb-cell is-pass"><strong>${r.intact}</strong> intact</span>

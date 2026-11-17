@@ -43,11 +43,11 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
 import { serviceMetadata, catalogEntryOf, livePackKind, normalizeServiceKey } from '../tools/lib/service-keys.mjs';
-import { listServicesForPack } from './store/pack-services.mjs';
+import { listServicesForPack, listPacksForService } from './store/pack-services.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
-import { crawlFiles, crawlToYaml, scanReport } from '../tools/lib/crawler.mjs';
+import { crawlFiles, crawlToYaml, scanReport, scanSkipKind } from '../tools/lib/crawler.mjs';
 import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
 import { diffPacks } from '../tools/lib/diff.mjs';
 import { comparePackBranches } from '../tools/lib/traceability-graph.mjs';
@@ -65,6 +65,7 @@ import { rebuildPack, foreignAsAdditions, applyAdditions, additionLabel, artefac
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
   validateSchedule, validateStackBudget, validateNotify, notifyTargetOf, scrubNotifyError,
+  BASELINE_SCAN_LIMIT, SCAN_PARTIAL_OUTCOME, lastCheckedRun, writeStoppedRun,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
@@ -87,9 +88,9 @@ import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs, snapshotScopeConfig } from './live-jobs.mjs';
 import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/lib/live-fetch.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { envRefOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { envRefOf, envSurfaceOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
-import { fetchRepositoryFiles } from './repo-sources.mjs';
+import { fetchRepositoryFiles, partialScanPolicy, repositoryKey } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
 import { PACK_UPLOAD_WAYS, parsePackUpload } from './service-packs.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
@@ -98,6 +99,8 @@ import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug, listServices } from './store/services.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
 import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
+// What a run's match rests on (C9): the figure only over a comparison, and why not.
+import { basisSummary, stoppedSummary } from '../tools/lib/run-basis.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { admittedBearer, admittedUser, authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -842,7 +845,7 @@ app.use(identityRoutes({ authorize }));
 // server/routes/services.mjs: the request's org's service records under
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
-app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService, readPackUpload, registerPack: registerUploadedPack }));
+app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService, readPackUpload, registerPack: registerUploadedPack, scopeBasisOf }));
 
 // The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
 // a reviewer's trusted | suspect | failed record per artefact of a
@@ -984,7 +987,13 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       // never-run one.
       let loadError = null;
       try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
-      const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
+      // The last check is the newest run that is not a stopped Run (a Run that stopped on a partial
+      // scan checked nothing; outcome scan-partial): it is named beside the check as `stoppedRun`.
+      // The engine's one rule (lastCheckedRun, the run a next run is compared against); read further
+      // back only when the newest is a stop, past every stop however many there are.
+      const newest = readJourneyRuns(name, { limit: 1 })[0] || null;
+      const stopped = newest?.outcome === SCAN_PARTIAL_OUTCOME ? newest : null;
+      const lastRun = stopped ? lastCheckedRun(readJourneyRuns(name, { limit: 1, pastStops: true })) : newest;
       // A journey whose notification a server run would refuse says so —
       // the run's own text, which names who acts (the server's operator, or
       // whoever holds the workspace); never for a journey a run would
@@ -1005,6 +1014,9 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         // one its run record names as packB.refreshedAt — or null when no
         // run has kept one.
         livePack: kept.get(name) || null,
+        // A Run newer than the last check that stopped on a partial scan: { startedAt, notRead,
+        // candidates, firstReason, kept (whether it kept a complete scan) }, or null.
+        stoppedRun: stoppedSummary(stopped),
         // Step 5: the declared cadence (parsed the way the CLI parses it —
         // cadenceMs null with a note for an irregular cron), the posture
         // budget inputs and the notify block as env var NAMES only (with
@@ -1020,7 +1032,12 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         lastRun: lastRun && {
           startedAt: lastRun.startedAt,
           outcome: lastRun.outcome,
-          alignmentPct: lastRun.drift?.alignmentPct ?? null,
+          // The match only over a comparison and over a live side that gave data (null otherwise,
+          // whatever an older record says), with what it rests on: compared, the vantage read as
+          // tools/lib/run-basis.mjs reads it, the reading (nothing-compared, vantage-lost), the first
+          // probe error (one masked line), the families not read, the scan's counts and filter,
+          // comparable — counts, names and bounded lines only.
+          ...basisSummary(lastRun),
           gradeScore: lastRun.grade?.score ?? null,
           // The grade schema that score was scored under (studio/diagnostic-grade.mjs GRADE_SCHEMA), null when the record names none.
           gradeSchema: Number.isInteger(lastRun.grade?.schema) ? lastRun.grade.schema : null,
@@ -1107,10 +1124,14 @@ app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'
 const servedRun = (run) => (run?.notify && typeof run.notify === 'object' && typeof run.notify.error === 'string'
   ? { ...run, notify: { ...run.notify, error: scrubNotifyError(run.notify.error) } }
   : run);
+// `checked=1`: only the runs that checked something — never a Run stopped on a partial scan — the
+// newest `limit` of them however many stops are newer (the board's last check after a stop).
 app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
+  const checked = req.query.checked === '1';
   try {
-    res.json({ runs: readJourneyRuns(req.params.name, { limit }).map(servedRun) });
+    const runs = readJourneyRuns(req.params.name, { limit, pastStops: checked });
+    res.json({ runs: (checked ? runs.filter((r) => r?.outcome !== SCAN_PARTIAL_OUTCOME) : runs).map(servedRun) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1196,9 +1217,11 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // The audit (STORE_PLAN slice 5): one journey.run row for every attempt
 // past the 404, the Pack B target refusal and the notify refusals, written after the engine returned or threw — on the 200
 // path the record's seven scalars; on the 502 path the same keys from the
-// route's own clock, the outcome `vantage-lost` when a live source lost its
-// vantage (the engine wrote a run record and may have notified) else
-// `error` (no record exists). Never the error's message: it may carry a URL
+// route's own clock, the outcome `vantage-lost` when Pack B lost its
+// vantage — the live read threw, or no probe family returned data (the
+// engine wrote a run record and may have notified; the 502 body says
+// `outcome: 'vantage-lost'` too) — else `error` (no record exists). Never
+// the error's message: it may carry a URL
 // or a credential. A journey with `notify` adds `notify: { urlEnv, status,
 // attempts }` — the hook's variable name, sent | skipped | failed (null when
 // no record exists) and how many requests left the server — never any part
@@ -1209,6 +1232,13 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  // A studio-written check that names a service with a record reads that environment's own live
+  // scope, else none (withServiceScope) — whatever its file still says (a scope an environment or a
+  // service deleted since left in it) — as it is graded on the record's switches. The file is not
+  // rewritten here; a check written by hand reads what its writer typed.
+  const scopeOwner = typeof def.service === 'string' && def.service.trim() && studioBanner(def.__source)
+    ? getServiceBySlug(currentStore(), normalizeServiceKey(def.service)) : null;
+  if (scopeOwner) def = withServiceScope(def, scopeOwner);
   const targets = journeyRunTargets(req, def);
   if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
   await executeJourneyRun(req, res, def, targets);
@@ -1318,17 +1348,15 @@ function mttxTargetsOfJourney(def) {
 // `packc journey run`, which is what a schedule runs — then grades as the
 // service does. A journey of no service keeps what it carries.
 // The scope a studio-written check's live read applies, as the service's Run would write it: the
-// environment's own, else the org's configured snapshot scope, else none (a configured scope that does
-// not parse leaves the check as it is — its Run says why). A file Pack B has none.
+// environment's own, else none — never the server's configured snapshot scope, which only pre-fills a
+// new environment's form. Only a check that NAMES this service (its `service` key) is the service's
+// to scope: one that reaches the service through its Pack A alone keeps what it was captured with,
+// and one that names no environment reads with none. A file Pack B has none.
 function withServiceScope(def, service) {
   const mcp = def?.packB?.mcp;
   if (!mcp || def.packB.file || !service) return def;
-  let scope = liveScopeOf(service, def.env);
-  if (!scope) {
-    const configured = snapshotScopeConfig(currentStore(), currentOrg());
-    if (configured.errors.length) return def;
-    scope = compactScope(configured.defaults);
-  }
+  if (typeof def.service !== 'string' || !def.service.trim() || normalizeServiceKey(def.service) !== service.slug) return def;
+  const scope = typeof def.env === 'string' && def.env.trim() ? liveScopeOf(service, def.env) : null;
   const { scope: _was, ...rest } = mcp;
   return { ...def, packB: { ...def.packB, mcp: { ...rest, ...(scope ? { scope } : {}) } } };
 }
@@ -1385,12 +1413,14 @@ function serviceCheckNames(service) {
 
 // The checks named, each written by the studio, rewritten with `service`'s
 // switches and set-asides — its own name, its keys and its comment block
-// kept; one whose lists already are the service's is not touched.
+// kept; one whose lists already are the service's is not touched. Answers
+// how many it wrote.
 function writeGradeOffToChecks(names, service) {
   const keys = gradeOffKeysOf(service);
   const aside = JSON.stringify(setAsideOfService(service));
   const runs = JSON.stringify(chaosRunsOfService(service));
   const targets = JSON.stringify(mttxTargetsOfService(service));
+  let written = 0;
   for (const name of names) {
     let def;
     try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
@@ -1403,9 +1433,31 @@ function writeGradeOffToChecks(names, service) {
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
-    try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); }
+    try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); written += 1; }
     catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs and MTTD / MTTR targets (${e.message})\n`); }
   }
+  return written;
+}
+
+// What the scope check (POST /api/services/:id/scope-check, server/scope-check.mjs) reads for an
+// environment of `service` — stored packs only, never an MCP call: `declared`, the environment's
+// last scan (its check's Pack A), else the service's own pack (an environment not added yet has
+// none of its own); `live`, the live pack the environment's last Run kept. Either null.
+function scopeBasisOf(service, envName) {
+  const name = serviceJourneyName(service.slug, envName);
+  let def;
+  try { def = loadJourneyDef(name, { allowPath: false }); } catch { def = null; }
+  const packOf = (id) => {
+    const meta = id ? findPackMeta(id) : null;
+    if (!meta) return null;
+    try { return { packId: meta.id, label: meta.label || meta.id, canonical: loadPackCanonical(meta) }; } catch { return null; }
+  };
+  const scanned = def ? workspacePackRef(def.packA) : null;
+  const primary = listPacksForService(currentStore(), service.id).find((l) => l.role === 'primary');
+  const declared = packOf(scanned?.id) || packOf(primary?.packId);
+  const kept = livePacksByJourney().get(name);
+  const liveMeta = kept ? packOf(kept.id) : null;
+  return { declared, live: liveMeta ? { ...liveMeta, refreshedAt: kept.refreshedAt } : null };
 }
 
 // A service about to be deleted: the checks that are its own, found while it
@@ -1413,7 +1465,8 @@ function writeGradeOffToChecks(names, service) {
 // service's, and a service made again under the name starts with none.
 function forgetGradeOffOfDeletedService(service) {
   const names = serviceCheckNames(service);
-  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [], targets: null });
+  // Its live scopes leave too: a service made again under the slug reads unscoped until it has its own.
+  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [], targets: null, liveScopes: {} });
 }
 
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
@@ -1468,13 +1521,17 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
+    // runJourney marks an error vantageLost only when it wrote the lost run's
+    // record — the live fetch threw, or Pack B's probe table says no family
+    // returned data (a file holding a live export included).
+    const lost = !!e?.vantageLost;
     const auditError = auditAfter(req, runRow({
-      startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
+      startedAt: t0.toISOString(), outcome: lost ? 'vantage-lost' : 'error',
       alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
       // The vantage-lost path posted from the record it kept (runJourney sets e.notify).
       ...notifyOf(e?.notify),
     }), { tag: 'journey' });
-    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...extra, ...(auditError ? { auditError } : {}) });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(lost ? { outcome: 'vantage-lost' } : {}), ...extra, ...(auditError ? { auditError } : {}) });
   }
 }
 
@@ -1525,12 +1582,23 @@ function livePacksByJourney() {
 //   1. the targets — the environment's endpoint resolved as a journey's
 //      Pack B is (a refusal scans nothing and sends nothing), the folder
 //      rule read again for a folder repository;
-//   2. the scan — the repository read now (server/repo-sources.mjs), at the
-//      environment's own branch where the service names one (its envRefs),
-//      else the repository's, and
-//      crawled under the service's slug and the environment's name, so the
-//      scan is the service's own pack; registered under one label per
-//      service and environment, so the next Run replaces it;
+//   2. the scan — the repository read now (server/repo-sources.mjs: a file
+//      the host refused or dropped is tried again, the read slowing down for
+//      every file after a refusal), at the environment's own branch where the
+//      service names one (its envRefs), else the repository's, and
+//      crawled under the service's slug — every environment of a service
+//      reads the same files, unless the environment's deployment surface is
+//      set (its envSurfaces: the files of that surface alone); its name
+//      chooses nothing — so the scan is the service's own pack; registered
+//      under one label per service and environment, so the next Run replaces
+//      it. A scan that LOST files (scan.partial) is no scan: while a complete
+//      scan of the same repository and branch is kept, the Run stops — 409,
+//      a `scan-partial` run record (no grade, no drift; a notify block posts
+//      it), nothing registered, no live call — unless OBSERVOGRAM_PARTIAL_SCAN
+//      is `check`; with none kept (the first Run, another repository or
+//      branch, an evicted pack) or under `check`, the partial scan is checked,
+//      its gate failed (scanComplete) and its figures marked not comparable
+//      (the record's `comparable`). A read that lost every file stops.
 //      A pack file in place of the repository (its kind 'pack',
 //      server/service-packs.mjs) is no scan: the pack as uploaded is Pack A;
 //   3. the check, saved — the journey `<slug>.<env>`: the scan as Pack A,
@@ -1543,12 +1611,16 @@ function livePacksByJourney() {
 // saw (tools/lib/crawler.mjs scanReport: the files read, the files the rule
 // would read and the read did not, with why, the cap's and the environment
 // scope's leftovers, the files read and recognised as nothing, the crawl's
-// warnings), kept in the run record as packA.scan; 400/404 for a service,
-// environment or repository the request cannot use; 409 for a record that
-// says nowhere to look (no repository, no endpoint) or names a source the
-// org switched off (Settings → Repository sources); 422 for a scan that
-// read nothing or made no valid pack; 502 when the repository or the live
-// side did not answer (the live side's loss keeps a record, as a journey's).
+// warnings; `partial`, `lost`, `notRead`, `notReadReasons`, `cappedFiles`,
+// `treeTruncated`, `filter`, `excludedMost`), kept in the run record as
+// packA.scan; 400/404 for a service, environment or repository the request
+// cannot use; 409 for a record that says nowhere to look (no repository, no
+// endpoint) or names a source the org switched off (Settings → Repository
+// sources), and for a scan that lost files ({ ok: false, outcome:
+// 'scan-partial', error, journey, kept: { id, label } | null, scan, record });
+// 422 for a scan that read nothing or made no valid pack; 502 when the
+// repository or the live side did not answer (the live side's loss keeps a
+// record, as a journey's).
 // Writes the rows of both packs, a journey.capture row ({ via: 'service' })
 // and the journey.run row.
 app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async (req, res) => {
@@ -1577,20 +1649,11 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   const endpoint = livePack ? null : getMcpEndpointRow(db, env.mcpEndpointId);
-  // The live read's scope (an MCP read only): the environment's own, else the org's configured
-  // snapshot scope (OBSERVOGRAM_SNAPSHOT_* / the org's own variables), else none. Written into the
-  // check as packB.mcp.scope, so a Check now and the command line read the same.
-  let liveScope = null;
-  if (!livePack) {
-    liveScope = liveScopeOf(service, env.name);
-    if (!liveScope) {
-      const configured = snapshotScopeConfig(db, req.observogramOrg);
-      if (configured.errors.length) {
-        return res.status(409).json({ ok: false, error: `the configured snapshot scope does not parse — ${configured.errors.join('; ')}; fix the variable, or give ${service.name} in ${env.name} its own live scope` });
-      }
-      liveScope = compactScope(configured.defaults);
-    }
-  }
+  // The live read's scope (an MCP read only): the environment's own, else none — the server's
+  // configured snapshot scope (OBSERVOGRAM_SNAPSHOT_*) only pre-fills a new environment's form and is
+  // never applied to one that exists. Written into the check as packB.mcp.scope, so a Check now and
+  // the command line read the same.
+  const liveScope = livePack ? null : liveScopeOf(service, env.name);
   const name = serviceJourneyName(service.slug, env.name);
   let previous = null;
   try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
@@ -1667,25 +1730,107 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   const access = remote ? repositoryAccess(repository, credential) : null;
   const withAccess = (report) => (access ? { ...report, access } : report);
   let scan = withAccess(scanReport(read));
+  // Every environment of the service reads the same files unless its deployment surface is set
+  // (envSurfaceOf: null reads every file) — the environment's name chooses nothing.
+  let canonical = null;
+  let crawlError = null;
+  if (scan.files) {
+    try {
+      let summary;
+      ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name, surface: envSurfaceOf(service, env.name) }));
+      scan = withAccess(scanReport(read, summary));
+    } catch (e) { crawlError = e; }
+  }
+  // A scan that lost files: stopped while a complete scan of this repository is kept (the default
+  // policy) or when it read no file at all; else checked, marked partial (runJourney fails its gate).
+  if (scan.partial) {
+    const kept = keptCompleteScan(name, previous, repository, read);
+    if (!scan.files || (kept && partialScanPolicy() === 'stop')) {
+      return stopOnPartialScan(req, res, { def, name, service, env, previous, kept, scan, targets, t0 });
+    }
+  }
   if (!scan.files) {
     return res.status(422).json({ ok: false, error: `${read.source} has no file the scan reads — Prometheus rules, OpenTelemetry collector configs, Grafana dashboards, compose files, Helm values or metrics code`, scan });
   }
-  let canonical;
-  try {
-    let summary;
-    ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name }));
-    scan = withAccess(scanReport(read, summary));
-  } catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
+  if (crawlError) return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${crawlError.message}`, scan });
   const errors = validateCanonical(canonical, SCHEMA);
   if (errors.length) {
     return res.status(422).json({ ok: false, error: `the scan of ${read.source} did not make a valid pack: ${errors[0]}`, errors: errors.slice(0, 20), scan });
   }
   const label = `${service.name} · ${env.name} · repository`;
   const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
-  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.skipped ? `, ${scan.skipped} not read` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.notRead ? `, ${scan.notRead} not read${scan.lost ? ` (${scan.lost} could not be read: checked as a partial scan)` : ''}` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
   // 3. The check, saved and run.
   await check(packId, label, scan);
 });
+
+// The service's last complete scan of the repository a Run has just read: the
+// check's Pack A, still registered, made by the newest run that checked
+// something, whose scan read this same repository and branch and lost nothing
+// (a record written before scans said so: none of its named files lost) — as
+// { id, label, source }, else null. The history is read past every Run
+// stopped since (readJourneyRuns pastStops): stops in a row never push the
+// check out of it, so every partial Run stops while the check stands.
+function keptCompleteScan(name, previous, repository, read) {
+  const ref = previous?.packA ? workspacePackRef(previous.packA) : null;
+  if (!ref) return null;
+  // The engine's one rule for "checked something" (lastCheckedRun), over the records that carry a scan.
+  const last = lastCheckedRun(readJourneyRuns(name, { limit: BASELINE_SCAN_LIMIT, pastStops: true })
+    .filter((r) => r && typeof r === 'object' && r.packA?.scan && typeof r.packA.scan === 'object'));
+  const s = last?.packA?.scan;
+  if (!s || typeof last.packA.source !== 'string' || basename(last.packA.source) !== `${ref.id}.pack.yaml`) return null;
+  if (!scannedSameRepository(s, repository, read) || (s.ref ?? null) !== (read.ref ?? null)) return null;
+  const lost = s.partial === true
+    || (s.partial === undefined && (Array.isArray(s.skippedFiles) ? s.skippedFiles : []).some((x) => scanSkipKind(x?.why) === 'lost'));
+  return lost ? null : { ...ref, source: last.packA.source };
+}
+
+// Whether a recorded scan read the repository this Run read. A host's (GitHub, Azure DevOps): by
+// the whole repository its `access` names — host, organisation and project as well as the names
+// (repo-sources.mjs repositoryKey), never the words for where it came from, which leave out the
+// organisation ("Shop/shop on Azure DevOps"); a host scan that names no access says too little, so it
+// is no scan of this repository and the partial scan is checked, marked partial. A folder or an
+// upload: by those words, which name its whole location.
+function scannedSameRepository(scan, repository, read) {
+  if (repository?.kind === 'github' || repository?.kind === 'ado') {
+    const was = scan.access && typeof scan.access === 'object' ? repositoryKey(scan.access) : null;
+    return was !== null && was === repositoryKey(repository);
+  }
+  return (scan.source ?? null) === (read.source ?? null);
+}
+
+// A Run stopped on a scan that lost files: the stored pack and the check's
+// Pack A untouched (the check saved again as it stands, so the listing shows
+// it), nothing registered, no live call; the scan-partial record written
+// (tools/lib/journey.mjs writeStoppedRun — a notify block posts it), its
+// journey.run row, one stderr line, and 409 with the sentence and the way
+// out (run it again; an operator may have partial scans checked instead).
+async function stopOnPartialScan(req, res, { def, name, service, env, previous, kept, scan, targets, t0 }) {
+  const startedAt = new Date(t0).toISOString();
+  if (kept) {
+    def.packA = previous.packA;
+    try { saveJourneyDef(name, withServiceGradeOff(def, getService(currentStore(), service.id) || service), { banner: serviceCheckBanner(service.slug, env.name) }); }
+    catch (e) { process.stderr.write(`[service-run] ${service.slug}/${env.name}: the check could not be saved again (${e.message})\n`); }
+  }
+  let notifyTarget = null;
+  if (def.notify && targets.notifyHook) {
+    try { notifyTarget = notifyTargetOf(def.notify, { url: targets.notifyHook.url, auth: targets.notifyHook.auth }); } catch { notifyTarget = null; }
+  }
+  const record = await writeStoppedRun({ ...def, name }, { kept: kept ? { source: kept.source } : null, scan, startedAt, tookMs: Date.now() - t0, notifyTarget });
+  const keptRef = kept ? { id: kept.id, label: kept.label } : null;
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${record.error} — the Run stopped; ${keptRef ? `the service keeps ${keptRef.id}` : 'no file of it could be read'}\n`);
+  const auditError = auditAfter(req, {
+    action: 'journey.run', targetKind: 'journey', targetId: bounded(name),
+    detail: {
+      startedAt: bounded(startedAt), outcome: SCAN_PARTIAL_OUTCOME, alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: finite(record.tookMs),
+      ...(def.notify ? { notify: { urlEnv: bounded(def.notify.urlEnv), status: ['sent', 'skipped', 'failed'].includes(record.notify?.status) ? record.notify.status : null, attempts: Number.isInteger(record.notify?.attempts) ? record.notify.attempts : 0 } } : {}),
+    },
+  }, { tag: 'journey' });
+  const way = keptRef
+    ? 'the service keeps its last complete scan of this repository; run it again (an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check)'
+    : 'no file of the repository could be read; run it again';
+  return res.status(409).json({ ok: false, outcome: SCAN_PARTIAL_OUTCOME, error: `${record.error} — the Run stopped: ${way}`, journey: name, kept: keptRef, scan, record, ...(auditError ? { auditError } : {}) });
+}
 
 // POST /api/journeys/capture — "save this comparison as a journey". The
 // server resolves the session's pack ids to durable sources: file-backed
@@ -1726,13 +1871,20 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   const live = bAnn['mcp.url'] && livePackKind(canonicalB) !== 'snapshot'
     ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
   if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
-  // A live pack read under a scope (a service's Run): the check re-reads it under the same one.
-  if (live?.mcp && bAnn[LIVE_SCOPE_ANNOTATION]) {
+  // The scope the check's live read applies, decided on the record: a capture that names a service
+  // with a record takes that environment's own scope (none without an environment, or when it has
+  // none) — never Pack B's recorded one, which may be another service's; a capture of no service
+  // record re-reads Pack B under the scope it was read with (a service's Run's live pack).
+  const scopeOwner = live?.mcp && typeof b.service === 'string' && b.service.trim() ? getServiceBySlug(currentStore(), normalizeServiceKey(b.service)) : null;
+  if (scopeOwner) {
+    const own = typeof b.env === 'string' && b.env.trim() ? liveScopeOf(scopeOwner, b.env.trim()) : null;
+    if (own) live.mcp.scope = own;
+  } else if (live?.mcp && bAnn[LIVE_SCOPE_ANNOTATION]) {
     let said = null;
     try { said = JSON.parse(bAnn[LIVE_SCOPE_ANNOTATION]); } catch { /* not a scope: none */ }
     if (said && typeof said === 'object' && !Array.isArray(said)) {
-      const { appliesTo: _appliesTo, ...fields } = said;
-      const { scope, errors } = normalizeScope(fields);
+      const { appliesTo: _appliesTo, notApplied: _notApplied, ...fields } = said;
+      const { scope, errors } = normalizeScope(fields, { stored: true });
       const compact = errors.length ? null : compactScope(scope);
       if (compact) live.mcp.scope = compact;
     }
@@ -2162,9 +2314,20 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
   }
   // A family the MCP doesn't expose at all is a tier restriction, not an
   // empty answer — one honest line, never the per-family "returned empty"
-  // narrative below.
-  if (probesUnsupported.length) {
-    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+  // narrative below. A family whose store answered it keeps no such thing
+  // (mcp.probeUnsupported.<family>: scrape targets a federated store does
+  // not list) is said as what was answered.
+  const notServed = {};
+  const reasonOf = (v) => { try { const r = JSON.parse(String(v))?.reason; return typeof r === 'string' && r ? r : null; } catch { return null; } };
+  for (const [k, v] of Object.entries(ann)) {
+    if (k.startsWith('mcp.probeUnsupported.')) notServed[k.slice('mcp.probeUnsupported.'.length)] = reasonOf(v);
+  }
+  const notOffered = probesUnsupported.filter((family) => !(family in notServed));
+  if (notOffered.length) {
+    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${notOffered.join(', ')}.`);
+  }
+  for (const family of probesUnsupported.filter((f) => f in notServed)) {
+    summary.warnings.push(`Not served here — ${family.replace(/_/g, ' ')}${notServed[family] ? `: ${notServed[family]}` : ''}. Not counted as a failure; a comparison reports the family as not checked.`);
   }
   // The stack panel is gated on metrics_query alone; a restricted tier
   // reads "not attempted", never "healthy" and never "absent".
@@ -2180,11 +2343,13 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
     summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
   }
   const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
+  // A family that FAILED got no answer (an outage, or a read that was refused) — never "returned empty".
+  const gotNothing = (k) => (probesFailed.includes(k) ? `got no answer${probeErrors[k] ? ` (${probeErrors[k]})` : ''}` : 'returned empty');
   if (attemptedNothing('recording_rules')) {
-    summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
+    summary.warnings.push(`Recording-rule probes ${gotNothing('recording_rules')}. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn't exposing them yet.`);
   }
   if (attemptedNothing('alert_rules')) {
-    summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
+    summary.warnings.push(`Alert-rule probes ${gotNothing('alert_rules')}. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn't be surfaced.`);
   }
   if (attemptedNothing('dashboards')) {
     summary.warnings.push(probesFailed.includes('dashboards')
@@ -2195,10 +2360,10 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
     summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
   }
   if (attemptedNothing('scrape_configs')) {
-    summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
+    summary.warnings.push(`Scrape-config probes ${gotNothing('scrape_configs')}. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.`);
   }
   if (attemptedNothing('metric_names')) {
-    summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
+    summary.warnings.push(`Metric-inventory probes ${gotNothing('metric_names')}. The metrics actually exported by the platform couldn't be enumerated.`);
   }
   // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
   if ((pack.spec?.slis || []).length === 0) {
@@ -3064,6 +3229,58 @@ function syncTargetsIntoChecks(log) {
   if (written) log(`[studio] wrote the services' MTTD / MTTR targets into ${written} saved check${written === 1 ? '' : 's'}`);
 }
 
+// Boot step 8: a saved check of a service reads with its environment's own live scope, else none
+// (withServiceScope). A check saved while the server's configured snapshot scope applied to every
+// environment without its own still carries that scope; it is rewritten here, at the first start
+// after the change, and logged with its name. Only that scope is ever taken out: a check whose scope
+// is not the org's configured default (OBSERVOGRAM_SNAPSHOT_* and the org's own, as the Run before
+// this change wrote it; none configured, or one that does not parse: nothing is the default's) keeps
+// it — one typed into a capture by hand among them, with its comments — and so does a check written
+// by hand (no studio banner) or one that names no service. A check whose service has no record (one
+// deleted before the change) reads with none, as a deleted service's checks do now. Only the scope is
+// written; the rest of the check is as it was. Idempotent: a check no longer carrying the default is
+// not touched again. Best effort: never a boot failure.
+const sameScopeSet = (a, b) => {
+  const fields = ['metricPrefixes', 'folderUids', 'metricExclude', 'ruleGroups'];
+  const list = (s, f) => (Array.isArray(s?.[f]) ? [...new Set(s[f].map(String))].sort() : []);
+  return fields.every((f) => JSON.stringify(list(a, f)) === JSON.stringify(list(b, f))) && (a?.datasourceUid || null) === (b?.datasourceUid || null);
+};
+const CHECK_NAMES_LOGGED = 10;
+function syncScopesIntoChecks(log) {
+  for (const org of listOrgs(currentStore())) {
+    const rewritten = [];
+    try {
+      runWithOrg(org.id, () => {
+        const configured = snapshotScopeConfig(currentStore(), org.id);
+        const theDefault = configured.errors.length ? null : compactScope(configured.defaults);
+        if (!theDefault) return;
+        for (const name of listJourneys()) {
+          let def;
+          try { def = loadJourneyDef(name, { allowPath: false }); } catch { continue; }
+          const mcp = def?.packB?.mcp;
+          if (!mcp || def.packB.file || typeof def.service !== 'string' || !def.service.trim()) continue;
+          if (!mcp.scope || !sameScopeSet(mcp.scope, theDefault)) continue;
+          const banner = studioBanner(def.__source);
+          if (!banner) continue;   // written by hand: left as it is
+          const service = getServiceBySlug(currentStore(), normalizeServiceKey(def.service));
+          const want = service ? withServiceScope(def, service)?.packB?.mcp?.scope ?? null : null;
+          if (want && sameScopeSet(want, mcp.scope)) continue;   // the environment's own scope is the default's
+          const { __source: _source, ...rest } = def;
+          const { scope: _was, ...mcpRest } = mcp;
+          try {
+            saveJourneyDef(name, { ...rest, packB: { ...rest.packB, mcp: { ...mcpRest, ...(want ? { scope: want } : {}) } } }, { banner });
+            rewritten.push(name);
+          } catch (e) { process.stderr.write(`[studio] org ${org.id}: the saved check ${name} could not be rewritten with its environment's own live scope (${e.message})\n`); }
+        }
+      });
+    } catch (e) { process.stderr.write(`[studio] org ${org.id}: the live scopes could not be written into its saved checks (${e.message})\n`); }
+    if (rewritten.length) {
+      const shown = rewritten.slice(0, CHECK_NAMES_LOGGED).join(', ') + (rewritten.length > CHECK_NAMES_LOGGED ? `, … (${rewritten.length - CHECK_NAMES_LOGGED} more)` : '');
+      log(`[studio] org ${org.id}: the server's snapshot scope taken out of ${rewritten.length} saved check${rewritten.length === 1 ? '' : 's'} (${shown}) — it no longer applies to a service environment; each reads its environment's own live scope, else none`);
+    }
+  }
+}
+
 // The studio no longer reads the install's deployment-wide live pack
 // (STORE_PLAN slice 3: one per org). While that file exists and the default
 // org has no live pack of its own yet, one line says where the badge reads
@@ -3136,6 +3353,7 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
   syncTargetsIntoChecks(log);
+  syncScopesIntoChecks(log);
   noteLegacyLivePack(db, log, legacyLivePack);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process

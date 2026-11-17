@@ -93,6 +93,15 @@ for (const [id, cap] of Object.entries(CAPABILITIES)) {
     assert(typeof c.tool === 'string' && TOOL_NAME_RE.test(c.tool),
       `capability ${id}: candidate tool "${c.tool}" is a well-formed tool name`);
   }
+  // A "not served here" status list (P6) belongs to a probe family, holds
+  // client-error statuses only, and never a refusal: 401/403 is a read that
+  // was not allowed, which fails the family.
+  if (cap.unsupportedOnHttpStatus !== undefined) {
+    const s = cap.unsupportedOnHttpStatus;
+    assert(cap.kind === 'probe' && Array.isArray(s) && Object.isFrozen(s) && s.length > 0
+      && s.every((n) => Number.isInteger(n) && n >= 400 && n <= 499 && n !== 401 && n !== 403),
+    `capability ${id}: unsupportedOnHttpStatus is a frozen, non-empty list of 4xx statuses without 401/403, on a probe`, s);
+  }
 }
 
 // Resolver contract: single-tool lookup, by-id lookup, cascade shape.
@@ -150,7 +159,6 @@ const EXPECTED_TOOL_SURFACE = [
   'metrics_alerts',
   'metrics_inventory',
   'metrics_label_values',
-  'metrics_metadata',
   'metrics_query',
   'metrics_recording_rules',
   'metrics_scrape_jobs',

@@ -206,6 +206,52 @@ counterpart is compared as usual, whatever the annotation says. The live
 fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
 look at*); a pack without them behaves exactly as before.
 `summary.notObserved` counts the entries; they are outside the union.
+A live read that covered only some STORES of a rule family says so in
+`observogram.unread.alert_rule` (`{ grafana?, ruler?, loki }`) and
+`observogram.unread.recording_rule` (`{ grafana }`): no Grafana alert-rule
+tool answered, no Prometheus-compatible ruler did, no tool reads a Loki
+ruler or Grafana-managed recording rules. An unmatched artefact every one of
+whose rules lives in a store so named — a declared rule's `engine` (absent,
+`prometheus`, `mimir`, `thanos`, `victoriametrics` → a ruler; `grafana`;
+`loki`), a recording rule that states Grafana's facts, a burn-rate entry
+every rule of which it was read from sits in such a store (its source rules,
+below: `engine: grafana` is Grafana's store, any other a ruler's) — goes to
+`notObserved` with that reason; a scope's own reason, more specific, comes
+first. A rule is `loki` only where its own source says so — a pack that
+states it, or a scanned rule whose expression is LogQL by a pipeline stage
+PromQL has no operator for (`|=`, `|~`, `!~`, `| json`, …) — never by the path
+a rule file ships under nor by a selector PromQL also has (`rate({app="x"}[5m])`,
+`x{job="y"} != 1`): a mixin's PromQL alert on `loki_*` series under `loki/`
+is a Prometheus rule, and missing live it reads *declared, not live*. A
+burn-rate **pair** one side of which was read from a rule in a store the
+other side's read did not cover (an SLO guarded by a Prometheus rule and a
+Grafana-managed one, against a read whose Grafana tool gave no answer) is
+not compared on its `windows` — the other side derived its own from fewer
+rules — and says so, `unobserved: [{ field: 'windows', side, keys: [], rule }]`
+(counted in `partlyCompared`); the rules both sides read are compared as
+below.
+
+**A Grafana-managed rule** states beside the spec what the closed AlertRule
+cannot hold (`observogram.grafana_rule.alerting.rules[<i>]`, the adapter's
+`grafana`: `{ uid?, folder?, folderUid?, group?, condition? }`). Its
+`condition` — the expression nodes from the query to the alert (a threshold,
+its recovery threshold, a reduce, math, classic conditions), the other
+queries, the condition reference and `paused`, as one text both readers
+derive the same way — is part of its behaviour: a threshold raised in Grafana
+reads drifted on `condition`. A side that states none (a listing that does
+not show it; a repository whose threshold, or any node of it, is a value a
+Helm chart fills in at deploy time or a `${VAR}` — no number the repository
+states) is no difference: the pair carries `unobserved: [{ field:
+'condition', side, keys: [] }]` and counts in `partlyCompared`. Its `uid`
+pairs a rule renamed on one side: when both sides state one uid under two
+names and neither name has a counterpart, the two are one `inBoth` entry,
+`matchedBy: 'uid'`, drifted on `name` (the alertname routing and silences
+match) — on the default identity path only, and never in place of a name both
+sides hold. Its `folder` (a title, as a provisioning file states it) and
+`group` answer a scope: a folder entry whose live read named one of its
+folders by that title holds it inside; one that named every folder and none
+so, outside; else not known, and the reason names the folder the pack
+states.
 
 A backend the live side has only from a scrape job named for an exporter
 that reads more than one product — the elasticsearch_exporter reads
@@ -398,7 +444,10 @@ info`) read *aligned*.
 
 So each entry says, beside it, the rules it was read from:
 `observogram.source_rules.policy.burn_rate_alerts.<slo id>` = a JSON list of
-`{ name, expr, for?, severity?, labels?, partial? }`, the rules' terms as an
+`{ name, expr, for?, severity?, labels?, condition?, engine?, partial? }`
+(`condition`: a Grafana-managed rule's threshold and other steps;
+`engine: grafana`: its store, read only against the stores the other side's
+read did not cover), the rules' terms as an
 operational rule's are read (`sourceRuleTerms`, tools/lib/sli-inference.mjs
 — the repository scan and the live fetch write the statement through that
 one function, over every rule whose expression references a recorded series
@@ -464,8 +513,7 @@ Not covered, as for an operational rule: a ruler that re-prints expressions
 (another number spelling, the aggregation modifier moved) reads the same
 rule as different on `expr`, and a listing with neither a labels map nor a
 flat severity on `labels` and `severity`; Helm control flow inside a rule
-is read wrong by the scan; a Grafana-managed rule's threshold kept in a threshold node is in no
-reading's `expr`; a label whose key the comparison drops everywhere as
+is read wrong by the scan; a label whose key the comparison drops everywhere as
 volatile (`source`, `host`, `version`, `url`, `description`, …) is
 compared on neither kind of rule. Two burn-rate entries on one SLO — no
 reader writes them — both carry the SLO's one statement, and a rule that
@@ -480,13 +528,20 @@ unmatched artefact on the other side, in a scoped family, goes to
 **outside** the scope — `outside the snapshot's metric scope (prefixes
 payments_, checkout_)`, with `; excluded ^app_event_\d+_total$` appended when
 the snapshot also dropped names by pattern (`outside the snapshot's metric
-scope (excluded ^go_)` when it set patterns and no prefix), `outside the
+scope (excluded ^go_)` when it set patterns and no prefix; a name longer than
+256 characters is never dropped by a pattern, by the fetcher or here —
+`tools/lib/live-fetch.mjs` `excludedBy` — and a pattern that can split a name
+of up to 256 characters more than a million ways is refused where the scope is
+parsed, never run), `outside the
 snapshot's dashboard folders (Payments)`, `outside the snapshot's alert rule
 groups (payments, checkout:slo)` (the group a crawled rule's `source` names,
 `<file>#<group>/<name>`), `outside the snapshot's alert rule scope (folders
 Payments; rule groups payments)` when both were applied
 — or **cannot tell**, when the artefact does not say what the scope needs (a
-crawled dashboard names no folder uid): `the snapshot read only the folders
+crawled dashboard names no folder uid, and states a folder title only where
+the repository provisions it — a sidecar annotation read as its YAML value, or
+a dashboard provider that the same compose container's Grafana reads, alone):
+`the snapshot read only the folders
 Payments; Pack A does not say which folder this dashboard is in, so it was
 not checked`, `the snapshot read only the rule groups payments; Pack A does not
 say which group this recording rule is in, so it was not checked` (a canonical
@@ -675,6 +730,11 @@ reported separately.
 - `jaccard = inBoth / union`: identity overlap.
 - `alignment = aligned / union`: true agreement ratio.
 
+With nothing in the union (`union` 0 — every declared artefact not checked,
+parked or out of scope) both are `null`, never 1: nothing compared is no match.
+A journey then records `drift.alignmentPct: null` beside `drift.compared: 0`,
+and a gate on the figure fails ("nothing was compared").
+
 The strongest diagnostic signal is the gap between them: high Jaccard and low
 alignment means Observogram found the same controls, but their definitions drift.
 
@@ -723,6 +783,10 @@ high-cost false reassurance per six confirmed controls. That maps to about
 85% fidelity. The drift-free criterion contributes fractional credit equal to
 the measured weighted fidelity; crossing the threshold decides whether the row
 is safe to trust.
+
+With nothing compared (an empty union, or nothing but placeholders to weigh)
+the fidelity is `null` (`computeWeightedDeltaRisk` → `health` / `healthPct`
+null), and Drift-free earns nothing: its detail begins `nothing compared`.
 
 ## Public API
 

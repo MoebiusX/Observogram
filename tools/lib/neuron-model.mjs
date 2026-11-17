@@ -10,7 +10,12 @@
 //
 // Honesty rules carried over from the run record (docs/MCP_INTEGRATION.md):
 //   - A vantage-lost run has no drift facts: it is a GAP in the alignment /
-//     grade series (value null), never a 0.
+//     grade series (value null), never a 0. So is a run that compared
+//     nothing, and an older record whose every probe failed (it claimed a
+//     figure over a live side that gave none): tools/lib/run-basis.mjs reads
+//     every run the way the listing and the board do. A run is counted under
+//     its reading — a pass or a failed gate over nothing compared is
+//     'nothing-compared', a stopped Run (a partial scan) 'scan-partial'.
 //   - Stack self-metric samples are signals, not verdicts: the model keeps
 //     their direction and hint so a surface can mark "nonzero", and never
 //     turns them into pass/fail.
@@ -24,8 +29,10 @@
 
 import { stackSeries, latestByFamily } from './stack-evidence.mjs';
 import { inventorySeries } from './inventory-coverage.mjs';
+import { comparedOf, matchPctOf, vantageOf, readingOutcome, firstProbeErrorOf, liveLossOf, scanFactsOf } from './run-basis.mjs';
 
-export const OUTCOMES = Object.freeze(['pass', 'gate-failed', 'vantage-lost']);
+// A run's outcome as a reader says it (run-basis.mjs readingOutcome).
+export const OUTCOMES = Object.freeze(['pass', 'gate-failed', 'nothing-compared', 'vantage-lost', 'scan-partial']);
 export const LADDER_KEYS = Object.freeze(['healthy', 'degraded', 'broken', 'unobserved']);
 export const NEURON_WINDOWS = Object.freeze([20, 50, 100, 200]);
 export const NEURON_WINDOW_DEFAULT = 50;
@@ -49,9 +56,12 @@ export function sortRunsOldestFirst(runs) {
     .map((x) => x.r);
 }
 
-const alignmentOf = (r) => num(r?.drift?.alignmentPct);
-const gradeOf = (r) => num(r?.grade?.score);
-const outcomeOf = (r) => (OUTCOMES.includes(r?.outcome) ? r.outcome : 'unknown');
+// The match only over a comparison and a live side that gave data; the grade only where the live side gave data.
+const alignmentOf = (r) => matchPctOf(r);
+const gradeOf = (r) => (vantageOf(r) === 'lost' ? null : num(r?.grade?.score));
+const outcomeOf = (r) => { const o = readingOutcome(r); return OUTCOMES.includes(o) ? o : 'unknown'; };
+// A run the record marks not comparable with the one before (its scan read other files) pairs with none.
+const comparableWithPrevious = (r) => !(isRecord(r?.comparable) && r.comparable.withPrevious === false);
 
 // One {t, v} per run, oldest first. v is null on a vantage-lost run (no
 // drift facts) — a gap the chart must leave open.
@@ -82,6 +92,7 @@ function latestAndPreviousGrade(runs) {
   const last = sorted.length ? sorted[sorted.length - 1] : null;
   const latest = last ? gradeOf(last) : null;
   let previous = null;
+  if (last && !comparableWithPrevious(last)) return [latest, null];
   for (let i = sorted.length - 2; i >= 0; i--) {
     const v = gradeOf(sorted[i]);
     if (v !== null) { previous = gradeTermsOf(sorted[i]) === gradeTermsOf(last) ? v : null; break; }
@@ -93,6 +104,7 @@ function latestAndPrevious(runs, pick) {
   const sorted = sortRunsOldestFirst(runs);
   const latest = sorted.length ? pick(sorted[sorted.length - 1]) : null;
   let previous = null;
+  if (sorted.length && !comparableWithPrevious(sorted[sorted.length - 1])) return [latest, null];
   for (let i = sorted.length - 2; i >= 0; i--) { const v = pick(sorted[i]); if (v !== null) { previous = v; break; } }
   return [latest, previous];
 }
@@ -218,6 +230,10 @@ export function exposureSeries(runs) {
 export function buildJourneyDetail(journey, runs) {
   const sorted = sortRunsOldestFirst(runs);
   const latest = sorted.length ? sorted[sorted.length - 1] : null;
+  // The newest run read as a lost vantage — a lost run, or an older record whose every probe failed,
+  // which still carried a grade and the chains' integrity over a live side that gave nothing: it shows
+  // neither, as gradeOf drops its grade from the series and the board does not letter it.
+  const lostRead = !!latest && outcomeOf(latest) === 'vantage-lost';
   const rows = stackRowSeries(sorted);
   return {
     name: journey?.name ?? null,
@@ -234,7 +250,7 @@ export function buildJourneyDetail(journey, runs) {
     stackBudget: journey?.stackBudget ?? null,
     notify: journey?.notify ?? null,
     runs: sorted.length,
-    outcomes: Object.fromEntries(OUTCOMES.map((o) => [o, sorted.filter((r) => r.outcome === o).length])),
+    outcomes: Object.fromEntries(OUTCOMES.map((o) => [o, sorted.filter((r) => outcomeOf(r) === o).length])),
     alignment: metricPoints(sorted, 'alignment'),
     grade: metricPoints(sorted, 'grade'),
     durations: sorted.map((r) => ({ t: startedMs(r), v: num(r.tookMs) })),
@@ -243,16 +259,25 @@ export function buildJourneyDetail(journey, runs) {
     exposure: exposureSeries(sorted),
     blast: blastRadiusNodes(latest),
     inventory: inventoryDetail(sorted),
-    breachFrequency: countBy(sorted.flatMap(breachesOf), (b) => b.criterion),
+    breachFrequency: countBy(sorted.flatMap(breachesOf), (b) => b.criterion ?? b.key),
     latest: latest ? {
       startedAt: latest.startedAt ?? null,
       tookMs: num(latest.tookMs),
       outcome: outcomeOf(latest),
       error: typeof latest.error === 'string' ? latest.error : null,
+      // What its figure rests on: the match only over a comparison, how much was compared, the first
+      // probe error (one masked line), whether the live side answered with no data, the scan's counts
+      // (a stopped Run's), and whether it is comparable with the run before.
+      alignment: alignmentOf(latest),
+      compared: comparedOf(latest.drift),
+      firstProbeError: firstProbeErrorOf(latest),
+      noData: outcomeOf(latest) === 'vantage-lost' && liveLossOf(latest).cause === 'no-data',
+      scan: scanFactsOf(latest.packA?.scan),
+      comparable: comparableWithPrevious(latest),
       drift: isRecord(latest.drift) ? latest.drift : null,
-      grade: isRecord(latest.grade) ? latest.grade : null,
+      grade: isRecord(latest.grade) && !lostRead ? latest.grade : null,
       conformance: isRecord(latest.conformance) ? latest.conformance : null,
-      traceability: isRecord(latest.traceability) ? latest.traceability : null,
+      traceability: isRecord(latest.traceability) && !lostRead ? latest.traceability : null,
       freshness: isRecord(latest.freshness) ? latest.freshness : null,
       breaches: breachesOf(latest),
       chains: isRecord(latest.chains) ? latest.chains : null,
@@ -299,10 +324,9 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
 
   const withRun = list.filter((j) => isRecord(j.lastRun));
   const lastRuns = withRun.map((j) => j.lastRun);
+  // The listing's last checks, by their reading (its compared and vantage, run-basis.mjs readingOutcome).
   const outcomes = {
-    pass: lastRuns.filter((r) => r.outcome === 'pass').length,
-    'gate-failed': lastRuns.filter((r) => r.outcome === 'gate-failed').length,
-    'vantage-lost': lastRuns.filter((r) => r.outcome === 'vantage-lost').length,
+    ...Object.fromEntries(OUTCOMES.map((o) => [o, lastRuns.filter((r) => readingOutcome(r) === o).length])),
     'never-run': list.length - withRun.length,
   };
 
@@ -385,7 +409,7 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
         return { name: j.name, cells: [...Array(columns - cells.length).fill(null), ...cells] };
       }),
     },
-    breachFrequency: countBy(allRuns.flatMap(({ r }) => breachesOf(r)), (b) => b.criterion),
+    breachFrequency: countBy(allRuns.flatMap(({ r }) => breachesOf(r)), (b) => b.criterion ?? b.key),
     causeKinds: countBy(allRuns.flatMap(({ r }) => causesOf(r)), (c) => c.kind),
     perJourney,
   };
@@ -455,8 +479,8 @@ export function defaultFocus(model, { now = Date.now() } = {}) {
     const reason = reasonOf.get(name);
     const attention = reason ? urgent.indexOf(reason) : urgent.length;
     const worse = (model.fleet?.chains?.worse || []).includes(name) ? 0 : 1;
-    const outcome = !last ? 3 : last.outcome === 'gate-failed' ? 0 : last.outcome === 'vantage-lost' ? 1 : 2;
-    const align = last?.drift?.alignmentPct ?? 101;
+    const outcome = !last ? 3 : last.outcome === 'gate-failed' ? 0 : ['vantage-lost', 'scan-partial', 'nothing-compared'].includes(last.outcome) ? 1 : 2;
+    const align = last?.alignment ?? 101;
     return [attention, worse, outcome, align, name];
   };
   return names.slice().sort((a, b) => {
@@ -498,6 +522,8 @@ export function deliveryState(detail) {
   const n = last.notify;
   if (isRecord(n)) return ['sent', 'skipped', 'failed'].includes(n.status) ? n.status : 'unknown';
   if (n === null) return 'not-configured';
+  // A stopped Run's record is written whole, delivery and all: one without it posted nothing.
+  if (last.outcome === 'scan-partial') return isRecord(detail?.notify) ? 'skipped' : 'not-configured';
   return isRecord(detail?.notify) ? 'unknown' : 'not-configured';
 }
 
@@ -545,6 +571,11 @@ export function latestCheck(detail, { now = Date.now() } = {}) {
     delivery: deliveryState(detail),
     breaches: last ? last.breaches.length : 0,
     error: last?.error ?? null,
+    // Why the live side gave nothing (its first probe error), or that it answered with no data; a
+    // stopped Run's scan.
+    firstProbeError: last?.firstProbeError ?? null,
+    noData: last?.noData === true,
+    scan: last?.scan ?? null,
     loadError: detail.loadError ?? null,
     ...scheduleLag(detail, { now }),
     trend: trendReadiness(detail),
@@ -556,7 +587,7 @@ export function latestCheck(detail, { now = Date.now() } = {}) {
 // undelivered notification, a schedule that stopped, then never run. Each
 // journey appears once, under its most urgent reason; `reasons` keeps the
 // rest. Passing, on-time journeys are left out.
-export const ATTENTION_REASONS = Object.freeze(['load-error', 'gate-failed', 'vantage-lost', 'notify-failed', 'overdue', 'never-run']);
+export const ATTENTION_REASONS = Object.freeze(['load-error', 'gate-failed', 'vantage-lost', 'scan-partial', 'nothing-compared', 'notify-failed', 'overdue', 'never-run']);
 export function attentionList(model, { now = Date.now() } = {}) {
   const out = [];
   for (const [name, d] of Object.entries(model?.perJourney || {})) {

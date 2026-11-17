@@ -143,8 +143,11 @@ annotation: a hand-uploaded pack can make them.
 `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE`, `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` for the deployment and
 `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
 deployment's field by field; a request's `scope` replaces the configured one
-whole. Inert when unset; a plain draft and the refresh never read them, a
-service's Run does where its environment has no live scope of its own
+whole. Inert when unset; a plain draft, the refresh and a service's Run never
+read them: they are the Expert snapshot's default and pre-fill the form of a
+NEW service environment, each field said *from the server default* (a default
+that names no metric prefixes cannot show it is a service's and is offered,
+never pre-filled) — a Run reads its environment's own scope, else none
 (README, *A live scope per environment*: a scoped draft — the families the
 scope narrows narrowed as here, the same annotations, the draft's signals
 kept). Metric
@@ -153,7 +156,24 @@ the prefixes kept (anchored, bounded regexes, white-space-separated in the
 variable — a backend's names that no declaration will ever match, an
 exporter's malformed mints; the count is in the gate log, the patterns ride in
 `observogram.scope.metric` as `exclude`, and the diff parks a repository
-metric they match as *not checked*), then a 20 000-name cap, named; folder
+metric they match as *not checked*), then a 20 000-name cap, named. A pattern
+is matched on the server's own thread, so its work is bounded where the scope
+is parsed (`tools/lib/live-fetch.mjs` `normalizeScope`): no backreference, and
+at most 16 million steps to test a 256-character name — four unbounded
+wildcards that take the same characters (`^q*q*q*q*q*q*q*q*q*q*q*q*$`,
+`^.*:.*:.*:.*$`) and long chains of optional atoms are refused before anything is
+timed, while three wildcards (`^.*:.*:.*$`, `^.*_.*_.*_seconds_bucket$`), or
+wildcards with words between them, pass; the timed half then times, warmed, the
+names the pattern itself opens (`excludeProbes`) beside the four adversarial ids,
+stopping at a name past 200 ms and within one budget of about a second per
+request; and a name longer than 256 characters is never dropped by a pattern, by
+the fetcher and the diff alike (`excludedBy`). That rule is for new input; a
+stored scope (a saved check's, an environment's) is read by the rule earlier
+releases had (`{ stored: true }`) and always loads — a pattern it holds that the
+rule refuses now is not applied, the run record's `packB.liveScope` is the scope
+applied and `packB.notApplied` names the rest (as the metric stage and
+`observogram.live.scope` do). The estimate is an interim: the next patch matches
+patterns in linear time. Folder
 uids filter dashboards before the detail reads and alert rules when every
 rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,
 through its registry row's `runtimeArgs` slot — is asked once per folder and the
@@ -191,8 +211,49 @@ is a reason to keep it; (5) switch the consumers to the snapshot, keep the
 bridge one release for comparison, then remove it. **What this batch cannot
 replace:** a datasource-uid push-down (no capability declares the slot), and
 parallel dashboard detail reads (the snapshot reads them one at a time).
-Grafana-managed alert rules are read from the provisioning shape recorded
-from Grafana itself (the MCP's envelope around it is not yet evidenced).
+**The alert-rule shapes.** Every read — a snapshot's and a draft's — asks every
+advertised alert-rule engine and unions the rules by store: Grafana's own
+(a tool that attests `grafana`, or whose answer is Grafana-managed rules) by
+uid, a Prometheus-compatible ruler's by name, so a Grafana rule is never
+dropped for a title a ruler holds. A Grafana tool's answer is read in the
+provisioning API's shape (`GET /api/v1/provisioning/alert-rules`: `title`,
+`data[]`, `folderUID`, `ruleGroup`) and in the ruler's
+(`GET /api/ruler/grafana/api/v1/rules`: an object keyed by folder title, its
+groups' rules each a `grafana_alert`; the ruler is told by that shape alone, so
+a folder may be titled anything, `data` or `groups` included); each rule states beside the spec its
+uid, folder, group and condition (`observogram.grafana_rule.alerting.rules[<i>]`
+— the threshold node the query alone does not say). One Grafana-managed rule
+two tools list is one rule: a copy that names no Grafana uid (Grafana's
+Prometheus-compatible listing: names, queries, the group) is the rule
+another tool read with its uid when the listing states that uid beside it, or
+when every term both readings state is the same and the folder its group
+names (`file`, a folder title in Grafana's listing, a rule file's path in a
+ruler's) does not contradict the rule's — never by name alone, never a copy
+from a tool that attests another product — and the copy with the uid stays; a
+tool that listed Grafana's rules alone read Grafana's store, not a ruler's.
+Without tools/list each
+store stops at its first answer with rules. A refused engine with nothing
+else answering is a FAILED family; beside rules from another engine, when
+no other engine read its store, the family is listed in `mcp.probesPartial`
+with the error in `mcp.probeErrors.alert_rules` — a tool failing beside
+another that read its store is no hole, and one refused beside an empty
+answer of its store still is. An engine whose store has no rules API (it
+answers 400, 404 or 405 — the capability row's `unsupportedOnHttpStatus`, as
+for scrape targets) is not served: never a failure, never a partial read;
+the family is unsupported when every engine asked says so. The journey's
+memory is read as the cascade reads it: an engine remembered as not served
+that now answers a 503 or a timeout has failed (a remembered "not served"
+never absorbs an outage), and one the journey's records saw answer the
+family by name (`mcp.probeAnsweredBy.alert_rules`) that now answers 400, 404
+or 405 has failed too, its probe error saying when it answered — a lost
+route, never a store that keeps none. What the read could not cover rides in
+`observogram.unread.alert_rule` (`{ grafana?, ruler?, loki }`: why) and
+`observogram.unread.recording_rule` (`{ grafana }`), and the rule groups it
+listed, before a rule-group scope narrowed them, in
+`mcp.discovered.rule_groups` (`[{ group, folderUid?, folder?, alert,
+recording }]`, the first 500; `_count` beyond) — the scope check of a service
+environment reads them. An answer in no alert-rule shape, or listing rules
+without their expressions, is no answer.
 
 ## 15.3 The ping
 

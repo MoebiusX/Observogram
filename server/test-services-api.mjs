@@ -205,7 +205,7 @@ const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 90071992
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
-const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'liveScopes', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'ref', 'livePack', 'liveScope', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
@@ -248,7 +248,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.checkout = json.service.id;
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
   // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
@@ -256,7 +256,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.payments = second.json.service.id;
   assert.deepEqual(stamped(second.json.service), {
     id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
   // tier: null is "graded by the pack", explicitly.
@@ -292,7 +292,7 @@ test('GET /api/services and GET /api/services/:id: the views by slug, as a viewe
   const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
   assert.deepEqual(stamped(one.json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
   for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
@@ -305,7 +305,7 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
   // Only what differs is a change (and a row names only those fields).
@@ -1154,7 +1154,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' },
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
@@ -1194,7 +1194,7 @@ test('a register writes the service, environment and link rows by the person reg
   ids.demo = demo.id;
   ids.demoProd = demo.environments[0].id;
   assert.deepEqual(stamped(demo), {
-    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' },
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
     environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1528,7 +1528,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, source: { kind: 'observogram' },
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1690,16 +1690,21 @@ test('the deploy routes take a typed MCP URL from an admin only (D3): oscar is r
 
 test('a journey\'s live Pack B (D6): capture names the registered endpoint, keeps an unregistered URL for ada and saves a file for oscar; oscar\'s run of a raw-URL def is refused 403 role before any wire call, ada\'s takes the typed path', async () => {
   const { startFakeMcp } = await import('./fixtures/fake-mcp.mjs');
-  const fake = await startFakeMcp(['system_health', 'system_topology'], (name) => (name === 'system_health' ? { services: [] } : { dependencies: [] }));
+  const { probeCandidates } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
+  // The scrape-targets family answers with data: a live read that returned no data is a lost run (C3/C4).
+  const SCRAPE = [probeCandidates('scrape_configs')[0]].map((c) => (typeof c === 'string' ? c : c.name))[0];
+  const fake = await startFakeMcp(['system_health', 'system_topology', SCRAPE], (name) => (name === 'system_health' ? { services: [] }
+    : name === 'system_topology' ? { dependencies: [] }
+      : { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] }));
   const journeys = join(WORKSPACE, 'orgs', 'acme', 'journeys');
   try {
     const base = (await call('vera', 'GET', '/api/packs/payment-service/canonical')).json;
     delete base.__effectiveEnvironment;
     delete base.__effective;
-    const upload = async (name, url) => {
+    const upload = async (name, url, extra = {}) => {
       const c = structuredClone(base);
       c.metadata.name = name;
-      c.metadata.annotations = { ...(c.metadata.annotations || {}), 'mcp.url': url };
+      c.metadata.annotations = { ...(c.metadata.annotations || {}), 'mcp.url': url, ...extra };
       const r = await call('oscar', 'POST', '/api/validate', c);
       assert.equal(r.status, 200, r.text.slice(0, 200));
       return r.json.registered.id;
@@ -1727,6 +1732,42 @@ test('a journey\'s live Pack B (D6): capture names the registered endpoint, keep
     assert.equal(byOscar.status, 200, byOscar.text.slice(0, 300));
     assert.equal(byOscar.json.record.packB.source, `mcp:${fake.url}?tier=x`, 'by id: the endpoint\'s URL');
     assert.ok(fake.authHeaders.length > before, 'both runs reached the MCP');
+    // A file holding mcp.url and no probe table (an older or hand-made export): no probe record,
+    // vantage none, graded on its comparison as before (A1).
+    const byFile = await call('oscar', 'POST', '/api/journeys/j-oscar/run', {});
+    assert.equal(byFile.status, 200, byFile.text.slice(0, 300));
+    assert.equal(byFile.json.record.vantage, 'none', 'no probe table: vantage none, never lost');
+    assert.equal(typeof byFile.json.record.grade?.score, 'number', 'and graded');
+    // A file holding a live export whose probe table says no family returned data: a lost run (C4,
+    // D3) — the 502 says vantage-lost, the row says so with its four nulls, the record has no grade.
+    const lostB = await upload('journey-lost-b', fake.url, {
+      'mcp.probesAttempted': 'metric_names,scrape_configs', 'mcp.probesSucceeded': '', 'mcp.probesEmpty': 'metric_names',
+      'mcp.probesFailed': '', 'mcp.probesUnsupported': 'scrape_configs',
+    });
+    await capture('oscar', 'j-oscar-lost', lostB);
+    assert.ok(defOf('j-oscar-lost').packB.file, 'Pack B is the file');
+    const seqLost = seqNow();
+    const byLost = await call('oscar', 'POST', '/api/journeys/j-oscar-lost/run', {});
+    assert.equal(byLost.status, 502, byLost.text.slice(0, 300));
+    assert.deepEqual([byLost.json.ok, byLost.json.outcome, byLost.json.error], [false, 'vantage-lost', 'no probe family returned data']);
+    const lostRows = rowsAfter(seqLost).filter(([action]) => action === 'journey.run');
+    assert.equal(lostRows.length, 1, 'one journey.run row');
+    assert.deepEqual([lostRows[0][4].outcome, lostRows[0][4].alignmentPct, lostRows[0][4].gradeScore, lostRows[0][4].gradePass, lostRows[0][4].breaches],
+      ['vantage-lost', null, null, null, null], 'the row: vantage-lost, the four nulls');
+    const lostRecord = (await call('oscar', 'GET', '/api/journeys/j-oscar-lost/runs?limit=1')).json.runs?.[0];
+    assert.ok(lostRecord && lostRecord.outcome === 'vantage-lost' && lostRecord.vantage === 'lost' && lostRecord.grade === undefined && lostRecord.drift === undefined
+      && lostRecord.gate.breaches.length === 1 && lostRecord.gate.breaches[0].criterion === 'vantage', 'the record: lost, its one vantage breach, no grade, no match');
+    // The readers, end to end: the listing lists the lost run as no data (its error is no probe error),
+    // the studio's error carries the 502's outcome, and the Run's toast says what the listing says.
+    const listedLost = (await call('oscar', 'GET', '/api/journeys')).json.journeys.find((j) => j.name === 'j-oscar-lost');
+    assert.deepEqual([listedLost.lastRun.outcome, listedLost.lastRun.reading, listedLost.lastRun.vantage, listedLost.lastRun.liveLoss, listedLost.lastRun.firstProbeError, listedLost.lastRun.alignmentPct, listedLost.lastRun.breaches],
+      ['vantage-lost', 'vantage-lost', 'lost', 'no-data', null, null, 1], 'the listing: a lost run whose live side returned no data, no figure, its one breach');
+    const { servicesRefusal } = await import('../studio/services-api.mjs');
+    const { runRecordedToast } = await import('../studio/overview-model.mjs');
+    const refusal = servicesRefusal(byLost.status, byLost.text);
+    assert.deepEqual([refusal.status, refusal.outcome], [502, 'vantage-lost'], 'the studio reads the 502\'s outcome');
+    assert.deepEqual(runRecordedToast({ name: 'Payment', env: 'prod', before: null, after: listedLost, outcome: refusal.outcome, error: refusal.message }),
+      { text: 'Payment · prod: Live returned no data.', tone: 'error' }, 'the Run\'s toast: recorded, and why');
     await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${epId}`);
     const gone = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
     assert.deepEqual([gone.status, gone.json.ok], [400, false], `an endpoint deleted since the capture: 400 before any run — ${gone.text.slice(0, 200)}`);

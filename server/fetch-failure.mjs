@@ -19,6 +19,7 @@
 // Server-only; pure but for the default route, read from this process's
 // environment.
 
+import { isIP } from 'node:net';
 import { outboundRoute } from './outbound-proxy.mjs';
 
 // The codes that mean the host was not reached, in words.
@@ -108,6 +109,119 @@ export const READ_TIMEOUT_MS = 60_000;
 // reject with the signal's reason.
 export function readSignal(signal = null) {
   return signal ? AbortSignal.any([AbortSignal.timeout(READ_TIMEOUT_MS), signal]) : AbortSignal.timeout(READ_TIMEOUT_MS);
+}
+
+// How long a host asks a reader to wait before it tries again, in ms, from its
+// answer's headers — `headers` a Headers or a plain object — or null when it
+// asks for nothing: `Retry-After` (seconds, or an HTTP date), else, only when
+// `x-ratelimit-remaining` is "0", `x-ratelimit-reset` (epoch seconds) — the
+// pair GitHub documents for a spent quota. Never negative. A number derived
+// from a header, never the header itself.
+export function hostWaitMs(headers, nowMs = Date.now()) {
+  const get = (name) => {
+    try {
+      if (typeof headers?.get === 'function') return headers.get(name);
+      if (headers && typeof headers === 'object') {
+        const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+        return key === undefined ? null : headers[key];
+      }
+    } catch { /* unreadable headers: nothing asked */ }
+    return null;
+  };
+  const after = String(get('retry-after') ?? '').trim();
+  if (after) {
+    if (/^\d+(?:\.\d+)?$/.test(after)) return Math.max(0, Math.round(Number(after) * 1000));
+    const at = Date.parse(after);
+    if (Number.isFinite(at)) return Math.max(0, at - nowMs);
+  }
+  if (String(get('x-ratelimit-remaining') ?? '').trim() === '0') {
+    const reset = String(get('x-ratelimit-reset') ?? '').trim();
+    if (/^\d+$/.test(reset)) return Math.max(0, Number(reset) * 1000 - nowMs);
+  }
+  return null;
+}
+
+// What a host's error answer says, for a sentence a person reads: the JSON
+// body's `message` — its first sentence only (`sentences` more where a reader
+// knows the next one is the remedy: GitHub's SAML single sign-on refusal), on
+// one line, at most 200 characters ("Not Found", "TF401019: The Git
+// repository … does not exist."; a host's further sentences may name an
+// identity or an address) — never the body itself, and nothing for a body
+// that is not JSON (an HTML page, a proxy's text): the status says it alone
+// then. What the kept sentences name of whoever asked is taken out
+// (withoutIdentities): GitHub's rate-limit answer names the account or the
+// address in its first sentence ("API rate limit exceeded for user ID 1."),
+// and the sentence reaches a run record, the journeys listing, a 409 and a
+// notification — reasons and counts only.
+export function hostMessage(body, { sentences = 1 } = {}) {
+  let message = null;
+  try { const j = JSON.parse(String(body ?? '')); if (j && typeof j.message === 'string') message = j.message; } catch { return ''; }
+  if (!message) return '';
+  const line = message.replace(/\s+/g, ' ').trim();
+  const kept = new RegExp(`^((?:.*?[.!?](?=\\s|$)\\s*){1,${Math.max(1, Math.floor(sentences) || 1)}})`).exec(line);
+  return withoutIdentities((kept ? kept[1] : line).trim()).slice(0, 200);
+}
+
+// GitHub's rate-limit sentence names who spent the quota after "for": the
+// account (a user ID, a GitHub App's installation ID) or, for a caller with
+// no token, its address. The subject goes and the fact stays: "API rate
+// limit exceeded." Anything else that names whoever asked is written
+// <redacted>: an account ID, an e-mail address, a quoted user name (Azure
+// DevOps' "The user '…'"), an IP address (Node's isIP decides, never a time
+// such as 05:00:00 nor a TF code's colon; an IPv4 address with a port, as a
+// proxy's 10.0.0.1:3128, loses the address and keeps the port) — what was
+// refused and why stays.
+const RATE_LIMIT_FOR = /(rate limit (?:exceeded|reached))\s+for\s+((?:user|installation|app|account)\s+ID\s+\d+|[0-9a-f.:]+?)(?=\.?(?:\s|$)|[!?,;)])/gi;
+const ADDRESS_LIKE = /(?<![\w:.])[0-9a-f]*[.:][0-9a-f.:]*/gi;
+function withoutIdentities(text) {
+  return String(text ?? '')
+    .replace(RATE_LIMIT_FOR, (all, fact, who) => (/\bID\b/i.test(who) || isIP(who) ? fact : all))
+    .replace(/\b(user|installation|app|account)\s+ID\s+\d+/gi, '$1 ID <redacted>')
+    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '<redacted>')
+    .replace(/\b(the user|identity)\s+'[^']*'/gi, "$1 '<redacted>'")
+    .replace(ADDRESS_LIKE, (token) => {
+      const bare = token.replace(/\.+$/, '');   // a sentence's full stop is no part of it
+      if (isIP(bare)) return `<redacted>${token.slice(bare.length)}`;
+      // An IPv4 address with its port, a colon after it included (Go's "dial tcp 10.0.0.1:3128: …").
+      const withPort = /^(.+):(\d{1,5})(:?)$/.exec(bare);
+      return withPort && isIP(withPort[1]) === 4 ? `<redacted>:${withPort[2]}${withPort[3]}${token.slice(bare.length)}` : token;
+    });
+}
+
+// What a reader may do with a read that failed, decided from the status the
+// reader kept (`err.status`) or a cause's code, never from the words:
+//   'refused'  the host turned the request away and may take it later — 403,
+//              429, 503: tried again after the host's wait, else a backoff,
+//              and the read slows down for every file;
+//   'failed'   a server error (500–599 but 503) or a connection that dropped
+//              (undici's 'terminated' with no code or ECONNRESET, UND_ERR_SOCKET,
+//              EPIPE; 'fetch failed' with one of those): tried again alone;
+//   null       anything else — 401, 404, a redirect, the 60 s deadline (a
+//              TimeoutError), a body that could not be decoded (Z_*, HPE_*,
+//              UND_ERR_BODY_TIMEOUT), the read's budget (a ReadBudgetError),
+//              or an answer its reader marked final (`err.retryable ===
+//              false`: GitHub's 403 that refuses the token — SAML single
+//              sign-on, a token or an app without access — rather than the
+//              pace, server/github-crawl.mjs ghFetch): never tried again.
+const REFUSED_STATUS = new Set([403, 429, 503]);
+export function retryKind(error) {
+  if (!error || typeof error !== 'object') return null;
+  if (error.retryable === false) return null;
+  const status = Number(error.status);
+  if (Number.isInteger(status) && status > 0) {
+    if (REFUSED_STATUS.has(status)) return 'refused';
+    return status >= 500 && status <= 599 ? 'failed' : null;
+  }
+  for (let e = error, depth = 0; e && typeof e === 'object' && depth < 5; e = e.cause, depth++) {
+    if (e.name === 'TimeoutError' || e.name === 'ReadBudgetError') return null;
+    const message = typeof e.message === 'string' ? e.message.trim().toLowerCase() : '';
+    if (e instanceof TypeError && message === 'terminated') {
+      const code = codesOf(e.cause || {})[0] || '';
+      return !code || DROPPED.has(code) ? 'failed' : null;
+    }
+    if (e instanceof TypeError && /fetch failed/.test(message)) return codesOf(e.cause || {}).some((c) => DROPPED.has(c)) ? 'failed' : null;
+  }
+  return null;
 }
 
 // The status a proxy answered a CONNECT with, when it would not open the way

@@ -120,7 +120,7 @@ Usage:
   packc init     --list           List the library entries (products and archetypes) a pack can be built from
   packc init     --show <entry>   An entry's params, SLIs per tier, per-tier objectives and evidence
   packc init     --entry <id> --tier <tier> --name <svc>  Build a pack from the library (YAML to stdout, todos to stderr)
-  packc journey  run <name>       Run a saved drift check (exit 0 pass · 1 gate-failed · 2 error)
+  packc journey  run <name>       Run a saved drift check (exit 0 pass · 1 gate-failed, or nothing compared under a gate · 2 error)
   packc journey  run --all        Run every saved journey in sequence (exit = the worst of them)
   packc journey  schedule <name>  Print cron / schtasks / GitHub Actions / CronJob snippets from its schedule:
   packc journey  list             List saved journeys + their last outcome
@@ -144,9 +144,27 @@ Run a command with no/invalid args to see its own usage.`);
 //   0 verdict passes the gate · 1 gate failed · 2 tooling/config error.
 // Schedule it externally (cron, Task Scheduler, GitHub Actions) — the
 // journey file is the unit of repetition, not a built-in scheduler.
+//
+// A run's exit code, read as every reader reads the run (tools/lib/run-basis.mjs readingOutcome): a run
+// that compared nothing cannot pass a gate, so under a gate it exits 1 even where the gate's own keys
+// held (a freshness-only gate, say); a journey with no gate configured (none, or one that asks for
+// nothing: every key false or null — renderJourneyMarkdown's rule) has no gate verdict, so such a run
+// exits 0 there, as any of its runs does — its report and `journey list` say nothing compared.
+function runExitCode(record, basis) {
+  if (record?.outcome !== 'pass') return 1;
+  const reading = basis.readingOutcome(record);
+  if (reading === 'pass') return 0;
+  const gate = record.gate?.thresholds;
+  const gated = !!gate && typeof gate === 'object' && Object.values(gate).some((v) => v !== false && v !== null && v !== undefined);
+  return reading === 'nothing-compared' && !gated ? 0 : 1;
+}
+
 async function runJourneyCommand([sub, ...args]) {
   const journeyLib = await import('./lib/journey.mjs');
   if (sub === 'list') {
+    // A run's figure as every reader reads it (tools/lib/run-basis.mjs): the match only over a
+    // comparison, a live side that gave nothing said with its first probe error.
+    const basis = await import('./lib/run-basis.mjs');
     const names = journeyLib.listJourneys();
     if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); return; }
     for (const n of names) {
@@ -160,10 +178,12 @@ async function runJourneyCommand([sub, ...args]) {
       // — never "skipped").
       const notifySeg = last && journeyLib.notifyStatusLine(last) ? ` · ${journeyLib.notifyStatusLine(last)}` : '';
       const inventorySeg = last && journeyLib.inventoryStatusLine(last) ? ` · ${journeyLib.inventoryStatusLine(last)}` : '';
+      const reading = last ? basis.readingOutcome(last) : null;
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
-        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}${notifySeg}`
-        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
+        : last.outcome === 'scan-partial' ? `scan-partial · ${last.startedAt} · ${basis.runBasis(last).text}${notifySeg}`
+        : reading === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${basis.runBasis(last).text}${notifySeg}`
+        : `${reading} · ${last.startedAt} · ${basis.alignmentWords(last)} · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
           // Step 4: the top candidate cause, only when a chain got worse —
           // a quiet run has nothing to explain — and, whenever the vantage
           // itself changed, that change beside it (never as a cause).
@@ -186,13 +206,14 @@ async function runJourneyCommand([sub, ...args]) {
     if (args.includes('--all') && !ref) {
       const names = journeyLib.listJourneys();
       if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); await exitAfterFlush(0); }
+      const basis = await import('./lib/run-basis.mjs');
       const results = [];
       let worst = 0;
       for (const n of names) {
         let record = null, error = null, exitCode;
         try {
           record = await journeyLib.runJourney(journeyLib.loadJourneyDef(n));
-          exitCode = record.outcome === 'pass' ? 0 : 1;
+          exitCode = runExitCode(record, basis);
         } catch (e) {
           error = e.message;
           exitCode = 2;
@@ -210,7 +231,7 @@ async function runJourneyCommand([sub, ...args]) {
       const def = journeyLib.loadJourneyDef(ref);
       const record = await journeyLib.runJourney(def);
       process.stdout.write(asJson ? JSON.stringify(record, null, 2) + '\n' : journeyLib.renderJourneyMarkdown(record) + '\n');
-      await exitAfterFlush(record.outcome === 'pass' ? 0 : 1);
+      await exitAfterFlush(runExitCode(record, await import('./lib/run-basis.mjs')));
     } catch (e) {
       console.error(`packc journey: ${e.message}`);
       await exitAfterFlush(2);

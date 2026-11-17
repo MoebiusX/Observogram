@@ -338,11 +338,20 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    read, a Folder, an Upload, the CLI, Expert's folder, drop and .zip — reads
    files by the crawler's one rule. The local doors honour the folder's
    `.gitignore` files. No door reads a YAML or JSON file whose name holds
-   `secret`; each names it instead. A Run keeps its scan report in the run
-   record (`packA.scan`); the Run's toast counts what was not read, what fell
-   past the file cap, what the environment's scope left out and what was
-   recognised as nothing, and the board lists those files with why. A grade
-   never rests on files nobody was told were missing.
+   `secret`; each names it instead — a file left out on purpose, never a
+   loss. A Run keeps its scan report in the run record (`packA.scan`); the
+   Run's toast counts what could not be read, what was over the scan's
+   limits, what fell past the file cap, what a deployment surface left out
+   and what was recognised as nothing, and the board lists those files with
+   why. A host that refuses a burst or drops a connection is asked again
+   (after the wait it asks for, the read slowing down for every file), so it
+   costs no file; a scan that still lost files is no scan: while the service
+   keeps a complete scan of the same repository, the Run stops and keeps it
+   (*… files could not be read … — the Run stopped: the service keeps its last
+   complete scan of this repository; run it again*), and otherwise it is
+   checked and its gate fails. Every environment of a service reads the same
+   files, unless its own deployment surface is set. A grade never rests on
+   files nobody was told were missing.
 
 5. **The board never claims what nobody checked.** Numbers are withheld with
    the reason, never drawn as zeros: when nothing live was checked, when the
@@ -357,13 +366,42 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    a pass older than its window, or declared and never recorded as run. With
    none declared it says what each side could not see, never that recovery
    is unproven. Each line counts what the engine counted, so the seven lines
-   still add up to the letter.
+   still add up to the letter. Over a check that compared nothing, the
+   chains' line says so and why (*Nothing was compared on the last check,
+   so no promise is confirmed live. 28 declared things not read live.*),
+   never *0 in 100 hold up live* over links nothing could read.
 
-6. **Overview speaks plainly, with one primary button.** Four status words
+6. **Overview speaks plainly, with one primary button.** Five status words
    on the board and no others — *Never checked · Unchanged · Changed ·
-   Unreachable*; the Services list's last check reads *Checked 2 hours ago*,
-   *Never checked*, *Unreachable*, or *Not known* when the checks could not
-   be read. No sentence the model returns carries a percentage, a layer code,
+   Unreachable · Nothing compared*: what the last check found. A service
+   row's last check is in one of five states, which say what that check
+   rests on: *Never checked* (no run), *Unreachable* (a lost read — the live
+   side gave nothing: *Live did not answer* with its first probe error
+   beneath, or *Live returned no data*; *Tried 2 hours ago*, no letter, the
+   gate failed), *Nothing compared* (with the first reason that holds — *7
+   declared things not read live*, *Live answered in part: dashboards not
+   read*, *49 of 220 files not read*, *The live read was scoped to part of
+   the estate*, *Every difference was set aside*, else *Neither side had
+   anything this check could compare*), *Checked (partial)* (a match, with
+   what was not read beside it: *Live answered in part: dashboards not
+   read*, *49 of 220 files not read*) and *Checked* (*92% match*); *Not
+   known* when the checks could not be read. The board's Unchanged and
+   Changed are a row's Checked or Checked (partial) — a check that compared
+   only what runs live undeclared (every declared difference set aside)
+   reads *Changed* (*nothing the repository declares was compared: 1 thing
+   runs live that it does not declare*) with its figure on the row, the ring
+   and the toast alike, never *it matches*. No percentage without a
+   comparison anywhere — a record written before this rule that claims 100
+   over an empty comparison reads *Nothing compared*, and one whose every
+   probe failed reads *Unreachable* — and a gate never reads as passed over
+   nothing. A Run that stopped on a partial scan leaves the last check as it
+   was and says so beside it (*Last Run stopped: partial scan — 49 of 220
+   files not read; the previous pack is kept.*; a Run that could read no
+   file of a repository it keeps no complete scan of says *no complete scan
+   of this repository is kept*). A deployment-surface filter is a note
+   beside the check, never a partial state (*12 files excluded by the
+   Kubernetes and Helm filter*, a warning past half of the files the scan
+   recognised). No sentence the model returns carries a percentage, a layer code,
    an artefact id or an engine state word (declared only, scaffold,
    candidate, recorded live); a number is drawn as a picture — the ring, the
    bars — and the renderer puts the sign on it. At most one primary button
@@ -446,9 +484,16 @@ Belongs here:
   a Run asked for is open under the row, once for the service;
 - each environment's cell: the endpoint's name (it opens **Change** on that
   environment) and its host, whole on hover; the branch its Run reads (its
-  own, else the repository's); the grade letter with how much matches live
-  (*92% match*), *Not checked yet* or *Live did not answer*; *Checked 2
-  hours ago*; **Run**, **Open** (the board, offered when the service has
+  own, else the repository's); the grade letter (only where the run graded)
+  with how much matches live (*92% match*, only where something was
+  compared), *Not checked yet*, *Live did not answer* with the first probe
+  error beneath (whole on hover), *Live returned no data* or *Nothing
+  compared* with why; what a reading leaves out beside the figure (*Live
+  answered in part: dashboards not read*, *49 of 220 files not read*); its
+  notes — a Run that stopped since, the files a deployment-surface filter
+  excluded (*12 files excluded by the Kubernetes and Helm filter*, a warning past
+  half), *Not comparable with the check before: …*; *Checked 2 hours ago*
+  (*Tried 2 hours ago* when the live side gave nothing); **Run**, **Open** (the board, offered when the service has
   a pack of its own or a check) and **Change** (that environment's form) —
   or *Not declared* with **Add**;
 - on the row, **Run all** (two or more environments that can run, one after
@@ -490,18 +535,38 @@ Belongs here:
   the kept copy again; **Pack file**, *Choose a pack file* — a pack exported
   from the repository (YAML or JSON), checked by the server when Save sends
   it and used by each Run as it is, with no scan;
+- under the repository, *Read only this deployment surface*: *No — every
+  file the scan reads (default)*, *Kubernetes and Helm*, *Kubernetes on
+  Amazon EKS*, *A local Kubernetes cluster (kind, minikube)* or *Docker
+  Compose* (*Off: every environment of checkout reads the same files.
+  Chosen, prod reads only that surface's files, and its row says how many the
+  filter left out.*); not offered for a pack file;
 - under the endpoint, *Live scope — what of the estate is this service's*:
   metric prefixes, dashboard / rule folder uids, exclude patterns, rule
-  groups and the datasource uid, prefilled from the environment's own scope
-  or the server's snapshot scope (said so); the Run then reads only that of
-  the estate, and the cell says *scoped: 2 prefixes, 5 folders*;
+  groups and the datasource uid — a new environment pre-filled from the
+  server default, each field said so (a default that names no metric
+  prefixes cannot show it is this service's: never pre-filled, offered as
+  **Use the server default**; typed prefixes then keep none of its other
+  answers, said before the save); an environment that exists reads its
+  own scope or none (its form and its cell say *No live scope — the server
+  default no longer applies here; set one*, the form offers **Use the
+  server default**); the Run then reads only that of the estate, and the
+  cell says *scoped: 2 prefixes, 5 folders*;
 - the Live answer's last choice, *A pack file — an export of live…*: *Choose
   a pack file*, sent with Save in place of the MCP endpoint (one or the
   other — choosing an endpoint again drops the export); each Run checks
   against it with no MCP call, and the matrix cell says *Live export* and the
   file's name and age where the endpoint and its host would be;
 - the toast a Run ends with: *… checked: 200 of 396 files from … (196 past the
-  file cap, 62 recognised as nothing), grade …, …% matches live.*;
+  file cap, 62 recognised as nothing), grade …, …% matches live.*, each part
+  of what a reading leaves out said only when it holds (*a partial scan*,
+  *nothing compared* in place of the figure, *live answered in part (its
+  dashboards not read)*, *not comparable with the check before*, *the …
+  filter excluded more than half of the files the scan recognised*); a Run
+  the server answered with an error but recorded says its reading (*Live did
+  not answer — <first probe error>.*, *Partial scan — 49 of 220 files not
+  read; the previous pack is kept.* — the 409's own scan and kept pack while
+  the listing does not show the stop yet);
 - a missing answer marked where it goes once a save was tried; the server's
   refusal shown as its sentence; a Run that did not finish says why on its
   row, in the server's words;
@@ -635,12 +700,16 @@ Belongs here:
     lit where the repository declares that kind and carrying the count, a
     pill such as *7 of 10 kinds* — and the coverage (*Coverage reaches 35 in
     100 across the four layers.*) with what found no layer;
-  - the scan line, *Read 200 of 396 files from … — 196 past the file cap, …*,
-    amber when files the rule takes were lost, and behind it each group:
-    *Not read* with each file and why, *Past the file cap* (a count: the read
-    takes the likely artefacts first), *The host cut its file list short*
-    when it did, *Left out by the prod scope* and *Read, recognised as
-    nothing* with their files, and the scan's warnings;
+  - the scan line, *Read 200 of 396 files from … — 3 could not be read, 196
+    past the file cap, …*, amber when files the rule takes were not read or a
+    deployment surface left out most of the repository — never for a file
+    left out on purpose — and behind it each group: *Could not be read* (the
+    host or the disk failed these; run it again), *Not read — over what a scan
+    reads*, *Past the file cap* (the read takes the likely artefacts first;
+    the first of them named), *The host cut its file list short* when it did,
+    *Skipped on purpose* (a secrets file, one git ignores), *Left out by the
+    Kubernetes and Helm filter* and *Read, recognised as nothing* with their
+    files, and the scan's warnings (an older record reads as before);
   - **Open in Discover**;
 - **Diagnose**:
   - one status strip for the column (*Graded against live · checked 2 hours
@@ -682,13 +751,23 @@ Belongs here:
   and *See the rules in Expert* (Conformance); the next step, one sentence and one button, in the chain's
   words (*Fix the 1 exporter and 2 alerts the live side does differently.*,
   *Exporters and alerts match live, the 7 dashboards could not be read; look
-  at the 32 details beyond the chain.*, or *The chain matches live; look at
-  the 31 details beyond it.*) — **See the
+  at the 32 details beyond the chain.*, *The chain matches live; look at
+  the 31 details beyond it.* only when a link of the chain matched, else
+  *Nothing in the chain was compared; look at …*; over nothing compared,
+  *Nothing was compared, so nothing is confirmed live: see what each side
+  holds.* with **Open in Diagnose**; over what runs live undeclared alone,
+  *Nothing the repository declares was compared; 1 thing runs live that it
+  does not declare yet.* with **See the differences**; after a Run that
+  stopped on a partial scan since the check on screen, *The last Run read
+  the repository in part and stopped, so the check shown is the one before
+  it: check it against live again, and run the service again once its
+  repository answers in full.* with **Check again**, its files not read
+  behind *Why*) — **See the
   differences** (Neuron, on the run whose numbers the board showed), **See
   what to fix** (Expert's Diagnose, with the assessment's first three causes
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
-  when the check reads a recording; with nothing to change, the sentence
-  alone (*Nothing to do right now: live matches what the repository
+  when the check reads a recording; with nothing to change and no Run
+  stopped since, the sentence alone (*Nothing to do right now: live matches what the repository
   declares.*, or, with the specification's rules still to add, *Live matches
   what the repository declares; the 3 rules the specification requires,
   above, are what is left to add.*); **Open in Remediate**;
@@ -1067,7 +1146,8 @@ The path a person takes today, end to end:
    promises; the status strip, which names any probe family the live side
    could not read.
 6. If the board reads *Unreachable*, or *the live side showed less than the
-   check before*, press **Check again** before reading any count.
+   check before*, press **Check again** before reading any count; if it reads
+   *Nothing compared*, open Diagnose to see what each side holds.
 7. **Open in Diagnose**: Expert's Assessment of the scan against the live
    pack the board graded, with the same letter. Explain the remaining drift
    from the drift drill under Comparison and the requirement chains;

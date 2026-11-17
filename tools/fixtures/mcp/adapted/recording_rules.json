@@ -5,7 +5,8 @@
     "interval": "5m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:00:34.982755749Z",
-    "evaluationTime": 0.002985121
+    "evaluationTime": 0.002985121,
+    "group": "finops:capacity"
   },
   {
     "name": "finops:memory:usage_per_pod_gb_hours",
@@ -13,7 +14,8 @@
     "interval": "5m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:00:34.985773129Z",
-    "evaluationTime": 0.0019871
+    "evaluationTime": 0.0019871,
+    "group": "finops:capacity"
   },
   {
     "name": "finops:kong:overhead_seconds",
@@ -21,7 +23,8 @@
     "interval": "5m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:00:34.98778236Z",
-    "evaluationTime": 0.002138755
+    "evaluationTime": 0.002138755,
+    "group": "finops:capacity"
   },
   {
     "name": "finops:requests:rate_per_service_5m",
@@ -29,7 +32,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.508908962Z",
-    "evaluationTime": 0.001500786
+    "evaluationTime": 0.001500786,
+    "group": "finops:ingestion"
   },
   {
     "name": "finops:errors:rate_per_service_5m",
@@ -37,7 +41,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.5104313Z",
-    "evaluationTime": 0.001245894
+    "evaluationTime": 0.001245894,
+    "group": "finops:ingestion"
   },
   {
     "name": "finops:spans:exported_rate_5m",
@@ -45,7 +50,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.511690472Z",
-    "evaluationTime": 0.000974187
+    "evaluationTime": 0.000974187,
+    "group": "finops:ingestion"
   },
   {
     "name": "finops:spans:dropped_rate_5m",
@@ -53,7 +59,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.512675455Z",
-    "evaluationTime": 0.00115134
+    "evaluationTime": 0.00115134,
+    "group": "finops:ingestion"
   },
   {
     "name": "finops:spans:sampling_ratio",
@@ -61,7 +68,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.51384191Z",
-    "evaluationTime": 0.001207714
+    "evaluationTime": 0.001207714,
+    "group": "finops:ingestion"
   },
   {
     "name": "finops:logs:bytes_rate_per_component_5m",
@@ -69,7 +77,8 @@
     "interval": "1m",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:06.515075233Z",
-    "evaluationTime": 0.002663719
+    "evaluationTime": 0.002663719,
+    "group": "finops:ingestion"
   },
   {
     "name": "genai:client_operation_duration:p95_5m",
@@ -77,7 +86,8 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.625508452Z",
-    "evaluationTime": 0.001648869
+    "evaluationTime": 0.001648869,
+    "group": "genai:operations"
   },
   {
     "name": "genai:client_operation_duration:p99_5m",
@@ -85,7 +95,8 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.627191521Z",
-    "evaluationTime": 0.001217347
+    "evaluationTime": 0.001217347,
+    "group": "genai:operations"
   },
   {
     "name": "genai:client_operation:error_ratio_5m",
@@ -93,7 +104,8 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.628429052Z",
-    "evaluationTime": 0.002084359
+    "evaluationTime": 0.002084359,
+    "group": "genai:operations"
   },
   {
     "name": "genai:client_token_usage:rate_1h",
@@ -101,7 +113,8 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.6305622Z",
-    "evaluationTime": 0.001770986
+    "evaluationTime": 0.001770986,
+    "group": "genai:operations"
   },
   {
     "name": "genai:rca_analysis_duration:p95_5m",
@@ -109,7 +122,8 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.632374697Z",
-    "evaluationTime": 0.001506144
+    "evaluationTime": 0.001506144,
+    "group": "genai:operations"
   },
   {
     "name": "genai:rca_analysis:failure_ratio_5m",
@@ -117,6 +131,7 @@
     "interval": "30s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:38.63391313Z",
-    "evaluationTime": 0.002744143
+    "evaluationTime": 0.002744143,
+    "group": "genai:operations"
   }
 ]

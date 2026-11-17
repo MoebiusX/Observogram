@@ -64,8 +64,17 @@ its repository (GitHub, Azure DevOps, a folder or an upload), and a column
 per environment in the order a release travels — dev, test, acceptance,
 staging, production, then any other by name. Each cell is that environment:
 its live endpoint (its name; the host beneath, whole on hover), the branch
-its Run reads, the grade letter with how much matches live, when it was last
-checked, **Run** (scans the repository and checks it against live),
+its Run reads, its last check — one of five states: *Never checked*,
+*Unreachable* (*Live did not answer* with its first probe error, or *Live
+returned no data*), *Nothing compared* (with why), *Checked (partial)* (the
+figure, with what was not read beside it: *49 of 220 files not read*) or
+*Checked* (the grade letter with how much matches live, *92% match*; a
+figure only where something was compared) — with its notes beneath (a Run
+stopped on a partial scan since: *Last Run stopped: partial scan — 49 of
+220 files not read; the previous pack is kept.*; the files a
+deployment-surface filter excluded; a check not comparable with the one
+before), when it was last checked, **Run** (scans the repository and
+checks it against live),
 **Open** (the service's board) and **Change** (that environment's endpoint
 and branch, and the service's repository and targets); an environment the
 service does not declare reads *Not declared*, with **Add**. On the row,
@@ -124,8 +133,8 @@ three columns, every number the engine's own —
   of it, and are listed in Remediate. **Can you trust what the
   signals show?** The chain against live, a row per link (*Exporters 21/21 ·
   Alerts 66/66 · Dashboards 7 not read live*), the chain's alignment as a
-  ring, the promises that hold end to end, and one of four
-  words — *Never checked · Unchanged · Changed · Unreachable* — with a timed
+  ring, the promises that hold end to end, and one of five
+  words — *Never checked · Unchanged · Changed · Unreachable · Nothing compared* — with a timed
   sentence from the service's saved journey: *Checked 2 hours ago against
   live — its exporters and alerts match live, and the 7 dashboards could not
   be read. 31 details differ beyond the chain.* **Check again** runs the journey against
@@ -1181,11 +1190,12 @@ org is never found (404, or 400 for `mcpEndpointId`).
 
 | Method | Path | Who | Body | What it does |
 |---|---|---|---|---|
-| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`, `livePack`, the export of live kept in its place, `{ packId, name, uploadedAt, bytes }` or `null`, and `liveScope`, the environment's own live scope, or `null` — then the org's configured snapshot scope applies, else none), `liveScopes` and `packs` (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs?, liveScopes? }` | a service record (201); `envRefs` the branch each environment's Run reads where it is not the repository's ([a branch per environment](#a-services-run)); `liveScopes` the scope each environment's live read applies ([a live scope per environment](#a-services-run)); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
+| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`, `livePack`, the export of live kept in its place, `{ packId, name, uploadedAt, bytes }` or `null`, and `liveScope`, the environment's own live scope, or `null` — then none: the org's configured snapshot scope only pre-fills a new environment's form), `liveScopes`, `envSurfaces` and `packs` (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs?, liveScopes?, envSurfaces? }` | a service record (201); `envRefs` the branch each environment's Run reads where it is not the repository's ([a branch per environment](#a-services-run)); `liveScopes` the scope each environment's live read applies ([a live scope per environment](#a-services-run)); `envSurfaces` the deployment surface each environment's Run reads alone — `kubernetes`, `eks`, `local-kubernetes` or `compose`; none: every file ([a deployment surface per environment](#a-services-run)); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
-| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets`, `envRefs`, `liveScopes` | `changed` lists the fields that differed (none: no audit row); `envRefs` and `liveScopes` are each the whole map (another repository clears `envRefs`), and a rename of an environment (`PATCH /api/environments/:id`) takes its branch and its scope along; a scope that does not parse is 400 naming its environment and field, before anything is kept; `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
-| `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; a `pack` repository is used as it is (no scan, no `scan`) and an environment's export of live in place of the endpoint (no MCP call); the live read applies the environment's scope, else the org's configured snapshot scope (409 when that does not parse), else none — saved as `packB.mcp.scope` and said as `record.packB.liveScope` (`null`: unscoped); the live MCP API's posture; see [A service's Run](#a-services-run) |
+| `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets`, `envRefs`, `liveScopes`, `envSurfaces` | `changed` lists the fields that differed (none: no audit row); `envRefs`, `liveScopes` and `envSurfaces` are each the whole map (another repository clears `envRefs` and keeps `envSurfaces`), and a rename of an environment (`PATCH /api/environments/:id`) takes its branch, its scope and its surface along; a surface the scan does not know is 400 naming its environment; a scope that does not parse is 400 naming its environment and field, before anything is kept; `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
+| `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; a `pack` repository is used as it is (no scan, no `scan`) and an environment's export of live in place of the endpoint (no MCP call); the live read applies the environment's own scope, else none — saved as `packB.mcp.scope` and said as `record.packB.liveScope` (`null`: unscoped); a scan that lost files while the service keeps a complete scan of the same repository is 409 `{ ok: false, outcome: 'scan-partial', error, journey, kept, scan, record }` — nothing registered, no MCP call (`OBSERVOGRAM_PARTIAL_SCAN=check` checks it instead, its gate failed); the live MCP API's posture; see [A service's Run](#a-services-run) |
+| `POST` | `/api/services/:id/scope-check` | operator | `{ env, scope }` — the scope as `liveScopes` holds one | what the scope would leave out of that environment's Run, from stored packs only (no MCP call, no row): `{ env, known, declared: { packId, label, families: [{ family, declared, inside, outside, unknown, byTitle?, titles?, untitledFolders? }] } \| null, live: { packId, label, readAt, folders, ruleGroups, ruleGroupsKept, foldersNotRead, missingGroups } \| null }` — `declared` the environment's last scan, else the service's own pack (an environment not added yet: `known: false`), `byTitle` the unknown ones filed under a folder title the live read gave for none of the scope's folders (`titles`; `untitledFolders`, the folder uids it gave no title of); `live` the live pack its last Run kept, its `ruleGroups` those the read listed before a rule-group scope narrowed them — `ruleGroupsKept: { kept, of }` when it listed more than it kept, and then no group is said missing; a scope that does not parse is 400 with the PATCH's text |
 | `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, slos, alerts, scrape, timing, families, absent, calls, readAt, cached }` (`slos`: each SLO's SLI now and its error budget left, read from the repository's own recorded series by name, `{ outcome, rows: [{ id, sli, objective, window, objectiveSource, now, budget }], cut }`, at most 8), each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
@@ -1417,7 +1427,11 @@ compares the service with all of it, and the match says little. `liveScopes`,
 `{ [environment name]: { metricPrefixes, folderUids, datasourceUid,
 metricExclude, ruleGroups } }` on `POST` and `PATCH /api/services/:id` (the
 whole map; an empty or `null` scope is none; each value checked as a snapshot
-scope is, the exclude patterns' timing included), narrows that environment's
+scope is, the exclude patterns' work bound and timing included — a pattern
+that can take more than 16 million steps to test a 256-character name is
+refused, and a request spends about a second at most timing its patterns; a scope
+stored before keeps loading, and a pattern it holds that the rule refuses now is
+read without and named on the run record, the Run's toast and the row), narrows that environment's
 live read as a snapshot of the same scope narrows it: the metric names its
 prefixes keep and its patterns do not drop, the dashboards and alert rules of
 its folders (pushed down where the tool takes a folder, every engine read),
@@ -1429,17 +1443,79 @@ and the recording-rule evidence read from every name listed, the chaos feed,
 and the scrape targets, routes and versions estate-wide (no scope field
 names them). A change of scope reaches the environment's saved check at once,
 as the service's grade switches do. An
-environment with none of its own reads with the org's configured snapshot
-scope (`OBSERVOGRAM_SNAPSHOT_*`, `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`), else
-unscoped. The Run writes the scope it applied into the check as
-`packB.mcp.scope` — a **Check now** and `packc journey run` read the same —
-and the record says it as `packB.liveScope` (`null`: the read was unscoped; a
-record written before has no key, and reads as before). The environment's
-view carries its own as `liveScope`; a rename takes it along, a deletion
-takes it away. In *Add a service* and **Change**, step 4 shows the five
-answers under the endpoint, prefilled from the environment's own or the
-server's (*Prefilled from the server's snapshot scope*), and the matrix cell
-says *scoped: 2 prefixes, 5 folders*.
+environment with none of its own reads **unscoped**: the org's configured
+snapshot scope (`OBSERVOGRAM_SNAPSHOT_*`, `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`)
+never applies to a service environment — one service's rule groups and
+exclude pattern must not narrow another's read. It pre-fills the form of a
+NEW environment instead, each field said *from the server default*, and saved
+it is that environment's own; it is not pre-filled for a service whose
+environments read other metric prefixes, and a pre-fill whose prefixes no
+metric the service's repository declares carries is cleared and said why. A
+default that names no metric prefixes (folder uids, rule groups or exclude
+patterns alone) cannot show it is a service's, so it is never pre-filled: the
+form says why and offers **Use the server default**.
+Typed prefixes that differ from the default's — a default with none included —
+keep none of the default's other answers (*… will not be saved for this
+environment*), a pre-fill is never written over an environment's own scope,
+and a blank *Add a service* whose name keys a service already listed says
+before the save that none of the pre-fill is saved onto it. An environment that exists and
+has none says *No live scope — the server default no longer applies here; set
+one* and offers **Use the server default**; a sign-in that takes the form to
+the host and back keeps which answers came from it. The Run writes the scope it
+applied into the check as `packB.mcp.scope` — a **Check now** and `packc
+journey run` read the same — and the record says it as `packB.liveScope`
+(`null`: the read was unscoped; a record written before has no key, and reads
+as before). A run whose live read applied another scope than the last graded
+run's — the first Run after this change of an environment that read under
+the server default — says its figures are not comparable with that run's
+(`comparable`, as a partial scan does). A capture that names a service reads with that environment's own
+scope, never with the one Pack B was read under; a check of no service keeps
+its own; a deleted service's or a deleted environment's scope leaves its
+checks, and a service made under a name a deleted one left takes its checks
+with its own scopes (none, until set); and the first start after the change
+takes the server default out of the saved checks that still carry it — only
+that scope, and only from studio-written checks: one typed into a capture by
+hand stays — naming each check in its log line. The environment's view carries its own as `liveScope`; a
+rename takes it along, a deletion takes it away. In *Add a service* and
+**Change**, step 4 shows the five answers under the endpoint and the scope's
+check (`POST /api/services/:id/scope-check`, stored packs only): a rule group
+the environment's last live read did not list, and a declared family with
+nothing inside the scope — rules filed under a folder title the live read gave
+no uid of are said not known, a note, and a rule group past the 500 the read
+kept is not called missing. The matrix cell says *scoped: 2 prefixes, 5 folders*.
+
+**Every environment reads the same files; a deployment surface per
+environment.** An environment's name chooses nothing: a service's
+environments named `prod` and `staging` scan the same files of the same
+repository. Where one environment deploys only one surface of a repository
+that holds several — a Helm chart and a compose file side by side — it can
+read that surface alone: `envSurfaces`, `{ [environment name]: kubernetes |
+eks | local-kubernetes | compose }` on `POST` and `PATCH /api/services/:id`
+(the whole map; a blank or `null` surface is none), kept beside the record
+with no schema step, off by default. The service's view carries
+`envSurfaces`; a rename of the environment takes it along, a deletion takes
+it away, and another repository keeps it (a surface is how the environment
+deploys). The Run's scan then says how many files the filter left out
+(`scan.filter: { surface, excluded }`, the files themselves in
+`scan.environment.excludedFiles`) and warns when it left out more than half
+of the files the scan recognises (`scan.excludedMost`). A folder that holds
+a `Chart.yaml` — the repository's root included — is a chart: its
+`templates/`, `files/`, `dashboards/`, `crds/` and `charts/` and its
+`values.schema.json` are the Kubernetes surface. With every file read, the
+Helm `enabled:` switches are read from the base `values.yaml` alone — an
+overlay's (`values-eks.yaml`) is one environment's — and every overlay
+switch the base values override is named in one warning: one that would
+switch a component off (it stays declared), and one that switches on a
+component the base values switch off (it is not declared; the environment
+that deploys with that overlay reads it through its deployment surface). A
+dashboard export kept under a top-level `docs/`, `examples/` or `samples/`
+folder that repeats the uid of a dashboard the repository holds elsewhere
+is a copy: it is not declared, and the warning names it (a dashboard kept
+only there is declared). In *Add a service* and
+**Change**, step 3 asks *Read only this deployment surface* under the
+repository. The command line, Expert's crawl panel, `POST /api/crawl`, `POST
+/api/crawl-github` and a journey's `crawl:` source keep the filter the
+environment's name maps to (`prod` by default).
 
 **Repository sources.** Each organisation chooses which of the kinds
 above its services may use (a Pack file is an upload: the Upload switch
@@ -1473,18 +1549,56 @@ endpoint (step 1: the export is Pack B, read with no MCP call):
    live Pack B is (a refusal reads nothing and sends nothing); a folder's
    rule is read again.
 2. **The scan** — the repository read now and crawled under the service's
-   slug and the environment's name, so the scan is the service's own pack
+   slug (every environment reads the same files, unless its deployment
+   surface is set — above), so the scan is the service's own pack
    (`primary`), registered under the label `<name> · <env> · repository`:
    the next Run's scan replaces it. A GitHub or Azure DevOps read resolves
-   the branch and lists the tree first (each call under its own 60 s), then
-   fetches the files the crawler's rule takes (at most 200, 5 MB each, 16 MB
-   in all) 8 at a time (`HOST_READ_PARALLEL`), each within 60 s and all of
-   them within 120 s (`HOST_READ_FILES_BUDGET_MS`, both in
+   the branch and lists the tree first (each call 60 s a try at most, its
+   tries and waits together within 90 s, `HOST_READ_CALL_BUDGET_MS`), then
+   fetches the files the crawler's rule takes (at most 500 by default,
+   `OBSERVOGRAM_SCAN_MAX_FILES` on the server, a whole number from 1 to 5000 —
+   any other value is said at start and 500 used; 5 MB each, and 16 MB per 200
+   files in all, 40 MB for 500) at most 8 at a time (`HOST_READ_PARALLEL`), each
+   within 60 s and all of them within 120 s per 200 files of the cap, never
+   less (`HOST_READ_FILES_BUDGET_MS`, 300 s for 500; both in
    `server/github-crawl.mjs`): 25 rounds of 8 for 200 files, so a host that
-   answers a file in under about 5 s fits, and a slower one loses the tail of
-   the plan. A file the time ran out for is listed among the files not read
-   with *the read's 120 s for its files ran out*, never a failed Run. When
-   the rule takes more than 200 files, the cap reaches the likely artefacts
+   answers a file in under about 5 s fits whatever the cap, and a slower one
+   loses the tail of the plan. A file the host refused (403, 429, 503) or dropped is tried
+   again, four tries in all (`HOST_READ_ATTEMPTS`), after the wait the host
+   asked for (`Retry-After`, a spent quota's `x-ratelimit-reset`; at most 60 s,
+   never past the read's end), else a backoff of 1, 2, 4 s; a refusal also
+   slows the whole read — the pool halves once for a burst and grows back by
+   one after a round of answers — and a host that asks for a longer wait
+   than 60 s, or than the read has left, a refusal and a server error alike,
+   is asked nothing more in it (*… — the host asked to wait 90 s, more than
+   the 60 s a read waits*). The repository and tree reads are tried again the
+   same way, a try again only when it fits in what their 90 s have left, so a
+   host or a proxy that fails slowly is asked once. A GitHub 403 that refuses
+   the token rather than the pace — SAML single sign-on (its sentence saying
+   what to do is kept), a token or an app without access — is never tried
+   again; a limit says it is one (a `retry-after`, a spent quota, its own
+   sentence) and only that is. A host's sentence names no one: GitHub's
+   *API rate limit exceeded for user ID …* reads *API rate limit exceeded.*,
+   and an address, an e-mail address or a quoted user name reads
+   `<redacted>`. A file that still fails, or the time ran out
+   for, is listed among the files not read with its reason (*… — tried 4
+   times*, *the read's 120 s for its files ran out*). **A scan that lost
+   files is no scan** (`scan.partial`, `scan.lost`; `scan.notRead` counts
+   every file not read but those left out on purpose — a secrets file, one
+   git ignores — the size caps and the file cap included): while the service
+   keeps a complete scan of the same repository and branch, the Run stops —
+   409 `{ outcome: 'scan-partial', error, journey, kept, scan, record }`,
+   the stored pack and the check untouched, no live call, a `scan-partial`
+   run record (no grade, no drift; a `notify` block posts it) — and says the
+   way out: run it again, or have partial scans checked instead,
+   `OBSERVOGRAM_PARTIAL_SCAN=check` on the server (read on each Run; `stop`
+   by default). With no complete scan of it kept (the first Run, another
+   repository or branch), or under `check`, the partial scan is checked: its
+   gate fails (`scanComplete`, whatever the gate asks) and the record says its
+   figures are not comparable with the run before (`comparable: {
+   withPrevious: false, reason }`), as does the run after it. A read that
+   lost every file stops whatever the policy. When
+   the rule takes more files than the cap, the cap reaches the likely artefacts
    last: rule files, collector configs, charts and dashboards first (and
    source whose path says telemetry), then the files that may describe an
    exporter (`config.yaml`, a saved `/metrics`), then the service's own YAML
@@ -1878,7 +1992,7 @@ written the same way, after the answer is known.
 | `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
 | `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
 | `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds; with a `notify`, also `notify: { urlEnv, authEnv }` — the names of the org's notify hook variables it chose (`authEnv` `null` without a token), never a value |
-| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when Pack B lost its vantage — the live read threw, or no probe family returned data (the engine wrote a run record and may have notified; the 502 body says `outcome: "vantage-lost"` too), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
 | `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
@@ -1980,8 +2094,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.42 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.42
+docker build -t observogram:0.8.43 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.43
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2044,7 +2158,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.42
+  observogram:0.8.43
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2052,7 +2166,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.42
+    image: observogram:0.8.43
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
@@ -2365,14 +2479,14 @@ restart loses them (a pack already registered stays). A snapshot is labelled
 MCP](#fetch-live-from-mcp)).
 
 **The snapshot scope** (inert when unset; a request's `scope` replaces it
-whole; a plain draft and the refresh never read it, a service's Run does where its environment has no scope of its own — [a live scope per environment](#a-services-run)):
+whole; a plain draft and the refresh never read it, nor does a service's Run — it only pre-fills a new environment's form, [a live scope per environment](#a-services-run)):
 
 | Variable | Meaning |
 |---|---|
 | `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
 | `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules; an alert-rule tool that takes a folder uid (Grafana's) is asked once per folder, so on a Grafana-only estate the other folders never travel; beside an engine that names no folder, or when a folder gets no answer, it is read whole as before and the gate log says so |
 | `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
-| `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` | white-space-separated patterns (a pattern cannot contain a space; `\s` works), each anchored (`^app_event_\d+_total$ ^go_`), for metric names a snapshot drops after the prefixes kept them — a backend's names no declaration will ever match; counted in the gate log, and a repository metric they match is *not checked*, never *declared, not live*; a pattern that crawls is refused with the rest |
+| `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` | white-space-separated patterns (a pattern cannot contain a space; `\s` works), each anchored (`^app_event_\d+_total$ ^go_`), for metric names a snapshot drops after the prefixes kept them — a backend's names no declaration will ever match; counted in the gate log, and a repository metric they match is *not checked*, never *declared, not live*; a pattern that may be too slow to match is refused with the rest |
 | `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` | comma-separated rule-group names (`payments, checkout:slo`; Grafana's `ruleGroup`, a Prometheus or vmalert `groups[].name`) a snapshot keeps for alert and recording rules, applied only when every rule the engines list names its group (said in the gate log otherwise); a repository rule of another group is *not checked*, never *declared, not live* |
 | `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID`, `…_METRIC_EXCLUDE`, `…_RULE_GROUPS` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
 | `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |
@@ -3096,8 +3210,8 @@ gate:
   minAlignmentPct: 85
   requireGradePass: true
   maxLiveAgeHours: 24
-  failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
-  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
+  failOnPartialEvidence: true   # a probe family FAILED (a refused read included) → the verdict is not trustworthy
+  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire (a health family that failed fails it)
   stack:                        # thresholds on the stack's own self-metric samples (early warning)
     requireSampled: true        # breach unless the MCP tier let the run sample them
     rows:
@@ -3133,9 +3247,18 @@ Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
 scheduled task, or a CI gate. Every run appends a JSON record under
 `.observogram/runs/<journey>/` (the drift-over-time series), including the
 vantage of the live source itself (`probes`, `vantage`, `toolsExposedCount`,
-`scrapeJobsDown`, `unhealthyRules`). When the live MCP does not answer at
-all, the run still writes an `outcome: vantage-lost` record before exiting
-`2` — the loss is a point in the history, not a gap. The CLI grades on the
+`scrapeJobsDown`, `unhealthyRules`). When the live side answers no probe
+family with data — or does not answer at all — the run writes an `outcome:
+vantage-lost` record (no grade, no match) before exiting `2` — the loss is a
+point in the history, not a gap, and never a figure. A run that compared
+nothing records no match figure (`drift.alignmentPct: null`, `drift.compared:
+0`), and a gate never passes on an absent figure — nor on a run that compared
+nothing: its report reads `⚠️ … — NOTHING COMPARED` (`· GATE FAILED` with its
+breaches, `· GATE NOT PASSED` under a gate whose own keys held, a
+freshness-only gate say, which then exits `1`), never `✅ PASS`; a journey
+with no gate configured (none, or one whose every key is `false` or `null`)
+has no gate verdict and exits `0`, its report and `journey list` saying
+nothing compared. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name. The example's
@@ -3209,7 +3332,11 @@ runs `journey run --all` as a CronJob against the studio's workspace PVC.
 `notify:` posts a run to a webhook only when it says something new
 (`transitions`: outcome changed, a chain got worse, a new candidate cause, the
 vantage changed; `breach`; `always`) — the outcome lands on the record as
-`notify` and never changes the exit code. Each record of a live run also keeps the stack
+`notify` and never changes the exit code. Both read a run as every reader
+does: one that compared nothing is no pass (`breach` posts it as *nothing
+compared*; under `transitions` a check that stops comparing anything is news,
+a repeat changes no outcome), and the payload's `reading` and one-line text
+say so. Each record of a live run also keeps the stack
 self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
 and Grafana status the MCP answered) — point-in-time signals kept per run so
 the history is the time series, never a verdict.
@@ -3319,7 +3446,13 @@ since the run before, the gate, drift / grade / conformance / freshness, the
 stack evidence table with the Alertmanager and Grafana status, the vantage,
 backend versions, delivery, and the schedule with its cron / schtasks /
 GitHub Actions / CronJob snippets (`GET /api/journeys/:name/schedule`, loaded
-on demand). The saved-journey cards close the page. The charts are
+on demand). The saved-journey cards close the page. A run whose live side
+gave nothing — a lost run, or an older record whose every probe failed —
+shows no grade and no chain integrity, in the focus head (*the live source
+did not answer: <first probe error>*) and the newest record alike; **run
+now** and **run all** read a run the server answered 502 but recorded as lost
+(its body's `outcome`) as *unable to observe* with its first probe error, and
+count it so — never *did not finish* with the server's raw answer. The charts are
 zero-dependency inline SVG (`tools/lib/svg-charts.mjs`); the numbers come
 from one pure model (`tools/lib/neuron-model.mjs`), so what the page says can
 be tested without a browser. The view needs no pack loaded.
@@ -3965,7 +4098,7 @@ unsupported charset or content encoding. The body is not logged.
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`, `repositoryAccess` `{ by, kind, location }` — how the scan behind it read a GitHub or Azure DevOps repository, `null` otherwise) |
 | `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
-| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); `&checked=1`: only the runs that checked something — never a Run stopped on a partial scan — the newest `limit` of them however many stops are newer; a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule); a notify name the server refuses is never bound — it is listed in `refusedEnvNames`, and each snippet says so where its binding would have been |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); a journey that notifies is refused before it runs unless its hook is the org's, set and allowed; without sign-in it runs only from this machine; an audit row: `journey.run`, on a failed run too |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); a `notify` names one of the org's notify hooks (`GET /api/journeys/notify-hooks`); an audit row: `journey.capture` |
@@ -3976,10 +4109,10 @@ unsupported charset or content encoding. The body is not logged.
 | `GET` | `/api/mcp/jobs/:jobId?since=` | Your job's gate log: `{ ok, job, stages, next, result?, error? }` — the stage records after the cursor `since` (send `next` back), each `{ seq, stage, label, state, counts, startedAt, finishedAt, message, gap }`; at the end `result` (`registered`, `validation`, `counts`, `gaps`, `tookMs`, a draft's `draft` summary) or `error`. Another member's job, another org's, one that expired (15 minutes after it ended) or that a restart lost: 404 `{ gone: true }` |
 | `POST` | `/api/mcp/jobs/:jobId/cancel` | Stop a running job (its starter, or an admin of the org — who gets `{ id, state }` and never the gate log): it ends `cancelled`, nothing registered; 409 once it has ended |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }` and their live scope) and the packs linked to it (`id`, `label`, `source`, `role`) |
-| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile }`, `{ profile: custom, mttd, mttr }` or `null` |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs?, liveScopes?, envSurfaces? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack); `repository` is `{ kind: github \| ado \| path, location, ref? }`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile }`, `{ profile: custom, mttd, mttr }` or `null` |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
-| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — `targets` — the MTTD / MTTR targets the studio keeps for it — `envRefs` — the branch each environment's Run reads where it is not the repository's; an environment's view gives its own as `ref` — and `liveScopes` — the scope each environment's live read applies (`changed` lists what differed; nothing → no audit row) |
-| `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }`; a `pack` repository and an export of live are used as they are (no scan, no MCP call) |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description`, `repository`, `gradeOff` — the grade criteria the service is not graded on — `setAside` — the differences with live its grade leaves out — `targets` — the MTTD / MTTR targets the studio keeps for it — `envRefs` — the branch each environment's Run reads where it is not the repository's; an environment's view gives its own as `ref` — `liveScopes` — the scope each environment's live read applies — and `envSurfaces` — the deployment surface each environment's Run reads alone (`changed` lists what differed; nothing → no audit row) |
+| `POST` | `/api/services/:id/run` | The service's Run, `{ env? }`: scans its repository, registers the scan as its pack, saves and runs its check against the environment's MCP endpoint → `{ record, pack, journey, scan }`; a `pack` repository and an export of live are used as they are (no scan, no MCP call); a scan that lost files while a complete one is kept is 409 `outcome: 'scan-partial'`, the service's pack untouched |
 | `PUT` | `/api/services/:id/repository-pack` | A pack exported from the repository in its place, `{ name, text }` → `{ service, repository }` |
 | `PUT` | `/api/environments/:id/live-pack` | A pack exported from live in place of the environment's MCP endpoint, `{ name, text }` → `{ environment }` (its `livePack`; the endpoint unbound) |
 | `DELETE` | `/api/environments/:id/live-pack` | The export of live taken away → `{ environment }`; 409 when there is none |

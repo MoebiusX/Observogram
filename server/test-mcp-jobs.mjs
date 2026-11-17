@@ -177,6 +177,8 @@ const masked = (canonical) => {
   const out = JSON.parse(JSON.stringify(canonical));
   for (const k of Object.keys(out)) if (k.startsWith('__')) delete out[k];
   for (const [k, v] of Object.entries(out.metadata.annotations)) if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(String(v))) out.metadata.annotations[k] = '<time>';
+  // The first instant a family answered it is not served here: a clock too.
+  for (const k of Object.keys(out.metadata.annotations)) if (k.startsWith('mcp.probeUnsupported.')) out.metadata.annotations[k] = JSON.stringify({ ...JSON.parse(out.metadata.annotations[k]), since: '<time>' });
   out.metadata.version = '<minute>';
   return out;
 };
@@ -229,10 +231,10 @@ test('a snapshot by id: 202, an id and a Location at once; the gate log by curso
   const ids = stagesFor('snapshot').map((s) => s.id);
   const last = new Map(end.records.map((x) => [x.stage, x]));
   assert.deepEqual([...last.keys()].sort(), [...ids].sort(), 'every snapshot stage reported');
-  assert.deepEqual([...last.values()].filter((x) => x.state !== 'done').map((x) => [x.stage, x.state]), [['alerting_routes', 'failed']],
-    'every stage done but the routes, offered and unanswered');
+  assert.deepEqual([...last.values()].filter((x) => x.state !== 'done').map((x) => [x.stage, x.state]), [['alerting_routes', 'skipped']],
+    'every stage done but the routes, offered and answered without a configuration: not served here (A16), never failed');
   assert.equal(last.get('register').message, 'registered as live-snapshot (live MCP snapshot)');
-  assert.equal(last.get('alerting_routes').gap.reason, 'the alerting routes tool got no answer: alertmanager_status: the Alertmanager status carries no configuration', 'the recorded status carries no configuration: a gap');
+  assert.equal(last.get('alerting_routes').gap.reason, 'alertmanager_status: the Alertmanager status carries no configuration — the alerting routes are not served here; not counted as a failure', 'the recorded status carries no configuration: a gap that says what was answered');
   const { result } = end;
   assert.deepEqual(result.registered.label, 'live-snapshot (live MCP snapshot)');
   assert.deepEqual(result.validation, { ok: true, errors: 0, first: [] });
@@ -247,7 +249,7 @@ test('a snapshot by id: 202, an id and a Location at once; the gate log by curso
   assert.deepEqual([added[0].actor, added[0].targetKind, added[0].targetId], ['oscar', 'live', main.origin]);
   assert.deepEqual(added[0].detail, {
     kind: 'snapshot', outcome: 'done', typed: false, mcpEndpoint: { id: ENDPOINT, name: 'acme-gw' }, jobId: job.id,
-    packId: snapshotPackId, stages: { done: ids.length - 1, skipped: 0, failed: 1 }, gaps: ['alerting_routes'],
+    packId: snapshotPackId, stages: { done: ids.length - 1, skipped: 1, failed: 0 }, gaps: ['alerting_routes'],
   });
   assert.ok(listAudit(db, { orgId: 'acme', limit: 50 }).some((x) => x.action === 'pack.register' && x.actor === 'oscar' && x.targetId === snapshotPackId), 'the pack\'s own row, by the starter');
   const status = await call('GET', '/api/mcp/jobs', 'oscar');
@@ -542,10 +544,10 @@ test('the typed-URL rule and the request checks: operators and the bearer send i
     // by the timed half before any job starts — in the variable and in a request's scope alike.
     process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE = '^a*a*a*a*b$';
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT });
-    assert.deepEqual([r.status, r.json.error], [400, 'the configured snapshot scope does not parse — OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name); fix the variable, or send a scope with the request']);
-    assert.deepEqual((await call('GET', '/api/mcp/jobs', 'oscar')).json.scope.errors, ['OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name)']);
+    assert.deepEqual([r.status, r.json.error], [400, 'the configured snapshot scope does not parse — OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 16 million steps); fix the variable, or send a scope with the request']);
+    assert.deepEqual((await call('GET', '/api/mcp/jobs', 'oscar')).json.scope.errors, ['OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 16 million steps)']);
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, scope: { metricExclude: ['^a*a*a*a*b$'] } });
-    assert.deepEqual([r.status, r.json.error], [400, 'scope.metricExclude[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name)']);
+    assert.deepEqual([r.status, r.json.error], [400, 'scope.metricExclude[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 16 million steps)']);
     process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE = ' ^alertmanager_cluster_  ^go_ ';
     const jobs = await call('GET', '/api/mcp/jobs', 'oscar');
     assert.deepEqual(jobs.json.scope, { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: ['^alertmanager_cluster_', '^go_'], ruleGroups: [] }, from: 'org', errors: [] });

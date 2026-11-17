@@ -56,13 +56,13 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr, sliSlug } from './lib/sli-inference.mjs';
-import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey } from './lib/artefact-model.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr, grafanaRuleFacts, sliSlug } from './lib/sli-inference.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey, GRAFANA_RULE_ANNOTATION_PREFIX } from './lib/artefact-model.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct, productsAScrapeJobServes } from './lib/backend-products.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
-import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { capability, probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
 import { promqlForKind } from './lib/inventory-coverage.mjs';
 import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
 import {
@@ -70,9 +70,9 @@ import {
 } from './lib/contracts/stack-self-metrics.mjs';
 import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-run-evidence.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
-import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
+import { stripMcpUrl, safeMcpUrl, redactCredentials, credentialParamName } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
-import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty } from './lib/live-fetch.mjs';
+import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty, excludeProblem, excludeProbes, excludedBy } from './lib/live-fetch.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -380,15 +380,53 @@ const OBSERVED_ERROR_LENGTH = 200;
 
 const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
 
+// A probe failure as the pack, the run record and a notification may keep it
+// (P7: reasons and counts only — a backend's error text can echo the request
+// it was asked with). Every URL by the repository's URL rule
+// (tools/lib/mcp-url-safety.mjs safeMcpUrl: no userinfo, no fragment, no
+// credential parameter) and no query string at all; a URL with none of these
+// stays as it was written, one that does not parse keeps what precedes its
+// query, its userinfo masked. Then what quotes a request without a scheme or
+// a secret outside a URL: the query and fragment of a path written alone
+// (urllib3 and requests name the request so: `Max retries exceeded with url:
+// /api/v1/targets?api_key=…`), the userinfo of a `//user:pass@` link, the
+// value of every `name=value` pair whose name says it holds a credential
+// (mcp-url-safety's credentialParamName, as the readers' safeErrorText reads
+// it) and a Bearer or Basic value. The readers' rule (tools/lib/run-basis.mjs
+// safeErrorText) masks nothing this one keeps. Idempotent.
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+const PATH_QUERY_IN_TEXT = /(^|[\s(=:,'"`[])(\/[^\s?#"'<>`]*)[?#][^\s"'<>`)\]]*/g;
+const USERINFO_IN_TEXT = /\/\/[^/\s@]+@/g;
+const NAME_VALUE_IN_TEXT = /(^|[\s?&;,([{'"`])([A-Za-z_][\w.%[\]-]*)=("[^"]*"|'[^']*'|[^\s&;,)\]}'"`]*)/g;
+const AUTH_VALUE_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+const decodedParamName = (name) => { try { return decodeURIComponent(name); } catch { return name; } };
+export function maskProbeErrorUrls(text) {
+  return String(text ?? '')
+    .replace(URL_IN_TEXT, (raw) => {
+      if (!/[?#]/.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(raw)) return raw;
+      const safe = safeMcpUrl(raw);
+      if (safe === null) return redactCredentials(raw).replace(/[?#].*$/, '');
+      const url = new URL(safe);
+      url.search = '';
+      return url.href;
+    })
+    .replace(PATH_QUERY_IN_TEXT, (_m, lead, path) => `${lead}${path}`)
+    .replace(USERINFO_IN_TEXT, '//***@')
+    .replace(NAME_VALUE_IN_TEXT, (m, lead, name) => (credentialParamName(decodedParamName(name)) ? `${lead}${name}=***` : m))
+    .replace(AUTH_VALUE_IN_TEXT, '$1 ***');
+}
+
 // Why a probe family got no answer: every candidate that failed, in the
 // order the cascade tried them, each named and trimmed like any observed
-// error — `metrics_label_values: HTTP 502 · metrics_metadata: MCP error
-// -32602 …`. The FIRST entry is the cause worth reading: the cascade only
-// reached the later ones because of it (the night the stack behind the
-// public MCP restarted, the one message kept was the last fallback's
-// schema complaint, which read like a contract change). A message that
-// already begins with the tool's name is not prefixed twice. Null when no
-// attempted candidate left a message.
+// error — `metrics_label_values: HTTP 502 · list_metrics: HTTP 503 …`. The
+// FIRST entry is the cause worth reading: the cascade only reached the
+// later ones because of it (the night the stack behind the public MCP
+// restarted, the one message kept was the last fallback's schema
+// complaint, which read like a contract change). A message that already
+// begins with the tool's name is not prefixed twice. Null when no
+// attempted candidate left a message. Every URL in it — and every query
+// and credential it quotes — is masked (maskProbeErrorUrls) before it is
+// cut, so a cut never keeps half a query.
 const PROBE_FAILURE_SEPARATOR = ' · ';
 function probeFailureText(attempted, probeFailures) {
   const entries = [];
@@ -402,9 +440,94 @@ function probeFailureText(attempted, probeFailures) {
     const msg = probeFailures?.[name];
     if (typeof msg !== 'string' || !msg) continue;
     const named = msg.startsWith(`${name}:`) ? msg : `${name}: ${msg}`;
-    entries.push(trimError(named));
+    entries.push(trimError(maskProbeErrorUrls(named)));
   }
   return entries.length ? entries.join(PROBE_FAILURE_SEPARATOR) : null;
+}
+
+// C6: a refusal — the MCP gateway's own 401/403 (tools/lib/mcp-client.mjs
+// `MCP HTTP 401 on tools/call: …`), a JSON-RPC error saying so, or a tool
+// whose backend refused the MCP's own credentials, in the words its client
+// library gives it: `HTTP 403: Forbidden`, `Unauthorized`, `status code 401`,
+// `"statusCode":401`; the Prometheus Go client's `client error: 403`; a
+// generated Grafana client's `[GET /search][403] searchForbidden`; `API error
+// (403)`; `received 403 from upstream`; gRPC's `code = PermissionDenied` /
+// `code = Unauthenticated`; AWS's `AccessDeniedException`. A bare 401 or 403
+// in other words (`returned 401 series`, `403 series matched`) is not one.
+// The one rule for the probe cascade and the ping's backendAuthRefused.
+const REFUSAL_TEXT = new RegExp([
+  String.raw`\bHTTP\s+(?:status\s+)?40[13]\b`,
+  String.raw`\bstatus(?:[\s_]*code)?"?\s*[:=]?\s*"?40[13]\b`,
+  String.raw`\b40[13]\s+(?:unauthori[sz]ed|forbidden)\b`,
+  String.raw`\bunauthori[sz]ed\b`,
+  String.raw`\bforbidden\b`,
+  String.raw`[a-z](?:unauthori[sz]ed|forbidden)\b`,
+  String.raw`\[40[13]\]`,
+  String.raw`\bclient error:\s*40[13]\b`,
+  String.raw`\((?:HTTP\s+)?40[13]\)`,
+  String.raw`\b40[13]\s+from\b`,
+  String.raw`\bcode\s*=\s*(?:PermissionDenied|Unauthenticated)\b`,
+  String.raw`\bAccessDenied(?:Exception)?\b`,
+].join('|'), 'i');
+export function isProbeRefusal(message) {
+  return typeof message === 'string' && REFUSAL_TEXT.test(message);
+}
+
+// P6: the statuses a store answers when it has no such API (a datasource
+// proxy in front of a federated or remote-write store answering
+// /api/v1/targets), as the capability row declares them
+// (tools/lib/contracts/mcp-capabilities.mjs unsupportedOnHttpStatus), and
+// their reason phrases — the reason a not-served family records is the tool
+// and the status, never the answer's text (it may name an internal URL).
+const HTTP_REASON_PHRASES = Object.freeze({ 400: 'Bad Request', 404: 'Not Found', 405: 'Method Not Allowed' });
+// The Prometheus HTTP API's error types and the statuses it answers them with.
+const PROMETHEUS_ERROR_TYPE_STATUS = Object.freeze({ bad_data: 400, not_found: 404 });
+const notServedStatusesOf = (family) => {
+  const statuses = capability(family).unsupportedOnHttpStatus;
+  return Array.isArray(statuses) ? statuses.filter((n) => Number.isInteger(n) && n >= 400 && n < 500 && n !== 401 && n !== 403) : [];
+};
+// A probe family whose answer can say "not served here": its capability row
+// declares the statuses, or its probe reads an answer so (notServedAnswer).
+// False for a name that is no capability (a caller's pre-filled probe table).
+function canNotServeHere(family) {
+  let statuses;
+  try { statuses = notServedStatusesOf(family); } catch { return false; }
+  return statuses.length > 0 || PROBES.some((p) => p.name === family && typeof p.notServedAnswer === 'function');
+}
+
+// A message that says the datasource the tool reads through is missing
+// (Grafana's datasource proxy: `Data source not found`, `Unable to find
+// datasource`, `datasource with uid "x" not found`): a misconfiguration of
+// the read, never a store without the API. The "not found" must be the
+// datasource's own — at most its uid, id or name between — so a URL's
+// `/api/datasources/…` path or a `datasource proxy returned Not Found` (the
+// store behind it answered 404) is no missing datasource.
+const MISSING_DATASOURCE_TEXT = /\bdata\s?sources?(?:\s+(?:with\s+)?(?:uid|id|name))?(?:\s+["'`]?[\w.:-]+["'`]?)?\s+(?:was\s+)?(?:not\s+found|does\s+not\s+exist|doesn't\s+exist)\b|\b(?:unable\s+to\s+find|unknown|no\s+such|missing)\s+(?:the\s+)?data\s?source\b/i;
+
+// The status (one of `statuses`) a failed call's message says the tool's
+// backend answered, or null: the tool's own answer or the call's JSON-RPC
+// error — never the MCP endpoint's own HTTP status (`MCP HTTP 404 on
+// tools/call` is the MCP itself), never a refusal, and never an answer that
+// names a missing datasource (E2: a wrong datasource uid answers 404 too).
+export function notServedStatus(message, statuses) {
+  if (typeof message !== 'string' || /^MCP HTTP \d{3} on /.test(message) || isProbeRefusal(message)) return null;
+  if (MISSING_DATASOURCE_TEXT.test(message)) return null;
+  for (const code of Array.isArray(statuses) ? statuses : []) {
+    if (!Number.isInteger(code) || code < 400 || code > 499 || code === 401 || code === 403) continue;
+    const phrase = HTTP_REASON_PHRASES[code];
+    const re = new RegExp(`\\bHTTP\\s+(?:status\\s+)?${code}\\b|\\bstatus(?:\\s+code)?\\s*[:=]?\\s*${code}\\b${phrase ? `|\\b${code}\\s+${phrase}\\b` : ''}`, 'i');
+    if (re.test(message)) return code;
+  }
+  return null;
+}
+
+// A Prometheus-shaped error envelope answered as a tool's content.
+const isErrorEnvelope = (response) => !!response && typeof response === 'object' && !Array.isArray(response) && response.status === 'error';
+
+// A not-served family's line wherever a reason is said (the gate log, the
+// pack's unobserved annotation): what was answered, then what it means.
+function notServedText(noun, notServed) {
+  return `${notServed.reason} — the ${noun} are not served here; not counted as a failure`;
 }
 
 // Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
@@ -1144,6 +1267,37 @@ function alertmanagerConfigText(response) {
   return typeof config === 'string' && config.trim() ? config : null;
 }
 
+// What an Alertmanager status answer that gave no configuration text to read
+// is: { trimmed, why }. "Not served" needs a positive signal (A16, narrowed):
+// `trimmed` only for a status object — no error, no error envelope, one of the
+// status's own fields (versionInfo, version, uptime, cluster) — that has no
+// `config` key at all: a tier that trims it. Everything else is no answer, a
+// failure with its reason: an error, something that is no Alertmanager status,
+// an empty configuration, or one in a shape this reader does not read (Grafana's
+// built-in Alertmanager states it as a JSON object — read as no routes, every
+// declared route would read "declared, not live").
+const ALERTMANAGER_STATUS_FIELDS = Object.freeze(['versionInfo', 'version', 'uptime', 'cluster']);
+const carriesError = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && (v.error != null || v.errorType != null);
+function alertmanagerStatusGap(response) {
+  if (isErrorEnvelope(response)) {
+    return { trimmed: false, why: `the status answer is an error envelope (errorType ${typeof response.errorType === 'string' && response.errorType ? response.errorType : 'unknown'})` };
+  }
+  if (carriesError(response)) return { trimmed: false, why: 'the status answer carries an error' };
+  const obj = locateObject('status-object', response);
+  if (!obj || isErrorEnvelope(obj) || carriesError(obj) || !ALERTMANAGER_STATUS_FIELDS.some((k) => obj[k] !== undefined)) {
+    return { trimmed: false, why: 'the answer is no Alertmanager status' };
+  }
+  const has = (o, k) => !!o && typeof o === 'object' && !Array.isArray(o) && Object.hasOwn(o, k);
+  if (has(obj, 'config') || has(response, 'config')) {
+    const config = has(obj, 'config') ? obj.config : response.config;
+    const text = typeof config === 'string' ? config : config?.original;
+    return config == null || (typeof text === 'string' && !text.trim())
+      ? { trimmed: false, why: 'the Alertmanager status carries an empty configuration' }
+      : { trimmed: false, why: 'the Alertmanager status carries its configuration in a shape this reader does not read' };
+  }
+  return { trimmed: true, why: 'the Alertmanager status carries no configuration' };
+}
+
 // The routes of the Alertmanager configuration a status call returned, read
 // exactly as the crawler reads a config file. Returns [] when there is no
 // configuration, it does not parse, or it declares no route with a channel
@@ -1163,6 +1317,53 @@ export function routesFromLiveAlertmanager(configText) {
       }),
     }))
     .filter(r => r.channels.length > 0);
+}
+
+// What a live read of the rule families states beside the probe outcomes:
+//   mcp.probesPartial + mcp.probeErrors.alert_rules  an alert-rule store no
+//       engine read (one errored or was refused, and no other engine of that
+//       store read it) beside one that answered with rules (unionAlertRules):
+//       the rules stand, the family was read in part (C3 reads it as a partial
+//       vantage)
+//   observogram.unread.alert_rule     { grafana?, ruler?, loki: why } — the
+//       stores the alert-rule read did not cover while the family answered:
+//       a declared rule of that store is not checked (diff.mjs)
+//   observogram.unread.recording_rule { grafana: why } — no recording-rule
+//       tool reads Grafana's own store (a Grafana alert-rule answer is read
+//       for its alert rules alone; the reason says which)
+//   mcp.discovered.rule_groups(_count) the rule groups the read listed, before
+//       a rule-group scope narrowed them (the studio's scope check)
+const RULE_GROUPS_RECORDED = 500;
+function ruleReadAnnotations(probeResults, ruleGroups) {
+  const out = {};
+  const alert = probeResults?.alert_rules;
+  if (alert?.outcome === 'data' && typeof alert.partial === 'string' && alert.partial) {
+    out['mcp.probesPartial'] = 'alert_rules';
+    // Masked where it is written, as every probe error is.
+    out['mcp.probeErrors.alert_rules'] = maskProbeErrorUrls(alert.partial);
+  }
+  if (alert?.outcome === 'data' || alert?.outcome === 'empty') {
+    const stated = alert.unread && typeof alert.unread === 'object' ? alert.unread : {};
+    const unread = Object.fromEntries(Object.entries(stated).filter(([, why]) => typeof why === 'string' && why));
+    // No alert-rule tool reads a Loki ruler (tools/lib/contracts/mcp-capabilities.mjs attests none).
+    unread.loki = 'no alert-rule tool reads a Loki ruler, so Loki rules were not read';
+    out['observogram.unread.alert_rule'] = JSON.stringify(unread);
+  }
+  const recording = probeResults?.recording_rules;
+  if (recording?.outcome === 'data' || recording?.outcome === 'empty') {
+    // Grafana's store, which no recording-rule tool reads. When a Grafana alert-rule tool answered, its
+    // answer may hold them, but the reading takes its alert rules alone: they are not compared, and the
+    // reason says that — never that they were not read.
+    const grafanaRead = (alert?.outcome === 'data' || alert?.outcome === 'empty') && alert.unread && typeof alert.unread === 'object' && !alert.unread.grafana;
+    out['observogram.unread.recording_rule'] = JSON.stringify({ grafana: grafanaRead
+      ? 'Grafana-managed recording rules are not compared: no recording-rule tool reads them, and the Grafana alert-rule answer is read for its alert rules alone, so they were not checked'
+      : 'no recording-rule tool reads Grafana-managed recording rules, so they were not read' });
+  }
+  if (Array.isArray(ruleGroups) && ruleGroups.length) {
+    out['mcp.discovered.rule_groups'] = annotationJson(ruleGroups.slice(0, RULE_GROUPS_RECORDED));
+    if (ruleGroups.length > RULE_GROUPS_RECORDED) out['mcp.discovered.rule_groups_count'] = String(ruleGroups.length);
+  }
+  return out;
 }
 
 export function buildCanonicalPack({
@@ -1190,6 +1391,8 @@ export function buildCanonicalPack({
   grafanaObserved = null,
   // sampleChaosRuns' answer — null when the caller predates it.
   chaosRuns = null,
+  // The rule groups the rule families listed (fetchMcp) — null when the caller predates it.
+  ruleGroups = null,
   packName = PACK_NAME,
 } = {}) {
   // Destructuring defaults only fire for `undefined`. The MCP probe
@@ -1220,7 +1423,9 @@ export function buildCanonicalPack({
   // Classify each probe by outcome:
   //   data    — MCP responded with non-empty content (a real answer)
   //   empty   — MCP responded but the payload was empty (an honest zero)
-  //   failed  — every candidate errored / 503'd (no response at all)
+  //   failed  — every candidate errored / 503'd (no response at all), or
+  //             one was refused (401/403) and none answered with data — an
+  //             honest zero needs a read that was allowed (C6)
   // The probe loop now stamps `outcome` directly. For callers that
   // pre-populate probeResults (the offline fetcher tests do), classify
   // from the legacy fields: `tool` set means SOMETHING answered, and
@@ -1244,7 +1449,10 @@ export function buildCanonicalPack({
   // unsupported — tools/list answered and NO candidate for the family is
   // exposed: a restricted MCP tier, not an outage. Distinct from `failed`
   // (we asked, nothing answered) so the studio never blames a deploy for
-  // a surface the server simply doesn't offer.
+  // a surface the server simply doesn't offer. Also a family whose every
+  // candidate answered that the store behind it keeps no such thing (P6:
+  // scrape targets answered 400 / 404 / 405, a status with no Alertmanager
+  // configuration) — its `notServed` says what was answered.
   const probesUnsupported = probesByOutcome('unsupported');
   // Why each probe family got no answer: fetchMcp keys probeFailures by
   // candidate tool NAME; map the names back to their family through the
@@ -1293,11 +1501,37 @@ export function buildCanonicalPack({
     'mcp.toolsUnmatched':      unmatchedTools.map(t => t.name).join(','),
   };
   // WHY a probe family got no answer — every failed candidate's message in
-  // the order tried, each trimmed like every other observed error. Absent
-  // when nothing errored.
+  // the order tried, each trimmed like every other observed error, every URL
+  // in it masked (whoever wrote the entry). Absent when nothing errored.
   for (const [family, msg] of Object.entries(probeErrors)) {
-    annotations[`mcp.probeErrors.${family}`] = msg;
+    annotations[`mcp.probeErrors.${family}`] = maskProbeErrorUrls(msg);
   }
+  // P6: why a family is unsupported when the store behind the MCP answered
+  // that it keeps no such thing: JSON { reason, since, tools } — the reason
+  // is the tool and the status it answered, never the answer's text. A
+  // journey's memory reads it back from the run record
+  // (tools/lib/journey.mjs probeMemoryOf).
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    const n = v?.notServed;
+    if (classify(v) !== 'unsupported' || !n || typeof n !== 'object') continue;
+    annotations[`mcp.probeUnsupported.${family}`] = JSON.stringify({
+      reason: trimError(n.reason) || 'no reason recorded',
+      since: typeof n.since === 'string' ? n.since : null,
+      tools: Array.isArray(n.tools) ? n.tools.filter((t) => typeof t === 'string') : [],
+    });
+  }
+  // E2: the tool(s) that answered a family that can read "not served" here
+  // (canNotServeHere) — data or an honest empty — so a journey remembers
+  // which tools serve it: a later not-served answer from one of them is a
+  // failure, not a store that keeps none (tools/lib/journey.mjs
+  // probeMemoryOf). Tool names only, comma-separated.
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    const outcome = classify(v);
+    if ((outcome !== 'data' && outcome !== 'empty') || !v?.tool || !canNotServeHere(family)) continue;
+    const tools = [...new Set(String(v.tool).split('+').filter(Boolean))];
+    if (tools.length) annotations[`mcp.probeAnsweredBy.${family}`] = tools.join(',');
+  }
+  Object.assign(annotations, ruleReadAnnotations(probeResults, ruleGroups));
   // The fetcher's own clock. mcp.refreshedAt is whatever the caller
   // stamped (server and journey stamp it after the fetch returns), so
   // freshness judgements on mcp.observed.* read mcp.observedAt.<family>
@@ -1990,6 +2224,7 @@ export function buildCanonicalPack({
       const symbol = `alerting.rules[${liveAlertRules.length - 1}]`;
       if (!unhealthy.has(a.name)) markVerified(symbol);
       if (Array.isArray(a.labelsObserved)) annotations[`${PARTIAL_ANNOTATION_PREFIX}${symbol}`] = partialAnnotation({ labels: a.labelsObserved });
+      if (a.grafana) annotations[`${GRAFANA_RULE_ANNOTATION_PREFIX}${symbol}`] = JSON.stringify(a.grafana);
     }
   }
   if (burnMapping.severityInferred.length) {
@@ -2167,8 +2402,15 @@ export function buildCanonicalPack({
   };
   const noTool = (what) => `no MCP tool exposes ${what}`;
   // Why a probe family is blind, or null when it answered (data or empty).
+  // An unsupported family whose store answered it keeps no such thing says
+  // what was answered (P6), not that no tool is offered.
   const blind = (family) => {
     const outcome = classify(probeResults?.[family]);
+    const notServed = probeResults?.[family]?.notServed;
+    if (outcome === 'unsupported' && notServed && typeof notServed === 'object' && typeof notServed.reason === 'string') {
+      const stage = stagesFor('draft').find((s) => s.id === STAGE_OF_PROBE[family]);
+      return notServedText(stage ? stageNoun(stage) : family.replace(/_/g, ' '), { ...notServed, reason: trimError(notServed.reason) });
+    }
     if (outcome === 'unsupported') return `this MCP offers no ${family.replace(/_/g, ' ')} tool`;
     if (outcome === 'failed') return `the ${family.replace(/_/g, ' ')} probe got no answer${probeErrors[family] ? `: ${probeErrors[family]}` : ''}`;
     return null;
@@ -2206,7 +2448,7 @@ export function buildCanonicalPack({
   unobserved('imports', noTool('pack imports'));
   unobserved('forecast', 'forecast rules are not read back from the ruler');
   if (blind('dashboards')) unobserved(['dashboard', 'panel'], blind('dashboards'));
-  if (blind('alert_rules')) unobserved('burn_rate', blind('alert_rules'));
+  if (blind('alert_rules')) unobserved(['alert_rule', 'burn_rate'], blind('alert_rules'));
   if (blind('metric_names')) unobserved('metric', blind('metric_names'));
   if (blind('scrape_configs')) unobserved('scrape_job', blind('scrape_configs'));
   if (recordedRules.length === 0 && blind('recording_rules')) {
@@ -2305,22 +2547,65 @@ function provisionedRuleList(response) {
 // the first data node that is not an expression → expr (the reading the
 // crawler gives a provisioning file, tools/lib/sli-inference.mjs
 // alertRuleExpr), `folderUID` → folderUid and `ruleGroup` → group (what a
-// snapshot's folder and rule-group scopes read). A Grafana-managed RECORDING
-// rule (`record` set) is not an alert rule and is left out. Empty for any
-// other shape.
+// snapshot's folder and rule-group scopes read), and what the rule states
+// beyond the spec as `grafana` (sli-inference.mjs grafanaRuleFacts: its uid,
+// folder uid, group and condition — the threshold the query alone does not
+// say). A Grafana-managed RECORDING rule (`record` set) is not an alert rule
+// and is left out. Empty for any other shape.
 export function adaptProvisionedAlertRules(response) {
   const list = provisionedRuleList(response) || [];
   return list
     .filter(r => r && typeof r === 'object' && typeof r.title === 'string' && r.title.trim() && Array.isArray(r.data) && !r.record)
-    .map(r => ({
-      name: r.title,
-      expr: alertRuleExpr(r),
-      ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
-      labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
-      annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
-      ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
-      ...(typeof r.ruleGroup === 'string' && r.ruleGroup.trim() ? { group: r.ruleGroup.trim() } : {}),
-    }));
+    .map(r => {
+      const facts = grafanaRuleFacts(r);
+      return {
+        name: r.title,
+        expr: alertRuleExpr(r),
+        ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
+        labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
+        annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
+        ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
+        ...(typeof r.ruleGroup === 'string' && r.ruleGroup.trim() ? { group: r.ruleGroup.trim() } : {}),
+        ...(facts ? { grafana: facts } : {}),
+      };
+    });
+}
+
+// Grafana's RULER answer (GET /api/ruler/grafana/api/v1/rules, optionally per
+// folder): an object keyed by folder TITLE, each a list of rule groups
+// ({ name, interval, rules }), each rule `{ for, labels, annotations,
+// grafana_alert: { title, uid, namespace_uid, rule_group, condition, data, … } }`.
+// Only Grafana's own ruler: every rule carries `grafana_alert`. Told by that
+// shape alone, whatever the keys: a folder is any title an operator gave it
+// (`data`, `groups`, `rules`, `status` among them), and a listing's own
+// `groups` / `rules` / `data` / `status` never hold groups of `grafana_alert`
+// rules, so they never read as one (an empty one reads empty either way).
+function isRulerShape(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+  const keys = Object.keys(response);
+  return keys.length > 0 && keys.every(k => Array.isArray(response[k]) && response[k].every(g => g && typeof g === 'object' && typeof g.name === 'string'
+    && Array.isArray(g.rules) && g.rules.every(r => r && typeof r === 'object' && r.grafana_alert && typeof r.grafana_alert === 'object')));
+}
+// One ruler rule, flat, as a listing's rule reads: the title as its name, the
+// query node as its expression, the folder title (the answer's key) and uid,
+// the group, and what it states beyond the spec (`grafana`).
+function flatRulerRule(rule, group, folderTitle) {
+  const ga = rule.grafana_alert;
+  const groupName = typeof ga.rule_group === 'string' && ga.rule_group.trim() ? ga.rule_group.trim() : group.name;
+  const facts = grafanaRuleFacts(ga, { folder: folderTitle, folderUid: ga.namespace_uid, group: groupName });
+  const record = ga.record && typeof ga.record === 'object' ? ga.record : null;
+  return {
+    name: ga.title,
+    type: record ? 'recording' : 'alerting',
+    ...(record ? { record: String(record.metric ?? '') } : {}),
+    expr: alertRuleExpr(ga),
+    ...(typeof rule.for === 'string' && rule.for ? { for: rule.for } : {}),
+    labels: rule.labels && typeof rule.labels === 'object' ? rule.labels : {},
+    annotations: rule.annotations && typeof rule.annotations === 'object' ? rule.annotations : {},
+    ...(facts ? { grafana: facts } : {}),
+    ...(facts?.folderUid ? { folderUid: facts.folderUid } : {}),
+    _group: groupName, _interval: group.interval,
+  };
 }
 
 // The rules of a rule-groups listing, flat, each beside the group it sits in
@@ -2328,9 +2613,33 @@ export function adaptProvisionedAlertRules(response) {
 //   { groups: [{ name, interval, rules: [{ record|name|alert, expr|query, type?, interval? }] }] }
 //   { rules: [{ record/name/alert, expr/query, interval? }] }      (flat: no group)
 //   { data: { groups: [...] } }                                      (Prometheus /api/v1/rules)
+//   { <folder title>: [{ name, interval, rules: [{ grafana_alert }] }] }  (Grafana's ruler)
 function flatRules(response) {
+  if (isRulerShape(response)) {
+    return Object.entries(response).flatMap(([folder, groups]) => groups.flatMap(g => g.rules.map(r => flatRulerRule(r, g, folder))));
+  }
   const groups = response?.groups || response?.data?.groups || [];
-  return response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval })));
+  return response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval, _file: g.file, _groupFolderUid: g.folderUid })));
+}
+
+// What a listing of names and queries states beside a rule that is no Grafana-managed rule's own
+// reading: a uid (Grafana's Prometheus-compatible listing gives each rule its Grafana uid) and the
+// folder its group names — `file`, a folder title in Grafana's listing and a rule file's path in a
+// ruler's, and a folder uid. Kept beside the rule the alert-rule reader returns (LISTED_FACTS),
+// never on it: the union reads it to tell one Grafana rule two tools list (unionAlertRules), and
+// it never enters the pack or the reading's shape. Null when the listing states none of it.
+const LISTED_FACTS = new WeakMap();
+function listedFactsOf(r) {
+  if (!r || typeof r !== 'object' || r.grafana) return null;
+  const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const facts = {};
+  const uid = text(r.uid);
+  const folder = text(r._file);
+  const folderUid = text(r.folderUid) ?? text(r._groupFolderUid);
+  if (uid) facts.uid = uid;
+  if (folder) facts.folder = folder;
+  if (folderUid) facts.folderUid = folderUid;
+  return Object.keys(facts).length ? facts : null;
 }
 // A snapshot's reading of one flat rule: the draft's reading, then the group
 // its listing names — positionally, so a name that sits in two groups carries
@@ -2389,11 +2698,12 @@ export const PROBES = [
         ...pickPresent(r, RECORDING_OBSERVATION_FIELDS),
       };
     },
+    // Every read keeps each rule's group beside it (the rule-group scope, and
+    // the rule groups a live read records); the canonical never carries it
+    // (stripRuleObservation), so a pack reads as it did.
     adapt(response) {
-      return flatRules(response).filter(this.isRule).map(this.read).filter(r => r.expr);
+      return this.adaptSnapshot(response);
     },
-    // A snapshot keeps each rule's group beside it (the rule-group scope);
-    // the draft keeps `adapt` alone, byte for byte.
     adaptSnapshot(response) {
       return flatRules(response).filter(this.isRule).map(r => withGroup(this.read(r), r)).filter(r => r.expr);
     },
@@ -2432,18 +2742,24 @@ export const PROBES = [
         // the alerting state and activeAt (Prometheus nests activeAt per
         // active alert instance; take the first). Never enters the spec.
         ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
+        // A Grafana ruler's rule: what it states beyond the spec, and its folder uid (the folder scope).
+        ...(r.grafana && typeof r.grafana === 'object' ? { grafana: r.grafana } : {}),
+        ...(r.grafana && typeof r.folderUid === 'string' && r.folderUid ? { folderUid: r.folderUid } : {}),
       };
     },
+    // Every read — a draft's as a snapshot's — reads Grafana-managed rules in
+    // the provisioning and ruler shapes and keeps each rule's group beside it
+    // (the rule-group scope). The canonical never carries the group.
     adapt(response) {
-      const listing = flatRules(response);
-      return readAlertRules(listing.filter(this.isRule), this.read, listing);
+      return this.adaptSnapshot(response);
     },
-    // A snapshot also reads Grafana-managed rules in the provisioning shape
-    // (D9) and keeps each rule's group beside it (the rule-group scope).
     adaptSnapshot(response) {
       if (provisionedRuleList(response)) return adaptProvisionedAlertRules(response);
       const listing = flatRules(response);
-      return readAlertRules(listing.filter(this.isRule), r => withGroup(this.read(r), r), listing);
+      const listed = listing.filter(this.isRule);
+      const read = readAlertRules(listed, r => withGroup(this.read(r), r), listing);
+      read.forEach((rule, i) => { const facts = listedFactsOf(listed[i]); if (facts) LISTED_FACTS.set(rule, facts); });
+      return read;
     },
   },
   {
@@ -2466,6 +2782,17 @@ export const PROBES = [
     // registry (tools/lib/contracts/mcp-capabilities.mjs).
     candidates: probeCandidates('scrape_configs'),
     target: 'spec.telemetry.scrape_evidence',   // annotation-only; no schema field
+    // A Prometheus error envelope ({ status: 'error', errorType, error })
+    // answered as the tool's content is no answer — it would adapt to [] and
+    // read as an honest zero. Its errorType is the Prometheus API's own answer
+    // for a status: one the capability row says means "not served"
+    // (unsupportedOnHttpStatus) makes the family unsupported, like the status.
+    answers: (response) => !isErrorEnvelope(response),
+    unanswered: (response) => `the targets answer is an error envelope (errorType ${typeof response?.errorType === 'string' && response.errorType ? response.errorType : 'unknown'})`,
+    notServedAnswer: (response, statuses) => {
+      const code = PROMETHEUS_ERROR_TYPE_STATUS[response?.errorType];
+      return code && statuses.includes(code) ? `errorType ${response.errorType} (HTTP ${code} ${HTTP_REASON_PHRASES[code]})` : null;
+    },
     adapt: (response) => {
       // otel-mcp-server's metrics_targets returns:
       //   { activeTargets: <number>, targets: [{ job, instance, health, lastScrape, lastError }] }
@@ -2506,11 +2833,16 @@ export const PROBES = [
     // The running Alertmanager configuration, carried by its status answer.
     candidates: probeCandidates('alerting_routes'),
     target: 'spec.alerting.routes',
-    // An answer WITHOUT a configuration (a tier that trims it) says
-    // nothing about routes: it is not "zero routes", so it must not count
-    // as an answer for this family.
+    // An answer WITHOUT a configuration text this reader reads says nothing
+    // about routes: it is not "zero routes", so it must not count as an
+    // answer for this family. Why it is none: alertmanagerStatusGap.
     answers: (response) => alertmanagerConfigText(response) !== null,
-    unanswered: 'the Alertmanager status carries no configuration',
+    unanswered: (response) => alertmanagerStatusGap(response).why,
+    // Only a status object with no `config` key at all is a tier that trims
+    // it: the routes are not served here — the family is unsupported, never
+    // failed. An error, an envelope, an empty configuration or one in a shape
+    // this reader does not read is a failure (A16, narrowed).
+    notServedAnswer: (response) => (alertmanagerStatusGap(response).trimmed ? 'the Alertmanager status carries no configuration' : null),
     adapt: (response) => routesFromLiveAlertmanager(alertmanagerConfigText(response)),
   },
   {
@@ -2549,17 +2881,87 @@ const STAGE_OF_PROBE = Object.freeze({
   scrape_configs: 'scrape_targets', alerting_routes: 'alerting_routes', metric_names: 'metric_names',
 });
 
-// The timed half of the exclude-pattern rule over a normalized scope's
-// `metricExclude` (normalizeScope ran the static half): one sentence per
-// pattern that crawls over an adversarial 256-character name, in the shape of
-// normalizeScope's own errors (`scope.metricExclude[i] "…" is …`), so the
-// server's start route and its configured-scope reader refuse it the same way
-// as any other bad scope value, before a job starts.
-export function timedExcludeErrors(patterns) {
+// Why the exclude-pattern rule refuses `pattern`, or null: the static half
+// (live-fetch.mjs excludeProblem — the work bound, a backreference) before
+// anything is timed, since a pattern past the bound has no bound to time
+// within; then the timed half, on names built from the pattern itself
+// (live-fetch.mjs excludeProbes) beside the four adversarial ids, so a pattern
+// that opens with a literal no id carries is timed doing its work, not nothing.
+// The timed half times the pattern itself, compiled and warmed first (V8 runs a pattern's first test in
+// its interpreter, about ten times slower than the native code a second test gets), over all its names
+// in one pass: within EXCLUDE_TIME_MS on the smaller of the wall clock and the CPU time plus its tick
+// (artefact-classify's id clocks), a pass over it but within twice it timed again, up to twice. A pass
+// stops at the first name after which the pattern has spent EXCLUDE_STOP_MS on both clocks (refused: the
+// names left would only hold the server's thread longer), or once the call's shared budget is spent.
+//
+// One budget per call (`budget`, a plain object the first pattern starts): a scope holds up to 32
+// patterns, a PATCH many environments' worth, so the call stops timing once it has spent
+// EXCLUDE_BUDGET_MS on both clocks — a pattern left untimed is refused as new input and not applied
+// from a stored scope, with its own sentence. Verdicts that say something about the pattern alone (the
+// static half's, and an acceptance) are remembered for the process (EXCLUDE_VERDICTS, bounded), so a
+// stored scope is not timed again on every Run; a timed refusal is not, so a loaded machine's slow pass
+// is tried again next time.
+const EXCLUDE_TIMED_OUT = 'is too slow to match (testing it on 256-character names took more than 50 ms)';
+const EXCLUDE_UNTIMED = 'was not timed (the scope\'s exclude patterns took more than 1 s to test together: send fewer, or simpler)';
+const EXCLUDE_TIME_MS = 50;
+const EXCLUDE_RETIMES = 2;
+const EXCLUDE_STOP_MS = 200;
+const EXCLUDE_BUDGET_MS = 1000;
+const EXCLUDE_SLACK_MS = process.platform === 'win32' ? 15.625 + 1 : 0;
+const EXCLUDE_VERDICTS_MAX = 512;
+const EXCLUDE_VERDICTS = new Map();
+const cpuNowMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+const budgetStarted = (budget) => {
+  if (budget && budget.wall0 === undefined) { budget.wall0 = performance.now(); budget.cpu0 = cpuNowMs(); }
+  return budget;
+};
+const budgetSpent = (budget) => !!budget && budget.wall0 !== undefined
+  && performance.now() - budget.wall0 > EXCLUDE_BUDGET_MS && cpuNowMs() - budget.cpu0 > EXCLUDE_BUDGET_MS;
+const remembered = (pattern, verdict) => {
+  if (EXCLUDE_VERDICTS.size >= EXCLUDE_VERDICTS_MAX) EXCLUDE_VERDICTS.delete(EXCLUDE_VERDICTS.keys().next().value);
+  EXCLUDE_VERDICTS.set(pattern, verdict);
+  return verdict;
+};
+// One timed pass of `re` over `ids` → { ms, stopped: null | 'slow' | 'budget' }.
+function excludePass(re, ids, budget) {
+  const wall0 = performance.now();
+  const cpu0 = cpuNowMs();
+  for (const id of ids) {
+    re.test(id);
+    if (performance.now() - wall0 > EXCLUDE_STOP_MS && cpuNowMs() - cpu0 > EXCLUDE_STOP_MS) return { ms: Infinity, stopped: 'slow' };
+    if (budgetSpent(budget)) return { ms: Infinity, stopped: 'budget' };
+  }
+  return { ms: Math.min(performance.now() - wall0, cpuNowMs() - cpu0 + EXCLUDE_SLACK_MS), stopped: null };
+}
+function excludeRefusal(pattern, budget = null) {
+  if (EXCLUDE_VERDICTS.has(pattern)) return EXCLUDE_VERDICTS.get(pattern);
+  const problem = excludeProblem(pattern);
+  if (problem) return remembered(pattern, problem);
+  budgetStarted(budget);
+  if (budgetSpent(budget)) return EXCLUDE_UNTIMED;
+  const ids = excludeProbes(pattern);
+  const re = new RegExp(pattern);
+  re.test('');   // compiled to native code before any name is timed
+  let pass = excludePass(re, ids, budget);
+  for (let k = 0; pass.stopped === null && pass.ms > EXCLUDE_TIME_MS && pass.ms <= 2 * EXCLUDE_TIME_MS && k < EXCLUDE_RETIMES; k += 1) {
+    pass = excludePass(re, ids, budget);
+  }
+  if (pass.stopped === 'budget') return EXCLUDE_UNTIMED;
+  if (pass.stopped === 'slow' || pass.ms > EXCLUDE_TIME_MS) return EXCLUDE_TIMED_OUT;
+  return remembered(pattern, null);
+}
+
+// The exclude-pattern rule over a normalized scope's `metricExclude`: one
+// sentence per pattern it refuses, in the shape of normalizeScope's own errors
+// (`scope.metricExclude[i] "…" …`), so the server's start route, the scope
+// check, PATCH and its configured-scope reader refuse it the same way as any
+// other bad scope value, before a job starts. `budget`: one plain object shared by every call that answers
+// one request (a PATCH's environments), so the request as a whole stops timing at EXCLUDE_BUDGET_MS.
+export function timedExcludeErrors(patterns, { budget = {} } = {}) {
   const errors = [];
   (Array.isArray(patterns) ? patterns : []).forEach((pattern, i) => {
-    if (compileBoundedPattern(pattern).re) return;
-    errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} is too slow to match (it crawls over a 256-character name)`);
+    const why = excludeRefusal(pattern, budget);
+    if (why) errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} ${why}`);
   });
   return errors;
 }
@@ -2586,8 +2988,9 @@ export function timedExcludeErrors(patterns) {
 //     group only when every rule names one; a datasource uid no advertised
 //     tool takes is named as a gap;
 //   - every advertised alert-rule engine is read and the rules unioned by
-//     name (the first engine wins a clash; each rule's `observedBy` names
-//     what its tool attests);
+//     store (unionAlertRules: Grafana's rules by uid, a ruler's by name; the
+//     first engine of a store wins a clash; each rule's `observedBy` names
+//     its store) — a draft reads them so too;
 //   - a dashboard's id is the crawler's rule (snapshotDashboardId);
 //   - the answer gains `snapshot: { scope, gaps, learned, counts }`, which
 //     buildSnapshotPack reads.
@@ -2597,8 +3000,22 @@ export function timedExcludeErrors(patterns) {
 // changes nothing. `signal` aborts requests in flight and is checked at stage
 // boundaries and in the dashboard loop: an aborted fetch rejects with the
 // signal's reason (an AbortError).
+// `probeMemory` — `{ unsupported?: { <family>: { reason, since, tools } },
+// answered?: { <family>: { tools, at, anyTool? } } }`, the caller's memory of
+// this endpoint (P6; tools/lib/journey.mjs probeMemoryOf reads it from the
+// journey's run records). Every family is asked on every read and its answer
+// alone decides: data, an honest empty, a refusal, a failure, or the
+// not-served answer — a not-served family that now answers a 503 or a
+// timeout is a failure like any other (a remembered "not served" never
+// absorbs an outage); `unsupported` only keeps the instant a not-served
+// answer was first given (`since`). `answered` names the tools the records
+// saw answer each family (data or an honest empty; `anyTool` for a record
+// that did not say which): such a tool's not-served answer now is no "not
+// served" — the store served the family, so its 400 / 404 / 405 or trimmed
+// status is a lost route or a changed datasource — but a failure that says
+// so (E2). The library keeps nothing between reads.
 export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport(),
-  mode = 'draft', scope = null, onStage = null, signal = null } = {}) {
+  mode = 'draft', scope = null, onStage = null, signal = null, probeMemory = null } = {}) {
   // The hook is resolved before anything touches the wire — a load failure
   // is a hard failure here, never inside a swallowing wrapper below.
   const t = await transport;
@@ -2607,25 +3024,33 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const snapshot = mode === 'snapshot';
   let snapScope = null;
   // The exclude patterns, compiled once through the repository's bounded-regex
-  // rule (the timed half: a pattern that crawls over an adversarial name is
-  // refused here, like any other bad scope value — normalizeScope checked the
-  // static half, and that module imports nothing). The server runs the same
-  // check before it answers a start, so this is the backstop.
+  // rule. New input was refused before a job started (the server runs the same
+  // rule on a start, the scope check and PATCH); a scope that reaches the fetch
+  // was stored — a saved check's, an environment's — and may hold a pattern
+  // saved before its work was bounded. Such a pattern is not applied: the read
+  // goes on without it, the metric stage says which and why, and so does the
+  // pack's observogram.live.scope (`notApplied`).
   const excludeMatchers = [];
+  const excludesNotApplied = [];
   // A draft takes a scope too (a scoped draft — the Services Run's live read of
   // one service): every family the scope narrows is narrowed exactly as a
   // snapshot narrows it, and everything else a draft reads (the stack signals,
   // the chaos feed, the vantage rule) stays as it is. A draft with no scope, or
   // an empty one, reads as it always did: `snapScope` stays null.
-  const draftScope = !snapshot && scope != null ? normalizeScope(scope) : null;
+  const draftScope = !snapshot && scope != null ? normalizeScope(scope, { stored: true }) : null;
   if (draftScope?.errors.length) throw new TypeError(`fetchMcp: ${draftScope.errors.join('; ')}`);
   if (snapshot || (draftScope && !scopeIsEmpty(draftScope.scope))) {
-    const normalized = draftScope || normalizeScope(scope);
+    const normalized = draftScope || normalizeScope(scope, { stored: true });
     if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
-    snapScope = normalized.scope;
-    const slow = timedExcludeErrors(snapScope.metricExclude);
-    if (slow.length) throw new TypeError(`fetchMcp: ${slow.join('; ')}`);
-    for (const pattern of snapScope.metricExclude) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
+    const applying = [];
+    const budget = {};
+    for (const pattern of normalized.scope.metricExclude) {
+      const why = excludeRefusal(pattern, budget);
+      if (why) excludesNotApplied.push(`exclude pattern ${JSON.stringify(pattern)} not applied — it ${why}`);
+      else applying.push(pattern);
+    }
+    snapScope = { ...normalized.scope, metricExclude: applying };
+    for (const pattern of applying) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
   }
   const stageLabel = new Map(stagesFor(mode).map(st => [st.id, st]));
   const report = (stage, state, { counts = null, message = null, gap = null } = {}) => {
@@ -2669,6 +3094,25 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // succeed (input validation, network, etc.) — distinct from the
   // top-level `errors` map which is for the core tools.
   const probeFailures = {};
+  // The caller's memory of a family this endpoint answered it does not serve
+  // (see the header), validated: { reason, since, tools } or null.
+  const memoryOf = (family) => {
+    const e = probeMemory?.unsupported?.[family];
+    if (!e || typeof e !== 'object' || typeof e.reason !== 'string' || !e.reason) return null;
+    const tools = Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [];
+    if (!tools.length) return null;
+    return { reason: e.reason, since: typeof e.since === 'string' && e.since ? e.since : null, tools };
+  };
+  // The caller's memory of the tools that answered a family (see the header),
+  // validated: { tools, at, anyTool } or null.
+  const answeredOf = (family) => {
+    const e = probeMemory?.answered?.[family];
+    if (!e || typeof e !== 'object') return null;
+    const tools = Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [];
+    const anyTool = e.anyTool === true;
+    if (!tools.length && !anyTool) return null;
+    return { tools, at: typeof e.at === 'string' && e.at ? e.at : null, anyTool };
+  };
 
   // Single retry on transient 5xx — upstream observability backends
   // (VictoriaMetrics, Grafana, Jaeger, …) occasionally drop a request
@@ -2868,8 +3312,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     dashCounts.kept = kept.length;
     return kept;
   };
-  // Rules are read as a snapshot reads them (every engine, their group and folder) only where the
-  // scope can narrow them: a snapshot, or a scoped draft with folders or rule groups.
+  // A scope narrows the rule families where it can (a snapshot, or a scoped draft with folders or
+  // rule groups); every read keeps each rule's group, and the alert rules go through the union.
   const rulesScoped = snapshot || folders.length > 0 || groups.length > 0;
   const adaptFor = (probe, response) => (snapScope && probe.name === 'dashboards'
     ? scopedSearchItems(response).map((d) => (snapshot ? dashboardFromSearchItem(d, snapshotDashboardId) : dashboardFromSearchItem(d)))
@@ -2883,6 +3327,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const probeGap = (name) => {
     const stage = STAGE_OF_PROBE[name];
     const r = probeResults[name];
+    if (r?.outcome === 'unsupported' && r.notServed) {
+      return { state: 'skipped', gap: gapOf(stage, name, notServedText(stageNoun(stageLabel.get(stage)), { ...r.notServed, reason: trimError(r.notServed.reason) })) };
+    }
     if (r?.outcome === 'unsupported') return { state: 'skipped', gap: gapOf(stage, name, offersNo(stage)) };
     if (r?.outcome === 'failed') {
       const why = probeFailureText(r.attempted, probeFailures);
@@ -2918,28 +3365,170 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const engineOf = (name) => productAttestedByTool(name) || name;
   const pushedDown = [];        // the engines whose rules came per folder, in the end
   const unionNotes = [];        // what the union had to do about it, for the gate log
-  // A snapshot reads EVERY advertised alert-rule engine and unions the rules
-  // by name: the first engine's rules as it lists them, then each later
-  // engine's rules whose name no earlier engine holds. Each rule names what
-  // its tool attests (`observedBy`; buildCanonicalPack reads the engine from
-  // it). An engine whose answer holds no rule contributes nothing.
+  // Every read — a snapshot's and a draft's — asks EVERY advertised alert-rule
+  // engine and unions the rules: the first engine's rules as it lists them,
+  // then each later engine's rules that no earlier engine of the SAME STORE
+  // holds. Two stores keep their own rules: Grafana's alert rules (a tool that
+  // attests `grafana`, or whose answer is Grafana-managed rules — the
+  // provisioning or ruler shape) and a Prometheus-compatible ruler (vmalert,
+  // Prometheus, Mimir, …): a Grafana-managed rule is never dropped because a
+  // ruler holds a rule of its title. Within Grafana's store a rule is held by
+  // its uid, within a ruler by its name. Each rule names what its store attests
+  // (`observedBy`; buildCanonicalPack reads the engine from it). An engine
+  // whose answer holds no rule contributes nothing. Without tools/list every
+  // candidate would be called on every read: then each store stops at its
+  // first answer with rules, and the Alertmanager's firing alerts are asked
+  // only when no store had any.
   //
   // An engine asked per folder is read whole or not at all. Its folder
   // answers stand only when every folder answered and every rule came from
   // the folder asked for; a folder that got no answer, or a tool that ignored
   // the argument, makes the engine read whole instead (the argless call it
-  // always got), and the folder scope then applies client-side as before. And
+  // always got) — and that read is what the engine is judged by, never a
+  // folder's answer — and the folder scope then applies client-side as before. And
   // when another engine's rules name no folder — so the folder scope cannot
   // narrow the family — a per-folder engine is read whole too: the pack never
   // holds half an engine under an annotation that says the family was whole.
+  //
+  // A read refused or failed (C6): when no engine answered with rules and one
+  // was refused or errored, the family FAILED — an empty answer from another
+  // engine is no honest zero beside a hole nobody can size — and a refusal is
+  // kept as one (`refused`). When one answered with rules beside an engine that
+  // was refused or errored, the rules stand; when that engine's store is a hole
+  // — no other engine of it answered, or it was refused and none answered with
+  // rules (each store read as the cascade reads one family's candidates) — the
+  // error is kept (`partial`, written as mcp.probeErrors.alert_rules) and the
+  // family is listed in mcp.probesPartial; a tool failing beside another that
+  // read its store is no hole. An engine whose store answered it keeps no such
+  // thing (the family's unsupportedOnHttpStatus, 400 / 404 / 405 — the
+  // cascade's rule, notServedStatus) is neither, unless the journey's records
+  // saw that tool answer the family (probeMemory's `answered`: then it is a
+  // failure that says so); a remembered "not served" never absorbs a later
+  // error. When every engine asked was not served, the family is
+  // unsupported. An answer in no alert-rule shape this
+  // reader knows, or one listing rules without their expressions, is no answer
+  // either. The Alertmanager candidate lists firing alerts, not declarations:
+  // never a failure of the family. What a store could not read rides on the
+  // result as `unread` ({ grafana?, ruler?, loki? }: why), so a declared rule
+  // of that store is not checked rather than "declared, not live". One
+  // Grafana-managed rule two tools list is one rule (withoutGrafanaCopies).
   const unionAlertRules = async (probe, candidates) => {
     const attempted = [];
-    const perEngine = [];   // { name, adapted, perFolder }
-    // The snapshot's reading of one answer, or null (no answer, or not a list).
-    const adaptedOf = (response) => {
+    const perEngine = [];   // { name, adapted, perFolder, store }
+    const failedEngines = [];   // engines (never the Alertmanager's evidence) that gave no usable answer
+    const listedTools = discoveredToolNames.size > 0;
+    const evidenceOnly = (name) => productAttestedByTool(name) === 'alertmanager';
+    // The store a tool's rules belong to: by what its answer is first, then by what it attests.
+    const storeOf = (name, adapted = []) => (evidenceOnly(name) ? 'evidence' : adapted.some(r => r?.grafana) || productAttestedByTool(name) === 'grafana' ? 'grafana' : 'ruler');
+    // An error that only says the tool is not there (tools/list was not read): not offered, never a failure.
+    const notThere = (name) => !listedTools && /unknown tool|tool not found|no such tool|method not found|-32601/i.test(String(probeFailures[name] || ''));
+    // An engine that gave no answer, read by the cascade's own rules (C6, P6): refused (401/403,
+    // isProbeRefusal) is a refusal, kept as such; a store that answered it keeps no such thing (the
+    // family's unsupportedOnHttpStatus, notServedStatus) is not served — neither an answer nor a
+    // failure, so it never makes the read partial; any other error is a failure. The Alertmanager's
+    // evidence and a tool that is not there are none of them.
+    const notServedCodes = notServedStatusesOf(probe.name);
+    const notServedEngines = [];   // { name, store, reason }
+    // The journey's memory (P6, probeMemory), read as the cascade reads it. An engine remembered as
+    // not served is asked again and its answer alone decides: a 503 or a timeout now is a failure (a
+    // remembered "not served" never absorbs an outage), and the memory keeps only the instant the
+    // not-served answer was first given (`since`). An engine the journey's records saw answer this
+    // family by name (`answered`, E2) reads a store that serves it: its 400 / 404 / 405 now is a lost
+    // route or a changed datasource, a failure that says so, never "not served". A record that did
+    // not say which tool answered (`anyTool`) counts for no engine here: the union reads several
+    // stores, and such a record cannot say which of them served.
+    const memo = notServedCodes.length ? memoryOf(probe.name) : null;
+    const answered = notServedCodes.length ? answeredOf(probe.name) : null;
+    const gaveNoAnswer = (name, store) => {
+      const why = probeFailures[name];
+      if (evidenceOnly(name) || notThere(name) || !why) return;
+      const refused = isProbeRefusal(why);
+      const code = notServedStatus(why, notServedCodes);
+      if (code !== null && !answered?.tools.includes(name)) {
+        notServedEngines.push({ name, store, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
+        return;
+      }
+      if (code !== null && !why.startsWith(`${name}: it answered `)) {
+        const bare = why.startsWith(`${name}: `) ? why.slice(name.length + 2) : why;
+        probeFailures[name] = `${name}: it answered ${answered.at ? `on ${answered.at.slice(0, 10)}` : 'before'}; now ${bare}`;
+      }
+      failedEngines.push({ name, store, refused });
+    };
+    // The reading of one answer, or null (no answer, or none this reader can use; the reason kept).
+    const adaptedOf = (response, name) => {
       if (response == null) return null;
-      try { const adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); return Array.isArray(adapted) ? adapted : null; }
-      catch { return null; }
+      const known = Array.isArray(response) || (response && typeof response === 'object'
+        && (Object.keys(response).length === 0 || Array.isArray(response.rules) || response.rules === null
+          || Array.isArray(response.groups) || Array.isArray(response.data) || Array.isArray(response.data?.groups) || isRulerShape(response)));
+      if (!known && !evidenceOnly(name)) {
+        if (!probeFailures[name]) probeFailures[name] = 'the answer is in no alert-rule listing shape this reader knows';
+        return null;
+      }
+      let adapted;
+      try { adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); } catch { return null; }
+      if (!Array.isArray(adapted)) return null;
+      if (adapted.length && !adapted.some(r => typeof r?.expr === 'string' && r.expr.trim()) && !evidenceOnly(name)) {
+        if (!probeFailures[name]) probeFailures[name] = 'the answer lists alert rules without their expressions';
+        return null;
+      }
+      return adapted;
+    };
+    // One Grafana-managed rule read by two tools is one rule. A copy that names no Grafana uid of its
+    // own reading — a listing of names and queries, as Grafana's Prometheus-compatible one is (`query`,
+    // `duration`, the group; no `data[]`) — is the rule another tool read with its uid when the listing
+    // states that uid beside it (LISTED_FACTS), or else when every term both readings state is the
+    // same: the name, the query, the wait, the labels (those the listing shows) and the group — and the
+    // folder the listing's group names does not contradict the rule's (a ruler's rule file is no
+    // Grafana folder). Never by name alone: a ruler's rule of the same title is another rule, and a
+    // tool that attests another product (vmalert, Mimir) never lists Grafana's. The copy with the uid
+    // stays — it states the condition, so a threshold raised in Grafana reads drifted, and it pairs a
+    // rename — and each held rule takes one copy of a tool. A tool every rule of which was such a copy
+    // read Grafana's store, not a ruler's (`listedGrafanaOnly`). `rules` carry `_store`, `_engine` (the
+    // perEngine entry) and `_listed` (the listing's facts) here.
+    const withoutGrafanaCopies = (rules) => {
+      const uidOf = (r) => (typeof r?.grafana?.uid === 'string' && r.grafana.uid ? r.grafana.uid : null);
+      const held = rules.filter(r => r._store === 'grafana' && uidOf(r));
+      if (!held.length) return rules;
+      // A held rule's folder: its uid, and its title as it or another held rule of that folder states it.
+      const titleByUid = new Map();
+      for (const h of held) if (h.grafana.folderUid && h.grafana.folder && !titleByUid.has(h.grafana.folderUid)) titleByUid.set(h.grafana.folderUid, h.grafana.folder);
+      const folderOf = (h) => {
+        const uid = h.grafana.folderUid ?? (typeof h.folderUid === 'string' && h.folderUid ? h.folderUid : null);
+        return { uid, title: h.grafana.folder ?? (uid ? titleByUid.get(uid) : null) ?? null };
+      };
+      const termsOf = (r) => {
+        const read = operationalAlertRule(r);
+        return read && { name: read.name, expr: read.expr.replace(/\s+/g, ' ').trim(), for: read.for ?? null, labels: read.labels ?? {} };
+      };
+      const isCopyOf = (copy, rule) => {
+        const listed = copy._listed || {};
+        if (listed.uid) return listed.uid === uidOf(rule);
+        const a = termsOf(copy);
+        const b = termsOf(rule);
+        if (!a || !b || a.name !== b.name || a.expr !== b.expr || a.for !== b.for) return false;
+        if (typeof copy.group !== 'string' || copy.group !== rule.group) return false;
+        const folder = folderOf(rule);
+        if (listed.folderUid && folder.uid && listed.folderUid !== folder.uid) return false;
+        if (listed.folder && folder.title && listed.folder !== folder.title) return false;
+        const keys = Array.isArray(copy.labelsObserved) ? copy.labelsObserved : [...new Set([...Object.keys(a.labels), ...Object.keys(b.labels)])];
+        return keys.every(k => a.labels[k] === b.labels[k]);
+      };
+      const copies = new Set();
+      for (const e of perEngine) {
+        const attests = productAttestedByTool(e.name);
+        if (attests && attests !== 'grafana') continue;
+        const mine = rules.filter(r => r._engine === e && !uidOf(r));
+        const taken = new Set();
+        for (const copy of mine) {
+          const rule = held.find(h => h._engine !== e && !taken.has(h) && isCopyOf(copy, h));
+          if (rule) { taken.add(rule); copies.add(copy); }
+        }
+        if (e.store === 'ruler' && mine.length && mine.length === e.adapted.filter(Boolean).length && mine.every(c => copies.has(c))) {
+          e.store = 'grafana';
+          e.listedGrafanaOnly = true;
+        }
+      }
+      return copies.size ? rules.filter(r => !copies.has(r)) : rules;
     };
     // Unscoped, the loop awaits exactly one call per candidate, as it always
     // did: the probes race under Promise.all and the pack records the order
@@ -2947,6 +3536,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // golden pins.
     for (const candidate of candidates) {
       const name = candName(candidate);
+      if (!listedTools) {
+        // The store this candidate is presumed to read before it answers: the Alertmanager's evidence waits for every store.
+        const presumed = evidenceOnly(name) ? null : storeOf(name);
+        if (perEngine.some(e => (presumed === null || e.store === presumed) && e.adapted.length > 0)) continue;
+      }
       attempted.push(name);
       const calls = ruleFolderCalls(candidate);
       let adapted = null;
@@ -2955,19 +3549,25 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       if (calls) {
         const all = [];
         for (const { uid, args } of calls) {
-          const one = adaptedOf(await cachedCall(name, args));
+          const one = adaptedOf(await cachedCall(name, args), name);
           if (!one) { why = `gave no answer for folder ${uid}`; break; }
           if (one.some(r => r?.folderUid !== uid)) { why = 'answered rules outside the folder asked for'; break; }
           all.push(...one);
         }
         if (!why) { adapted = all; perFolder = true; }
+        // The whole read decides now: what a folder answered (a folder the store does not know, 404)
+        // says nothing of whether the store has a rules API, so the engine is not judged by it.
+        else delete probeFailures[name];
       }
       if (!adapted) {
-        adapted = adaptedOf(await cachedCall(name, candArgs(candidate)));
+        adapted = adaptedOf(await cachedCall(name, candArgs(candidate)), name);
         if (adapted && why) unionNotes.push(`${engineOf(name)} ${why}, so it was read whole instead`);
       }
-      if (!adapted) continue;
-      perEngine.push({ name, adapted, perFolder });
+      if (!adapted) {
+        gaveNoAnswer(name, storeOf(name));
+        continue;
+      }
+      perEngine.push({ name, adapted, perFolder, store: storeOf(name, adapted) });
     }
     // Whole, or not at all: a per-folder engine beside one that names no folder
     // is re-read whole, and left out when that read fails — never half an
@@ -2976,33 +3576,86 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     if (union.length && !union.every(r => typeof r?.folderUid === 'string' && r.folderUid !== '')) {
       for (const e of [...perEngine]) {
         if (!e.perFolder) continue;
-        const whole = adaptedOf(await cachedCall(e.name, candArgs(candidates.find(c => candName(c) === e.name))));
+        const whole = adaptedOf(await cachedCall(e.name, candArgs(candidates.find(c => candName(c) === e.name))), e.name);
         if (whole) { e.adapted = whole; e.perFolder = false; unionNotes.push(`${engineOf(e.name)} was read whole, since another engine names no folder`); } else {
           perEngine.splice(perEngine.indexOf(e), 1);
+          failedEngines.push({ name: e.name, store: e.store, refused: isProbeRefusal(probeFailures[e.name]) });
           unionNotes.push(`${engineOf(e.name)} gave no answer when read whole beside an engine that names no folder, so its rules were left out`);
         }
       }
     }
     pushedDown.push(...perEngine.filter(e => e.perFolder).map(e => engineOf(e.name)));
-    const rules = [];
+    let rules = [];
     const engines = [];
     let listed = 0;
+    const heldKey = (store, r) => `${store}\u0000${store === 'grafana' && typeof r?.grafana?.uid === 'string' && r.grafana.uid ? `uid:${r.grafana.uid}` : r?.name}`;
     for (const e of perEngine) {
       if (e.adapted.length === 0) continue;
       listed += e.adapted.length;
-      const held = new Set(rules.map(r => r.name));
-      const observedBy = productAttestedByTool(e.name);
-      for (const r of e.adapted) if (r && !held.has(r.name)) rules.push({ ...r, observedBy });
+      const held = new Set(rules.map(r => heldKey(r._store, r)));
+      const observedBy = e.store === 'grafana' ? 'grafana' : productAttestedByTool(e.name);
+      for (const r of e.adapted) if (r && !held.has(heldKey(e.store, r))) rules.push({ ...r, observedBy, _store: e.store, _engine: e, _listed: LISTED_FACTS.get(r) ?? null });
       engines.push(e.name);
     }
+    rules = withoutGrafanaCopies(rules);
+    for (const r of rules) { delete r._store; delete r._engine; delete r._listed; }
+    // Each store as the cascade reads one family's candidates (C6): its rules stand when an engine
+    // answered it with rules, whatever another of its engines did — that one's failure is no hole (two
+    // tools of one store read one store, as `unread` below has it); with none, a refusal is a hole
+    // nobody can size (an honest zero needs a read that was allowed), an honest empty from another of
+    // its engines answers for it otherwise, and a store none of whose engines answered is a hole when
+    // one of them failed. The family is read in part (`partial`) only for a hole beside rules.
+    const storeRead = (store) => {
+      const answered = perEngine.filter(e => e.store === store);
+      const failed = failedEngines.filter(e => e.store === store);
+      if (answered.some(e => e.adapted.length > 0)) return 'rules';
+      if (failed.length && (failed.some(e => e.refused) || !answered.length)) return 'hole';
+      return answered.length ? 'empty' : 'unread';
+    };
+    const holes = failedEngines.filter(e => storeRead(e.store) === 'hole');
+    const failedText = holes.length ? probeFailureText(holes.map(e => e.name), probeFailures) : null;
     if (engines.length) {
-      probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data' };
+      probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data', ...(failedText ? { partial: failedText } : {}) };
       observedAt[probe.name] = new Date().toISOString();
-    } else if (perEngine.length) {
+    } else if (perEngine.length && !failedEngines.length) {
       probeResults[probe.name] = { tool: perEngine[0].name, attempted, adapted: [], rawSize: 2, outcome: 'empty' };
       observedAt[probe.name] = new Date().toISOString();
+    } else if (!perEngine.length && !failedEngines.length && notServedEngines.length) {
+      // P6, as the cascade has it: every engine asked answered that its store keeps no such rules —
+      // unsupported here, never failed (`since` the first time the journey saw it).
+      const tools = [...new Set(notServedEngines.map(e => e.name))];
+      probeResults[probe.name] = {
+        tool: null, attempted, adapted: null, outcome: 'unsupported',
+        notServed: { reason: notServedEngines[0].reason, since: memo?.since ?? new Date().toISOString(), tools },
+      };
     } else {
-      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed' };
+      // C6: no engine with rules beside a refused or failed one — a hole nobody can size. A refusal
+      // stays one (`refused`: the firing-alerts fallback reads it, as it does the cascade's).
+      const refused = [...new Set(failedEngines.filter(e => e.refused).map(e => e.name))];
+      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed', ...(refused.length ? { refused } : {}) };
+    }
+    // What a store could not read while the family answered: a declared rule of that store is not checked.
+    if (perEngine.length && probeResults[probe.name].outcome !== 'failed') {
+      const unread = {};
+      for (const [store, what, tool] of [
+        ['grafana', 'Grafana-managed rules', 'Grafana alert-rule tool'],
+        ['ruler', 'rules a Prometheus-compatible ruler evaluates', 'Prometheus-compatible rule tools'],
+      ]) {
+        const read = storeRead(store);
+        if (read === 'rules' || read === 'empty') continue;
+        const failed = failedEngines.filter(e => e.store === store).map(e => e.name);
+        const notServed = notServedEngines.filter(e => e.store === store);
+        const grafanaOnly = store === 'ruler' ? perEngine.filter(e => e.listedGrafanaOnly).map(e => e.name) : [];
+        const offered = probe.candidates.some(c => storeOf(candName(c)) === store && (!listedTools || discoveredToolNames.has(candName(c))));
+        // A not-served engine's reason is its tool and status (P6), never the answer's text.
+        unread[store] = failed.length
+          ? `the ${tool} got no answer: ${probeFailureText(failed, probeFailures)}, so ${what} were not read`
+          : notServed.length ? `the ${tool} answered that its store serves none here (${[...new Set(notServed.map(e => trimError(e.reason)))].join(PROBE_FAILURE_SEPARATOR)}), so ${what} were not read`
+            : grafanaOnly.length ? `the ${tool} listed Grafana-managed rules only (${grafanaOnly.join(', ')}), so ${what} were not read`
+              : !offered ? `this MCP offers no ${store === 'grafana' ? 'Grafana alert-rule tool' : 'Prometheus-compatible rule tool'}, so ${what} were not read`
+                : `no ${tool} answered, so ${what} were not read`;
+      }
+      probeResults[probe.name].unread = unread;
     }
     // Every rule the family holds came per folder: an engine that answered
     // whole with no rule at all narrows nothing and names nothing outside them.
@@ -3019,6 +3672,27 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // listing and Grafana-managed rules do; a flat `rules` listing does not) —
   // otherwise not applied, and said. The message joins what was not applied.
   const folderCount = () => `${folders.length} folder${folders.length === 1 ? '' : 's'} asked for`;
+  // The rule groups each rule family listed, before a rule-group scope narrowed
+  // them ({ group, folderUid?, folder?, alert, recording }, per folder uid and
+  // group): what a scope's rule groups are checked against (the studio's scope
+  // check reads mcp.discovered.rule_groups). On the way, the title of a scoped
+  // folder a Grafana ruler names (its answer is keyed by folder title).
+  const ruleGroupsListed = new Map();
+  const noteRuleGroups = (list, family) => {
+    for (const r of Array.isArray(list) ? list : []) {
+      const group = typeof r?.group === 'string' && r.group.trim() ? r.group.trim() : null;
+      const folderUid = typeof r?.folderUid === 'string' && r.folderUid ? r.folderUid
+        : typeof r?.grafana?.folderUid === 'string' && r.grafana.folderUid ? r.grafana.folderUid : null;
+      const title = typeof r?.grafana?.folder === 'string' && r.grafana.folder ? r.grafana.folder.slice(0, 100) : null;
+      if (folderUid && title && folders.includes(folderUid) && !folderTitles[folderUid]) folderTitles[folderUid] = title;
+      if (!group) continue;
+      const key = `${folderUid ?? ''}\u0000${group}`;
+      let entry = ruleGroupsListed.get(key);
+      if (!entry) { entry = { group, ...(folderUid ? { folderUid } : {}), alert: 0, recording: 0 }; ruleGroupsListed.set(key, entry); }
+      if (!entry.folder && title) entry.folder = title;
+      entry[family === 'alert_rule' ? 'alert' : 'recording'] += 1;
+    }
+  };
   const scopeRules = (name, family, { allPushedDown = false } = {}) => {
     const r = probeResults[name];
     const list = Array.isArray(r?.adapted) ? r.adapted : [];
@@ -3066,6 +3740,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     if (probe.name === 'alert_rules' || probe.name === 'scrape_configs' || probe.name === 'alerting_routes') {
       checkAbort();
       if (probe.name === 'alert_rules') {
+        noteRuleGroups(probeResults.alert_rules?.adapted, 'alert_rule');
         const union = unionResult;
         const listed = union ? union.listed : adaptedLength('alert_rules');
         alertRulesListed = listed;
@@ -3100,12 +3775,36 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     } else {
       candidates = probe.candidates.slice();
     }
-    if (rulesScoped && probe.name === 'alert_rules') {
+    if (probe.name === 'alert_rules') {
       // Per-call state rides on a local, never on the shared PROBES row.
       unionResult = await unionAlertRules(probe, candidates);
       return;
     }
     const attempted = [];
+    // Why candidates gave no answer (C6, P6): refused (401/403 — the read
+    // was not allowed), or answered that the store behind the tool keeps
+    // no such thing (the capability row's unsupportedOnHttpStatus, or the
+    // probe's own reading of an answer: notServedAnswer).
+    const refused = [];
+    const notServed = [];   // [{ tool, reason }]
+    const notServedCodes = notServedStatusesOf(probe.name);
+    const canNotServe = notServedCodes.length > 0 || typeof probe.notServedAnswer === 'function';
+    // E2: a tool the journey's records saw answer this family (data or an
+    // honest empty) reads a store that serves it — its not-served answer now
+    // is a lost route or a changed datasource: a failure that says so (its
+    // probe error: `<tool>: it answered on <day>; now <the answer>`), never
+    // "not served".
+    const answered = canNotServe ? answeredOf(probe.name) : null;
+    const notServedFrom = (tool, reason) => {
+      if (!answered || !(answered.anyTool || answered.tools.includes(tool))) {
+        notServed.push({ tool, reason });
+        return;
+      }
+      const said = probeFailures[tool] || reason;
+      if (said.startsWith(`${tool}: it answered `)) return;   // said so already (the same tool asked twice)
+      const bare = said.startsWith(`${tool}: `) ? said.slice(tool.length + 2) : said;
+      probeFailures[tool] = `${tool}: it answered ${answered.at ? `on ${answered.at.slice(0, 10)}` : 'before'}; now ${bare}`;
+    };
     // Remember the first candidate that responded with a non-null
     // result, even if that result was empty. If all candidates either
     // fail outright OR return empty, we fall back to reporting the
@@ -3117,11 +3816,22 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       const args = candArgs(candidate);
       attempted.push(name);
       const response = await cachedCall(name, args);
-      if (response == null) continue;          // tool errored or returned nothing
+      if (response == null) {                  // tool errored or returned nothing
+        const why = probeFailures[name];
+        if (isProbeRefusal(why)) refused.push(name);
+        else if (notServedCodes.length) {
+          const code = notServedStatus(why, notServedCodes);
+          if (code !== null) notServedFrom(name, `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}`);
+        }
+        continue;
+      }
       // A probe may say an answer does not speak to its question at all
       // (probe.answers): that is no answer, not an empty one.
       if (typeof probe.answers === 'function' && !probe.answers(response)) {
-        if (!probeFailures[name]) probeFailures[name] = probe.unanswered || 'the answer does not carry what this probe reads';
+        const unanswered = typeof probe.unanswered === 'function' ? probe.unanswered(response) : probe.unanswered;
+        if (!probeFailures[name]) probeFailures[name] = unanswered || 'the answer does not carry what this probe reads';
+        const served = typeof probe.notServedAnswer === 'function' ? probe.notServedAnswer(response, notServedCodes) : null;
+        if (served) notServedFrom(name, `${name}: ${served}`);
         continue;
       }
       let adapted;
@@ -3145,6 +3855,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         firstEmpty = { tool: name, adapted, rawSize: JSON.stringify(response).length };
       }
     }
+    // C6: a refused read leaves a hole nobody can size — no candidate
+    // answered with data, so the family FAILED, whatever an empty fallback
+    // said (an honest zero needs a read that was allowed); the refusal stays
+    // the probe error. Data from another candidate wins (returned above).
+    if (refused.length) {
+      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed', refused: [...new Set(refused)] };
+      return;
+    }
     if (firstEmpty) {
       probeResults[probe.name] = {
         tool: firstEmpty.tool,
@@ -3155,6 +3873,18 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       };
       // An honest zero is still an observation made at this instant.
       observedAt[probe.name] = new Date().toISOString();
+      return;
+    }
+    const asked = [...new Set(attempted)];
+    // P6: every candidate asked answered that the store behind it keeps no
+    // such thing — unsupported here, never failed; `since` carries the first
+    // time the journey saw it, `tools` what answered it. Anything else — a
+    // 503, a timeout, an error — is a failure, whatever the journey remembers.
+    if (canNotServe && notServed.length && asked.every((tool) => notServed.some((n) => n.tool === tool))) {
+      probeResults[probe.name] = {
+        tool: null, attempted, adapted: null, outcome: 'unsupported',
+        notServed: { reason: notServed[0].reason, since: memoryOf(probe.name)?.since ?? new Date().toISOString(), tools: asked },
+      };
       return;
     }
     probeResults[probe.name] = {
@@ -3179,7 +3909,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       // counted in the gate log.
       if (excludeMatchers.length) {
         const before = kept.length;
-        kept = kept.filter(n => !excludeMatchers.some(re => re.test(n)));
+        kept = kept.filter(n => !excludedBy(excludeMatchers, n));
         excluded = before - kept.length;
       }
       if (snapshot && kept.length > SNAPSHOT_LIMITS.metricNames) {
@@ -3199,6 +3929,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     if (snapScope?.datasourceUid) {
       const ds = `datasource uid "${snapScope.datasourceUid}" not applied — no advertised tool takes a datasource uid`;
       message = message ? `${ds}; ${message}` : ds;
+    }
+    if (excludesNotApplied.length) {
+      const na = excludesNotApplied.join('; ');
+      message = message ? `${na}; ${message}` : na;
     }
     endProbeStage('metric_names', { listed, kept: adaptedLength('metric_names'), ...(excluded !== null ? { excluded } : {}) }, message);
   }
@@ -3480,9 +4214,12 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const ruleEvidence = { firingAlerts: [], recordingRuleNames: [] };
 
   // Fallback for alert_rules: only run when the primary probe returned
-  // an empty array AND the MCP exposes metrics_query.
+  // an empty array AND the MCP exposes metrics_query. A ruler that refused
+  // the read (the family failed: C6) is no answer about rules either, so the
+  // firing alerts are gathered for it as they were when it read as empty.
   const alertProbe = probeResults?.alert_rules;
-  const alertPrimaryEmpty = alertProbe && (alertProbe.outcome === 'empty'
+  const refusedRead = (p) => p?.outcome === 'failed' && Array.isArray(p.refused) && p.refused.length > 0;
+  const alertPrimaryEmpty = alertProbe && (alertProbe.outcome === 'empty' || refusedRead(alertProbe)
     || (Array.isArray(alertProbe.adapted) && (snapScope && alertRulesListed !== null ? alertRulesListed : alertProbe.adapted.length) === 0));
   if (!snapshot && alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
     const r = await quiet(`${TOOL.metricsQuery}.ALERTS`,
@@ -3510,7 +4247,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // shorthand (e.g. `up:rate1m`) is captured too.
   const recordingProbe = probeResults?.recording_rules;
   const recordingPrimaryEmpty = recordingProbe &&
-    (recordingProbe.outcome === 'empty' || (Array.isArray(recordingProbe.adapted) && recordingProbe.adapted.length === 0));
+    (recordingProbe.outcome === 'empty' || refusedRead(recordingProbe) || (Array.isArray(recordingProbe.adapted) && recordingProbe.adapted.length === 0));
   const metricNames = unscopedMetricNames;
   if (recordingPrimaryEmpty && Array.isArray(metricNames) && metricNames.length) {
     const RECORDING_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*){1,}$/i;
@@ -3525,6 +4262,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   checkAbort();
   report('signals', 'done', { counts: { stackRows: stackSamples?.rows?.length ?? 0, firingAlerts: ruleEvidence.firingAlerts.length } });
   {
+    noteRuleGroups(probeResults.recording_rules?.adapted, 'recording_rule');
     const listed = adaptedLength('recording_rules');
     const message = snapScope ? scopeRules('recording_rules', 'recording_rule') : null;
     endProbeStage('recording_rules', {
@@ -3542,6 +4280,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     Object.values(probeResults)
       .flatMap(r => String(r?.tool || '').split('+'))
       .filter(Boolean)
+      // A tool whose store answered "not served" is probed all the same.
+      .concat(Object.values(probeResults).flatMap(r => (Array.isArray(r?.notServed?.tools) ? r.notServed.tools : [])))
       .concat([TOOL.systemHealth, TOOL.systemTopology, TOOL.anomaliesActive, TOOL.anomaliesBaselines])
   );
   // Version probes count as "wired" too — surface them so they don't
@@ -3582,6 +4322,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
     grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
     chaosRuns,                  // { status, outcome, feed, runs, reason, callsMade } — the chaos run feed, or null
+    // The rule groups the rule families listed, before a scope narrowed them (mcp.discovered.rule_groups).
+    ruleGroups: [...ruleGroupsListed.values()].sort((x, y) => (x.folderUid ?? '').localeCompare(y.folderUid ?? '', 'en') || x.group.localeCompare(y.group, 'en')),
     // A snapshot only: what buildSnapshotPack records — the scope applied,
     // each gapped stage with its reason, the families the scope narrowed
     // and the folder titles the answers named, the per-stage counts.
@@ -3589,7 +4331,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       snapshot: {
         scope: snapScope,
         gaps: [...gaps].sort((x, y) => [...stageLabel.keys()].indexOf(x.stage) - [...stageLabel.keys()].indexOf(y.stage)),
-        learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles },
+        learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles, ...(excludesNotApplied.length ? { notApplied: excludesNotApplied } : {}) },
         counts: stageCounts,
         toolsListComplete,
       },
@@ -3597,7 +4339,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // A scoped draft: the scope and what it was applied to (the caller writes
     // scopeAnnotations(scope, learned) on the pack it builds).
     ...(snapScope && !snapshot ? {
-      liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles } },
+      liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles, ...(excludesNotApplied.length ? { notApplied: excludesNotApplied } : {}) } },
     } : {}),
   };
 }
@@ -3668,7 +4410,11 @@ export function buildSnapshotPack(fetched, { refreshedAt = null, origin, endpoin
     origin,
     endpoint: endpoint && endpoint.id != null ? { id: endpoint.id, name: endpoint.name ?? null } : null,
   });
-  Object.assign(annotations, scopeAnnotations(scope ?? snap.scope ?? null, snap.learned || {}));
+  // The scope as the caller sent it, with the exclude patterns the fetch applied: a stored pattern the
+  // rule refuses now was read without, and learned.notApplied says so.
+  const said = scope ?? snap.scope ?? null;
+  const recorded = said && Array.isArray(snap.scope?.metricExclude) ? { ...said, metricExclude: snap.scope.metricExclude } : said;
+  Object.assign(annotations, scopeAnnotations(recorded, snap.learned || {}));
   if (stageGaps.length) {
     annotations['observogram.live.gaps'] = JSON.stringify(stageGaps.map(g => ({ stage: g.stage, reason: g.reason })));
   }
@@ -3702,8 +4448,9 @@ export function buildSnapshotPack(fetched, { refreshedAt = null, origin, endpoin
 // surfaced:
 //   connected      initialize and tools/list answered (a read that failed
 //                  is the read's outcome; a tool whose isError text says
-//                  401/403/unauthorized/forbidden is read.backendAuthRefused
-//                  — the MCP's own credentials to its backend)
+//                  HTTP 401/403, unauthorized or forbidden (isProbeRefusal)
+//                  is read.backendAuthRefused — the MCP's own credentials to
+//                  its backend)
 //   auth-refused   HTTP 401/403 on initialize, tools/list or tools/call (the
 //                  gateway refused the token sent, or its absence)
 //   unreachable    no HTTP answer (ECONNREFUSED, ENOTFOUND, TLS) or a 5xx
@@ -3728,7 +4475,8 @@ export const PING_READS = Object.freeze([
 ]);
 export const PING_DETAIL_LENGTH = 100;
 const PING_ERROR_LENGTH = 300;
-const BACKEND_AUTH_TEXT = /\b(401|403)\b|unauthori[sz]ed|forbidden/i;
+// The read's backend refused the MCP's own credentials: the probe cascade's
+// refusal rule (isProbeRefusal), one rule for both.
 
 class PingDeadline extends Error {
   constructor() { super('the ping deadline passed'); this.name = 'PingDeadline'; }
@@ -3904,7 +4652,7 @@ export async function pingMcp({ mcpUrl, mcpAuth = null, transport = mcpTransport
         read.outcome = 'failed';
         // The tool answered isError (the client's `<tool>: <text>`): its
         // backend refused the MCP's own credentials when the text says so.
-        if (message.startsWith(`${pick.tool}: `) && BACKEND_AUTH_TEXT.test(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
+        if (message.startsWith(`${pick.tool}: `) && isProbeRefusal(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
       }
     } finally { out.timings.readMs = ms(at); }
     return out;

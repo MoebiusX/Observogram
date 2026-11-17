@@ -28,7 +28,8 @@
 // them, and the requirement chains scored again without them — a chain whose
 // root is set aside leaves the rollup; a set-aside declared link leaves its
 // chain's accounting, so a chain broken only by things set aside is intact.
-// The engine's own summary and rollup ride beside (`setAsides.engine`).
+// The engine's own summary and rollup ride beside (`setAsides.engine`). A
+// summary or rollup left with nothing to count has null figures, never 1.
 //
 // Pure ESM, no DOM: the studio's Diagnose and Remediate, the board and the
 // server's runs (tools/lib/journey.mjs) read the same rules.
@@ -101,7 +102,8 @@ export function setAsideFingerprint(list, now) {
 }
 
 // The summary's counts again over the buckets as they are now, by the
-// engine's own formulas (tools/lib/diff.mjs); the pairs are not touched.
+// engine's own formulas (tools/lib/diff.mjs); the pairs are not touched. A
+// union left empty has no ratio: null, never 1 (nothing compared is no match).
 function summaryOver(layers, engine) {
   let onlyInA = 0, onlyInB = 0;
   for (const bucket of Object.values(layers)) {
@@ -116,8 +118,8 @@ function summaryOver(layers, engine) {
     ...engine,
     onlyInA, onlyInB,
     union, aTotal: onlyInA + inBoth, bTotal: onlyInB + inBoth,
-    jaccard: union === 0 ? 1 : Math.round((inBoth / union) * 100) / 100,
-    alignment: union === 0 ? 1 : Math.round((aligned / union) * 100) / 100,
+    jaccard: union === 0 ? null : Math.round((inBoth / union) * 100) / 100,
+    alignment: union === 0 ? null : Math.round((aligned / union) * 100) / 100,
   };
 }
 
@@ -163,7 +165,8 @@ function graphWithout(graph, declared, live, ids) {
   const branches = graph.branches.map((b) => (isObj(b) ? branchWithout(b, declared, live, ids) : b));
   const counted = branches.filter((b) => isObj(b) && !b.setAside);
   const declaredBranches = counted.filter((b) => b.hasA);
-  const integrityMean = declaredBranches.length ? round4(declaredBranches.reduce((s, b) => s + (Number(b.integrity) || 0), 0) / declaredBranches.length) : 1;
+  // No declared chain left to count: no integrity figure (an empty set is not 100 % intact).
+  const integrityMean = declaredBranches.length ? round4(declaredBranches.reduce((s, b) => s + (Number(b.integrity) || 0), 0) / declaredBranches.length) : null;
   const rollup = {
     ...(graph.rollup || {}),
     intact: counted.filter((b) => b.verdict === 'intact').length,
@@ -173,7 +176,7 @@ function graphWithout(graph, declared, live, ids) {
     declaredTotal: declaredBranches.length,
     total: counted.length,
     integrityMean,
-    integrityPct: Math.round(integrityMean * 100),
+    integrityPct: integrityMean === null ? null : Math.round(integrityMean * 100),
     setAside: branches.filter((b) => isObj(b) && b.setAside).length,
   };
   return { ...graph, branches, rollup };

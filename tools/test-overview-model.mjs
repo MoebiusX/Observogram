@@ -33,10 +33,15 @@ import {
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, LIVE_PACK,
   scopeFormValues, scopeFromValues, scopeSummary, liveScopeDefaultsOf, SCOPE_FIELDS,
+  SCOPE_DEFAULT_IGNORED, scopePrefillOf, useServerDefaultScope, scopeSaveOf, scopeCheckOf, scopeChecking, scopeChecked, scopeCheckFailed, scopeCheckView,
   serviceAsideKey, serviceTargetsKey, studioTargetsCounted, serviceMatrix, envRank,
+  runToastModel, runRecordedToast,
 } from '../studio/overview-model.mjs';
-import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
-import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
+import { renderOverview, renderServiceList, readTokenDrafts, runToastText, scopeCheckBlockHtml } from '../studio/overview-view.mjs';
+// The rule the server lists a run by (GET /api/journeys), and the engine's causes: a row and a board read as they are fed.
+import { basisSummary } from '../tools/lib/run-basis.mjs';
+import { rankCauses } from '../tools/lib/chain-history.mjs';
+import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic, checkServiceScope } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 import { CLAUSE_FIX } from '../studio/clause-fixes.mjs';
 import { instrumentGradeFor, GRADE_CRITERION_KEYS, GRADE_SCHEMA } from '../studio/diagnostic-grade.mjs';
@@ -106,6 +111,15 @@ const lostRun = { ...run, outcome: 'vantage-lost' };
 const partialRun = restamp(fixture('krystaline-run-partial'));
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
+// No figure without its basis: an older record over an empty union (100, a pass); a Run that stopped on a
+// partial scan (C8); a lost run whose families answered empty (C4); an older pass whose every probe failed
+// (defect 1 as history holds it); a comparison of live-only things alone.
+const nothingRun = { ...run, outcome: 'pass', drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, outOfScope: 0, scaffold: 0 }, gate: { thresholds: { minAlignmentPct: 85 }, breaches: [] }, probes: { attempted: ['alert_rules'], succeeded: ['alert_rules'], empty: [], failed: [], unsupported: [] }, probeErrors: {}, vantage: 'full', causes: null, transition: { reason: 'first run', changed: [] } };
+const stoppedRun = { journey: run.journey, startedAt: run.startedAt, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)', packA: { source: run.packA.source, scan: { source: 'acme/checkout', files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: run.packB.source }, scope: run.scope, gate: { thresholds: {}, breaches: [] }, notify: null };
+const { drift: _noDrift, grade: _noGrade, ...ungraded } = run;
+const noDataRun = { ...ungraded, outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: ['alert_rules', 'dashboards'], failed: [], unsupported: [] }, probeErrors: {}, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost: no probe family returned data — nothing was compared' }] } };
+const oldAllFailed = { ...run, outcome: 'pass', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: [], failed: ['dashboards', 'alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500', dashboards: 'dashboards_search: HTTP 500' } };
+const liveOnlyRun = { ...run, drift: { alignmentPct: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 5, setAside: { declaredNotLive: 3, liveNotDeclared: 0 } } };
 
 // The live pack the server kept from that run (GET /api/journeys `livePack`), and its catalogue entry.
 const LIVE_ENTRY = { id: 'uploaded-krystaline-live-5e1f', label: 'krystaline · prod · live', description: 'Uploaded pack — journey-live:krystaline', live: 'scaffold', source: 'uploaded', ok: true };
@@ -417,7 +431,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
 // ---------- is that still true right now? ----------
 
 test('stillTrueModel: never checked (no journey; a journey without a run, with and without an env), the live wording and the Check button only for a live journey', () => {
-  assert.deepEqual(OVERVIEW_STATUS, { never: 'Never checked', unchanged: 'Unchanged', changed: 'Changed', unreachable: 'Unreachable' });
+  assert.deepEqual(OVERVIEW_STATUS, { never: 'Never checked', unchanged: 'Unchanged', changed: 'Changed', unreachable: 'Unreachable', nothing: 'Nothing compared' });
   assert.equal(FRESH_WINDOW_MS, 24 * HOUR);
   // S0: no journey at all.
   const s0 = keep(stillTrueModel({ journey: null, run: null, now: NOW }));
@@ -480,6 +494,8 @@ test('stillTrueModel: Unchanged with the Check again primary; stale after a day 
     status: 'unreachable', pill: 'Unreachable',
     sentence: 'Last check 2 hours ago: the live side did not answer, so nothing is known about it right now.',
     note: '', cadence: 'Checks run only when you click.', stale: false, canCheck: false, checkLabel: '', checkPrimary: false, tone: 'warn', error: null, pending: false, running: false, ago: '2 hours ago',
+    // The reason beneath: the first probe error the record carries.
+    reason: 'Live did not answer — grafana_dashboards_search: Error: HTTP 401: Unauthorized — http://kx-krystalinex-grafana:3000/api/search?limit=100&type=dash-db',
   });
   assert.equal(keep(stillTrueModel({ journey, run: lostRun, now: STALE_NOW })).stale, true);
   // A recording as Pack B: the words say so with its day, and nothing can be checked from here.
@@ -708,8 +724,18 @@ const STATES = {
   loading: { services: null, servicesStatus: { kind: 'loading', error: null } },
   empty: { services: [] },
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
+  'nothing compared': { run: nothingRun },
+  'nothing compared (recording)': { journeys: [fileJourney], run: nothingRun },
+  'live-only things alone': { run: liveOnlyRun },
+  'stopped on a partial scan': { run: stoppedRun },
+  'stopped on a partial scan (recording)': { journeys: [fileJourney], run: stoppedRun },
+  'a Run stopped after a check that matched': { run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() } },
+  'a Run stopped after a check that matched (recording)': { journeys: [fileJourney], run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() } },
+  'no live data': { run: noDataRun },
+  'an older pass whose every probe failed': { run: oldAllFailed },
+  'a partial scan, compared': { run: { ...run, packA: { ...run.packA, scan: { files: 171, candidates: 220, partial: true, notRead: 49 } }, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' } } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable', 'stopped on a partial scan (recording)', 'a Run stopped after a check that matched (recording)']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -1037,11 +1063,12 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
   assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold in every link, 1 in part, 12 broken.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
-  // Rules compared on part of their labels (a live listing that shows severities only): said beside the numbers and on the strip.
+  // Rules compared on part of what they say (a live listing that shows severities only, or a Grafana rule's
+  // query without its condition — drift.partlyCompared counts both): said beside the numbers and on the strip.
   const partly = keep(fidelityModel({ run: { ...run, drift: { ...run.drift, partlyCompared: 58 } }, journey, pack: krystalinePack, now: NOW }));
-  assert.deepEqual([partly.note, partly.partial], ['The live side answered only in part: its dashboards could not be read. 58 alert rules were compared in part: labels a live listing does not show, or values a chart or a deploy step fills in, were not compared.', ['dashboards', 'rule labels']]);
+  assert.deepEqual([partly.note, partly.partial], ['The live side answered only in part: its dashboards could not be read. 58 alert rules were compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.', ['dashboards', 'rule labels or conditions']]);
   const one = keep(fidelityModel({ run: { ...run, probes: { failed: [] }, drift: { ...run.drift, partlyCompared: 1 } }, journey, pack: krystalinePack, now: NOW }));
-  assert.deepEqual([one.note, one.partial], ['1 alert rule was compared in part: labels a live listing does not show, or values a chart or a deploy step fills in, were not compared.', ['rule labels']]);
+  assert.deepEqual([one.note, one.partial], ['1 alert rule was compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.', ['rule labels or conditions']]);
   assert.deepEqual(f.partial, ['dashboards'], 'no such count in the record: the strip names the failed families alone');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
@@ -1527,6 +1554,192 @@ const stringsOf = (value, out = []) => {
   return out;
 };
 
+// ---------- what a run's figures rest on: nothing compared, a live side that gave nothing, a stopped Run ----------
+
+test('OM3 stillTrueModel and nextActionModel over nothing compared: the fifth status word, never "it matches" or "live matches" over an empty comparison (an older record\'s 100 included) nor over a stopped Run; the stopped Run\'s reading and its Check again; Open in Diagnose is the one primary; the status strip says nothing compared', () => {
+  const s = keep(stillTrueModel({ journey, run: nothingRun, now: NOW }));
+  assert.deepEqual([s.status, s.pill, s.tone, s.canCheck, s.checkLabel, s.checkPrimary], ['nothing', 'Nothing compared', 'warn', true, 'Check again', false]);
+  assert.equal(s.sentence, 'Checked 2 hours ago against live — nothing was compared. Neither side had anything this check could compare.');
+  const n = keep(nextActionModel({ still: s, grade: liveGrade, run: nothingRun, journey, now: NOW }));
+  assert.deepEqual([n.sentence, n.button, n.primary], ['Nothing was compared, so nothing is confirmed live: see what each side holds.', { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, true]);
+  assert.ok(![s.sentence, n.sentence].some((x) => /matches/.test(x)), 'never "matches" over nothing');
+  // The first reason that holds: the live side read in part, the declared things it could not read.
+  const unread = { ...nothingRun, vantage: 'partial', probes: { ...nothingRun.probes, attempted: ['alert_rules', 'dashboards'], failed: ['dashboards'] }, probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, packB: { ...nothingRun.packB, liveScope: { metricPrefixes: ['shop_'] } }, drift: { ...nothingRun.drift, setAside: { declaredNotLive: 2, liveNotDeclared: 1 } } };
+  const su = keep(stillTrueModel({ journey, run: unread, now: NOW }));
+  assert.equal(su.sentence, 'Checked 2 hours ago against live — nothing was compared. Live answered in part: dashboards not read. 3 are set aside for this service.');
+  const nu = keep(nextActionModel({ still: su, grade: liveGrade, run: unread, journey, now: NOW }));
+  assert.deepEqual(nu.why, ['Part of the live side could not be read: its dashboards.', 'The live read was scoped to part of the estate; what lies outside it was not compared.', '3 differences are set aside for this service.']);
+  // Only live-only things compared: nothing the repository declares was, so nothing of it matches — but
+  // something was compared (C2): Changed, the figure on the ring and the row (OM8), never Nothing compared.
+  const lo = keep(stillTrueModel({ journey, run: liveOnlyRun, now: NOW }));
+  assert.deepEqual([lo.status, lo.pill, lo.tone, lo.checkPrimary], ['changed', 'Changed', 'warn', false]);
+  assert.equal(lo.sentence, 'Checked 2 hours ago against live — nothing the repository declares was compared: 5 things run live that it does not declare. 3 are set aside for this service.');
+  const nlo = keep(nextActionModel({ still: lo, grade: liveGrade, run: liveOnlyRun, journey, now: NOW }));
+  assert.deepEqual([nlo.sentence, nlo.button?.action, nlo.primary], ['Nothing the repository declares was compared; 5 things run live that it does not declare yet.', 'ov-next-neuron', true]);
+  // A stopped Run (C8) as the newest record: nothing was compared, the previous pack is kept; Check again checks it.
+  const st = keep(stillTrueModel({ journey, run: stoppedRun, now: NOW }));
+  assert.deepEqual([st.status, st.pill, st.tone, st.canCheck, st.tried], ['nothing', 'Nothing compared', 'warn', false, true]);
+  assert.equal(st.sentence, 'Last Run 2 hours ago: the repository was read in part (49 of 220 files not read), so nothing was compared; the previous pack is kept.');
+  const nst = keep(nextActionModel({ still: st, grade: packGrade, run: stoppedRun, journey, now: NOW }));
+  assert.deepEqual([nst.button, nst.primary, nst.why], [{ label: 'Check again', action: 'ov-check' }, true, ['49 of 220 files were not read.', 'The first not read: grafana/a.json — it could not be downloaded (HTTP 403).']]);
+  assert.ok(/previous pack is kept/.test(nst.sentence));
+  const nstRec = keep(nextActionModel({ still: keep(stillTrueModel({ journey: fileJourney, run: stoppedRun, now: NOW })), grade: packGrade, run: stoppedRun, journey: fileJourney, now: NOW }));
+  assert.deepEqual([nstRec.button, nstRec.primary], [null, false], 'a recording: nothing to check from here');
+  // A Run that stopped after the last check: the check reads as it did, the stopped Run said beneath.
+  const after = keep(stillTrueModel({ journey, run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() }, now: NOW }));
+  assert.deepEqual([after.status, after.stopped], ['unchanged', 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.']);
+  assert.equal(keep(stillTrueModel({ journey, run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 - HOUR).toISOString() }, now: NOW })).stopped, undefined, 'an older stop is no news');
+  // The whole screen: one primary; the strip says nothing compared, and "tried" after a stopped Run.
+  const m = screen({ run: nothingRun, layout: 'board' });
+  assert.deepEqual([m.still.status, m.primary, m.next.button?.action], ['nothing', 'next', 'ov-next-diagnose']);
+  const c = overviewContainer();
+  renderOverview(c, keep(m), { overview: {} });
+  assert.ok(c.innerHTML.includes('<span class="ov-status__part ov-status__part--nothing">nothing compared</span>'), 'the status strip says nothing compared');
+  assert.ok(c.innerHTML.includes('ov-status--warn'));
+  const c2 = overviewContainer();
+  renderOverview(c2, keep(screen({ run: stoppedRun, layout: 'board' })), { overview: {} });
+  assert.ok(c2.innerHTML.includes('ov-status__part--when">tried 2 hours ago</span>'), 'a stopped Run was tried, not checked');
+  // Not comparable with the check before: the since clause says so, never "got worse since".
+  const nc = keep(stillTrueModel({ journey, run: { ...run, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, transition: { since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'worse' }, { direction: 'worse' }], reason: null } }, now: NOW }));
+  assert.equal(nc.sentence, 'Checked 2 hours ago against live — 43 things differ from what the repository declares. Not comparable with the check before: this scan could not read 49 of 220 files.');
+  const ncGrade = gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: { ...run, comparable: { withPrevious: false, reason: 'the previous run read every file' } }, journey, now: NOW });
+  assert.equal(ncGrade.source, 'Graded against live, 2 hours ago. Not comparable with the check before: the previous run read every file.');
+});
+
+test('OM4 a lost live side: the reason beneath the sentence names the first probe error; a lost run whose families answered empty says the live side answered with no data; an older pass record where no family answered reads Unreachable and does not letter the board; a vantage lost before a good check, or a stopped Run before one, is a recovery, never "showed less"; fidelity and changes withhold their counts over nothing compared and over a stopped Run', () => {
+  const nd = keep(stillTrueModel({ journey, run: noDataRun, now: NOW }));
+  assert.deepEqual([nd.status, nd.pill, nd.reason], ['unreachable', 'Unreachable', undefined]);
+  assert.equal(nd.sentence, 'Last check 2 hours ago: the live side answered but returned nothing this check reads, so nothing is known about it right now.');
+  const nnd = keep(nextActionModel({ still: nd, grade: packGrade, run: noDataRun, journey, now: NOW }));
+  assert.deepEqual([nnd.sentence, nnd.why, nnd.primary], ['Check again once the live side returns data; until then nothing is known.', ['The live side answered the last check, but returned nothing this check reads.'], true]);
+  // An older pass whose every probe failed (defect 1 as history holds it).
+  const old = keep(stillTrueModel({ journey, run: oldAllFailed, now: NOW }));
+  assert.deepEqual([old.status, old.reason], ['unreachable', 'Live did not answer — alert_rules_list: HTTP 500: no backend session']);
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: oldAllFailed, journey, now: NOW }));
+  assert.deepEqual([g.basis, g.source], ['repository', 'Graded from the repository alone; the last live check could not see production.']);
+  assert.equal(runGradesBoard(oldAllFailed, krystalinePack), false);
+  const f = fidelityModel({ run: oldAllFailed, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([f.known, f.alignmentPct, f.tiles], [false, null, []], 'no ring over a live side that gave nothing');
+  // A vantage lost before a good check is a recovery; so is a stopped Run before one (its record carries no live picture).
+  const recovered = { ...run, causes: { vantage: { changed: true, from: { vantage: 'lost', failed: ['alert_rules'] }, to: { vantage: 'partial', failed: ['dashboards'] } } } };
+  assert.deepEqual(vantageShrank(recovered), []);
+  const { transitions: _t, ...causes } = rankCauses({ previous: stoppedRun, baseline: null, current: { ...run, causes: undefined }, deploys: [] });
+  assert.equal(causes.vantage?.from, null, 'the engine compares with a record that has no vantage');
+  const afterStop = { ...run, causes };
+  assert.deepEqual(vantageShrank(afterStop), [], 'never "the live side showed less" after a stopped Run');
+  assert.equal(keep(stillTrueModel({ journey, run: afterStop, now: NOW })).status, 'changed');
+  assert.equal(runGradesBoard({ ...afterStop, grade: { ...afterStop.grade, schema: GRADE_SCHEMA } }, krystalinePack), true, 'it letters the board');
+  // Nothing compared and a stopped Run: the counts are withheld with the reason, never drawn as zeros.
+  const fn = fidelityModel({ run: nothingRun, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([fn.known, fn.nothing, fn.tiles, fn.note], [false, true, [], 'Nothing was compared on the last check, so there is nothing to count. Neither side had anything this check could compare.']);
+  assert.equal(changesModel({ fidelity: fn }).sentence, 'Nothing was compared on the last check, so there is nothing to change yet.');
+  const fs2 = fidelityModel({ run: stoppedRun, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([fs2.known, fs2.nothing, fs2.note], [false, true, 'The last Run read the repository in part and stopped before comparing anything; the previous pack is kept.']);
+  const fp = fidelityModel({ run: { ...nothingRun, probes: { ...nothingRun.probes, attempted: ['alert_rules', 'dashboards'], failed: ['dashboards'] } }, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual(fp.partial, ['dashboards'], 'the families live could not read are still named');
+  const gs = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: stoppedRun, journey, now: NOW }));
+  assert.equal(gs.source, 'Graded from the repository alone; the last Run read the repository in part and stopped before checking.');
+  // The rendered board: the reason beneath the sentence, the vantage term kept.
+  const c = overviewContainer();
+  renderOverview(c, keep(screen({ run: oldAllFailed, layout: 'board' })), { overview: {} });
+  assert.ok(c.innerHTML.includes('<p class="ov-live__reason og-muted">Live did not answer — alert_rules_list: HTTP 500: no backend session</p>'));
+});
+
+test('OM5 nextActionModel: "The chain matches live" only when a link of the chain matched; a chain with nothing compared says so', () => {
+  const tier = (o = {}) => ({ aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0, ...o });
+  const tiers = (exporters) => ({ exporters, alerts: tier(), dashboards: tier(), mttx: tier(), detail: { ...tier({ drifted: 2 }), families: { recording_rule: 2 } }, machinery: { ...tier(), families: {} } });
+  const chainRun = (exporters) => ({ ...run, drift: { ...run.drift, aligned: exporters.aligned, drifted: 2, declaredNotLive: 0, liveNotDeclared: 0, tiers: tiers(exporters) } });
+  const none = chainRun(tier());
+  const nn = keep(nextActionModel({ still: keep(stillTrueModel({ journey, run: none, now: NOW })), grade: liveGrade, run: none, journey, now: NOW }));
+  assert.equal(nn.sentence, 'Nothing in the chain was compared; look at the 2 details beyond it.');
+  const matched = chainRun(tier({ aligned: 5 }));
+  const nm = keep(nextActionModel({ still: keep(stillTrueModel({ journey, run: matched, now: NOW })), grade: liveGrade, run: matched, journey, now: NOW }));
+  assert.equal(nm.sentence, 'The chain matches live; look at the 2 details beyond it.');
+});
+
+test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a partial scan, the scope, the grade where one exists, the match only over a comparison, nothing compared, live answered in part, not comparable with the check before, the filter warning; ok only for a whole reading; a whole reading is today\'s toast byte for byte; a Run recorded with an error says its reading', () => {
+  const row = { name: 'Checkout', env: 'prod', repository: { text: 'acme/checkout' } };
+  const whole = { record: { outcome: 'pass', vantage: 'full', probes: { attempted: ['alert_rules'], succeeded: ['alert_rules'], empty: [], failed: [], unsupported: [] }, grade: { letter: 'B' }, drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, packB: {} }, scan: { files: 12, candidates: 12, source: 'acme/checkout' } };
+  const mw = keep(runToastModel(row, whole));
+  assert.deepEqual([runToastText(mw), mw.tone], ['Checkout · prod checked: 12 files from acme/checkout, grade B, 92% matches live.', 'ok']);
+  const worst = { record: { ...whole.record, vantage: 'partial', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], empty: [], failed: ['dashboards'], unsupported: [] }, grade: { letter: 'C' }, drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, packB: { liveScope: { metricPrefixes: ['shop_'] } }, comparable: { withPrevious: false, reason: 'x' } },
+    scan: { files: 171, candidates: 220, source: 'acme/checkout', partial: true, skipped: 49, excludedMost: true, filter: { surface: 'kubernetes', excluded: 120 } } };
+  const mx = keep(runToastModel(row, worst));
+  assert.deepEqual([runToastText(mx), mx.tone], ['Checkout · prod checked: 171 of 220 files from acme/checkout (49 not read) — a partial scan, live read scoped to 1 prefix, grade C, nothing compared, live answered in part (its dashboards not read), not comparable with the check before, the Kubernetes and Helm filter excluded more than half of the files the scan recognised.', '']);
+  // A 200 from a server that still graded a live side that gave nothing: no grade, no figure.
+  const lost = { record: { ...whole.record, probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } }, scan: null };
+  const ml = keep(runToastModel(row, lost));
+  assert.deepEqual([runToastText(ml), ml.tone], ['Checkout · prod checked: the pack file acme/checkout, live did not answer — alert_rules_list: HTTP 500.', '']);
+  // Stored exclude patterns the read went without (packB.notApplied): the scope named is the one applied, and
+  // the toast says what was skipped — never a whole reading.
+  const skipped = { ...whole, record: { ...whole.record, packB: { liveScope: { metricExclude: ['^go_'] }, notApplied: ['exclude pattern "^q*q*$" not applied — it may be too slow to match', 'exclude pattern "^(a)\\1" not applied — it refers back to a group'] } } };
+  const mn = keep(runToastModel(row, skipped));
+  assert.deepEqual([runToastText(mn), mn.tone], ['Checkout · prod checked: 12 files from acme/checkout, live read scoped to 1 exclude pattern, 2 stored exclude patterns not applied (may be too slow to match; change them in the service\'s live scope), grade B, 92% matches live.', '']);
+  // A Run the server answered with an error but recorded: the refreshed listing's reading.
+  const before = { name: 'checkout.prod', lastRun: { startedAt: '2026-11-16T09:00:00.000Z', outcome: 'pass' } };
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, lastRun: { startedAt: '2026-11-16T10:00:00.000Z', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: 'alert_rules_list: HTTP 500', liveLoss: 'error' } } }),
+    { text: 'Checkout · prod: Live did not answer — alert_rules_list: HTTP 500.', tone: 'error' });
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220 } } }),
+    { text: 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'error' });
+  // A Run stopped on a partial scan (the 409, services-api.mjs servicesRefusal's scan and kept): whether a complete scan is kept is
+  // the 409's answer, else the listing's; a stop the listing does not show yet (a first Run that kept none) reads from the 409's scan.
+  const stopNoneKept = { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 3, candidates: 3, kept: false } };
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: stopNoneKept }),
+    { text: 'Checkout · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error' }, 'the listing: none kept');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220, kept: true } }, outcome: 'scan-partial', scan: { notRead: 69, candidates: 220 }, kept: { id: 'p1', label: 'Checkout · prod · repository' } }).text,
+    'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.', 'listed: the listing\'s counts, the 409\'s kept');
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: null, outcome: 'scan-partial', error: '409: 3 of 3 files not read: a.yaml — it could not be downloaded (HTTP 403) — the Run stopped: no file of the repository could be read; run it again', scan: { notRead: 3, candidates: 3 }, kept: null }),
+    { text: 'Checkout · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error', unlisted: true }, 'not listed yet: the 409 alone, never "the run did not finish"');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: null, outcome: 'scan-partial', scan: { notRead: 49, candidates: 220 }, kept: { id: 'p1', label: 'x' } }).text, 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: before }), null, 'nothing new recorded: the run did not finish');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: { lastRun: { startedAt: 't', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: null, liveLoss: 'no-data' } } }).text, 'Checkout · prod: Live returned no data.', 'a first Run');
+});
+
+test('OM7 why this grade over nothing compared: the Drift-free line says nothing was compared and why — never "N in 100 hold up live" over links nothing could read (the engine scored it nothing, with no figure); the points stay the engine\'s; a comparison keeps the integrity line', () => {
+  // The requirement-chain construct over an empty union: the engine's Drift-free is 0, "nothing compared"; the
+  // chains' scored integrity (0) counts the declared links broken for want of anything compared.
+  const nothingDrift = { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
+  const nothingChain = { ...run, outcome: 'gate-failed', drift: nothingDrift, traceability: { ...run.traceability, integrityPct: 0 }, grade: { ...run.grade, score: 58.6, letter: 'C', letterLabel: 'Field Grade' } };
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey, now: NOW }));
+  assert.deepEqual([g.basis, g.letter], ['live', 'C']);
+  const driftLine = (m) => m.why.find((w) => w.key === 'drift-free');
+  assert.deepEqual([driftLine(g).ok, driftLine(g).text], ['no', 'Nothing was compared on the last check, so no promise is confirmed live. Live answered in part: dashboards not read.']);
+  assert.ok(!g.why.some((w) => /in 100 hold up/.test(w.text)), 'no measured-looking figure over nothing compared');
+  assert.equal(g.points, '4.1 of 7 points. B starts at 4.4.', 'the points are the engine\'s: Drift-free earned nothing');
+  // An older record over an empty union (its four counts, no drift.compared) reads the same; a recording says so.
+  const { compared: _c, ...olderDrift } = nothingDrift;
+  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...nothingChain, drift: { ...olderDrift, alignmentPct: 100 } }, journey, now: NOW }))).text, driftLine(g).text);
+  assert.ok(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey: fileJourney, now: NOW }))).text.startsWith('Nothing was compared on the last check, so no promise is confirmed in the recording.'));
+  // A comparison with something in it keeps the integrity line, unchanged.
+  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }))).text, "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85.");
+});
+
+test('OM9 a Run stopped on a partial scan after the check on screen: the next step says the stop — the check shown is the one before it — with its counts and first file, and Check again as the one primary; never "Nothing to do right now" beside the stop', () => {
+  const later = { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() };
+  const still = keep(stillTrueModel({ journey, run: unchangedRun, stopped: later, now: NOW }));
+  assert.equal(still.stopped, 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.');
+  const next = keep(nextActionModel({ still, grade: liveGrade, run: unchangedRun, journey, now: NOW, stopped: later }));
+  assert.deepEqual([next.sentence, next.button, next.primary, next.why], [
+    'The last Run read the repository in part and stopped, so the check shown is the one before it: check it against live again, and run the service again once its repository answers in full.',
+    { label: 'Check again', action: 'ov-check' }, true,
+    ['49 of 220 files were not read.', 'The first not read: grafana/a.json — it could not be downloaded (HTTP 403).'],
+  ]);
+  assert.ok(!/Nothing to do/.test(next.sentence));
+  // A host that gives the panel's line but not the record: the stop is said, without its counts.
+  const bare = keep(nextActionModel({ still, grade: liveGrade, run: unchangedRun, journey, now: NOW }));
+  assert.deepEqual([bare.sentence, bare.why], [next.sentence, []]);
+  // Over a check whose differences stand, the stop is still the news.
+  const changedStill = keep(stillTrueModel({ journey, run, stopped: later, now: NOW }));
+  assert.equal(keep(nextActionModel({ still: changedStill, grade: liveGrade, run, journey, now: NOW, stopped: later })).sentence, next.sentence);
+  // The whole screen: the stop's Check again is the one primary.
+  const m = keep(screen({ run: unchangedRun, stopped: later }));
+  assert.deepEqual([m.next.sentence, m.primary, m.next.button?.action], [next.sentence, 'next', 'ov-check']);
+  // A stop older than the check on screen is no news: the check's own next step.
+  const older = { ...stoppedRun, startedAt: new Date(T0 - HOUR).toISOString() };
+  const s0 = keep(stillTrueModel({ journey, run: unchangedRun, stopped: older, now: NOW }));
+  assert.equal(keep(nextActionModel({ still: s0, grade: liveGrade, run: unchangedRun, journey, now: NOW, stopped: older })).sentence, 'Nothing to do right now: live matches what the repository declares.');
+});
+
 test('vocabulary: no string of any model built above carries a percentage, a layer code, an artefact id, engine jargon or the product name', () => {
   assert.ok(builtModels.length >= 60, `the guard saw ${builtModels.length} models`);
   const all = stringsOf(builtModels);
@@ -1545,9 +1758,9 @@ test('vocabulary: no string of any model built above carries a percentage, a lay
     const offenders = all.filter(hit);
     assert.deepEqual(offenders, [], `${what} reaches the screen: ${JSON.stringify(offenders)}`);
   }
-  // The four status words, and only those, ever reach the pill.
+  // The five status words, and only those, ever reach the pill.
   const pills = new Set(builtModels.map((m) => m?.pill ?? m?.still?.pill).filter(Boolean));
-  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Unchanged', 'Unreachable']);
+  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Nothing compared', 'Unchanged', 'Unreachable']);
 });
 
 test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 of a point, as the engine scores them, so the list is offered for the letter it explains (seen on the demo 2026-10-28 when a check moved 84 to 85)', () => {
@@ -1831,6 +2044,130 @@ const svcRow = (over = {}) => ({
 const lastRunAt = new Date(NOW - 2 * HOUR).toISOString();
 const listJourney = (name, scope, lastRun, packA = '/w/packs/x.pack.yaml') => ({ name, scope, packA, packB: 'mcp: https://mcp.example.test/mcp', lastRun });
 
+// ---------- the row's five states ----------
+
+// A journeys-listing entry as GET /api/journeys lists a record (server/index.mjs: the outcome, then
+// tools/lib/run-basis.mjs basisSummary, then the grade's fields).
+const listedRun = (record, over = {}) => ({ startedAt: lastRunAt, outcome: record.outcome, ...basisSummary(record), gradeScore: record.grade?.score ?? null, breaches: record.gate?.breaches?.length ?? 0, ...over });
+const probeTable = (o) => ({ attempted: [], succeeded: [], empty: [], failed: [], unsupported: [], ...o });
+const ROW_RECORDS = {
+  lost: { outcome: 'vantage-lost', error: 'alert_rules_list: HTTP 500: no backend session', vantage: 'lost', probes: probeTable({ attempted: ['alert_rules'], failed: ['alert_rules'] }), probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' }, gate: { breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } },
+  noData: { outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: probeTable({ attempted: ['alert_rules'], empty: ['alert_rules'] }), probeErrors: {}, gate: { breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } },
+  oldAllFailed: { outcome: 'pass', vantage: 'partial', probes: probeTable({ attempted: ['alert_rules', 'dashboards'], failed: ['alert_rules', 'dashboards'] }), probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 69 }, gate: { breaches: [] } },
+  nothingOld: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 69 }, gate: { breaches: [] } },
+  nothingUnread: { outcome: 'gate-failed', vantage: 'partial', probes: probeTable({ attempted: ['dashboards', 'alert_rules'], succeeded: ['alert_rules'], failed: ['dashboards'] }), probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, tiers: { dashboards: { notRead: 7 } } }, grade: { score: 40 }, gate: { breaches: [{ criterion: 'minAlignmentPct', detail: 'nothing was compared' }] } },
+  livePart: { outcome: 'gate-failed', vantage: 'partial', probes: probeTable({ attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], failed: ['dashboards'] }), probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, drift: { alignmentPct: 78, aligned: 252, drifted: 5, declaredNotLive: 38, liveNotDeclared: 30 }, grade: { score: 69 }, gate: { breaches: [{ criterion: 'minAlignmentPct' }] } },
+  partialScan: { outcome: 'gate-failed', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 54, compared: 100, aligned: 54, drifted: 6, declaredNotLive: 30, liveNotDeclared: 10 }, grade: { score: 55 },
+    packA: { scan: { files: 171, candidates: 220, partial: true, notRead: 49, filter: { surface: 'kubernetes', excluded: 12 }, excludedMost: false } }, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, gate: { breaches: [{ criterion: 'scanComplete' }] } },
+  capped: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, grade: { score: 88 },
+    packA: { scan: { files: 200, candidates: 394, partial: false, notRead: 194, filter: { surface: 'compose', excluded: 30 }, excludedMost: true } }, gate: { breaches: [] } },
+  checked: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, grade: { score: 88 }, gate: { breaches: [] } },
+};
+const ROW_KEYS = Object.keys(ROW_RECORDS);
+const fiveStateList = (extra = {}) => {
+  const services = [svcRow({ id: 90, slug: 'never', name: 'Never' }), ...ROW_KEYS.map((k, i) => svcRow({ id: 100 + i, slug: k.toLowerCase(), name: k }))];
+  const journeys = ROW_KEYS.map((k) => ({ ...listJourney(`${k.toLowerCase()}.prod`, { service: k.toLowerCase(), env: 'prod' }, listedRun(ROW_RECORDS[k])), ...(extra[k] || {}) }));
+  return serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW });
+};
+
+test('OM1 the service list\'s five states from the listing: never; unreachable (Live did not answer with the first probe error; Live returned no data; an older pass whose every probe failed); nothing compared (an older record\'s 100 over an empty union; with the first reason that holds); checked (partial) (a partial live side; a partial scan); checked — no figure without a comparison, the letter only where a grade exists, never a gate pass over nothing; the notes beside it', () => {
+  const stopped = { startedAt: new Date(NOW - HOUR).toISOString(), notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)' };
+  const m = fiveStateList({ checked: { stoppedRun: stopped } });
+  const last = Object.fromEntries(m.rows.map((r) => [r.name, r.last]));
+  const pick = (l) => [l.state, l.word, l.label, l.reason, l.letter, l.alignmentPct, l.gate, l.when];
+  assert.deepEqual(pick(last.Never), ['never', 'Never checked', 'Not checked yet', '', null, null, null, '']);
+  assert.deepEqual(pick(last.lost), ['unreachable', 'Unreachable', 'Live did not answer', 'alert_rules_list: HTTP 500: no backend session', null, null, 'fail', 'Tried 2 hours ago']);
+  assert.deepEqual(pick(last.noData), ['unreachable', 'Unreachable', 'Live returned no data', '', null, null, 'fail', 'Tried 2 hours ago']);
+  assert.deepEqual(pick(last.oldAllFailed), ['unreachable', 'Unreachable', 'Live did not answer', 'alert_rules_list: HTTP 500: no backend session', null, null, 'fail', 'Tried 2 hours ago'], 'defect 1 as history holds it: never 100% match, never a pass');
+  assert.deepEqual(pick(last.nothingOld), ['nothing', 'Nothing compared', 'Nothing compared', 'Neither side had anything this check could compare', 'B', null, null, 'Checked 2 hours ago'], 'alignmentPct 100 and aligned 0 over an empty union: Nothing compared');
+  assert.deepEqual(pick(last.nothingUnread), ['nothing', 'Nothing compared', 'Nothing compared', '7 declared things not read live', 'C', null, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(pick(last.livePart), ['partial', 'Checked (partial) 2 hours ago', '', 'Live answered in part: dashboards not read', 'B', 78, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(pick(last.partialScan), ['partial', 'Checked (partial) 2 hours ago', '', '49 of 220 files not read', 'C', 54, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(last.partialScan.notes, [{ text: '12 files excluded by the Kubernetes and Helm filter', tone: 'neutral' }, { text: 'Not comparable with the check before: this scan could not read 49 of 220 files', tone: 'warn' }]);
+  assert.deepEqual(pick(last.capped), ['checked', 'Checked 2 hours ago', '', '194 of 394 files not read', 'A', 92, 'pass', 'Checked 2 hours ago'], 'a capped scan is not partial: its files not read are said beside the figure');
+  assert.deepEqual(last.capped.notes, [{ text: '30 files excluded by the Docker Compose filter — more than half of the files the scan recognised', tone: 'warn' }]);
+  assert.deepEqual(pick(last.checked), ['checked', 'Checked 2 hours ago', '', '', 'A', 92, 'pass', 'Checked 2 hours ago']);
+  assert.deepEqual(last.checked.notes, [{ text: 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'warn' }], 'after a stopped Run: the last check, and the stop beside it');
+  // Stored exclude patterns the last read went without (the listing's scopeNotApplied): said on the row until they change.
+  const skippedLast = Object.fromEntries(fiveStateList({ checked: { lastRun: { ...listedRun(ROW_RECORDS.checked), scopeNotApplied: 2 } } }).rows.map((r) => [r.name, r.last])).checked;
+  assert.deepEqual(skippedLast.notes, [{ text: '2 stored exclude patterns not applied — may be too slow to match; change them in the live scope', tone: 'warn' }]);
+  // Every record but one that compared something has no gate pass; no percentage in a string.
+  assert.deepEqual(m.rows.filter((r) => r.last.gate === 'pass').map((r) => r.name).sort(), ['capped', 'checked']);
+  const strings = [];
+  const walk = (v) => { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+  walk(m);
+  assert.deepEqual(strings.filter((x) => x.includes('%')), []);
+  // A journey whose only records stopped: never checked, the stop said.
+  const onlyStopped = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [{ ...listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, null), stoppedRun: stopped }], endpoints: [EP], now: NOW });
+  assert.deepEqual([onlyStopped.rows[0].last.state, onlyStopped.rows[0].last.notes.length], ['never', 1]);
+  // A stopped Run's record as the listing's last run (an older listing): nothing compared, tried.
+  const asLast = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'scan-partial', scan: { notRead: 49, candidates: 220 } })], endpoints: [EP], now: NOW });
+  assert.deepEqual(pick(asLast.rows[0].last), ['nothing', 'Nothing compared', 'Nothing compared', 'Partial scan — 49 of 220 files not read; the previous pack is kept', null, null, null, 'Tried 2 hours ago']);
+});
+
+test('OM2 renderServiceList: each state\'s cell — the match only over a comparison, Live did not answer with its first error beneath (whole on hover, wrapping), Nothing compared with why, what was not read beside a figure, a filter\'s exclusions and the more-than-half warning, a stopped Run beside the last check, an environment the server default no longer scopes; a checked cell keeps today\'s bytes', () => {
+  const m = fiveStateList({ checked: { stoppedRun: { startedAt: new Date(NOW - HOUR).toISOString(), notRead: 49, candidates: 220 } } });
+  // The model's own cell for an environment with no scope while the server has a default (envScopeCell).
+  const unscoped = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, liveScopeDefaults: { metricPrefixes: ['shop_', 'checkout_'], ruleGroups: ['shop'] } }).rows[0].scope;
+  assert.deepEqual(unscoped, { text: null, from: null, defaultIgnored: SCOPE_DEFAULT_IGNORED, defaultSummary: '2 prefixes, 1 rule group' });
+  m.rows.find((r) => r.name === 'checked').scope = unscoped;
+  const c = overviewContainer();
+  renderServiceList(c, m, formModel(FORM_CLOSED), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<b title="Live did not answer — alert_rules_list: HTTP 500: no backend session">Live did not answer</b></span><span class="ov-mx__why">alert_rules_list: HTTP 500: no backend session</span>'), 'the first probe error beneath, the whole on hover');
+  assert.ok(html.includes('<b>Live returned no data</b></span><span class="ov-mx__when'), 'no data: no error to name');
+  assert.ok(html.includes('<b title="Nothing compared — Neither side had anything this check could compare">Nothing compared</b></span><span class="ov-mx__why">Neither side had anything this check could compare</span>'));
+  assert.ok(html.includes('<b title="78% match — Live answered in part: dashboards not read">78% match</b></span><span class="ov-mx__why">Live answered in part: dashboards not read</span>'), 'what was not read, beside the figure');
+  assert.ok(html.includes('<span class="ov-mx__note">12 files excluded by the Kubernetes and Helm filter</span><span class="ov-mx__note ov-mx__note--warn">Not comparable with the check before: this scan could not read 49 of 220 files</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">30 files excluded by the Docker Compose filter — more than half of the files the scan recognised</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.</span>'));
+  assert.ok(html.includes('<span class="ov-mx__scope ov-mx__scope--unscoped" title="This environment has no live scope of its own. The server default (2 prefixes, 1 rule group) applied to it before; it no longer applies to an environment that exists, so its Run reads the whole estate the endpoint serves. Change → Use the server default makes it this environment&#39;s own.">No live scope — the server default no longer applies here; set one</span>'),
+    'an environment the server default no longer scopes says so, the default\'s summary on hover');
+  assert.ok(!/scoped: |\(No live scope/.test(html), 'never "scoped: " without a scope, never the sentence as the summary');
+  assert.ok(!/100% match|null%|undefined%/.test(html), 'no figure over nothing');
+  // A plain checked cell: today's bytes.
+  const plain = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, listedRun(ROW_RECORDS.checked))], endpoints: [EP], now: NOW });
+  const c2 = overviewContainer();
+  renderServiceList(c2, plain, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c2.innerHTML.includes('<b>92% match</b></span><span class="ov-mx__when og-muted">'), 'the match, then when');
+  // The listing could not be read: the word, as before.
+  const unknown = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeysError: '500: x', endpoints: [EP], now: NOW });
+  const c3 = overviewContainer();
+  renderServiceList(c3, unknown, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c3.innerHTML.includes('<b>Not known</b>'));
+});
+
+test('OM8 live-only things alone (every declared difference set aside): one record, one reading — something was compared, so the row, the ring, the Run\'s toast and the board all carry the figure, and the board says Changed with what runs live undeclared, never Nothing compared beside a ring that shows one, never "it matches"', () => {
+  // The engine's set-aside path: the two declared differences set aside, one live rule the repository does not
+  // declare left in the comparison (drift.compared 1, alignment 0).
+  const liveOnly = { ...run, vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), probeErrors: {},
+    drift: { alignmentPct: 0, compared: 1, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 1, setAside: { declaredNotLive: 2, liveNotDeclared: 0 } } };
+  // The row, from the listing.
+  const row = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, listedRun(liveOnly))], endpoints: [EP], now: NOW }).rows[0].last;
+  assert.deepEqual([row.state, row.alignmentPct, row.label], ['checked', 0, '']);
+  // The board: Changed with the figure on the ring; the next step is what runs live undeclared.
+  const m = screen({ run: liveOnly, layout: 'board' });
+  assert.deepEqual([m.still.status, m.still.pill, m.still.tone], ['changed', 'Changed', 'warn']);
+  assert.equal(m.still.sentence, 'Checked 2 hours ago against live — nothing the repository declares was compared: 1 thing runs live that it does not declare. 2 are set aside for this service.');
+  assert.deepEqual([m.board.fidelity.known, m.board.fidelity.alignmentPct, m.board.fidelity.tiles.map((t) => t.value)], [true, 0, [0, 0, 0, 1]]);
+  assert.deepEqual([m.next.sentence, m.next.button?.action, m.primary], ['Nothing the repository declares was compared; 1 thing runs live that it does not declare yet.', 'ov-next-neuron', 'next']);
+  const c = overviewContainer();
+  renderOverview(c, m, { overview: {} });
+  assert.ok(!c.innerHTML.includes('ov-status__part--nothing'), 'the status strip never says nothing compared beside the figure');
+  // While a check runs, the pill is the same word.
+  assert.equal(stillTrueModel({ journey, run: liveOnly, now: NOW, running: true }).status, 'changed');
+  // The Run's toast.
+  const toast = runToastModel({ name: 'Checkout', env: 'prod' }, { record: liveOnly, scan: null });
+  assert.deepEqual([toast.pct, toast.nothing], [0, false]);
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one):
+  // never "it matches" over it.
+  const hollow = { ...liveOnly, drift: { alignmentPct: 100, compared: 3, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } };
+  const h = stillTrueModel({ journey, run: hollow, now: NOW });
+  assert.deepEqual([h.status, h.pill], ['nothing', 'Nothing compared']);
+  assert.ok(!/matches/.test(h.sentence), h.sentence);
+  assert.equal(stillTrueModel({ journey, run: hollow, now: NOW, running: true }).status, 'nothing');
+});
+
 test('Record a chaos run…: the experiments a run can be recorded for, the form it opens (now, Passed, every expected alert ticked), what Save sends and what it refuses, Forget, the tile\'s and the control room\'s button, a studio run said as the studio\'s', () => {
   const T = Date.parse('2026-11-11T15:00:00Z');
   const layered = { layers: { L1: [], L2: [], L3: [], L4: {}, L5: [
@@ -1945,7 +2282,7 @@ test('serviceListModel: one row per service and environment with its two places 
   const [checkout, searchStaging, basket, ledger, searchProd] = m.rows;
   assert.deepEqual(checkout.repository.text, 'acme/checkout');
   assert.deepEqual(checkout.live, { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' });
-  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail' });
+  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail', label: '', reason: '', notes: [], when: 'Checked 2 hours ago' });
   assert.deepEqual(checkout.run, { enabled: true, reason: null, running: false });
   assert.equal(checkout.journey, 'checkout.prod');
   assert.deepEqual([searchStaging.last.state, searchStaging.last.word, searchStaging.last.letter], ['unreachable', 'Unreachable', null]);
@@ -1979,7 +2316,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   const services = [svcRow()];
   // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
   const blank = formOpened(services, { endpoints: [EP] });
-  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '', scopePrefixes: '', scopeFolders: '', scopeExclude: '', scopeGroups: '', scopeDatasource: '' }], 'a new service starts on the recommended targets');
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '', scopePrefixes: '', scopeFolders: '', scopeExclude: '', scopeGroups: '', scopeDatasource: '', surface: '' }], 'a new service starts on the recommended targets');
   assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
   assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
   // Opened on a row: its service and environment, the environment fixed.
@@ -2414,7 +2751,7 @@ test('renderServiceList: Pack file\'s chooser in place of the address, the Live 
 
 // ---------- an environment's live scope ----------
 
-test('a live scope per environment: the five answers and the compact scope; the form prefilled from the environment\'s own or the server\'s snapshot scope, said so; the save sends the service\'s map only when this environment\'s entry changes; the row says "scoped: …"', () => {
+test('a live scope per environment: the five answers and the compact scope; the form opens on the environment\'s own scope, or empty when it has none — the server default never applies to one that exists; the save sends the service\'s map only when this environment\'s entry changes; the row says "scoped: …", or that the default no longer applies', () => {
   assert.deepEqual(SCOPE_FIELDS.map((f) => f.field), ['metricPrefixes', 'folderUids', 'metricExclude', 'ruleGroups', 'datasourceUid']);
   const scope = { metricPrefixes: ['checkout_', 'http_'], folderUids: ['abc'], metricExclude: ['^go_', '^process_'], ruleGroups: ['checkout'], datasourceUid: 'prom' };
   const values = scopeFormValues(scope);
@@ -2437,19 +2774,21 @@ test('a live scope per environment: the five answers and the compact scope; the 
   const mm = formModel(mine, { endpoints: [EP] }).scope;
   assert.deepEqual([mm.shown, mm.from, mm.hint], [true, 'environment', "This environment's own scope: each Run reads only 1 prefix, 2 folders of the estate, and the match counts only that."]);
   assert.equal(formModel(formInput(mine, 'endpointId', LIVE_PACK), { endpoints: [EP] }).scope.shown, false, 'an export of live has no scope');
-  // Unchanged: nothing sent. Changed: the whole map. Cleared: the entry goes (the server's applies).
+  // Unchanged: nothing sent. Changed: the whole map. Cleared: the entry goes (and none applies: the server default does not).
   assert.equal(savePlan(mine.values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, null);
   assert.deepEqual(savePlan(formInput(mine, 'scopeGroups', 'checkout').values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch,
     { liveScopes: { prod: { metricPrefixes: ['checkout_'], folderUids: ['f1', 'f2'], ruleGroups: ['checkout'] } } });
   let cleared = mine;
   for (const f of SCOPE_FIELDS) cleared = formInput(cleared, f.value, '');
   assert.deepEqual(savePlan(cleared.values, { services: [row(own, { prod: own })], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, { liveScopes: {} });
-  assert.equal(formModel(cleared, { endpoints: [EP] }).scope.hint, "Empty: the server's snapshot scope applies.");
+  assert.equal(formModel(cleared, { endpoints: [EP] }).scope.hint, 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.', 'its own scope cleared on the form: no default is offered over it');
 
-  // None of its own: prefilled from the server's, said so; saved as it is, it stays the server's (nothing sent).
-  const prefilled = formOpened([row()], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
-  assert.deepEqual([prefilled.values.scopePrefixes, prefilled.scopeFrom, formModel(prefilled, { endpoints: [EP] }).scope.hint], ['shop_', 'server', "Prefilled from the server's snapshot scope; change it for this environment."]);
-  assert.equal(savePlan(prefilled.values, { services: [row()], serviceId: 1, scopeDefaults: DEFAULTS }).service.patch, null);
+  // None of its own: it opens EMPTY whatever the server default says, says so and offers it; saved as it is, nothing is sent.
+  const none = formOpened([row()], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
+  const nm = formModel(none, { endpoints: [EP] }).scope;
+  assert.deepEqual([none.values.scopePrefixes, none.scopeFrom, nm.offerDefault, nm.defaultIgnored], ['', null, true, SCOPE_DEFAULT_IGNORED]);
+  assert.equal(nm.hint, `${SCOPE_DEFAULT_IGNORED}. Each Run reads the whole estate the endpoint serves; the server default (1 prefix) is not applied to an environment that exists — Use the server default to make it this environment's own.`);
+  assert.equal(savePlan(none.values, { services: [row()], serviceId: 1, scopeDefaults: DEFAULTS, scopePrefill: none.scopePrefill }).service.patch, null);
   // No scope anywhere: empty, said so; a new service typed with one is created with it.
   const blank = formInput(formInput(formOpened([], { endpoints: [EP] }), 'name', 'Basket'), 'scopePrefixes', 'basket_');
   assert.equal(formModel(formOpened([], { endpoints: [EP] }), { endpoints: [EP] }).scope.hint, 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.');
@@ -2464,11 +2803,103 @@ test('a live scope per environment: the five answers and the compact scope; the 
   assert.equal(kept.values.scopeGroups, 'checkout, slo');
   assert.equal(savePlan(formInput(kept, 'targetProfile', 'financial').values, { services: [row(comma, { prod: comma })], serviceId: 1, targetsTouched: true }).service.patch.liveScopes, undefined, 'untouched: never re-split');
 
-  // The row: the resolved scope in a few words, its own or the server's; none for an unscoped read or an export.
+  // The row: its own scope in a few words; none of its own while the server has a default — said so (A14); else none.
   const rowOf = (services, defaults) => serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, liveScopeDefaults: defaults }).rows[0].scope;
   assert.deepEqual(rowOf([row(own, { prod: own })], DEFAULTS), { text: '1 prefix, 2 folders', from: 'environment' });
-  assert.deepEqual(rowOf([row()], DEFAULTS), { text: '1 prefix', from: 'server' });
+  assert.deepEqual(rowOf([row()], DEFAULTS), { text: null, from: null, defaultIgnored: 'No live scope — the server default no longer applies here; set one', defaultSummary: '1 prefix' });
   assert.equal(rowOf([row()], null), null);
+});
+
+test('the deployment surface an environment reads alone: off by default — the form opens on the environment\'s own; five choices and what each means; not for a pack file, nor on a server that keeps none; a save sends the service\'s map only when this environment\'s entry changes; chosen with another environment; a draft keeps a known one; the row names it; the form draws the select', () => {
+  const two = [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }, { id: 12, serviceId: 1, name: 'stg', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }];
+  const row = (envSurfaces = {}) => svcRow({ envSurfaces, environments: two });
+  // Off by default, the key last; an Add of an environment starts off too.
+  const off = formOpened([row()], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.equal(Object.keys(off.values).at(-1), 'surface');
+  assert.equal(off.values.surface, '');
+  const fm = formModel(off, { endpoints: [EP] }).surface;
+  assert.deepEqual([fm.shown, fm.label, fm.options.map((o) => [o.id, o.selected])], [true, 'Read only this deployment surface', [['', true], ['kubernetes', false], ['eks', false], ['local-kubernetes', false], ['compose', false]]]);
+  assert.equal(fm.hint, 'Off: every environment of Checkout reads the same files. Chosen, prod reads only that surface\'s files, and its row says how many the filter left out.');
+  // Its own, said; another environment chosen on the service's Change loads its own.
+  const own = formOpened([row({ prod: 'kubernetes' })], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.equal(own.values.surface, 'kubernetes');
+  assert.equal(formModel(own, { endpoints: [EP] }).surface.hint, 'prod reads only the Kubernetes and Helm files; its row says how many the filter left out.');
+  const picked = formOpened([row({ prod: 'kubernetes', stg: 'compose' })], { serviceId: 1, env: 'prod', endpoints: [EP], pick: true });
+  assert.equal(formInput(picked, 'env', 'stg').values.surface, 'compose');
+  assert.equal(formOpened([row({ prod: 'kubernetes' })], { serviceId: 1, endpoints: [EP], addEnv: true }).values.surface, '', 'a new environment starts off');
+  // Not drawn for a pack file (no scan), nor on a server whose views carry no envSurfaces (an older one would drop it).
+  assert.equal(formModel(formInput(own, 'kind', 'pack'), { endpoints: [EP], uploads: true }).surface.shown, false);
+  assert.equal(formModel(formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP] }), { endpoints: [EP] }).surface.shown, false, 'no envSurfaces on the view: not offered');
+  assert.equal(formModel(formOpened([row()], { endpoints: [EP] }), { endpoints: [EP] }).surface.shown, true, 'a new service on a server that keeps them: offered');
+  // The save: nothing when unchanged; the whole map when chosen; the entry gone when set back to every file.
+  assert.equal(savePlan(own.values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, null);
+  assert.deepEqual(savePlan(formInput(off, 'surface', 'eks').values, { services: [row({ stg: 'compose' })], serviceId: 1 }).service.patch, { envSurfaces: { stg: 'compose', prod: 'eks' } });
+  assert.deepEqual(savePlan(formInput(own, 'surface', '').values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, { envSurfaces: {} });
+  assert.equal(savePlan(formInput(formInput(own, 'kind', 'pack'), 'surface', '').values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, null, 'a pack file leaves the setting as it is');
+  const fresh = formInput(formInput(formOpened([row()], { endpoints: [EP] }), 'name', 'Basket'), 'surface', 'compose');
+  assert.deepEqual(savePlan({ ...fresh.values, location: 'acme/basket' }, { services: [] }).service.create.envSurfaces, { prod: 'compose' }, 'a new service is created with it');
+  const named = formInput(formOpened([row({ prod: 'kubernetes' })], { endpoints: [EP] }), 'name', 'Checkout');
+  assert.equal(savePlan({ ...named.values, location: 'https://github.com/acme/checkout' }, { services: [row({ prod: 'kubernetes' })], scopeKnown: false }).service.patch?.envSurfaces, undefined, 'a blank Add naming the service never takes away one it did not draw');
+  // A draft: a known surface comes back, an unknown one does not.
+  const draft = formDraft(formInput(off, 'surface', 'eks'), { now: NOW });
+  assert.equal(formRestored([row()], draft, { endpoints: [EP], now: NOW }).values.surface, 'eks');
+  assert.equal(formRestored([row()], { ...draft, values: { ...draft.values, surface: 'helm' } }, { endpoints: [EP], now: NOW }).values.surface, '');
+  // The row says which surface an environment reads alone.
+  const rows = serviceListModel({ services: [row({ prod: 'kubernetes' })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows;
+  assert.deepEqual(rows.map((r) => [r.env, r.surface]), [['prod', { id: 'kubernetes', label: 'Kubernetes and Helm' }], ['stg', null]]);
+  // The form draws the select, its choices and its hint.
+  const c = overviewContainer();
+  renderServiceList(c, serviceListModel({ services: [row({ prod: 'kubernetes' })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }), formModel(own, { endpoints: [EP] }), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<span class="ov-form__l">Read only this deployment surface</span><select class="og-input" data-field="surface" aria-describedby="ov-form-surface-hint">'), 'the select, wired as every answer is');
+  assert.ok(html.includes('<option value="kubernetes" selected>Kubernetes and Helm</option>') && html.includes('<option value="">No — every file the scan reads (default)</option>'));
+  assert.ok(html.includes('id="ov-form-surface-hint">prod reads only the Kubernetes and Helm files; its row says how many the filter left out.</span>'));
+});
+
+test('a Run stopped on a scan that lost files: the refusal keeps what the scan read and the scan kept, never anything for another 409; the board reads the newest run that checked something and the stop after it — reading further back only when the newest is a stop', async () => {
+  const body = { ok: false, outcome: 'scan-partial', error: '49 of 220 files could not be read: a.yaml — it could not be downloaded (Azure DevOps 403 — tried 4 times) — the Run stopped: …', scan: { files: 151, notRead: 69, lost: 49, candidates: 220 }, kept: { id: 'uploaded-shop-1', label: 'Shop · prod · repository' }, record: {} };
+  const err = servicesRefusal(409, JSON.stringify(body));
+  assert.deepEqual([err.status, err.message.startsWith('409: 49 of 220 files could not be read'), err.outcome, err.scan, err.kept], [409, true, 'scan-partial', body.scan, body.kept]);
+  assert.equal(servicesRefusal(409, { ...body, kept: null }).kept, null, 'no scan kept: null');
+  const other = servicesRefusal(409, { ok: false, error: 'Shop names no repository yet' });
+  assert.ok(!('outcome' in other) && !('scan' in other) && !('kept' in other), 'another 409 carries none of it');
+
+  const { loadOverviewFacts } = await import('../studio/overview-api.mjs');
+  const checked = { startedAt: '2026-11-17T09:00:00.000Z', outcome: 'pass', grade: { letter: 'B' } };
+  const stop = { startedAt: '2026-11-17T10:00:00.000Z', outcome: 'scan-partial', error: 'x' };
+  const asked = [];
+  // The listing as the server gives it (GET /api/journeys): lastRun is the last check, never a stop; a newer stop is stoppedRun.
+  const listedOf = (runs) => {
+    const check = runs.find((r) => r.outcome !== 'scan-partial');
+    return { name: 'shop.prod', lastRun: check ? { startedAt: check.startedAt, outcome: check.outcome } : null, stoppedRun: runs[0]?.outcome === 'scan-partial' ? { startedAt: runs[0].startedAt } : null };
+  };
+  // The runs route as the server answers it: `checked=1` keeps the runs that checked something, past every stop;
+  // `knowsChecked: false` is a server from before it, which answers with its newest runs.
+  const facts = (runs, { knowsChecked = true } = {}) => loadOverviewFacts({
+    journeyFor: (list) => list[0],
+    fetchFn: async (path) => {
+      asked.push(path);
+      if (path === '/api/journeys') return { journeys: [listedOf(runs)] };
+      const limit = Number(/limit=(\d+)/.exec(path)[1]);
+      const list = knowsChecked && /[?&]checked=1\b/.test(path) ? runs.filter((r) => r.outcome !== 'scan-partial') : runs;
+      return { runs: list.slice(0, limit) };
+    },
+  });
+  const plain = await facts([checked]);
+  assert.deepEqual([plain.run, plain.stopped, asked.filter((p) => p.includes('/runs')).length], [checked, null, 1], 'the newest run alone, read once, as before');
+  asked.length = 0;
+  const afterStop = await facts([stop, stop, checked]);
+  assert.deepEqual([afterStop.run, afterStop.stopped], [checked, stop], 'the stop is not the check: the board keeps the check of the pack the service kept, and the stop beside it');
+  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=1&checked=1']);
+  // More stops than the old look-back of 25: the check is still read.
+  const manyStops = [...Array.from({ length: 40 }, () => stop), checked];
+  assert.deepEqual([(await facts(manyStops)).run, (await facts(manyStops)).stopped], [checked, stop], 'past every stop, however many');
+  // A server that does not know checked=1 answers with the stop: the 25 newest, as before.
+  asked.length = 0;
+  const older = await facts([stop, stop, checked], { knowsChecked: false });
+  assert.deepEqual([older.run, older.stopped], [checked, stop]);
+  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=1&checked=1', '/api/journeys/shop.prod/runs?limit=25']);
+  assert.deepEqual([(await facts([stop])).run, (await facts([stop])).stopped], [null, stop], 'only stops: nothing checked yet');
 });
 
 test('renderServiceList: the live scope under the endpoint — five fields with their values, the hint — and "scoped: …" in the matrix cell', () => {
@@ -2483,6 +2914,251 @@ test('renderServiceList: the live scope under the endpoint — five fields with 
   for (const f of SCOPE_FIELDS) assert.ok(html.includes(`data-field="${f.value}"`), f.value);
   assert.ok(html.includes('each Run reads only 1 prefix, 2 folders of the estate'));
   assert.ok(html.includes('<span class="ov-mx__scope og-muted" title="prod&#39;s own live scope: the Run reads only this of the estate">scoped: 1 prefix, 2 folders</span>'), 'the cell says it');
+});
+
+// ---------- the server default pre-fills a new environment, and never applies on its own (SPEC P5) ----------
+
+test('a new environment is pre-filled from the server default, each field said so; saved untouched it is the environment\'s own; typed prefixes that differ drop the default\'s untouched answers and say so; a service whose environments read other prefixes is not pre-filled; an existing environment\'s own scope is never written over by the default (a blank Add that keys it); Use the server default fills an environment that has none; a host that passes only scopeDefaults keeps the rule', () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'], metricExclude: ['^go_'] };
+  const env = (name, liveScope = null) => ({ id: name === 'prod' ? 11 : 12, serviceId: 1, name, mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope });
+  const svc = (envs, liveScopes = {}) => svcRow({ liveScopes, environments: envs });
+  // A new service: pre-filled, each field said "from the server default".
+  const fresh = formOpened([], { endpoints: [EP], scopeDefaults: DEFAULTS });
+  const fm = formModel(fresh, { endpoints: [EP] }).scope;
+  assert.deepEqual([fresh.values.scopePrefixes, fresh.values.scopeGroups, fresh.values.scopeExclude, fresh.scopeFrom], ['shop_', 'shop-slo', '^go_', 'server']);
+  assert.deepEqual(fm.fields.filter((x) => x.fromDefault).map((x) => x.value), ['scopePrefixes', 'scopeExclude', 'scopeGroups']);
+  assert.equal(fm.hint, "Pre-filled from the server default: saved as this environment's own scope. Change or clear any field — the server default never applies on its own.");
+  // Saved untouched: the environment's own (the default never applies on its own, so it must be kept to apply).
+  const named = formInput(fresh, 'name', 'Shop');
+  assert.deepEqual(savePlan({ ...named.values, location: 'acme/shop' }, { services: [], scopePrefill: fresh.scopePrefill }).service.create.liveScopes, { prod: DEFAULTS });
+  // Typed prefixes that differ: the default's rule groups and patterns are another service's — not saved, said so.
+  const typed = formInput(named, 'scopePrefixes', 'basket_');
+  const tm = formModel(typed, { endpoints: [EP] }).scope;
+  assert.equal(tm.dropped, 'The server default is for the metric prefixes shop_: its exclude patterns and rule groups will not be saved for this environment — type them again to keep them.');
+  assert.deepEqual(savePlan({ ...typed.values, location: 'acme/shop' }, { services: [], scopePrefill: fresh.scopePrefill }).service.create.liveScopes, { prod: { metricPrefixes: ['basket_'] } });
+  assert.deepEqual(savePlan({ ...formInput(typed, 'scopeGroups', 'basket').values, location: 'acme/shop' }, { services: [], scopePrefill: fresh.scopePrefill }).service.create.liveScopes,
+    { prod: { metricPrefixes: ['basket_'], ruleGroups: ['basket'] } }, 'a field typed again is the person\'s');
+  // A host that passes only scopeDefaults (an older vendored host): the default is the pre-fill, the rule holds.
+  assert.deepEqual(savePlan({ ...typed.values, location: 'acme/shop' }, { services: [], scopeDefaults: DEFAULTS }).service.create.liveScopes, { prod: { metricPrefixes: ['basket_'] } });
+  // Add environment on a service whose environments read other prefixes: not pre-filled, said why.
+  const other = { metricPrefixes: ['checkout_'] };
+  const refused = formOpened([svc([env('prod', other)], { prod: other })], { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS });
+  assert.deepEqual([refused.values.scopePrefixes, refused.scopePrefillRefused], ['', { defaultPrefixes: ['shop_'], servicePrefixes: ['checkout_'] }]);
+  assert.equal(formModel(formInput(refused, 'name', 'Checkout'), { endpoints: [EP] }).scope.hint, "Empty: the server default (prefixes shop_) is for another service — Checkout's environments read checkout_.");
+  assert.deepEqual(scopePrefillOf(svc([env('prod', { metricPrefixes: ['shop_'] })]), DEFAULTS), { values: scopeFormValues(DEFAULTS) }, 'the same prefixes: pre-filled');
+  assert.equal(scopePrefillOf(null, null), null, 'no default: nothing');
+  // A blank Add whose name and environment key an existing environment with a scope of its own: the pre-fill is never written over it.
+  const own = { metricPrefixes: ['checkout_'], folderUids: ['f1'] };
+  const blankAdd = formInput(formOpened([svc([env('prod', own)], { prod: own })], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Checkout');
+  assert.equal(blankAdd.values.scopePrefixes, 'shop_', 'a blank Add is pre-filled');
+  assert.equal(savePlan({ ...blankAdd.values, location: 'https://github.com/acme/checkout' }, { services: [svc([env('prod', own)], { prod: own })], scopePrefill: blankAdd.scopePrefill, scopeKnown: false }).service.patch?.liveScopes, undefined,
+    'the environment keeps its own scope');
+  assert.deepEqual(scopeSaveOf({ ...blankAdd.values }, { was: own, prefill: DEFAULTS, known: true }), own, 'over an environment\'s own scope, the untouched pre-fill is never kept: the environment keeps its own, never cleared by answers not saved');
+  // An existing environment with none of its own: empty, offered the default; Use the server default makes it its own once saved.
+  const bare = formOpened([svc([env('prod')])], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
+  assert.deepEqual([bare.values.scopePrefixes, formModel(bare, { endpoints: [EP] }).scope.offerDefault], ['', true]);
+  const used = useServerDefaultScope(bare);
+  const um = formModel(used, { endpoints: [EP] }).scope;
+  assert.deepEqual([used.values.scopePrefixes, used.scopeFrom, um.offerDefault, um.fields.find((x) => x.value === 'scopePrefixes').fromDefault], ['shop_', 'server', false, true]);
+  assert.deepEqual(savePlan(used.values, { services: [svc([env('prod')])], serviceId: 1, scopePrefill: used.scopePrefill }).service.patch, { liveScopes: { prod: DEFAULTS } });
+  const noDefault = { ...bare, scopeDefaults: null };
+  assert.equal(useServerDefaultScope(noDefault), noDefault, 'no default: the form as it was');
+});
+
+test('a server default that names no metric prefixes (the folder, rule groups and exclude pattern docs/VENDORING.md sets) cannot show it is a service\'s: never pre-filled — a new service, Add environment — said why and offered; used, then typed prefixes keep none of its other answers, said before the save', () => {
+  const DEFAULTS = { folderUids: ['folder-a'], ruleGroups: ['Group One', 'Group Two'], metricExclude: ['^demo_event_(?:\\d+|blank)_total$'] };
+  const REFUSED = { defaultPrefixes: [], servicePrefixes: null, unprefixed: true };
+  assert.deepEqual(scopePrefillOf(null, DEFAULTS), { refused: REFUSED }, 'no prefixes: nothing shows it matches');
+  assert.deepEqual(scopePrefillOf(svcRow(), DEFAULTS), { refused: REFUSED });
+  // A new service: the scope opens empty, says why, offers the default.
+  const fresh = formInput(formOpened([], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Second Shop');
+  const fm = formModel(fresh, { endpoints: [EP] }).scope;
+  assert.deepEqual([fresh.values.scopeFolders, fresh.values.scopeGroups, fresh.values.scopeExclude, fresh.scopePrefill, fresh.scopePrefillRefused], ['', '', '', null, REFUSED]);
+  assert.deepEqual([fm.from, fm.offerDefault, fm.fields.filter((x) => x.fromDefault).length, fm.dropped], [null, true, 0, null]);
+  assert.equal(fm.hint, "Empty: the server default (1 folder, 2 rule groups, 1 exclude pattern) names no metric prefixes, so nothing shows it is Second Shop's — it is not pre-filled. Use the server default to make it this environment's own.");
+  // Its owner types the service's own prefixes: only those are saved (before, the default's folder, groups and pattern rode along).
+  const typed = formInput(fresh, 'scopePrefixes', 'http_');
+  const tm = formModel(typed, { endpoints: [EP] }).scope;
+  assert.deepEqual([tm.dropped, tm.hint], [null, "This environment's own scope: each Run reads only 1 prefix of the estate, and the match counts only that."]);
+  assert.deepEqual(savePlan({ ...typed.values, location: 'acme/shop' }, { services: [], scopeDefaults: DEFAULTS, scopePrefill: typed.scopePrefill }).service.create.liveScopes, { prod: { metricPrefixes: ['http_'] } });
+  // Add environment on a service: the same.
+  const added = formOpened([svcRow()], { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS });
+  assert.deepEqual([added.values.scopeGroups, added.scopePrefillRefused, formModel(added, { endpoints: [EP] }).scope.offerDefault], ['', REFUSED, true]);
+  // Used on purpose: the environment's own once saved, each field said so.
+  const used = useServerDefaultScope(fresh);
+  const um = formModel(used, { endpoints: [EP] }).scope;
+  assert.deepEqual([used.values.scopeGroups, um.from, um.offerDefault, um.fields.filter((x) => x.fromDefault).map((x) => x.value)], ['Group One, Group Two', 'server', false, ['scopeFolders', 'scopeExclude', 'scopeGroups']]);
+  assert.deepEqual(savePlan({ ...used.values, location: 'acme/shop' }, { services: [], scopePrefill: used.scopePrefill }).service.create.liveScopes, { prod: DEFAULTS });
+  // …then the service's own prefixes typed: they differ from the default's (none), so its other answers are not saved, and the form says so.
+  const own = formInput(used, 'scopePrefixes', 'http_');
+  const om = formModel(own, { endpoints: [EP] }).scope;
+  assert.equal(om.dropped, 'The server default names no metric prefixes, so nothing says it is for http_: its folder uids, exclude patterns and rule groups will not be saved for this environment — type them again to keep them.');
+  assert.equal(om.hint, "This environment's own scope: each Run reads only 1 prefix of the estate, and the match counts only that.", 'the hint says what a save keeps');
+  assert.deepEqual(savePlan({ ...own.values, location: 'acme/shop' }, { services: [], scopePrefill: own.scopePrefill }).service.create.liveScopes, { prod: { metricPrefixes: ['http_'] } });
+  assert.deepEqual(scopeSaveOf(formInput(own, 'scopeGroups', 'shop').values, { prefill: DEFAULTS }), { metricPrefixes: ['http_'], ruleGroups: ['shop'] }, 'a field typed again is the person\'s');
+  // A default WITH prefixes is still pre-filled: the rule above is for a default that cannot show it matches.
+  assert.equal(formOpened([], { endpoints: [EP], scopeDefaults: { ...DEFAULTS, metricPrefixes: ['shop_'] } }).values.scopePrefixes, 'shop_');
+});
+
+test('a blank Add whose name keys a service already listed says before the save that the server default\'s pre-filled answers will not be saved onto it, as savePlan does; the hint never says "saved" then', () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'] };
+  const services = [svcRow()];
+  const blank = formInput(formInput(formOpened(services, { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Checkout'), 'env', 'staging');
+  assert.equal(blank.values.scopePrefixes, 'shop_', 'a blank form is pre-filled');
+  const m = formModel(blank, { endpoints: [EP] }).scope;
+  assert.equal(m.dropped, "Checkout is a service already listed, and this form was not opened on it: the server default's metric prefixes and rule groups will not be saved for staging — type your own, or use Change on its row.");
+  assert.equal(m.hint, "None of these answers is saved as staging's live scope.");
+  const plan = savePlan({ ...blank.values, location: 'https://github.com/acme/checkout' }, { services, serviceId: blank.serviceId, scopePrefill: blank.scopePrefill, scopeKnown: !!blank.record });
+  assert.deepEqual([plan.service.id, plan.service.patch?.liveScopes, plan.env], [1, undefined, { create: { name: 'staging' } }], 'and the save keeps none of them, as the form said');
+  // A typed answer of the person's own is saved onto it, and the hint says what is.
+  const groups = formInput(blank, 'scopeGroups', 'checkout-slo');
+  assert.equal(formModel(groups, { endpoints: [EP] }).scope.hint, "This environment's own scope: each Run reads only 1 rule group of the estate, and the match counts only that.");
+  assert.deepEqual(savePlan({ ...groups.values, location: 'https://github.com/acme/checkout' }, { services, scopePrefill: groups.scopePrefill, scopeKnown: false }).service.patch.liveScopes, { staging: { ruleGroups: ['checkout-slo'] } });
+  // A name no service has: a new service, the pre-fill saved as it says.
+  const other = formInput(formOpened(services, { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Basket');
+  assert.deepEqual([formModel(other, { endpoints: [EP] }).scope.dropped, formModel(other, { endpoints: [EP] }).scope.from], [null, 'server']);
+});
+
+test('the sign-in round trip (formDraft → formRestored) keeps the server default the form was pre-filled with: Use the server default on an environment that exists, then the service\'s own prefixes — the restored form drops and saves what it said before', () => {
+  const DEFAULTS = { metricPrefixes: ['shopa_'], ruleGroups: ['shop-a-slo'], metricExclude: ['^go_'] };
+  const services = [svcRow({ environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: null }] })];
+  const form = formInput(useServerDefaultScope(formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS })), 'scopePrefixes', 'shopb_');
+  const DROPPED = 'The server default is for the metric prefixes shopa_: its exclude patterns and rule groups will not be saved for this environment — type them again to keep them.';
+  const save = (f) => savePlan(f.values, { services, serviceId: 1, scopePrefill: f.scopePrefill ?? null, scopeKnown: !!f.record }).service.patch?.liveScopes ?? null;
+  assert.deepEqual([formModel(form, { endpoints: [EP] }).scope.dropped, save(form)], [DROPPED, { prod: { metricPrefixes: ['shopb_'] } }]);
+  const draft = formDraft(form, { now: NOW });
+  assert.deepEqual(draft.scopePrefill, DEFAULTS, 'the draft carries the pre-fill, compact');
+  const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW });
+  assert.deepEqual([back.values.scopePrefixes, back.values.scopeGroups, back.scopePrefill], ['shopb_', 'shop-a-slo', DEFAULTS]);
+  assert.deepEqual([formModel(back, { endpoints: [EP] }).scope.dropped, save(back)], [DROPPED, { prod: { metricPrefixes: ['shopb_'] } }], 'before: no sentence, and the default\'s rule group and pattern saved as the environment\'s own');
+  // A default with no prefixes, used on a new environment (never pre-filled): the round trip keeps that too.
+  const UNPREFIXED = { ruleGroups: ['shop-a-slo'] };
+  const fresh = useServerDefaultScope(formInput(formOpened([], { endpoints: [EP], scopeDefaults: UNPREFIXED }), 'name', 'Shop'));
+  const freshBack = formRestored([], formDraft(fresh, { now: NOW }), { endpoints: [EP], scopeDefaults: UNPREFIXED, now: NOW });
+  assert.deepEqual([freshBack.values.scopeGroups, freshBack.scopePrefill, formModel(freshBack, { endpoints: [EP] }).scope.from], ['shop-a-slo', UNPREFIXED, 'server']);
+  // A draft without one (older, or none was used) opens as before; one whose pre-fill is no scope is ignored.
+  assert.equal(formRestored(services, { ...draft, scopePrefill: undefined }, { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW }).scopePrefill, null);
+  assert.equal(formRestored(services, { ...draft, scopePrefill: ['x'] }, { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW }).scopePrefill, null);
+  assert.equal(formDraft(formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS }), { now: NOW }).scopePrefill, undefined, 'no pre-fill: none in the draft');
+});
+
+test('the scope check words what it cannot know: declared rules filed by a folder title the live read gave no uid of (a note — never "they do not say which folder"), and a rule group past the ones the live read kept (never "Not in the last live read")', () => {
+  const env = { id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: null };
+  const services = [svcRow({ environments: [env] })];
+  const viewOf = (values, answer) => {
+    let form = formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP] });
+    for (const [k, v] of Object.entries(values)) form = formInput(form, k, v);
+    const ask = scopeCheckOf(form);
+    return scopeCheckView(scopeChecked(scopeChecking(form, ask.key), answer, ask.key, { now: NOW }));
+  };
+  const readAt = new Date(NOW - 2 * 3600_000).toISOString();
+  const live = { packId: 'l', label: 'live', readAt, folders: null, ruleGroups: ['shop'], ruleGroupsKept: null, foldersNotRead: [], missingGroups: [] };
+  // Every declared rule filed under the title "Shop", the live read titled none of the scope's folders.
+  const titled = viewOf({ scopeFolders: 'shop-alerts' }, { declared: { families: [{ family: 'alert_rule', declared: 3, inside: 0, outside: 0, unknown: 3, byTitle: 3, titles: ['Shop'], untitledFolders: ['shop-alerts'] }] }, live });
+  assert.deepEqual(titled.warnings, [], 'no warning against a scope that may well be right');
+  assert.deepEqual(titled.notes, ['None of the 3 declared alert rules is known to be inside this scope: they name their folder by its title only ("Shop"), and the last live read of prod (2 hours ago) did not give the title of the folder shop-alerts. A Run with it compares those it finds in these folders; one it does not find reads not checked.']);
+  // Some by title, some saying nothing, one outside: a warning that says each.
+  const mixed = viewOf({ scopeFolders: 'f1', scopeGroups: 'shop' }, { declared: { families: [{ family: 'alert_rule', declared: 4, inside: 0, outside: 1, unknown: 3, byTitle: 2, titles: ['Shop'], untitledFolders: ['f1'] }] }, live });
+  assert.deepEqual(mixed.warnings, ['None of the 4 declared alert rules is known to be inside this scope: 2 of them name their folder by its title only ("Shop"), and the last live read of prod (2 hours ago) did not give the title of the folder f1; 1 of them do not say which folder or group they are in; 1 are outside.']);
+  // An answer from an older server (no byTitle): as before.
+  assert.deepEqual(viewOf({ scopeFolders: 'f1' }, { declared: { families: [{ family: 'alert_rule', declared: 3, inside: 0, outside: 0, unknown: 3 }] }, live }).warnings,
+    ['None of the 3 declared alert rules is known to be inside this scope: 3 of them do not say which folder they are in.']);
+  // The live read listed more rule groups than it kept: a group not among them is not known missing.
+  const many = viewOf({ scopeGroups: 'zz-shop' }, { declared: { families: [] }, live: { ...live, ruleGroups: ['group-000', 'group-001'], ruleGroupsKept: { kept: 500, of: 601 }, missingGroups: null } });
+  assert.deepEqual([many.warnings, many.notes], [[], ['The last live read of prod (2 hours ago) listed 601 rule groups and kept the first 500: "zz-shop" is not among them, so whether it is there is not known.']]);
+  assert.deepEqual(viewOf({ scopeGroups: 'group-001' }, { declared: { families: [] }, live: { ...live, ruleGroups: ['group-000', 'group-001'], ruleGroupsKept: { kept: 500, of: 601 }, missingGroups: null } }).notes, [], 'a group among those kept: nothing to say');
+});
+
+test('the form keeps both settings an environment has of its own, the deployment surface and the live scope, every way it opens and saves: its own of each; another environment chosen, its own of each (no scope: empty, never the default); Add environment, every file and the default pre-filled; a draft, both answers back; one save, both maps; a blank Add that keys an environment writes neither over', () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'] };
+  const env = (name, liveScope = null) => ({ id: name === 'prod' ? 11 : 12, serviceId: 1, name, mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope });
+  const prodScope = { metricPrefixes: ['shop_'], folderUids: ['f1'] };
+  const svc = svcRow({ liveScopes: { prod: prodScope }, envSurfaces: { prod: 'kubernetes', stg: 'compose' }, environments: [env('prod', prodScope), env('stg')] });
+  const prod = formOpened([svc], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS, pick: true });
+  assert.deepEqual([prod.values.surface, prod.values.scopePrefixes, prod.values.scopeFolders, prod.scopeFrom, prod.scopePrefill], ['kubernetes', 'shop_', 'f1', 'environment', null]);
+  const stg = formInput(prod, 'env', 'stg');
+  assert.deepEqual([stg.values.surface, stg.values.scopePrefixes, stg.values.scopeGroups, stg.scopeFrom, stg.scopePrefill], ['compose', '', '', null, null]);
+  assert.equal(formModel(stg, { endpoints: [EP] }).scope.offerDefault, true, 'offered, never applied');
+  const added = formOpened([svc], { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS });
+  assert.deepEqual([added.values.surface, added.values.scopePrefixes, added.values.scopeGroups, added.scopeFrom], ['', 'shop_', 'shop-slo', 'server']);
+  const draft = formDraft(formInput(formInput(stg, 'surface', 'eks'), 'scopeGroups', 'stg-slo'), { now: NOW });
+  const back = formRestored([svc], draft, { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW });
+  assert.deepEqual([back.values.env, back.values.surface, back.values.scopeGroups, back.values.scopePrefixes], ['stg', 'eks', 'stg-slo', '']);
+  assert.deepEqual(savePlan(back.values, { services: [svc], serviceId: 1, scopePrefill: back.scopePrefill }).service.patch,
+    { liveScopes: { prod: prodScope, stg: { ruleGroups: ['stg-slo'] } }, envSurfaces: { prod: 'kubernetes', stg: 'eks' } });
+  const blank = formInput(formOpened([svc], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Checkout');
+  assert.deepEqual([blank.values.env, blank.values.surface, blank.values.scopeGroups], ['prod', '', 'shop-slo'], 'a blank Add: every file, the default pre-filled');
+  const plan = savePlan({ ...blank.values, location: 'https://github.com/acme/checkout' }, { services: [svc], scopePrefill: blank.scopePrefill, scopeKnown: false });
+  assert.deepEqual([plan.service.patch?.liveScopes, plan.service.patch?.envSurfaces], [undefined, undefined], 'prod keeps its own scope and its own surface');
+});
+
+test('the scope check: asked for a service\'s environment (one not added yet too) with a scope typed; an answer for an older scope is dropped; every sentence; a pre-fill whose prefixes the service\'s declared metrics never carry is cleared and said why', async () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'] };
+  const env = { id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: { ruleGroups: ['shop', 'gone'], folderUids: ['f1'] } };
+  const services = [svcRow({ liveScopes: { prod: env.liveScope }, environments: [env] })];
+  const form = formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP] });
+  const ask = scopeCheckOf(form);
+  assert.deepEqual([ask.serviceId, ask.env, ask.scope], [1, 'prod', { folderUids: ['f1'], ruleGroups: ['shop', 'gone'] }]);
+  assert.equal(scopeCheckOf(formInput(form, 'endpointId', LIVE_PACK)), null, 'an export of live: nothing to check');
+  assert.equal(scopeCheckOf(formOpened([], { endpoints: [EP] })), null, 'a new service: no record to check against');
+  const adding = formInput(formOpened(services, { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS }), 'env', 'staging');
+  assert.equal(scopeCheckOf(adding)?.env, 'staging', 'an environment not added yet is checked against the service\'s own pack');
+  // Checking, then the answer: the sentences.
+  const checking = scopeChecking(form, ask.key);
+  assert.deepEqual(scopeCheckView(checking), { state: 'checking', warnings: [], notes: ['Checking the scope…'] });
+  const answer = {
+    declared: { packId: 'p', label: 'shop', families: [
+      { family: 'dashboard', declared: 3, inside: 0, outside: 3, unknown: 0 },
+      { family: 'alert_rule', declared: 4, inside: 0, outside: 1, unknown: 3 },
+      { family: 'recording_rule', declared: 2, inside: 2, outside: 0, unknown: 0 },
+    ] },
+    live: { packId: 'l', label: 'live', readAt: new Date(NOW - 2 * 3600_000).toISOString(), folders: ['f1'], ruleGroups: ['payments', 'shop'], foldersNotRead: [], missingGroups: ['gone'] },
+  };
+  const done = scopeChecked(checking, answer, ask.key, { now: NOW });
+  const v = scopeCheckView(done);
+  assert.deepEqual(v.warnings, [
+    'Not in the last live read of prod (2 hours ago): the rule group "gone". It listed payments, shop in the folders f1.',
+    'None of the 3 declared dashboards is inside this scope: a Run would compare none of them.',
+    'None of the 4 declared alert rules is known to be inside this scope: 3 of them do not say which folder or group they are in, 1 are outside.',
+  ]);
+  assert.deepEqual(v.notes, []);
+  assert.equal(scopeChecked(checking, answer, 'an older key'), checking, 'an answer for another scope is dropped');
+  assert.deepEqual(scopeCheckView(scopeCheckFailed(checking, new Error('HTTP 400: liveScopes.prod: scope.metricPrefixes[0] "9bad" is not a metric-name prefix'), ask.key)).notes, ['The scope could not be checked: HTTP 400: liveScopes.prod: scope.metricPrefixes[0] "9bad" is not a metric-name prefix.']);
+  // No live read, an older one, folders not read, no scan.
+  const noted = (a) => scopeCheckView(scopeChecked(checking, a, ask.key, { now: NOW })).notes;
+  assert.deepEqual(noted({ declared: null, live: null }), ['No live read of prod yet: Run it once to check the rule groups against live.', 'No scan of Checkout in prod yet: Run it once to check this scope against what the repository declares.']);
+  assert.deepEqual(noted({ declared: { families: [] }, live: { readAt: null, folders: null, ruleGroups: null, foldersNotRead: [], missingGroups: null } }), ['The last live read of prod did not record its rule groups: Run it again to check them.']);
+  assert.deepEqual(noted({ declared: { families: [] }, live: { readAt: null, folders: ['f9'], ruleGroups: ['x'], foldersNotRead: ['f1'], missingGroups: null } }), ['The last live read of prod read only the folders f9: Run it with this scope once to check the rule groups of f1.']);
+  assert.deepEqual(scopeCheckView(scopeChecked(checking, { declared: { families: [] }, live: { readAt: null, folders: null, ruleGroups: [], foldersNotRead: [], missingGroups: ['shop', 'gone'] } }, ask.key)).warnings,
+    ['The last live read of prod listed no rule group in the folders f1, so "shop", "gone" are not there.']);
+  // A pre-fill whose prefixes no declared metric of the service carries: cleared, said why.
+  const pre = formInput(formOpened(services, { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS }), 'env', 'staging');
+  const preAsk = scopeCheckOf(pre);
+  const cleared = scopeChecked(scopeChecking(pre, preAsk.key), { declared: { families: [{ family: 'metric', declared: 12, inside: 0, outside: 12, unknown: 0 }] }, live: null }, preAsk.key);
+  assert.deepEqual([cleared.values.scopePrefixes, cleared.values.scopeGroups, cleared.scopePrefill, cleared.scopePrefillRefused], ['', '', null, { defaultPrefixes: ['shop_'], servicePrefixes: null, declared: 12 }]);
+  assert.equal(formModel(cleared, { endpoints: [EP] }).scope.hint, "Empty: the server default (prefixes shop_) is for another service — Checkout's repository declares no metric with those prefixes.");
+  // The request: POST, the environment and the scope.
+  const calls = [];
+  await checkServiceScope(1, { env: 'prod', scope: { ruleGroups: ['shop'] } }, { fetchFn: async (url, init) => { calls.push([url, init.method, JSON.parse(init.body)]); return { ok: true }; } });
+  assert.deepEqual(calls, [['/api/services/1/scope-check', 'POST', { env: 'prod', scope: { ruleGroups: ['shop'] } }]]);
+});
+
+test('renderServiceList: a field holding the server default says so, what a save would not keep, Use the server default, the scope check\'s block (drawn even when empty, so the host can replace it)', () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'] };
+  const fresh = formInput(formInput(formOpened([], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Shop'), 'scopePrefixes', 'basket_');
+  const c = overviewContainer();
+  renderServiceList(c, serviceListModel({ services: [], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }), formModel(fresh, { endpoints: [EP] }), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('Rule groups<span class="ov-form__scope-from og-muted"> · from the server default</span>'), 'the rule groups field still holds the default');
+  assert.ok(!html.includes('Metric prefixes<span class="ov-form__scope-from'), 'the prefixes were typed');
+  assert.ok(html.includes('<span class="ov-form__scope-warn">The server default is for the metric prefixes shop_: its rule groups will not be saved for this environment — type them again to keep them.</span>'));
+  assert.ok(html.includes('<div class="ov-form__scope-check" role="status"></div>'), 'the check block, empty');
+  const bare = formOpened([svcRow({ environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: null }] })], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
+  const c2 = overviewContainer();
+  renderServiceList(c2, serviceListModel({ services: [], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }), formModel(bare, { endpoints: [EP] }), { overview: {} });
+  assert.ok(c2.innerHTML.includes('data-ux-action="ov-form-scope-default">Use the server default</button>'));
+  assert.ok(c2.innerHTML.includes(SCOPE_DEFAULT_IGNORED));
+  assert.equal(scopeCheckBlockHtml({ warnings: ['A <b>'], notes: ['n'] }), '<div class="ov-form__scope-check" role="status"><ul class="ov-form__scope-warn"><li>A &lt;b&gt;</li></ul><span class="ov-form__hint og-muted">n</span></div>');
 });
 
 // ---------- a repository read with the person's own token ----------
@@ -2600,7 +3276,7 @@ test('the form offers the person\'s own token where a row would — GitHub (opti
   assert.equal(authOf('github', { heldTokens: undefined }), null, 'a host that passes no heldTokens takes no token from the form: no field');
   assert.equal(formModel(open('github'), { endpoints: [EP] }).auth, null);
   // The form's values never hold it: nothing typed there is drawn back.
-  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource']);
+  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource', 'surface']);
   const opened = open('github');
   assert.equal(formInput(opened, 'repoAuth', 'made-up-token'), opened, 'and typing never reaches them: the field is no form value');
 });
@@ -2732,7 +3408,7 @@ test('the form offers Sign in to … before the token where the host offers it, 
   const draft = formDraft(form, { now: NOW });
   assert.deepEqual(draft, { v: 1, at: NOW, serviceId: null, env: null, values: form.values, targetsTouched: false });
   assert.notEqual(draft.values, form.values, 'a copy');
-  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource'], 'the form holds no token, so the draft cannot');
+  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource', 'surface'], 'the form holds no token, so the draft cannot');
   assert.equal(formDraft(FORM_CLOSED), null);
   const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], now: NOW + 60_000 });
   assert.deepEqual([back.open, back.mode, back.serviceId, back.saving, back.error, back.values], [true, 'add', null, false, null, form.values]);

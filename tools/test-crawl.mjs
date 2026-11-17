@@ -833,6 +833,174 @@ assert(togProdProducts.has('prometheus'),
 assert(togProdProducts.has('victoriametrics'),
   'prod scan still reads base-values backends');
 
+// ---------- every file, unless a deployment surface is chosen; a chart is a chart wherever it is ----------
+// A service environment's Run passes `surface` (its setting, null for none): the environment's name chooses
+// nothing. A repository whose root holds Chart.yaml is a chart: its templates, files, dashboards, CRDs and
+// values schema are the Kubernetes surface (they were dropped as "another surface" under prod).
+process.stdout.write('\n--- deployment surfaces and the chart root ---\n');
+{
+  const rules = 'groups:\n  - name: shop\n    rules:\n      - alert: ShopDown\n        expr: up{job="shop"} == 0\n        for: 5m\n        labels: { severity: critical }\n';
+  const ROOT_CHART = {
+    'Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'values.yaml': 'replicaCount: 2\nimage:\n  repository: example/shop\n  tag: 1.0.0\n',
+    'values-eks.yaml': 'replicaCount: 4\n',
+    'values.schema.json': '{"type":"object"}',
+    'templates/deployment.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: shop\nspec:\n  template:\n    spec:\n      containers:\n        - name: shop\n          image: example/shop:1.0.0\n',
+    'templates/prometheusrule.yaml': `apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: shop\nspec:\n${rules.replace(/^/gm, '  ')}`,
+    'files/alerts.rules.yaml': rules,
+    'files/collector.yaml': 'receivers:\n  otlp:\n    protocols: { http: {} }\nexporters:\n  prometheus:\n    endpoint: 0.0.0.0:8889\nservice:\n  pipelines:\n    metrics: { receivers: [otlp], exporters: [prometheus] }\n',
+    'crds/shop.yaml': 'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: shops.example.com\n',
+    'dashboards/shop.json': JSON.stringify({ title: 'Shop', uid: 'shop', schemaVersion: 41, panels: [{ title: 'Up', type: 'stat', targets: [{ expr: 'up{job="shop"}' }] }] }),
+    'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n',
+    'src/metrics.ts': "import { Counter } from 'prom-client';\nexport const c = new Counter({ name: 'shop_orders_total', help: 'orders' });\n",
+  };
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const crawl = (files, opts) => crawlFiles(files, { repoName: 'shop', now: NOW, ...opts });
+  const kept = (out, files) => Object.keys(files).filter((p) => !out.summary.environment.excluded.includes(p));
+  // Under prod (the name's profile, the command line's default) the chart is read whole: only the EKS overlay
+  // and the compose file are another surface's.
+  const prodRoot = crawl(ROOT_CHART, { environment: 'prod' });
+  assert(JSON.stringify(prodRoot.summary.environment.excluded) === JSON.stringify(['values-eks.yaml', 'docker-compose.yml']),
+    'a root chart under prod keeps its templates, files, dashboards, CRDs and values schema; the EKS overlay and the compose file are left out', prodRoot.summary.environment.excluded);
+  assert(prodRoot.summary.files.byKind['prometheus-rules'] === 2 && prodRoot.summary.files.byKind['grafana-dashboard'] === 1 && prodRoot.summary.files.byKind['otel-collector'] === 1,
+    'the chart\'s rules, dashboard and collector config are read under prod', prodRoot.summary.files.byKind);
+  assert(prodRoot.summary.environment.excludedMost === false && prodRoot.summary.environment.surface === 'kubernetes',
+    'two of the ten recognised files left out is not most of them; the filter is the Kubernetes surface', prodRoot.summary.environment);
+  // The same chart in a folder no keyword names (deploy/chart/): the same reading.
+  const nested = Object.fromEntries(Object.entries(ROOT_CHART).map(([p, t]) => [p === 'docker-compose.yml' || p.startsWith('src/') ? p : `deploy/chart/${p}`, t]));
+  assert(JSON.stringify(crawl(nested, { environment: 'prod' }).summary.environment.excluded) === JSON.stringify(['deploy/chart/values-eks.yaml', 'docker-compose.yml']),
+    'a chart under deploy/chart/ is read as one too', crawl(nested, { environment: 'prod' }).summary.environment.excluded);
+  // An explicit surface: the same filter, said by its label.
+  const k8s = crawl(ROOT_CHART, { environment: 'prod', surface: 'kubernetes' });
+  assert(JSON.stringify(k8s.summary.environment.excluded) === JSON.stringify(prodRoot.summary.environment.excluded)
+    && k8s.summary.warnings.includes('The Kubernetes and Helm filter excluded 2 file(s) from other deployment surfaces.'),
+    'surface kubernetes reads as the prod profile, the warning naming the surface by its label', k8s.summary.warnings);
+  const eks = crawl(ROOT_CHART, { environment: 'qa', surface: 'eks' });
+  assert(JSON.stringify(eks.summary.environment.excluded) === JSON.stringify(['docker-compose.yml']) && eks.summary.environment.surface === 'eks',
+    'surface eks keeps the EKS overlay with the chart, whatever the environment is called', eks.summary.environment);
+  const compose = crawl(ROOT_CHART, { environment: 'prod', surface: 'compose' });
+  assert(kept(compose, ROOT_CHART).join(',') === 'docker-compose.yml,src/metrics.ts' && compose.summary.environment.excludedMost === true,
+    'surface compose leaves the chart out — files/collector.yaml is the chart\'s, no root Docker config — and that is most of what the scan recognises', kept(compose, ROOT_CHART));
+  assert(compose.summary.warnings.some((w) => /^The Docker Compose filter left out 8 of the 10 files the scan recognises — more than half of them\. An environment with no deployment surface set reads every file\.$/.test(w)),
+    'and the warning says so', compose.summary.warnings);
+  // surface given: the name filters nothing — prod, staging and no name read the same files and declare the same spec.
+  const everyOf = (environment) => crawl(ROOT_CHART, { environment, surface: null });
+  const [p0, s0, n0] = [everyOf('prod'), everyOf('staging'), everyOf(undefined)];
+  assert(p0.summary.files.included === 12 && p0.summary.files.excludedByEnvironment === 0 && p0.summary.environment.surface === null && p0.summary.environment.scoped === false,
+    'surface null reads every file, whatever the environment is called', p0.summary.environment);
+  assert(JSON.stringify(p0.canonical.spec) === JSON.stringify(s0.canonical.spec) && JSON.stringify(p0.canonical.spec) === JSON.stringify(n0.canonical.spec),
+    'prod, staging and none declare the same spec when no surface is chosen');
+  const unknown = crawl(ROOT_CHART, { environment: 'prod', surface: 'helm' });
+  assert(unknown.summary.files.included === 12 && unknown.summary.warnings.includes('deployment surface "helm" is not one the scan knows (kubernetes, eks, local-kubernetes, compose); every file was read.'),
+    'an unknown surface reads every file and says so', unknown.summary.warnings);
+  // Absent, the name filters as before (the command line, Expert's panel, crawl: sources).
+  assert(crawl(ROOT_CHART, { environment: 'prod' }).summary.environment.scoped === true && crawl(ROOT_CHART, {}).summary.environment.profile === 'prod',
+    'without `surface` the name chooses the profile, prod by default');
+  // A filter that would leave nothing reads every file and counts nothing left out (it named every file before).
+  const nothingLeft = { 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n', 'k8s/eks/values.yaml': 'a: 1\n' };
+  const emptiedName = crawl(nothingLeft, { environment: 'prod' });
+  assert(emptiedName.summary.files.excludedByEnvironment === 0 && emptiedName.summary.environment.excluded.length === 0 && emptiedName.summary.environment.surface === null
+    && !emptiedName.summary.warnings.some((w) => /Environment scope/.test(w)),
+    'a prod filter that would leave nothing excludes none and warns of none', emptiedName.summary);
+  const emptiedSurface = crawl(nothingLeft, { environment: 'prod', surface: 'kubernetes' });
+  assert(emptiedSurface.summary.environment.surface === null && emptiedSurface.summary.environment.asked === 'kubernetes' && emptiedSurface.summary.files.excludedByEnvironment === 0
+    && emptiedSurface.summary.warnings.includes('The Kubernetes and Helm filter would leave no file, so every file was read.'),
+    'a chosen surface that would leave nothing is said, never applied', emptiedSurface.summary.environment);
+  // excludedMost: more than half the recognised files — exactly half is not.
+  const half = { 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n', 'k8s/charts/x/values.yaml': 'grafana:\n  image:\n    repository: grafana/grafana\n' };
+  assert(crawl(half, { surface: 'compose' }).summary.environment.excludedMost === false, 'one of two recognised files left out is not most of them');
+  const most = { ...half, 'k8s/charts/x/values-prod.yaml': 'loki:\n  image:\n    repository: grafana/loki\n' };
+  assert(crawl(most, { surface: 'compose' }).summary.environment.excludedMost === true, 'two of three is');
+  // A scan report carries the filter.
+  const { scanReport } = await import('./lib/crawler.mjs');
+  const report = scanReport({ files: ROOT_CHART }, k8s.summary);
+  assert(JSON.stringify(report.filter) === JSON.stringify({ surface: 'kubernetes', excluded: 2 }) && report.excludedMost === false,
+    'scanReport: the surface read alone and how many it left out', report.filter);
+  assert(JSON.stringify(scanReport({ files: nothingLeft }, emptiedSurface.summary).filter) === JSON.stringify({ surface: null, excluded: 0, asked: 'kubernetes' }),
+    'and a surface asked for that read every file');
+}
+
+// ---------- every file read: a Helm overlay's switch is one environment's, never every one's ----------
+// With no surface chosen, an overlay (values-eks.yaml) that switches a component off must not take it
+// away from the environments that run it: only the base values decide, and the overlay is named.
+{
+  const none = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'prod', surface: null, now: '2026-06-05T00:00:00.000Z' });
+  assert(products(none).has('prometheus') && !(none.summary.discovered.disabledComponents || []).length,
+    'every file read: the base values switch prometheus on, and it is declared', none.summary.discovered.disabledComponents);
+  assert(none.summary.warnings.some((w) => w.startsWith('Every file is read, so only the base Helm values decide what is deployed: k8s/charts/app/values-eks.yaml switches prometheus off.')),
+    'the overlay that would switch it off is named in one warning', none.summary.warnings);
+  const eksOnly = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'prod', surface: 'eks', now: '2026-06-05T00:00:00.000Z' });
+  assert(!products(eksOnly).has('prometheus') && (eksOnly.summary.discovered.disabledComponents || []).includes('prometheus'),
+    'the EKS surface applies its overlay: prometheus switched off', eksOnly.summary.discovered.disabledComponents);
+  const staging = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'staging', now: '2026-06-05T00:00:00.000Z' });
+  assert(products(staging).has('prometheus'), 'a name that maps to no profile reads every file, so the base values decide there too');
+}
+
+// The mirror: an overlay that switches ON a component the base values switch off. With every file read the base
+// values still decide, so the component is not declared — and that is said, with the overlay, never left silent; the
+// environment that deploys with the overlay reads it through its deployment surface. One warning names both directions.
+{
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const ON_IN_OVERLAY = {
+    'charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'charts/shop/values.yaml': 'grafana:\n  image:\n    repository: grafana/grafana\n    tag: 11.1.0\nprometheus:\n  enabled: false\n  image:\n    repository: prom/prometheus\n    tag: v2.53.0\n',
+    'charts/shop/values-prod.yaml': 'prometheus:\n  enabled: true\n',
+  };
+  for (const environment of ['prod', 'staging']) {
+    const every = crawlFiles(ON_IN_OVERLAY, { repoName: 'shop', environment, surface: null, now: NOW });
+    assert(!products(every).has('prometheus') && JSON.stringify(every.summary.discovered.disabledComponents) === JSON.stringify(['prometheus']),
+      `${environment}, every file read: the base values switch prometheus off, so it is not declared`, every.summary.discovered.disabledComponents);
+    assert(every.summary.warnings.includes('Every file is read, so only the base Helm values decide what is deployed: charts/shop/values-prod.yaml switches prometheus on, which is not declared. An environment that deploys with one of these overlays reads it alone through its deployment surface.'),
+      `${environment}: the overlay that switches it on is named, and what that leaves out`, every.summary.warnings);
+  }
+  const k8s = crawlFiles(ON_IN_OVERLAY, { repoName: 'shop', environment: 'prod', surface: 'kubernetes', now: NOW });
+  assert(products(k8s).has('prometheus') && !(k8s.summary.discovered.disabledComponents || []).length && !k8s.summary.warnings.some((w) => w.startsWith('Every file is read')),
+    'the Kubernetes surface merges the overlay: prometheus declared, nothing to say', k8s.summary.discovered.disabledComponents);
+  const BOTH = { ...ON_IN_OVERLAY, 'charts/shop/values-eks.yaml': 'grafana:\n  enabled: false\nprometheus:\n  enabled: true\n' };
+  const both = crawlFiles(BOTH, { repoName: 'shop', environment: 'prod', surface: null, now: NOW });
+  assert(products(both).has('grafana') && !products(both).has('prometheus'), 'the base values decide both components', [...products(both)]);
+  assert(both.summary.warnings.includes('Every file is read, so only the base Helm values decide what is deployed: charts/shop/values-eks.yaml switches grafana off; charts/shop/values-eks.yaml switches prometheus on, which is not declared; charts/shop/values-prod.yaml switches prometheus on, which is not declared. An environment that deploys with one of these overlays reads it alone through its deployment surface.'),
+    'one warning, every overlay switch in path order, both directions', both.summary.warnings);
+}
+
+// ---------- every file read: a documentation copy of a dashboard is no second dashboard ----------
+// A dashboard export kept under docs/ that repeats the uid of the chart's own dashboard sorted first and took that
+// uid, pushing the dashboard the chart provisions to a -2 id no Grafana holds (a false "declared, not live"), and
+// declared the metrics only its stale panels query. It is set aside and named; a dashboard kept only under docs/ is
+// declared as before; prod and staging declare the same.
+{
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const panel = (title, expr) => ({ title, type: 'timeseries', targets: [{ expr }] });
+  const CHART = JSON.stringify({ title: 'Shop', uid: 'shop-main', schemaVersion: 41, panels: [panel('Up', 'up{job="shop"}'), panel('Orders', 'rate(shop_orders_total[5m])')] });
+  const ARCHIVED = JSON.stringify({ title: 'Shop (archived)', uid: 'shop-main', schemaVersion: 39, panels: [panel('Up', 'up{job="shop"}'), panel('Memory', 'process_resident_memory_bytes{job="shop"}')] });
+  const ONLY_IN_DOCS = JSON.stringify({ title: 'Runbook board', uid: 'runbook-board', schemaVersion: 41, panels: [panel('Errors', 'rate(shop_errors_total[5m])')] });
+  const DOC_COPIES = {
+    'docs/archive/Shop export 2026.json': ARCHIVED,
+    'docs/runbook-board.json': ONLY_IN_DOCS,
+    'k8s/charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'k8s/charts/shop/dashboards/shop.json': CHART,
+  };
+  const specs = [];
+  for (const environment of ['prod', 'staging']) {
+    const out = crawlFiles(DOC_COPIES, { repoName: 'shop', environment, surface: null, now: NOW });
+    const dashes = out.canonical.spec.dashboards.map((d) => `${d.id} <- ${d.source}`).sort();
+    assert(JSON.stringify(dashes) === JSON.stringify(['runbook-board <- file://docs/runbook-board.json', 'shop-main <- file://k8s/charts/shop/dashboards/shop.json']),
+      `${environment}: the chart's dashboard keeps its uid, no -2; the documentation-only one is declared`, dashes);
+    const origins = JSON.parse(out.canonical.metadata.annotations['crawler.discovered.metric_origins'] || '{}');
+    assert(!('process_resident_memory_bytes' in origins) && 'shop_orders_total' in origins && 'shop_errors_total' in origins,
+      `${environment}: the metric only the copy's panels query is not declared`, Object.keys(origins));
+    assert(out.summary.warnings.includes('1 dashboard file(s) under a documentation folder repeat a dashboard the repository holds elsewhere and are not declared: docs/archive/Shop export 2026.json repeats k8s/charts/shop/dashboards/shop.json (uid shop-main).')
+      && !out.summary.warnings.some((w) => /appears in 2 files/.test(w)), `${environment}: the copy is named`, out.summary.warnings);
+    assert(out.summary.files.byKind['grafana-dashboard'] === 3, 'the copy was read and recognised: it is counted, not declared', out.summary.files.byKind);
+    specs.push(JSON.stringify(out.canonical.spec));
+  }
+  assert(specs[0] === specs[1], 'prod and staging declare the same spec');
+  // Two copies outside documentation folders are two files of the repository's own: the second suffixed, as before.
+  const twice = crawlFiles({ ...DOC_COPIES, 'grafana/shop.json': CHART }, { repoName: 'shop', surface: null, now: NOW });
+  assert(JSON.stringify(twice.canonical.spec.dashboards.map((d) => d.id).sort()) === JSON.stringify(['runbook-board', 'shop-main', 'shop-main-2']),
+    'a uid in two files outside documentation folders keeps today\'s -2', twice.canonical.spec.dashboards.map((d) => d.id));
+}
+
 // ---------- unresolved ${VAR} placeholders in alerting channels ----------
 //
 // Regression for the 2026-06-10 finding: a webhook whose entire value is a
@@ -1188,6 +1356,132 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'the rule pinned: `_` mapped, `--` kept, cut at 60, `d-` before a digit, the title when the uid yields nothing, null when neither does', exported);
 }
 
+// ---------- a crawled dashboard states the folder the repository provisions it into ----------
+// (SPEC P5: only then is it "not read" for lack of a folder.) tools/fixtures/crawl/dashboard-folders/README.md.
+{
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+  const { scopeAnnotations } = await import('./lib/live-fetch.mjs');
+  const dir = fileURLToPath(new URL('./fixtures/crawl/dashboard-folders/', import.meta.url));
+  const files = new Map();
+  (function walk(d) {
+    for (const n of readdirSync(d).sort()) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (n !== 'README.md') files.set(p.slice(dir.length).replace(/\\/g, '/'), readFileSync(p, 'utf8'));
+    }
+  })(dir);
+  assert(detectArtefactKind('grafana/provisioning/dashboards/providers.yaml', files.get('grafana/provisioning/dashboards/providers.yaml')) === 'grafana-dashboard-provider', 'a dashboard provider file is read as one');
+  const { canonical, summary } = crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' });
+  const byId = Object.fromEntries(canonical.spec.dashboards.map(d => [d.id, [d.folder, d.params?.folderTitle ?? null, d.params?.folderUid ?? null, d.params?.folderSource ?? null]]));
+  const PROVIDERS = 'grafana/provisioning/dashboards/providers.yaml';
+  assert(JSON.stringify(byId) === JSON.stringify({
+    node: ['Platform', 'Platform', null, 'charts/shop/templates/dashboards.yaml (ConfigMap k8s-sidecar-target-directory)'],
+    'shop-overview': ['Shop Ops', 'Shop Ops', null, 'charts/shop/templates/dashboards.yaml (ConfigMap grafana_folder)'],
+    unmounted: ['guessed-from-tag', null, null, null],
+    dup: ['guessed-from-tag', null, null, null],
+    other: ['guessed-from-tag', null, null, null],
+    checkout: ['Shop', 'Shop', 'shop-dash', PROVIDERS],
+    payments: ['Payments', 'Payments', null, PROVIDERS],
+    'teams-root': ['General', 'General', null, PROVIDERS],
+  }), 'each dashboard states the folder the repository provisions it into — a provider (uid and title; the file structure; General) through a compose mount, a sidecar ConfigMap (inline, and .Files.Glob); one no provider reads, one in no mounted folder and one two providers claim state none', byId);
+  assert(summary.discovered.dashboardProviders === 4 && summary.discovered.dashboardFolders === 5, 'counted', [summary.discovered.dashboardProviders, summary.discovered.dashboardFolders]);
+  assert(validateCanonical(canonical, SCHEMA).length === 0, 'the pack validates', validateCanonical(canonical, SCHEMA).slice(0, 3));
+  // Under a live folder scope: a dashboard stated in a folder the read kept and not live is declared, not live; one
+  // stated in a folder the read named and left out is outside; one stating none keeps "does not say which folder".
+  const live = buildCanonicalPack({
+    refreshedAt: '2026-06-05T00:00:00Z', mcpUrl: 'https://mcp.shop.example',
+    health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] },
+    probeResults: { dashboards: { tool: 'search', attempted: ['search'], adapted: [], outcome: 'empty' } },
+  });
+  Object.assign(live.metadata.annotations, scopeAnnotations({ folderUids: ['shop-dash', 'platform-uid'] }, { applied: ['dashboard'], folderTitles: { 'shop-dash': 'Shop', 'platform-uid': 'Platform Ops' } }));
+  const d = diffPacks(adapt(canonical), adapt(live));
+  const dash = (bucket) => Object.values(d.layers).flatMap(l => l[bucket] || []).filter(e => e.key.startsWith('dashboard::')).map(e => [JSON.parse(e.key.slice('dashboard::'.length)).id, e.reason ?? null]);
+  assert(JSON.stringify(dash('onlyInA')) === JSON.stringify([['checkout', null]]), 'a dashboard in a folder the read kept: compared (not live: declared, not live)', dash('onlyInA'));
+  const parked = Object.fromEntries(dash('notObserved'));
+  assert(parked.node === 'outside the snapshot\'s dashboard folders (Shop, Platform Ops)' && parked['teams-root'] === 'outside the snapshot\'s dashboard folders (Shop, Platform Ops)',
+    'a dashboard stated in another folder: outside', parked);
+  assert(/does not say which folder this dashboard is in/.test(parked.other || ''), 'a dashboard stating none: not checked for lack of a folder', parked.other);
+}
+// The provisioned folder as a repository writes it: a sidecar value read as YAML reads it (a comment,
+// a block scalar, quotes), a file mounted alone, and only a provider the dashboard's own container
+// reads — never one nothing mounts into Grafana, one mounted into another service, nor two nested ones.
+{
+  const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+  const { scopeAnnotations } = await import('./lib/live-fetch.mjs');
+  const dash = (uid, title) => JSON.stringify({ uid, title, schemaVersion: 39, tags: ['guessed-from-tag'], panels: [{ type: 'timeseries', title: 'p', targets: [{ expr: 'up{job="shop"}' }] }] });
+  const chart = (annotation) => ({
+    'charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'charts/shop/dashboards/node.json': dash('node', 'Node'),
+    'charts/shop/templates/dashboards.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-dashboards', '  labels:', '    grafana_dashboard: "1"', '  annotations:',
+      ...annotation.map((l) => `    ${l}`), 'data:', '{{ (.Files.Glob "dashboards/*.json").AsConfig | indent 2 }}', ''].join('\n'),
+  });
+  const folderOf = (files, id) => {
+    const d = crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.dashboards.find((x) => x.id === id);
+    return [d?.folder ?? null, d?.params?.folderUid ?? null];
+  };
+  const SIDECAR = {
+    'a trailing comment': [['grafana_folder: "Shop Ops" # the team\'s folder'], 'Shop Ops'],
+    'a block scalar': [['grafana_folder: >-', '  Shop Ops'], 'Shop Ops'],
+    'a plain value with a comment': [['grafana_folder: Shop Ops # owned by the shop team'], 'Shop Ops'],
+    'a target directory with a comment': [['k8s-sidecar-target-directory: /tmp/dashboards/Platform  # where the sidecar writes'], 'Platform'],
+    'a single-quoted value': [["grafana_folder: 'Shop Ops'"], 'Shop Ops'],
+    'a value on the line below': [['grafana_folder:', '  Shop Ops'], 'Shop Ops'],
+    'a # inside quotes': [['grafana_folder: "Team #1"'], 'Team #1'],
+    'a flow value': [['grafana_folder: [Shop]'], 'guessed-from-tag'],
+    'text after a closing quote': [['grafana_folder: "Shop" Ops'], 'guessed-from-tag'],
+  };
+  const read = Object.fromEntries(Object.entries(SIDECAR).map(([k, [lines]]) => [k, folderOf(chart(lines), 'node')[0]]));
+  assert(JSON.stringify(read) === JSON.stringify(Object.fromEntries(Object.entries(SIDECAR).map(([k, [, title]]) => [k, title]))),
+    'a sidecar annotation is read as its YAML value — a comment, a block scalar, quotes; one that is no single scalar states no folder', read);
+  // Under a live folder scope that read "Shop Ops" and found no dashboard: the chart's dashboard is declared, not live — never "outside".
+  const live = buildCanonicalPack({
+    refreshedAt: '2026-06-05T00:00:00Z', mcpUrl: 'https://mcp.shop.example', health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] },
+    probeResults: { dashboards: { tool: 'search', attempted: ['search'], adapted: [], outcome: 'empty' } },
+  });
+  const scoped = (uid, title) => {
+    const pack = structuredClone(live);
+    Object.assign(pack.metadata.annotations, scopeAnnotations({ folderUids: [uid] }, { applied: ['dashboard'], folderTitles: { [uid]: title } }));
+    return pack;
+  };
+  const verdict = (files, pack) => {
+    const d = diffPacks(adapt(crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' }).canonical), adapt(pack));
+    const pick = (bucket) => Object.values(d.layers).flatMap((l) => l[bucket] || []).filter((e) => e.key.startsWith('dashboard::')).map((e) => [JSON.parse(e.key.slice('dashboard::'.length)).id, e.reason ?? null]);
+    return { declaredNotLive: pick('onlyInA'), notObserved: pick('notObserved') };
+  };
+  const commented = verdict(chart(['grafana_folder: "Shop Ops" # the team\'s folder']), scoped('shop-ops', 'Shop Ops'));
+  assert(JSON.stringify(commented) === JSON.stringify({ declaredNotLive: [['node', null]], notObserved: [] }), 'a commented sidecar value: the missing dashboard reads declared, not live', commented);
+  // Compose: the providers a container reads, and a file mounted alone.
+  const providers = (list) => ['apiVersion: 1', 'providers:', ...list.flatMap((p) => [`  - name: ${p.name}`, '    type: file', ...(p.folder ? [`    folder: ${p.folder}`] : []), ...(p.uid ? [`    folderUid: ${p.uid}`] : []), '    options:', `      path: ${p.path}`, ...(p.structure ? ['      foldersFromFilesStructure: true'] : [])]), ''].join('\n');
+  const SHOP = { name: 'shop', folder: 'Shop', uid: 'shop-dash', path: '/var/lib/grafana/dashboards/shop' };
+  const compose = (services) => `services:\n${Object.entries(services).map(([name, volumes]) => `  ${name}:\n    image: ${name === 'grafana' ? 'grafana/grafana:11.2.0' : 'alpine:3.20'}\n    volumes:\n${volumes.map((v) => `      - ${v}\n`).join('')}`).join('')}`;
+  const PROV = './grafana/provisioning:/etc/grafana/provisioning:ro';
+  const DASH = './grafana/dashboards:/var/lib/grafana/dashboards';
+  const repo = (services, list = [SHOP]) => ({ 'docker-compose.yml': compose(services), 'grafana/provisioning/dashboards/providers.yaml': providers(list), 'grafana/dashboards/shop/checkout.json': dash('checkout', 'Checkout') });
+  const COMPOSE = {
+    'the provider and the dashboards in one container': [repo({ grafana: [PROV, DASH] }), ['Shop', 'shop-dash']],
+    'another service mounting the dashboards first': [repo({ backup: ['./grafana/dashboards:/backup/dashboards:ro'], grafana: [PROV, DASH] }), ['Shop', 'shop-dash']],
+    'a provider file nothing mounts into Grafana': [repo({ grafana: [DASH] }), ['guessed-from-tag', null]],
+    'the provider mounted into another service than the dashboards': [repo({ grafana: [PROV], exporter: [DASH] }), ['guessed-from-tag', null]],
+    'nested providers (the outer one reads the inner folder too)': [repo({ grafana: [PROV, DASH] }, [{ name: 'all', folder: 'Everything', path: '/var/lib/grafana/dashboards' }, SHOP]), ['guessed-from-tag', null]],
+    'a provider whose Grafana reads another provisioning folder': [{ ...repo({ grafana: ['./grafana/provisioning:/etc/grafana/provisioning:ro', DASH] }), 'docker-compose.yml': `${compose({ grafana: ['./grafana/provisioning:/etc/grafana/provisioning:ro', DASH] })}    environment:\n      GF_PATHS_PROVISIONING: /provisioning\n` }, ['guessed-from-tag', null]],
+  };
+  const placed = Object.fromEntries(Object.entries(COMPOSE).map(([k, [files]]) => [k, folderOf(files, 'checkout')]));
+  assert(JSON.stringify(placed) === JSON.stringify(Object.fromEntries(Object.entries(COMPOSE).map(([k, [, want]]) => [k, want]))),
+    'a provider places a dashboard only where one container reads both, once', placed);
+  const TEAMS = { name: 'teams', path: '/var/lib/grafana/dashboards/teams', structure: true };
+  const single = {
+    'docker-compose.yml': compose({ grafana: [PROV, './grafana/dashboards/teams/root.json:/var/lib/grafana/dashboards/teams/root.json:ro', './grafana/dashboards/teams/Payments/payments.json:/var/lib/grafana/dashboards/teams/Payments/payments.json:ro'] }),
+    'grafana/provisioning/dashboards/providers.yaml': providers([TEAMS]),
+    'grafana/dashboards/teams/root.json': dash('teams-root', 'Teams root'),
+    'grafana/dashboards/teams/Payments/payments.json': dash('payments', 'Payments'),
+  };
+  assert(JSON.stringify([folderOf(single, 'teams-root')[0], folderOf(single, 'payments')[0]]) === JSON.stringify(['General', 'Payments']), 'a file mounted alone under a provider filing by folders: its folder, never its own name', [folderOf(single, 'teams-root'), folderOf(single, 'payments')]);
+  const alone = verdict(single, scoped('payments-uid', 'Payments'));
+  assert(JSON.stringify(alone.declaredNotLive) === JSON.stringify([['payments', null]]), 'the missing dashboard of a file mounted alone reads declared, not live', alone);
+}
 // A compose file as people write them: a port bound to a host address is the
 // container's, a value may stand on the line below its key, anchors and merge
 // keys share settings between services.
@@ -1629,10 +1923,11 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   // An indentless list (`rules:` and its items in one column) with a hook before its first item.
   const indentless = template(['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: checkout', 'spec:', '  groups:', '  - name: checkout', '    rules:',
     '    {{- with .Values.additionalRules }}{{ toYaml . | nindent 4 }}{{- end }}', '    - alert: CheckoutDown', '      expr: up{job="checkout"} == 0', '    - alert: CheckoutSlow', '      expr: checkout_latency_seconds > 1'].join('\n') + '\n');
-  assert(JSON.stringify(rulesOf(indentless)) === JSON.stringify(['policy:checkoutdown', 'policy:checkoutslow']) && quiet(indentless), 'an indentless list with a hook first: every rule read', [rulesOf(indentless), indentless.summary.warnings]);
+  // (No recording rules here: the alert rules are declared in alerting.rules too, beside the placeholders derived from their names.)
+  assert(JSON.stringify(rulesOf(indentless)) === JSON.stringify(['CheckoutDown@prometheus', 'CheckoutSlow@prometheus', 'policy:checkoutdown', 'policy:checkoutslow']) && quiet(indentless), 'an indentless list with a hook first: every rule read', [rulesOf(indentless), indentless.summary.warnings]);
   // A bare rules template (no ConfigMap, no resource) whose include sits in a rule's labels.
   const bare = read({ ...chart, 'charts/checkout/templates/rules.yaml': ['groups:', '  - name: checkout', '    rules:', '      - alert: CheckoutDown', '        expr: up{job="checkout"} == 0', '        labels:', '          severity: critical', '          {{- include "checkout.labels" . | nindent 10 }}'].join('\n') + '\n' });
-  assert(JSON.stringify(rulesOf(bare)) === JSON.stringify(['policy:checkoutdown']), 'a bare rules template with an include in its labels is read', [rulesOf(bare), bare.summary.warnings]);
+  assert(JSON.stringify(rulesOf(bare)) === JSON.stringify(['CheckoutDown@prometheus', 'policy:checkoutdown']), 'a bare rules template with an include in its labels is read', [rulesOf(bare), bare.summary.warnings]);
   // An indent the chart computes renders beside the line above it; an indent past any line of the text is bounded.
   const computed = template(resource().replace('            severity: warning', '            severity: warning\n{{ toYaml .Values.extraLabels | indent (int .Values.labelIndent) }}'));
   assert(partialOf(computed)[0] === 'labels=severity', 'an include with a computed indent extends the labels above it', partialOf(computed));

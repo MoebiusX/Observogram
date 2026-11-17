@@ -35,6 +35,7 @@ import { MTTX_CUSTOM, MTTX_PROFILES, sameTargets, targetsErrors, targetsRecord }
 import { CHAOS_RUNS_MAX, chaosRunErrors, chaosRunId, chaosRunRecord, sameChaosRun } from '../studio/chaos-runs.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { compactScope, normalizeScope } from '../tools/lib/live-fetch.mjs';
+import { DEPLOYMENT_SURFACES } from '../tools/lib/crawler.mjs';
 import { timedExcludeErrors } from '../tools/fetch-live-pack.mjs';
 import { noSignInWay, rankOfRole } from './authz.mjs';
 import { AdminRefusal } from './identity-admin.mjs';
@@ -131,6 +132,8 @@ export const WAYS = Object.freeze({
   liveScopes: `liveScopes is the scope each environment's live read applies — { [environment name]: { metricPrefixes, folderUids, datasourceUid, metricExclude, ruleGroups } }, {} for none, at most ${ENV_REFS_MAX}`,
   liveScope: (env, errors) => `liveScopes.${env}: ${errors.join('; ')}`,
   envRef: (name) => `the branch for ${JSON.stringify(name)} is 1–200 characters with no spaces`,
+  envSurfaces: `envSurfaces is the deployment surface each environment's Run reads alone — { [environment name]: ${Object.keys(DEPLOYMENT_SURFACES).join(' | ')} }, {} for none (every file), at most ${ENV_REFS_MAX}`,
+  envSurface: (name, x) => `the deployment surface for ${JSON.stringify(name)} is one of ${Object.keys(DEPLOYMENT_SURFACES).join(', ')} — or blank for every file — not ${JSON.stringify(x) ?? String(x)}`,
   repositoryFolderRoots: (x) => `${JSON.stringify(x)} is not under a folder this server reads repositories from (OBSERVOGRAM_REPO_ROOTS)`,
   repositoryFolderPosture: "a folder is read on the server, so it is taken only under the folders listed in OBSERVOGRAM_REPO_ROOTS on the server, or from the server's own machine while it runs without sign-in on loopback — list the folder there, or give a GitHub or Azure DevOps repository",
   repositorySourceOff: (label) => `${label} is switched off in Settings → Repository sources — an org admin can switch it back on`,
@@ -282,22 +285,58 @@ export function parseEnvRefs(value) {
 // exclude patterns' timed check): { [environment name]: compact scope }, {} for none. The whole map is
 // sent; a name with an empty scope (or null) is left out — it reads with the org's configured snapshot
 // scope, else unscoped. A scope that does not parse is refused whole, naming its environment and field.
-export function parseLiveScopes(value) {
+export function parseLiveScopes(value, { current = null } = {}) {
   if (!isPlainObject(value)) invalid(WAYS.liveScopes);
   const entries = Object.entries(value);
   if (entries.length > ENV_REFS_MAX) invalid(WAYS.liveScopes);
   const out = [];
+  // One timing budget for the whole map (every environment's patterns together), and an environment
+  // whose scope comes back exactly as stored (`current`, the service's map) is read as stored: the
+  // rule earlier releases had, never timed again — saving another environment's scope never fails on
+  // a pattern this one kept from before (the fetch reads without it, and says so).
+  const budget = {};
+  const kept = isPlainObject(current) ? current : {};
   for (const [name, raw] of entries) {
     const env = String(name).trim();
     if (!env || env.length > 200) invalid(WAYS.liveScopes);
     if (raw === null) continue;
-    const { scope, errors } = normalizeScope(raw);
-    if (!errors.length) errors.push(...timedExcludeErrors(scope.metricExclude));
+    const asStored = Object.hasOwn(kept, env) && isPlainObject(kept[env]) && JSON.stringify(compactScope(normalizeScope(raw, { stored: true }).scope)) === JSON.stringify(compactScope(normalizeScope(kept[env], { stored: true }).scope));
+    const { scope, errors } = normalizeScope(raw, { stored: asStored });
+    if (!errors.length && !asStored) errors.push(...timedExcludeErrors(scope.metricExclude, { budget }));
     if (errors.length) invalid(WAYS.liveScope(env, errors));
     const compact = compactScope(scope);
     if (compact) out.push([env, compact]);
   }
   return Object.fromEntries([...new Map(out)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// The deployment surface each environment's Run reads alone (tools/lib/crawler.mjs DEPLOYMENT_SURFACES):
+// { [environment name]: surface }, {} for none. The whole map is sent; a name with a blank or null
+// surface is left out — it reads every file. Unlike the branches, a surface is how the environment
+// deploys, so it stays when the repository changes.
+export function parseEnvSurfaces(value) {
+  if (!isPlainObject(value)) invalid(WAYS.envSurfaces);
+  const entries = Object.entries(value);
+  if (entries.length > ENV_REFS_MAX) invalid(WAYS.envSurfaces);
+  const out = [];
+  for (const [name, surface] of entries) {
+    const env = String(name).trim();
+    if (!env || env.length > 200) invalid(WAYS.envSurfaces);
+    if (surface === null || surface === '') continue;
+    const id = typeof surface === 'string' ? surface.trim() : surface;
+    if (id === '') continue;
+    if (typeof id !== 'string' || !Object.hasOwn(DEPLOYMENT_SURFACES, id)) invalid(WAYS.envSurface(env, surface));
+    out.push([env, id]);
+  }
+  return Object.fromEntries([...new Map(out)].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+// The deployment surface an environment of `service` reads alone (its own entry, never an inherited
+// name, a surface the crawler knows), else null: every file. Any kind of repository.
+export function envSurfaceOf(service, envName) {
+  const map = service?.envSurfaces;
+  const id = map && typeof map === 'object' && Object.hasOwn(map, envName) ? map[envName] : null;
+  return typeof id === 'string' && Object.hasOwn(DEPLOYMENT_SURFACES, id) ? id : null;
 }
 
 // The scope an environment of `service` keeps for its live read (its own entry), else null.
@@ -544,13 +583,14 @@ function changedFields(current, next) {
 
 // `caller` (mcpCallerOf(req)) decides whether a folder repository may be
 // named; a repository of a source the org switched off is refused (409).
-export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets, envRefs, liveScopes } = {}, { caller = null } = {}) {
+export function createServiceFromApi(db, actor, { slug, name, owners, tier, description, repository, targets, envRefs, liveScopes, envSurfaces } = {}, { caller = null } = {}) {
   name = parseName(name, WAYS.serviceName);
   const fields = {
     slug: parseSlug(slug, name), name, owners: parseOwners(owners), tier: parseTier(tier), description: parseDescription(description),
     targets: targets === undefined ? null : parseTargets(targets, { actor }),
     envRefs: envRefs === undefined ? {} : parseEnvRefs(envRefs),
     liveScopes: liveScopes === undefined ? {} : parseLiveScopes(liveScopes),
+    envSurfaces: envSurfaces === undefined ? {} : parseEnvSurfaces(envSurfaces),
   };
   if (namedSource(repository)) refuseSourceOff(db, namedSource(repository));
   fields.repository = parseRepository(repository, { caller }) ?? null;
@@ -588,7 +628,8 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
     if (patch.envRefs !== undefined) next.envRefs = parseEnvRefs(patch.envRefs);
-    if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes);
+    if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes, { current: current.liveScopes ?? null });
+    if (patch.envSurfaces !== undefined) next.envSurfaces = parseEnvSurfaces(patch.envSurfaces);
     // Another repository (another kind or address): the branches named for the old one are not its own.
     if (next.repository !== undefined && patch.envRefs === undefined && Object.keys(current.envRefs || {}).length
       && (next.repository?.kind !== current.repository?.kind || next.repository?.location !== current.repository?.location)) next.envRefs = {};
@@ -681,8 +722,9 @@ function moveEnvRef(db, actor, serviceId, from, to) {
   const envRefs = movedMap(service?.envRefs, from, to);
   const livePacks = movedMap(service?.livePacks, from, to);
   const liveScopes = movedMap(service?.liveScopes, from, to);
-  if (!envRefs && !livePacks && !liveScopes) return;
-  updateService(db, actor, serviceId, { ...(envRefs ? { envRefs } : {}), ...(livePacks ? { livePacks } : {}), ...(liveScopes ? { liveScopes } : {}) });
+  const envSurfaces = movedMap(service?.envSurfaces, from, to);
+  if (!envRefs && !livePacks && !liveScopes && !envSurfaces) return;
+  updateService(db, actor, serviceId, { ...(envRefs ? { envRefs } : {}), ...(livePacks ? { livePacks } : {}), ...(liveScopes ? { liveScopes } : {}), ...(envSurfaces ? { envSurfaces } : {}) });
 }
 
 // An environment's export of live, own entry only (never an inherited name), or null.
@@ -818,8 +860,8 @@ function environmentView(env, service, endpoint) {
     ref: envRefOf(service, env.name),
     // The export of live it is checked against in place of an MCP endpoint, else null.
     livePack: livePackOf(service, env.name),
-    // The scope its live read applies, as the service keeps it (compact), else null — then the org's
-    // configured snapshot scope applies, if any (GET /api/mcp/jobs's scope), else none.
+    // The scope its live read applies, as the service keeps it (compact), else null — then none: the
+    // org's configured snapshot scope only pre-fills a new environment's form.
     liveScope: liveScopeOf(service, env.name),
     createdAt: env.createdAt, updatedAt: env.updatedAt,
   };
@@ -845,6 +887,8 @@ function serviceView(service, environments, links) {
     envRefs: service.envRefs && typeof service.envRefs === 'object' ? service.envRefs : {},
     // The scope each environment's live read applies: { [environment]: scope }, {} for none.
     liveScopes: service.liveScopes && typeof service.liveScopes === 'object' ? service.liveScopes : {},
+    // The deployment surface each environment's Run reads alone: { [environment]: surface }, {} for none (every file).
+    envSurfaces: service.envSurfaces && typeof service.envSurfaces === 'object' ? service.envSurfaces : {},
     source: { kind: 'observogram' }, createdAt: service.createdAt, updatedAt: service.updatedAt,
     environments,
     packs: [...links].sort(byRoleThenId).map((l) => ({ id: l.packId, label: l.label ?? null, source: l.source ?? null, role: l.role })),

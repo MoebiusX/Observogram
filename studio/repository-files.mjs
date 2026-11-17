@@ -34,7 +34,9 @@ function decodeText(bytes) {
 
 function add(out, path, text) {
   if (text === null) { out.skipped.push({ path, why: 'it is not UTF-8 text' }); return; }
-  if (out.bytes + text.length > REPOSITORY_FILES_CAP) { out.truncated = true; return; }
+  // Past the cap: named, as a scan names a file past its total (lib.SCAN_WHY.totalCap's words), so the
+  // Run counts it as not read.
+  if (out.bytes + text.length > REPOSITORY_FILES_CAP) { out.truncated = true; out.skipped.push({ path, why: `the scan stops at ${mb(REPOSITORY_FILES_CAP)} in all` }); return; }
   out.files[path] = text;
   out.bytes += text.length;
 }

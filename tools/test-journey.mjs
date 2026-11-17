@@ -211,7 +211,12 @@ try {
   assert(/1 scrape job\(s\) down \+ 2 unhealthy rule\(s\)/.test(breaches[0].detail) && /job alertmanager down/.test(breaches[0].detail) && /rule rr_bad unhealthy/.test(breaches[0].detail),
          'maxUnhealthy breach names both counts and the offenders', breaches[0].detail);
   assert(evaluateGate({ maxUnhealthy: 3 }, unhealthyFacts).length === 0, 'maxUnhealthy at the exact sum passes (> not >=)');
-  assert(evaluateGate({ maxUnhealthy: 0 }, facts).length === 0, 'maxUnhealthy: 0 passes when nothing is down or unhealthy');
+  // C5: no count and no probe table is no health read at all — the gate cannot pass on it.
+  breaches = evaluateGate({ maxUnhealthy: 0 }, facts);
+  assert(breaches.length === 1 && breaches[0].criterion === 'maxUnhealthy'
+         && breaches[0].detail === 'no on-wire health was read — no scrape-job or rule-health count was given — the gate cannot pass on an absent count (max 0)',
+         'maxUnhealthy fails closed when no on-wire health was read (no counts, no probe table)', breaches);
+  assert(evaluateGate({ maxUnhealthy: 0 }, { ...facts, scrapeJobsDown: 0, unhealthyRules: 0 }).length === 0, 'maxUnhealthy: 0 passes when nothing is down or unhealthy');
 
   // --- a strict gate fails the run with outcome gate-failed ---
   writeFileSync(join(TMP, 'journeys', 'strict.journey.yaml'), [
@@ -1009,7 +1014,10 @@ try {
   assert(lostRec.packB.source === `mcp:${lostUrl}` && lostRec.packA.name === 'payment-service', 'vantage-lost record names both sources', { a: lostRec.packA, b: lostRec.packB });
   const lostRaw = readFileSync(join(TMP, 'runs', 'lost', `${lostRec.startedAt.replace(/[:.]/g, '-')}.json`), 'utf8');
   assert(!lostRaw.includes('URLTOKSECRET'), 'the vantage-lost record on disk carries no credential parameter from packB.mcp.url', lostRaw.match(/"source": "[^"]*"/g));
-  assert(typeof lostRec.startedAt === 'string' && typeof lostRec.tookMs === 'number' && lostRec.gate.breaches.length === 0, 'vantage-lost record has the timing fields and no fabricated breaches');
+  assert(typeof lostRec.startedAt === 'string' && typeof lostRec.tookMs === 'number'
+         && JSON.stringify(lostRec.gate.breaches) === JSON.stringify([{ criterion: 'vantage', detail: 'vantage lost: the live side did not answer — nothing was compared' }])
+         && lostRec.vantage === 'lost' && !('probes' in lostRec),
+         'vantage-lost record has the timing fields, vantage lost, and the one breach it carries is the vantage\'s (C4) — no probe table: the read threw first', lostRec);
   assert(lostRec.grade === undefined && lostRec.drift === undefined, 'vantage-lost record carries no grade or drift — nothing was verified');
   const lostMd = renderJourneyMarkdown(lostRec);
   assert(/VANTAGE LOST/.test(lostMd) && /unreachable/.test(lostMd) && /No verdict/.test(lostMd), 'markdown reports a vantage loss as no verdict', lostMd.split('\n')[0]);
@@ -1063,6 +1071,79 @@ try {
   assert(/^pay-vs-curated\tpass · .* · stack none · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliList.stdout), 'journey list prints stack none for a file-sourced journey, then the chains status', cliList.stdout);
   assert(!/^lost\t.*stack/m.test(cliList.stdout) && !/^lost\t.*chains/m.test(cliList.stdout), 'a vantage-lost line carries no stack or chains status');
 
+  // --- no figure without its basis: the report and `journey list` over records old and new ---
+  {
+    const base = { ...readJourneyRuns('pay-vs-curated')[0] };
+    // An older record over an empty union: alignment 100, a pass — Nothing compared. Written before
+    // drift.compared (the engine now records it on every run): its four counts are all a reader has.
+    const { compared: _compared, ...olderDrift } = base.drift;
+    const emptyOld = { ...base, drift: { ...olderDrift, alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } };
+    const mdEmpty = renderJourneyMarkdown(emptyOld);
+    assert(/\| Alignment \| \*\*nothing compared\*\* — 0 aligned/.test(mdEmpty) && !/100%\*\*/.test(mdEmpty), 'the report over an empty union says nothing compared, never 100%');
+    assert(!/null%/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null, compared: 0 } })), 'the report never prints null%');
+    // Nothing compared is never ✅ PASS: under a gate whose own keys held it cannot pass (GATE NOT PASSED), a failed
+    // gate says both, and a journey with no gate has no gate verdict — NOTHING COMPARED alone; the reason is said.
+    {
+      const nothingDrift = { ...base.drift, alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
+      const head = (rec) => renderJourneyMarkdown(rec).split('\n')[0];
+      const gatedPass = { ...base, outcome: 'pass', drift: nothingDrift, gate: { thresholds: { maxLiveAgeHours: 48 }, breaches: [] } };
+      assert(head(gatedPass) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED · GATE NOT PASSED` && !/✅|— PASS/.test(renderJourneyMarkdown(gatedPass)),
+             'a pass over nothing compared under a gate: NOTHING COMPARED · GATE NOT PASSED, never ✅ PASS', head(gatedPass));
+      assert(/\n_Nothing was compared \(neither side had anything this check could compare\), so this run says nothing about whether the declared artefacts work, and its gate cannot pass on it\._\n/.test(renderJourneyMarkdown(gatedPass)),
+             'the report says why, and that the gate cannot pass on it', renderJourneyMarkdown(gatedPass).split('\n').slice(0, 4));
+      const open = { ...gatedPass, gate: { thresholds: {}, breaches: [] } };
+      assert(head(open) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED` && /; with no gate configured, it has no gate verdict\._\n/.test(renderJourneyMarkdown(open)),
+             'no gate configured: no gate verdict, and still nothing compared', head(open));
+      // A gate that asks for nothing (every key false or null) is no gate either.
+      assert(head({ ...gatedPass, gate: { thresholds: { failOnPartialEvidence: false, requireGradePass: null }, breaches: [] } }) === head(open), 'a gate that asks for nothing is no gate');
+      const failedGate = { ...gatedPass, outcome: 'gate-failed', gate: { thresholds: { minAlignmentPct: 85 }, breaches: [{ criterion: 'minAlignmentPct', detail: 'nothing was compared — no alignment figure to hold against the required 85%' }] } };
+      assert(head(failedGate) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED · GATE FAILED` && /### Gate breaches\n\n- \*\*minAlignmentPct\*\* — nothing was compared/.test(renderJourneyMarkdown(failedGate)),
+             'a failed gate over nothing compared: both, the breaches listed', head(failedGate));
+      assert(head(emptyOld).startsWith(`## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED`), 'an older pass over an empty union is no pass either', head(emptyOld));
+      // An older pass whose every probe failed is a lost vantage, as every reader reads it.
+      const oldAllFailed = { ...emptyOld, vantage: 'partial', probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' } };
+      assert(head(oldAllFailed) === `## ⚠️ Journey \`${base.journey}\` — VANTAGE LOST` && /\| Error \| alert_rules_list: HTTP 500: no backend session \|/.test(renderJourneyMarkdown(oldAllFailed)), 'an older pass whose every probe failed reads VANTAGE LOST with its first probe error', head(oldAllFailed));
+      assert(head(base) === `## ✅ Journey \`${base.journey}\` — PASS`, 'a pass over a comparison is ✅ PASS, as before', head(base));
+    }
+    assert(/\| Alignment \| \*\*not recorded\*\*/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null } })), 'a figure the record does not carry: not recorded');
+    // A stopped Run (C8): no grade, no drift — rendered, never thrown.
+    const stopped = { journey: 'shop.prod', startedAt: '2026-11-16T10:00:00.000Z', tookMs: 9, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)',
+      packA: { source: '/w/packs/shop.pack.yaml', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, gate: { thresholds: {}, breaches: [] }, notify: null };
+    let mdStopped = '';
+    try { mdStopped = renderJourneyMarkdown(stopped); } catch (e) { mdStopped = `threw ${e.message}`; }
+    assert(/— PARTIAL SCAN/.test(mdStopped) && /\| Scan \| Partial scan — 49 of 220 files not read; the previous pack is kept \(171 read\) \|/.test(mdStopped) && /\| Not read first \| grafana\/a\.json — it could not be downloaded \(HTTP 403\) \|/.test(mdStopped),
+           'the report over a stopped Run: PARTIAL SCAN, its counts and the first files not read', mdStopped.split('\n').slice(0, 12));
+    assert(/\| Error \| Partial scan: 49 of 220 files not read: grafana\/a\.json — it could not be downloaded \(HTTP 403\) \|/.test(mdStopped) && /the previous pack is kept\._$/m.test(mdStopped),
+           'the report gives the stopped Run\'s own sentence', mdStopped.split('\n').slice(0, 12));
+    const mdNoneKept = renderJourneyMarkdown({ ...stopped, packA: { ...stopped.packA, source: null } });
+    assert(/\| Declared \(A\) \| no pack kept yet \|/.test(mdNoneKept) && /\| Scan \| Partial scan — 49 of 220 files not read; no complete scan of this repository is kept \(171 read\) \|/.test(mdNoneKept)
+           && /no complete scan of this repository is kept\._$/m.test(mdNoneKept) && !/previous pack is kept/.test(mdNoneKept), 'a stop that kept no complete scan never says the previous pack is kept', mdNoneKept.split('\n').slice(0, 14));
+    // A lost run (C4): the first probe error, the probe table; one whose families answered empty: no data.
+    const lost = { journey: 'shop.prod', startedAt: '2026-11-16T11:00:00.000Z', tookMs: 4, outcome: 'vantage-lost', error: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500', packA: { source: 'a', name: 'shop', version: '1' }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, vantage: 'lost',
+      probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: ['dashboards'], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500' }, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } };
+    const mdLost = renderJourneyMarkdown(lost);
+    assert(/\| Error \| alert_rules_list: HTTP 500: no backend session \|/.test(mdLost) && /\| Live probes \| 2 attempted/.test(mdLost) && /— \*\*unreachable\*\*/.test(mdLost), 'the lost report names the first probe error and the probe table', mdLost.split('\n').slice(0, 10));
+    const noData = { ...lost, error: 'no probe family returned data', probes: { ...lost.probes, empty: ['alert_rules', 'dashboards'], failed: [] }, probeErrors: {} };
+    const mdNoData = renderJourneyMarkdown(noData);
+    assert(/— \*\*no data\*\*/.test(mdNoData) && /answered, but no probe family returned data/.test(mdNoData), 'a live side that answered with no data says so', mdNoData.split('\n').slice(0, 10));
+    // A null integrity (nothing on a chain observable) is not measured, never null%; a run not comparable with the one before says so.
+    const nulls = { ...base, branches: [{ title: 'checkout', verdict: 'intact', ladderVerdict: 'unobserved', integrityPct: null, ladderIntegrityPct: null, degraded: [] }], comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, packA: { ...base.packA, scan: { files: 171, candidates: 220, partial: true, notRead: 49 } } };
+    const mdNulls = renderJourneyMarkdown(nulls);
+    assert(/\| checkout \| intact \| unobserved \| not measured \| not measured \|/.test(mdNulls) && !/null%/.test(mdNulls), 'a null integrity reads not measured');
+    assert(/_not comparable with the previous run: this scan could not read 49 of 220 files_/.test(mdNulls) && /\| Repository scan \| 49 of 220 files not read — a partial scan; not comparable with the run before \|/.test(mdNulls), 'not comparable: said in place of the chain moves, the scan said beside', mdNulls.split('\n').filter((l) => /scan|comparable/i.test(l)));
+    // journey list over seeded records: nothing compared, a stopped Run — never undefined% or null%.
+    for (const [name, rec] of [['seeded-empty', emptyOld], ['seeded-stop', stopped]]) {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA:`, `  file: ${PACK_A.replaceAll('\\', '/')}`, `packB:`, `  file: ${PACK_B.replaceAll('\\', '/')}`].join('\n'));
+      mkdirSync(join(TMP, 'runs', name), { recursive: true });
+      writeFileSync(join(TMP, 'runs', name, `${String(rec.startedAt).replace(/[:.]/g, '-')}.json`), JSON.stringify({ ...rec, journey: name }));
+    }
+    const seeded = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+    assert(/^seeded-empty\tnothing-compared · \S+ · nothing compared · /m.test(seeded.stdout), 'journey list: an older 100 over an empty union reads nothing compared', seeded.stdout.split('\n').filter((l) => l.startsWith('seeded-')));
+    assert(/^seeded-stop\tscan-partial · 2026-11-16T10:00:00\.000Z · Partial scan — 49 of 220 files not read; the previous pack is kept$/m.test(seeded.stdout), 'journey list: a stopped Run reads its partial scan', seeded.stdout.split('\n').filter((l) => l.startsWith('seeded-')));
+    assert(!/undefined%|null%/.test(seeded.stdout), 'journey list never prints undefined% or null%');
+    for (const name of ['seeded-empty', 'seeded-stop']) { rmSync(join(TMP, 'journeys', `${name}.journey.yaml`)); rmSync(join(TMP, 'runs', name), { recursive: true, force: true }); }
+  }
+
   // --- step 4: the live-pack snapshot (policy, files, pruning, read-back) ---
   // Pure policy first: every branch of livePackDecision.
   {
@@ -1099,6 +1180,12 @@ try {
   // identical run to run unless `fakeRules` is set, so a chain transition
   // is under the test's control.
   let fakeRules = false;
+  // The scrape-targets family answers with data (one job Pack A does not
+  // declare): a live read that returned no data at all is a lost run (C3/C4),
+  // so every run against this fake keeps one family answering. It is never
+  // turned off here: the run whose every family answers empty is the notify
+  // fake's empty twin, below.
+  const fakeTargets = true;
   // Inventory coverage: when set, the fake advertises the metrics query tool and answers the
   // journey's per-kind queries — QM1 up, QM2 down, QMX not inventoried; host h1 only; 3 queues on QM1.
   let fakeInventory = false;
@@ -1122,13 +1209,14 @@ try {
     if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp' } });
     if (msg.method === 'notifications/initialized') return send({});
     if (msg.method === 'tools/list') {
-      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeRules ? ['list_recording_rules'] : []), ...(fakeInventory ? ['metrics_query'] : [])].map(name => ({ name })) });
+      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeTargets ? ['metrics_targets'] : []), ...(fakeRules ? ['list_recording_rules'] : []), ...(fakeInventory ? ['metrics_query'] : [])].map(name => ({ name })) });
     }
     if (msg.method === 'tools/call') {
       const name = msg.params?.name;
       const result = name === 'system_health' ? { services: [] }
         : name === 'system_topology' ? { dependencies: [] }
         : name === 'anomalies_baselines' ? { baselines: [] }
+        : name === 'metrics_targets' ? { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] }
         : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
         : name === 'metrics_query' ? fakeMetrics(msg.params?.arguments?.query)
         : {};
@@ -1222,6 +1310,20 @@ try {
     let scopeErr = null;
     try { loadJourneyDef('bad-scope'); } catch (e) { scopeErr = e.message; }
     assert(/^journey bad-scope: packB\.mcp\.scope\.metricPrefixes\[0\] "9bad" is not a metric-name prefix/.test(scopeErr || ''), 'a packB.mcp.scope that does not parse is refused at load, naming the field', scopeErr);
+    // A check saved before the exclude patterns' work was bounded still loads and runs (the CronJob's `journey run
+    // --all` included): three wildcards are within the bound and applied; a pattern past it stays in the file, the
+    // live read goes on without it, and the kept live pack says which and why.
+    const Q = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
+    writeFileSync(join(TMP, 'journeys', 'old-scope.journey.yaml'), ['name: old-scope', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: ${fakeUrl}, scope: { metricPrefixes: [shop_], metricExclude: ['^.*:.*:.*$', '${Q}'] } } }`].join('\n'));
+    const to = await runJourney(loadJourneyDef('old-scope'));
+    const oldNote = JSON.parse(readLivePack('old-scope', to)?.metadata?.annotations?.['observogram.live.scope'] || '{}');
+    // The record says what the read applied, never what was stored: the scope less the pattern it went
+    // without, and that pattern named (packB.notApplied) — the listing, the toast and the row read them.
+    assert(to.outcome === 'pass' && JSON.stringify(to.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], metricExclude: ['^.*:.*:.*$'] })
+      && to.packB.notApplied?.length === 1 && to.packB.notApplied[0].startsWith(`exclude pattern "${Q}" not applied — it may be too slow to match`)
+      && JSON.stringify(oldNote.metricExclude) === JSON.stringify(['^.*:.*:.*$']) && oldNote.notApplied?.length === 1
+      && oldNote.notApplied[0] === to.packB.notApplied[0],
+      'a stored scope loads and runs whatever it holds: the bounded pattern applied, the other read without and named — on the record as on the pack', { outcome: to.outcome, record: to.packB, oldNote });
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,
@@ -1299,9 +1401,10 @@ try {
     const availChain = t3.branches.find(b => b.title === 'api_availability_99_9');
     assert(c3.causes[0].chains.join() === availChain.title && c3.causes[0].rootKeys.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
            'the cause names the chain by title (its identity key apart) and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, rootKeys: c3.causes[0].rootKeys, nodes: c3.causes[0].nodes });
-    assert(c3.vantage && c3.vantage.changed === true && /vantage lost → restricted/.test(c3.vantage.detail) && /probe family recording_rules now exposed/.test(c3.vantage.detail) && /4 → 5 MCP tools exposed/.test(c3.vantage.detail),
+    // The vantage word stays full (scrape targets answered on both runs; a family not offered never degrades it, C3).
+    assert(c3.vantage && c3.vantage.changed === true && c3.vantage.detail === 'probe family recording_rules now exposed · 5 → 6 MCP tools exposed',
            'the vantage block reports the family that now answers and the tool count — beside the causes, never among them', c3.vantage);
-    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
+    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: probe family recording_rules now exposed · 5 → 6 MCP tools exposed`).test(md3),
            'markdown lists the ranked causes with their chains by title, then the vantage change', md3.split('### Candidate causes')[1]);
     assert(JSON.stringify(t3json.causes) === JSON.stringify(c3), 'causes round-trip through the history file');
     assert(causeLine(t3) === `top cause: [observogram-deploy] ${c3.causes[0].evidence}` && causeLine(t2) === 'no candidate causes' && causeLine(t1) === 'no candidate causes' && causeLine({ outcome: 'vantage-lost' }) === 'no candidate causes',
@@ -1334,10 +1437,10 @@ try {
     }
     // `journey list` while t3 is the newest run: the top candidate cause
     // rides on the line of the journey whose chains got worse — and, since
-    // the vantage moved too (lost → restricted), that change beside it.
+    // the vantage moved too (a family now exposed), that change beside it.
     {
       const cliT3 = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
-      assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending · vantage changed: vantage lost → restricted · probe family recording_rules now exposed · 4 → 5 MCP tools exposed$/m.test(cliT3.stdout),
+      assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending · vantage changed: probe family recording_rules now exposed · 5 → 6 MCP tools exposed$/m.test(cliT3.stdout),
              'journey list appends the top candidate cause to the journey whose chains got worse, then the vantage change beside it', cliT3.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     }
     // Review B-M6: a hand-dropped notes.json in the run directory is not a
@@ -1362,12 +1465,12 @@ try {
     assert(t4.transition.since === t3.startedAt && t4.transition.reason === null && t4.transition.any === false && t4.transition.skipped.length === 1 && t4.transition.skipped[0].startedAt === lostAt && t4.transition.skipped[0].outcome === 'vantage-lost',
            'after a vantage-lost run the transition is against the newest record with chains (since = t3) and names the skipped record', t4.transition);
     assert(t4.livePack.kept === true && t4.livePack.reason === `previous run ${lostAt} lost its vantage`, 'the run after a vantage loss keeps its snapshot for that reason', t4.livePack);
-    assert(t4.causes.causes.length === 0 && t4.causes.vantage.changed === true && /^vantage lost → restricted/.test(t4.causes.vantage.detail) && !('transitions' in t4.causes),
-           'the vantage is compared against the lost run (lost → restricted); nothing got worse against t3; the ranker\'s copy of the diff is not persisted', t4.causes);
+    assert(t4.causes.causes.length === 0 && t4.causes.vantage.changed === true && /^vantage lost → full/.test(t4.causes.vantage.detail) && !('transitions' in t4.causes),
+           'the vantage is compared against the lost run (lost → full); nothing got worse against t3; the ranker\'s copy of the diff is not persisted', t4.causes);
     const md4 = renderJourneyMarkdown(t4);
     assert(new RegExp(`### Transitions since previous run\\n\\n_previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}_\\n\\n_no chain changed since ${escapeRe(t3.startedAt)}_`).test(md4),
            'the transitions section says the previous run lost its vantage and which run it compared against', md4.split('### Transitions since previous run')[1]?.slice(0, 300));
-    assert(new RegExp(`_no chain got worse since ${escapeRe(t3.startedAt)} \\(previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}\\)_\\n\\nvantage changed: vantage lost → restricted`).test(md4),
+    assert(new RegExp(`_no chain got worse since ${escapeRe(t3.startedAt)} \\(previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}\\)_\\n\\nvantage changed: vantage lost → full`).test(md4),
            'the causes section words the baseline the same way, then the vantage change', md4.split('### Candidate causes')[1]?.slice(0, 400));
     assert(!/no previous run/.test(md4), 'a run after an outage never claims there was no previous run', md4);
     const lostFirst = readJourneyRuns('fake-live').find(r => r.outcome === 'vantage-lost');
@@ -1446,7 +1549,7 @@ try {
       const cliV = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
       assert(/^vantage-worse\tpass · .* · no candidate causes · vantage changed: vantage full → partial · probe family recording_rules newly failed \(HTTP 502\)$/m.test(cliV.stdout),
              'a vantage-only worse transition lists no candidate causes AND the vantage change — the change is named, never blamed', cliV.stdout.split('\n').filter(l => l.startsWith('vantage-worse')));
-      assert(/^fake-live\tpass · .* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliV.stdout) && !/^fake-live\t.*top cause/m.test(cliV.stdout),
+      assert(/^fake-live\tpass · .* · ladder [^\n]* · vantage changed: vantage lost → full[^\n]*$/m.test(cliV.stdout) && !/^fake-live\t.*top cause/m.test(cliV.stdout),
              'the run after the outage (no cause) still lists the vantage change', cliV.stdout.split('\n').filter(l => l.startsWith('fake-live')));
       assert(!/^fake-always\t.*vantage changed/m.test(cliV.stdout), 'a run whose vantage did not change gets no vantage segment');
     }
@@ -1518,7 +1621,7 @@ try {
     // The CLI line shows the chains segment for a live journey too.
     const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
     assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
-    assert(/^fake-live\t.* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliLive.stdout) && !/^fake-live\t.*top cause/m.test(cliLive.stdout),
+    assert(/^fake-live\t.* · ladder [^\n]* · vantage changed: vantage lost → full[^\n]*$/m.test(cliLive.stdout) && !/^fake-live\t.*top cause/m.test(cliLive.stdout),
            'once the run after the outage is the newest, the line carries the vantage change and no cause segment (nothing got worse against t3)', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
@@ -1611,6 +1714,9 @@ try {
     // which makes the recording-rule chains go unobserved → absent — a
     // `worse` transition under the test's control, exactly as t2 → t3.
     let rulesExposed = false;
+    // Set for one run only (the empty twin below): scrape targets answer an honest empty, so no
+    // probe family returns data.
+    let targetsEmpty = false;
     const mcp = createHttpServer(async (req, res) => {
       let raw = '';
       req.setEncoding('utf8');
@@ -1620,10 +1726,12 @@ try {
       const send = (result) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'notify-test-session' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result })); };
       if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp-notify' } });
       if (msg.method === 'notifications/initialized') return send({});
-      if (msg.method === 'tools/list') return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(rulesExposed ? ['list_recording_rules'] : [])].map(name => ({ name })) });
+      // Scrape targets answer with data on every run (a read that returned no data is a lost run, C4).
+      if (msg.method === 'tools/list') return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', 'metrics_targets', ...(rulesExposed ? ['list_recording_rules'] : [])].map(name => ({ name })) });
       if (msg.method === 'tools/call') {
         const name = msg.params?.name;
         const result = name === 'system_health' ? { services: [] } : name === 'system_topology' ? { dependencies: [] } : name === 'anomalies_baselines' ? { baselines: [] }
+          : name === 'metrics_targets' ? { targets: targetsEmpty ? [] : [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] }
           : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
           : {};
         return send({ content: [{ type: 'text', text: JSON.stringify(result) }] });
@@ -1734,6 +1842,19 @@ try {
         assert(twin.notify === null, 'a definition without notify: records notify null (not configured — distinct from a missing key)');
         const twinDisk = readJourneyRuns('plain-twin')[0];
         assert('notify' in twinDisk && twinDisk.notify === null, 'notify null is persisted on the first (only) write');
+        // The same fake with its one data family answering empty: no probe family returned data, so the
+        // run is a lost run (C4) — one vantage-lost record, no grade, no match, thrown on as a loss is.
+        writeFileSync(join(TMP, 'journeys', 'empty-twin.journey.yaml'), [`name: empty-twin`, `packA: { file: ${A} }`, MCP_B, 'env: prod'].join('\n'));
+        targetsEmpty = true;
+        let emptyErr = null;
+        try { await runJourney(loadJourneyDef('empty-twin')); } catch (e) { emptyErr = e; } finally { targetsEmpty = false; }
+        const emptyRuns = readJourneyRuns('empty-twin');
+        assert(emptyErr?.vantageLost === true && emptyErr.vantageRecorded === true && emptyErr.message === 'no probe family returned data'
+               && emptyRuns.length === 1 && emptyRuns[0].outcome === 'vantage-lost' && emptyRuns[0].vantage === 'lost' && emptyRuns[0].notify === null
+               && emptyRuns[0].grade === undefined && emptyRuns[0].drift === undefined
+               && (emptyRuns[0].probes?.empty || []).includes('scrape_configs') && (emptyRuns[0].probes?.failed || []).length === 0,
+               'a live side whose every family answers empty: one vantage-lost record (no probe family returned data), thrown on',
+               { err: emptyErr?.message, runs: emptyRuns.map((r) => ({ outcome: r.outcome, error: r.error, probes: r.probes })) });
         writeFileSync(join(TMP, 'journeys', 'sched-twin.journey.yaml'), [`name: sched-twin`, `packA: { file: ${A} }`, MCP_B, 'env: prod', 'schedule: "*/15 * * * *"', 'stackBudget: { objective: 0.99, window: 30d }', 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: always }'].join('\n'));
         const sched = await runJourney(loadJourneyDef('sched-twin'));
         const scored = (r) => JSON.stringify({ grade: r.grade, traceability: r.traceability, branches: r.branches, chains: r.chains, drift: r.drift, conformance: r.conformance, outcome: r.outcome, breaches: r.gate.breaches });
@@ -1775,7 +1896,12 @@ try {
         assert(notifyStatusLine(n2) === 'notify sent' && notifyStatusLine(n1) === 'notify skipped' && notifyStatusLine({ notify: null }) === null && notifyStatusLine({}) === null, 'notifyStatusLine reads the status or nothing');
         const cliN = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
         assert(/^notified\tpass · .* · chains \d+\/\d+ intact · ladder [^\n]* · notify sent$/m.test(cliN.stdout), 'journey list appends notify sent as the last segment (after cause / vantage)', cliN.stdout.split('\n').filter(l => l.startsWith('notified')));
-        assert(/^plain-twin\tpass · [^\n]*$/m.test(cliN.stdout) && !/^plain-twin\t.*notify/m.test(cliN.stdout), 'a journey without notify: gets no notify segment');
+        // The fake's scrape targets answer with data, so the twin's run compared something: its figure stands
+        // (tools/lib/run-basis.mjs alignmentWords), and a journey without notify: gets no notify segment.
+        assert(/^plain-twin\tpass · \S+ · alignment \d+% · [^\n]*$/m.test(cliN.stdout) && !/^plain-twin\t.*notify/m.test(cliN.stdout), 'a journey without notify: gets no notify segment', cliN.stdout.split('\n').filter((l) => l.startsWith('plain-twin')));
+        // Its empty twin's every family answered empty: the engine wrote a vantage-lost record (C4) and the line
+        // reads it as the live side that returned no data — never a match, never "did not answer".
+        assert(/^empty-twin\tvantage-lost · \S+ · Live returned no data$/m.test(cliN.stdout), 'a live side that returned no data lists as vantage-lost · Live returned no data', cliN.stdout.split('\n').filter((l) => l.startsWith('empty-twin')));
       }
       // (c) 500 then 202 → two attempts, sent.
       mode = 'flaky'; flakyLeft = 1; hits.length = 0;
@@ -2020,6 +2146,45 @@ try {
       assert(readJourneyRunsIn(TMP2, 'all-pass').length === 3, 'each --all run appends to every journey\'s history');
       const none = packc(['journey', 'run', '--all'], TMP3);
       assert(none.status === 0 && /^\(no journeys saved — add \.observogram\/journeys\/<name>\.journey\.yaml\)$/m.test(none.stdout), 'run --all over zero journeys prints the existing no-journeys line and exits 0', { status: none.status, out: none.stdout });
+      // (k2) a run that compared nothing — Pack A against a live export whose only data is a scrape job it
+      // declares nothing of — is never ✅ PASS, and cannot pass a gate: under one whose own keys held (freshness
+      // only) it exits 1 (NOTHING COMPARED · GATE NOT PASSED); a journey with no gate configured has no gate
+      // verdict, so it exits 0 there, its report saying NOTHING COMPARED.
+      {
+        const TMP4 = mkdtempSync(join(tmpdir(), 'observogram-journey-nothing-'));
+        try {
+          const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+          const { probeCandidates } = await import('./lib/contracts/mcp-capabilities.mjs');
+          const first = probeCandidates('scrape_configs')[0];
+          const targetsTool = typeof first === 'string' ? first : first.name;
+          const unsupported = { tool: null, attempted: ['x'], adapted: null, outcome: 'unsupported' };
+          const probeResults = Object.fromEntries(['metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'alerting_routes'].map((f) => [f, unsupported]));
+          probeResults.scrape_configs = { tool: targetsTool, attempted: [targetsTool], adapted: [{ job: 'shop-api', targets: [{ instance: 'shop-api:9100', health: 'down', lastScrape: null, lastError: 'connection refused' }] }], outcome: 'data' };
+          const live = buildCanonicalPack({ refreshedAt: new Date().toISOString(), mcpUrl: 'https://mcp.example.com/mcp', health: { services: [] }, topology: { dependencies: [] }, probeResults, probeFailures: {} });
+          mkdirSync(join(TMP4, 'journeys'), { recursive: true });
+          const liveFile = join(TMP4, 'live.pack.json').replaceAll('\\', '/');
+          writeFileSync(liveFile, JSON.stringify(live));
+          writeFileSync(join(TMP4, 'journeys', 'nothing-gated.journey.yaml'), ['name: nothing-gated', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`, 'gate: { maxLiveAgeHours: 48 }'].join('\n'));
+          writeFileSync(join(TMP4, 'journeys', 'nothing-open.journey.yaml'), ['name: nothing-open', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`].join('\n'));
+          // A gate that asks for nothing is no gate: no gate verdict, exit 0.
+          writeFileSync(join(TMP4, 'journeys', 'nothing-asks-nothing.journey.yaml'), ['name: nothing-asks-nothing', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`, 'gate: { failOnPartialEvidence: false }'].join('\n'));
+          const gated = packc(['journey', 'run', 'nothing-gated'], TMP4);
+          const gatedRec = readJourneyRunsIn(TMP4, 'nothing-gated')[0];
+          assert(gatedRec?.outcome === 'pass' && gatedRec.drift?.compared === 0 && gatedRec.gate.breaches.length === 0, 'fixture: the freshness-only gate held, and nothing was compared', gatedRec && { outcome: gatedRec.outcome, drift: gatedRec.drift, breaches: gatedRec.gate.breaches });
+          assert(gated.status === 1 && /^## ⚠️ Journey `nothing-gated` — NOTHING COMPARED · GATE NOT PASSED$/m.test(gated.stdout) && !/✅|— PASS/.test(gated.stdout),
+                 'under a gate, nothing compared cannot pass it: exit 1, never ✅ PASS', { status: gated.status, head: gated.stdout.split('\n')[0], err: gated.stderr });
+          const open = packc(['journey', 'run', 'nothing-open'], TMP4);
+          assert(open.status === 0 && /^## ⚠️ Journey `nothing-open` — NOTHING COMPARED$/m.test(open.stdout) && !/✅|GATE/.test(open.stdout.split('\n')[0]),
+                 'no gate configured: no gate verdict (exit 0), and the report still says nothing compared', { status: open.status, head: open.stdout.split('\n')[0], err: open.stderr });
+          const allNothing = packc(['journey', 'run', '--all', '--json'], TMP4);
+          const arrNothing = JSON.parse(allNothing.stdout);
+          assert(allNothing.status === 1 && arrNothing.map((r) => `${r.name}:${r.exitCode}`).join() === 'nothing-asks-nothing:0,nothing-gated:1,nothing-open:0', 'run --all: each by the same rule (a gate that asks for nothing is no gate), the worst is the exit code', arrNothing.map((r) => [r.name, r.exitCode]));
+          const listNothing = packc(['journey', 'list'], TMP4);
+          assert(['nothing-asks-nothing', 'nothing-gated', 'nothing-open'].every((n) => new RegExp(`^${n}\\tnothing-compared · `, 'm').test(listNothing.stdout)), 'journey list reads each nothing compared', listNothing.stdout.split('\n'));
+        } finally {
+          rmSync(TMP4, { recursive: true, force: true });
+        }
+      }
       // (l) schedule: every format, --json, the placeholder + stderr note, the exits.
       writeFileSync(join(TMP2, 'journeys', 'sched-env.journey.yaml'), ['name: sched-env', `packA: { file: ${A} }`, 'packB: { mcp: { url: https://mcp.example.invalid/mcp, authEnv: MY_MCP_TOKEN } }', 'schedule: { cron: "0 */2 * * *", timezone: Europe/Madrid }', 'notify: { urlEnv: MY_HOOK_URL, authEnv: MY_HOOK_TOKEN }'].join('\n'));
       const secretEnv = { MY_HOOK_URL: 'https://hooks.example/s3cr3t-value', MY_HOOK_TOKEN: 's3cr3t-token', MY_MCP_TOKEN: 's3cr3t-mcp' };

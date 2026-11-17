@@ -35,7 +35,11 @@
 // OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_* for one org (read only by
 // the org that owns the name, the longest-prefix rule of
 // server/store/mcp-endpoints.mjs), the org's overriding the deployment's
-// field by field. Read per request; inert when unset.
+// field by field. Read per request; inert when unset. It is the Expert live
+// snapshot's default and pre-fills a NEW service environment's form (said
+// "from the server default" there); it never applies to a service environment
+// that exists — a Run, a Check now and a capture read the environment's own
+// scope, else none (server/index.mjs).
 
 import { randomBytes } from 'node:crypto';
 import { brandEnvFrom } from '../tools/lib/brand-env.mjs';

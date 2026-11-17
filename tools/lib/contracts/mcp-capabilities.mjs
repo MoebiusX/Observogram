@@ -28,6 +28,12 @@
 //                release past `removeAfter` while the row still exists
 //                (docs/ARCHITECTURE_EVOLUTION.md §6).
 //
+// Capability rows may also carry:
+//   unsupportedOnHttpStatus  statuses (4xx, never 401/403) a candidate's
+//                backend answers when the store behind the MCP has no such
+//                API: the family is unsupported there, not failed — a
+//                refusal is never "not served".
+//
 // Candidate ORDER is the fallback order and is part of the contract — the
 // fetcher tries advertised candidates first-to-last and the first that
 // answers wins. Reorder only with the same care as a behaviour change.
@@ -98,6 +104,12 @@ export const CAPABILITIES = Object.freeze({
     // slot once per folder and reads only those rules (the answer is the same
     // provisioning shape, folder by folder); the draft leaves it empty and
     // the call is argless, as before.
+    // A tool whose store has no rules API behind it (a datasource proxy in
+    // front of a store that runs no ruler) answers 400 / 404 / 405: that
+    // engine is not served here, never a failure, so it never makes the
+    // union's read partial — the scrape targets' rule
+    // (tools/fetch-live-pack.mjs notServedStatus), remembered the same way.
+    unsupportedOnHttpStatus: Object.freeze([400, 404, 405]),
     candidates: [
       { tool: 'vmalert_rules', attests: 'vmalert' },
       { tool: 'metrics_alerts' },
@@ -136,6 +148,14 @@ export const CAPABILITIES = Object.freeze({
   scrape_configs: {
     kind: 'probe',
     responseShape: 'scrape-targets',
+    // A Prometheus-shaped targets API behind a datasource proxy in front of a
+    // federated or remote-write store answers 400 / 404 / 405: there are no
+    // targets to list there. A candidate whose answer says so makes the
+    // family unsupported, never failed (tools/fetch-live-pack.mjs
+    // notServedStatus) — unless the answer names a missing datasource, or the
+    // journey's records saw that tool answer the family (a lost route then,
+    // not a store that keeps none): those are failures.
+    unsupportedOnHttpStatus: Object.freeze([400, 404, 405]),
     // metrics_targets is the canonical otel-mcp-server tool (metrics skill);
     // returns the Prometheus /api/v1/targets shape. The rest are legacy.
     candidates: [
@@ -153,16 +173,17 @@ export const CAPABILITIES = Object.freeze({
     // Candidates ordered by likelihood:
     //   metrics_label_values — canonical otel-mcp-server name; needs
     //     { label: '__name__' } to enumerate metric names
-    //   metrics_metadata     — requires { metric: '<name>' } per metric,
-    //     so it's the FALLBACK only (chicken-and-egg)
     //   the rest are legacy / community-MCP names
+    // metrics_metadata is no candidate (2026-11-16): it requires
+    // { metric: '<name>' } per metric, so it cannot enumerate names, and
+    // called without it it only ever answered -32602 — which then read as
+    // the family's error.
     candidates: [
       { tool: 'metrics_label_values', args: { label: '__name__' } },
       { tool: 'list_metrics' },
       { tool: 'prometheus_metric_names' },
       { tool: 'metrics_inventory' },
       { tool: 'mimir_metric_names' },
-      { tool: 'metrics_metadata' },
     ],
   },
 
@@ -173,8 +194,10 @@ export const CAPABILITIES = Object.freeze({
     // (API v2 /status → `config`: the text itself, or { original: <text> }),
     // secrets already redacted by Alertmanager. The probe reads the ROUTES
     // out of it — the same reading the crawler gives a config file — and
-    // keeps nothing else of the text. An answer without a configuration
-    // (a tier that trims it) is no answer for this probe.
+    // keeps nothing else of the text. An answer without a configuration is
+    // no answer for this probe: a status object with no `config` key at all
+    // (a tier that trims it) reads not served here; an error, an empty
+    // configuration or one in a shape the reader does not read fails it.
     candidates: [{ tool: 'alertmanager_status', attests: 'alertmanager' }],
   },
 

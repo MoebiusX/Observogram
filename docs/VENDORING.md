@@ -33,7 +33,7 @@ prose contracts that follow.
 | --- | --- | --- |
 | [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), a snapshot's `observogram.scope.<kind>` parked as *not checked*, and — only on a pair one side of which was shown a field in part — `unobserved: [{ field, side, keys }]` on the `inBoth` entry; on a burn-rate pair whose two packs both state the rules the entry was read from, each rule's differences join the pair's `deltas` as `{ field, a, b, rule, nth? }` and its note is `{ field, side, keys, rule, nth? }` — one field name may repeat in a pair's `deltas`, and `summary.partlyCompared` counts rules, not pairs |
 | [`tools/lib/identity-modes.mjs`](../tools/lib/identity-modes.mjs) | imports `artefact-model.mjs`, `artefact-classify.mjs`; no Node APIs | comparison identity modes (rebadge batch 3, R3) — `IDENTITY_MODES` (`behaviour` = `identityKeyOf`, `name`, `id`), `DEFAULT_IDENTITY_MODE`, `identityMode`, `nameOf`, `idOf`, `nameKeyOf` / `idKeyOf` (`(artefact, { side })`), `pairingOf`, `identityFamilies`; the studio's Compare loads the same file |
-| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS` |
+| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope` (an exclude pattern's work bounded over a 256-character name), `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS`, `EXCLUDE_NAME_MAX`, `excludeProblem`, `excludedBy` (the one rule a name is dropped by: a name past the bound never is), `excludeProbes` (the names the fetcher's timed half times a pattern on), `inStageOrder` (probe families in the order the stages read them) and `firstProbeError(record)` (a run record's first probe error in that order — the one rule the engine writes a lost run's `error` by and `run-basis.mjs` reads it by) |
 | [`tools/lib/mcp-server-settings.mjs`](../tools/lib/mcp-server-settings.mjs) | imports `artefact-classify.mjs`, `mcp-url-safety.mjs` — copy the three together; no Node APIs | the MCP server-settings contract (rebadge batch 4) — the descriptor v1 an MCP server serves at `<root>/admin/schema` (`SETTINGS_DESCRIPTOR_VERSION`, `SETTINGS_DESCRIPTOR_PATH`, `SETTINGS_LIMITS`, `FIELD_TYPES`, `parseSettingsDescriptor`), the root and path rule (`settingsRoot`, `resolveSettingsPath`, `normaliseUrlValue`), the generic form (`genericDescriptor`, `GENERIC_NAMES`), the request (`settingsRequest`), the outcome and its redaction (`outcomeOf`, `redactEchoes`, `redactSecretKeys`) and the settings policy (`compileSettingsPolicy`, `policyFindings`); an MCP server author vendors it to validate a descriptor or policy file, and the studio's Server settings modal loads the same file |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`); a field shown only in part — `PARTIAL_ANNOTATION_PREFIX` (`observogram.partial.`), `partialAnnotation`, `parsePartialAnnotation`, `unobservedOf`; `adapter.mjs` now imports the first and third, so the adapter's closure gains this file and `promql-canon.mjs`; the rules a burn-rate entry was read from — `SOURCE_RULES_ANNOTATION_PREFIX` (`observogram.source_rules.`), `sourceRulesAnnotationKey`, `parseSourceRulesAnnotation` (the adapter imports the last two and puts the list on the artefact as `sourceRules`), which `deltasOf` and `unobservedOf` read for a burn-rate pair |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1, v2 or v3 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), the v3 tool labels `toolLabels` (`TOOL_LABEL_LIMITS`; `adapter.mjs` imports it to rename `tool`), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
@@ -47,6 +47,7 @@ prose contracts that follow.
 | [`tools/lib/remediation-flow.mjs`](../tools/lib/remediation-flow.mjs) | imports `artefact-model.mjs` (`classify`, `identityKeyOf`) | the diagnose → remediate flow (GAP batch 2) — `buildRemediationFlowModel({ pack, diff, liveAnnotations, otherSide })`: a remediation's trigger resolved to its alert artefacts (`observogram.remediates.*` annotation, rule name, compiled burn-rule name, SLO — `resolveTrigger`, `remediationTargets`, `burnRuleNames`, `slugKey` / `triggerSlug`), the alerts' states from the comparison (`alertStatesFromDiff`), the next steps; pure, no clock, never throws |
 | [`tools/lib/audit-report.mjs`](../tools/lib/audit-report.mjs) | imports `artefact-classify.mjs`, `blast-radius.mjs`, `brand.mjs`, `pack-conformance.mjs`, `remediation-flow.mjs`; no Node APIs | the service audit report (GAP batch 2) — `buildAuditReport` (the document), the section builders, `renderAuditReportHtml` (the first standalone document over `design-tokens.css` + `design-kit.css`), `auditReportFilename`; the traceability graph arrives as a shape |
 | [`tools/lib/legacy.mjs`](../tools/lib/legacy.mjs) | imports `pack-conformance.mjs` | the layered-JSON upconvert and the merge — `isLegacyLayeredPack`, `upconvertLegacyPack` (→ `{ canonical, report, provenance }`), `mergeUpconvert`; copy the two together |
+| [`tools/lib/run-basis.mjs`](../tools/lib/run-basis.mjs) | imports `mcp-url-safety.mjs` and `live-fetch.mjs` (both zero-import) — copy the three together; no Node APIs | what a run's match figure rests on, read the same way by every reader: `comparedOf(drift)` (drift.compared, else the four counts of an older record), `vantageOf(record)` (lost when no probe family returned data, whatever an older record says; restricted reads full), `matchPctOf(record)` (the figure only over a comparison and a live side that gave data), `firstProbeErrorOf` / `liveLossOf` (the first failed family's first error by `live-fetch.mjs` `firstProbeError`, one line, credentials masked), `readingOutcome` (a pass or a failed gate over nothing compared is `nothing-compared`), `nothingReason`, `partialParts`, `scanFactsOf` (an older record's environment scope named by the surface its profile stood for), `scanPartialReading` (`{ kept: false }` for a stop that kept no complete scan), `runBasis`, `alignmentWords`, `basisSummary` (what `GET /api/journeys` lists of the last run), `stoppedSummary` (a Run that stopped on a partial scan, with `kept`) and `stoppedRunKept`; `studio/overview-model.mjs` holds the studio's copy and `studio/verdict-ui.mjs historyAlignmentPct` the figure's, pinned equal by `tools/test-run-basis.mjs` |
 | [`tools/lib/stack-evidence.mjs`](../tools/lib/stack-evidence.mjs) | imports `contracts/stack-self-metrics.mjs` only | pure history helpers over journey run records — `stackSeries`, `latestByFamily`, `stackSummary`, `stackPostureBudget`, `nonzeroRuns`, `formatStackValue`, `stackOutcomeLabel`; explicit inputs, no Node APIs, every output a point-in-time signal |
 | [`tools/lib/contracts/stack-self-metrics.mjs`](../tools/lib/contracts/stack-self-metrics.mjs) | pure data + lookups | the stack self-metric alias table `stack-evidence.mjs` orders by — copy the two together |
 | [`tools/lib/blast-radius.mjs`](../tools/lib/blast-radius.mjs) | **zero-import** (CI-asserted) | the blind-spot blast radius over the requirement graph — `CONSUMER_SIDE` / `PROTECTION_SIDE`, `normalizeGraphShape`, `blastRadiusOf`, `blastRadiusIndex`; input is the plain `{ nodes: [{ key, identityKey, kind, layer, label, virtual, scaffold }], edges: [{ from, to, type, provenance }] }` that `graphShape(graph)` in `traceability-graph.mjs` projects (nodes also accepted as a Map or a keyed object); structural exposure only — what WOULD go blind — it never reads liveness |
@@ -116,14 +117,31 @@ applied. Keys are only ever added here, never renamed or removed.
 
 **Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
 original shape (`isLiveDraft`, `failed`, `empty`, `attempted`, `partial` —
-`partial` still means *outright probe failures only*) and gains optional keys
+`partial` means a probe family failed, or answered only in part) and gains optional keys
 a downstream host may ignore: `unsupported` (probe families the MCP tier does
-not expose, from `mcp.probesUnsupported`), `errors` (`{ family: message }`
-from `mcp.probeErrors.<family>`), and `vantage` — `'full'` (nothing failed,
-nothing unsupported), `'partial'` (some probes failed), `'restricted'` (nothing
-failed, some families not exposed), `'lost'` (every attempted family failed or
-is unsupported), `'none'` (not a live draft). Keys are only ever added here,
-never renamed or removed.
+not expose, from `mcp.probesUnsupported`, or whose store answered it keeps no
+such thing), `errors` (`{ family: message }`
+from `mcp.probeErrors.<family>`), `succeeded` (the families that returned
+data), `inPart` (families answered in part, `mcp.probesPartial`), `notServed`
+(`{ family: reason }` from `mcp.probeUnsupported.<family>`), `probeTable`
+(whether the pack recorded one) and `vantage` (2026-11-16): `'lost'` when the
+probe table says no family returned data — whatever tools/list advertised,
+every family empty included; `'partial'` when a family failed or answered in
+part; `'full'` otherwise (a family not offered or not served never degrades
+it); `'none'` without `mcp.url`, or for a live export that recorded no probe
+table at all. `'restricted'` is no longer produced — a host that stored it
+reads it as `'full'`. Keys are only ever added here, never renamed or removed.
+
+**Figures over nothing are null (2026-11-16).** `diffPacks`' `summary.alignment`
+and `summary.jaccard`, `applySetAsides`' recomputed summary and chain rollup,
+`compareBranches`' `rollup.integrityMean` / `integrityPct` and
+`rollup.ladder.integrityMean` / `integrityPct` with no declared chain (the
+ladder averages only the chains that have a figure), a branch's
+`ladderIntegrity` / `ladderIntegrityPct` when nothing on it was observable,
+and `computeWeightedDeltaRisk`'s `health` / `healthPct` with nothing to weigh
+are `null`, never 1 / 100. `branchRecordsFromGraph` keeps a null ladder figure
+and `chainSummary` averages the finite ones. A host that formats these as a
+percentage must say "not measured" for null.
 
 **Optional inputs `computeDiagnosticGrade` reads.** The diff-bucket path
 counts a layer bucket's optional `scaffold` array (placeholders `diffPacks`
@@ -133,7 +151,12 @@ optional `notObserved` array the same way (`N not checked`): artefacts one
 pack holds in a family the other could not observe move no weight. The Fresh criterion
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
-and every score are unchanged, and no import was added.
+and every score are unchanged, and no import was added. Drift-free earns
+nothing where nothing backs it (2026-11-16, grade schema still 5): a diff
+whose union is empty (`nothing compared - …`, on the chain construct too), a
+bucket path with only placeholders to weigh, a live source with no diff that
+asked or recorded no probe family, or whose families returned no data — each
+scored 1 before.
 
 **Grade schema 5 (0.8.33): Multi-modal and Comprehensive earn by how far
 they get.** `computeDiagnosticGrade` returns `gradeSchema: 5` (the new export
@@ -188,7 +211,7 @@ A host whose own fetcher writes neither gets "no chaos experiment declared in
 this pack", which is true. `boardGroupsHtml(layerId, entries, { annotations })`
 (studio/discover-board.mjs) reads the same two keys for the empty chaos group;
 without the third argument it says "None in this pack" as before.
-| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `set-asides.mjs` (zero-import), `artefact-tiers.mjs` (zero-import), `mttx-targets.mjs` (zero-import), `chaos-runs.mjs` (zero-import), `constants.mjs`, `clause-fixes.mjs` (zero-import) — copy the nine together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `chainModel`, `chainDifferences` and `chainWords` (the chain in words: what differs, what matches, what live did not read), `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`), the Services list as a matrix (`serviceMatrix`, `envRank`, `branchIsEnvironments` — whose branch the form's answer is: a row per service, a column per environment in release order; `serviceListModel` carries it as `matrix`), the control room's targets (`controlRoomMttx`), Record a chaos run… (`chaosExperimentsOf`, `chaosRunFormOpened`, `chaosRunFormInput`, `chaosRunPlan`, `chaosRunForgetPlan`, `chaosRunFormModel`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
+| [`studio/overview-model.mjs`](../studio/overview-model.mjs) | imports `services-model.mjs` (zero-import), `diagnostic-grade.mjs`, `set-asides.mjs` (zero-import), `artefact-tiers.mjs` (zero-import), `mttx-targets.mjs` (zero-import), `chaos-runs.mjs` (zero-import), `constants.mjs`, `clause-fixes.mjs` (zero-import) — copy the nine together (CI-asserted: `tools/test-overview-model.mjs`) | the Overview board's model, pure — `buildOverviewModel(input)` and its parts (`gradeModel`, `gradeWhy`, `stillTrueModel`, `nextActionModel`, `chainModel`, `chainDifferences` and `chainWords` (the chain in words: what differs, what matches, what live did not read), `layersModel`, `rulesModel`, `fidelityModel`, `changesModel`, `vantageShrank`, `runGradesBoard`, `boardComparison`, `decideUiMode`, `decideOverviewLayout`), what a run's figures rest on (the studio's copy of `tools/lib/run-basis.mjs`: `comparedOf`, `vantageOf`, `matchPctOf`, `firstProbeErrorOf`, `liveLossOf`, `readingOutcome`, `basisFactsOf`, `nothingReason`, `partialParts`, `scanFactsOf`, `scanPartialReading`, `stoppedRunKept`, `stoppedNote`, `safeErrorText`), the Run's toast (`runToastModel`, with `overview-view.mjs` `runToastText`; `runRecordedToast` for a Run the server answered with an error but recorded), a row's last check in one of five states (`last`: `{ state: never · unreachable · nothing · partial · checked, word, label, reason, notes, when, letter, alignmentPct, gate }`), the Services list as a matrix (`serviceMatrix`, `envRank`, `branchIsEnvironments` — whose branch the form's answer is: a row per service, a column per environment in release order; `serviceListModel` carries it as `matrix`), the control room's targets (`controlRoomMttx`), Record a chaos run… (`chaosExperimentsOf`, `chaosRunFormOpened`, `chaosRunFormInput`, `chaosRunPlan`, `chaosRunForgetPlan`, `chaosRunFormModel`) and the start's logic (`START_IDLE`, `startChoose`, `startAdopted`); see *The Overview board* below |
 | [`studio/set-asides.mjs`](../studio/set-asides.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | a service's set-asides — differences with live its grade leaves out (under development, not this service's): `applySetAsides(diff, list, { now })` returns the comparison without them (its summary and requirement chains scored again, the engine's beside), `setAsideCandidates`, `setAsideFingerprint`, `setAsideState`, `reviewDate`; the server's runs and Expert's Diagnose read the same rules |
 | [`studio/control-room-model.mjs`](../studio/control-room-model.mjs) | **zero-import** (CI-asserted: `tools/test-overview-model.mjs`) | the control room's model, pure: the panel's state from one read to the next (`controlRoomOpened`, `controlRoomReading`, `controlRoomAnswered`, `controlRoomFailed`, `controlRoomDue` — a minute; 1, 2, then 4 minutes after consecutive failures; none hidden, none after a final refusal) and `buildControlRoomModel({ state, serviceName, envName, mttx, now })`, the server's answer in words and numbers (MTTR and MTTD first, never a figure the read did not support; what the figures are of said under the title — the service's own, as the server scopes the read to its repository's alert rules and scrape jobs, or the endpoint's whole from an older server); `mttx` is `overview-model.mjs` `controlRoomMttx({ loaded, layered, layeredError, targets, settable })` — the repository's targets (`origin: 'repository'`), else the studio's with their words (`origin: 'studio'`, `mttdWords`, `mttrWords`: measured against, said so), else `{ declared: false, recommended }` (no verdict), each with every recorded chaos run (`runs`) and, with `settable`, `action` (*Set targets…* / *Change targets…*, the model's `targets: { label, aria }`, the panel's button to `host.overview.setTargets()`); `{ unread: true }` while the repository's pack is not read |
 | [`studio/control-room-view.mjs`](../studio/control-room-view.mjs) | imports `util.mjs` (escapeHtml), `host.mjs`, `ux-kit-pure.mjs` — as `overview-view.mjs` (CI-asserted) | `renderControlRoom(container, model, host)`: the panel into its own host element (never inside the board, which repaints) — two children, the panel and a live region kept across repaints; a repaint of the same service environment redraws only the pieces whose words changed — `host.overview.closeControlRoom` and `refreshControlRoom`; `placeControlRoom(head)`; `formatValue`, `boundWords` |
@@ -609,24 +632,76 @@ The studio's wiring is `listPickPackFile` in `studio/app.mjs`.
 
 **A live scope per environment** (README, *A live scope per environment*):
 step 4 draws the scope's five answers under the endpoint (`formModel`'s
-`scope`: `{ shown, from, hint, fields }`), and the matrix cell its summary
-(`serviceListModel` rows' `scope`: `{ text, from }`). Pass the server's
-configured snapshot scope, compact, to the three places that read it — none
-of them is required, and without it an environment with no scope of its own
-reads as empty:
+`scope`: `{ shown, from, hint, fields: [{ …, fromDefault }], dropped, offerDefault,
+defaultIgnored, check }`), and the matrix cell its summary (`serviceListModel`
+rows' `scope`: `{ text, from }`, or `{ text: null, defaultIgnored, defaultSummary }`
+for an environment with none of its own while the server has a default — the
+default never applies to it; `defaultIgnored` is the row's sentence,
+`SCOPE_DEFAULT_IGNORED`, and `defaultSummary` the default in a few words, which
+`mxCellHtml` puts on hover). Pass the server's configured snapshot scope,
+compact, to the places that read it — none of them is required: `formOpened`
+pre-fills only a NEW environment with it (`form.scopePrefill`), and only a
+default that names metric prefixes (one that names none is
+`form.scopePrefillRefused: { unprefixed: true, … }`, offered by
+`scope.offerDefault`), an existing one opens on its own scope;
+`useServerDefaultScope(form)` is the form's **Use the server default**;
+`savePlan` takes `scopePrefill` (an older host that passes only
+`scopeDefaults` has it taken as the pre-fill) and keeps what `scopeSaveOf`
+keeps — `scope.dropped` and the hint say so before the save, a blank Add whose
+name keys a service you passed `formOpened` included; `formDraft` carries the
+pre-fill (`scopePrefill`, compact) and `formRestored` puts it back. The scope check is `scopeCheckOf(form)` → the host's
+`checkServiceScope(serviceId, { env, scope })` (overview-api.mjs) →
+`scopeChecked(form, answer, key)` / `scopeCheckFailed`, worded by
+`scopeCheckView(form)` and drawn by `scopeCheckBlockHtml` (overview-view.mjs),
+which a host may replace in place while the person types:
 
 ```js
 import { liveScopeDefaultsOf } from './overview-model.mjs';
 // An operator's read (anyone else gets a refusal: no scope then); a variable that does not parse makes it null.
 const defaults = liveScopeDefaultsOf(await fetchJson('/api/mcp/jobs').then((b) => b.scope, () => null));
 serviceListModel({ …, liveScopeDefaults: defaults });
-formOpened(services, { …, scopeDefaults: defaults });                                    // prefills, form.scopeFrom 'server'
-savePlan(values, { …, scopeDefaults: form.scopeDefaults });                              // liveScopes in the create or patch, when changed
+formOpened(services, { …, scopeDefaults: defaults });                                    // a new environment pre-filled, form.scopePrefill
+savePlan(values, { …, scopeDefaults: form.scopeDefaults, scopePrefill: form.scopePrefill }); // liveScopes in the create or patch, when changed
 ```
 
 `scopeFormValues`, `scopeFromValues`, `scopeSummary`, `sameScope`,
 `resolvedScope` and `SCOPE_FIELDS` are the model's own (the studio never
 imports `tools/lib`; the server checks every value).
+
+**A deployment surface per environment** (README, *Every environment reads
+the same files*): every environment of a service reads the same files; step 3
+offers *Read only this deployment surface* under the repository (`formModel`'s
+`surface`: `{ shown, label, options: [{ id, label, selected }], hint }`; not
+shown for a pack file, nor when the services you pass carry no `envSurfaces` —
+an older server would drop the answer), its answer `values.surface` (`''` for
+every file), and `savePlan` puts the service's whole `envSurfaces` map into
+the create or patch when this environment's entry changes. The rows carry
+`surface` (`{ id, label }` or `null`). `DEPLOYMENT_SURFACE_CHOICES` and
+`surfaceLabel(id)` are the model's mirror of `tools/lib/crawler.mjs`
+`DEPLOYMENT_SURFACES` (pinned by a test). Nothing to wire: a select with
+`data-field` is handled as every answer is.
+
+**A Run stopped on a scan that lost files.** `runServiceRecord` throws
+`servicesRefusal`'s error with `.status` 409, `.outcome` `'scan-partial'`,
+`.scan` (what the scan read — counts and reasons only) and `.kept` (`{ id,
+label }`, the scan the service keeps, or `null`); the server has kept a
+`scan-partial` record. Hand the error's `outcome`, `scan` and `kept` to
+`runRecordedToast` with the row's listing entry before and after the Run: it
+says the stop and whether a complete scan is kept — from the 409 itself while
+the listing does not show it (a first Run that kept none saves no check).
+`loadOverviewFacts` answers `run` — the journey's newest run that checked
+something, however many stops are newer (it asks the runs route for
+`checked=1`; a server that answers without it is read 25 records back, as
+before) — and `stopped`, the newest record when it is such a stop (else
+`null`; read too when the listing names only a stop): a board that passes
+the newest record as `run` would read a stop, which carries no drift, as a
+check. A board unit older
+than this release reads a `scan-partial` record so: copy the Overview board
+unit with the server. `scanModel` reads a scan by kind when it counts what it
+did not read (`notRead`): `lost`, `limit`, `capped` (with the cap's files),
+`truncated`, `onPurpose` — a secrets file or one git ignores, never a
+warning — `excluded` (the filter, by its label) and `unknown`; an older
+record reads as before.
 
 **A repository read as the person who runs it.** A GitHub or Azure DevOps
 repository is read with the person's own token (README, *Whose access reads
@@ -779,7 +854,12 @@ switches are a what-if only.
   writing `observogram.source_rules.policy.burn_rate_alerts.<slo>` — the list
   `sourceRuleTerms` (tools/lib/sli-inference.mjs) returns for its listing —
   beside each entry it reads from such rules; a host that writes none sees
-  the deltas it always had.
+  the deltas it always had. A burn-rate pair's `unobserved` note may name
+  `field: 'windows'` with its `rule`: a rule the entry was read from that
+  sits in a store the other side's read did not cover
+  (`observogram.unread.alert_rule`), so the pair's windows went uncompared; a
+  host whose packs carry no `engine: grafana` on their source rules, or no
+  `observogram.unread.*`, never sees it.
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.
@@ -888,6 +968,13 @@ OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
 - `RULE_GROUPS` is a comma list, compared exactly, so a name may hold spaces.
 - These values describe one team, service and environment. Keep them in the deployment's
   variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code ([`LIVE_FETCH.md`](LIVE_FETCH.md) §15.2).
+- Without `METRIC_PREFIXES`, nothing shows which service they are for, so the studio
+  pre-fills no new environment with them. The service form offers **Use the server
+  default** instead. Typed prefixes then keep none of the default's folders, rule groups
+  or patterns. Set `METRIC_PREFIXES` to the service's own for the pre-fill.
+- A pattern whose quantifiers can split a 256-character name more than a million ways is
+  refused, `^.*_.*_.*_total$` among them, and so is a backreference. A name longer than 256
+  characters is never dropped by a pattern.
 - The two variables your patch read inside `fetchMcp` do not exist upstream.
 - After the first snapshot, read the gate log. It says whether the folder scope was pushed
   down or the rules were read whole.
