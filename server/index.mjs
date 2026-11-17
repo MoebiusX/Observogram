@@ -98,6 +98,8 @@ import { isAdoServices } from './ado-crawl.mjs';
 import { getService, getServiceBySlug, listServices } from './store/services.mjs';
 import { getMcpEndpoint as getMcpEndpointRow } from './store/mcp-endpoints.mjs';
 import { safeMcpUrl as safeMcpUrlOf } from '../tools/lib/mcp-url-safety.mjs';
+// What a run's match rests on (C9): the figure only over a comparison, and why not.
+import { basisSummary, stoppedSummary } from '../tools/lib/run-basis.mjs';
 import { conformanceWaivers, listWaiverViews } from './waiver-admin.mjs';
 import { admittedBearer, admittedUser, authGate, orgContext, authorize, effectiveRoleOf, listenOf, rankOf, rankOfRole, requestPosture } from './authz.mjs';
 import { versionInfo } from './version.mjs';
@@ -984,7 +986,11 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       // never-run one.
       let loadError = null;
       try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
-      const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
+      // The last check is the newest run that is not a stopped Run (a Run that stopped on a partial
+      // scan checked nothing; outcome scan-partial): it is named beside the check as `stoppedRun`.
+      const newest = readJourneyRuns(name, { limit: 1 })[0] || null;
+      const stopped = newest?.outcome === 'scan-partial' ? newest : null;
+      const lastRun = stopped ? (readJourneyRuns(name, { limit: 20 }).find((r) => r?.outcome !== 'scan-partial') || null) : newest;
       // A journey whose notification a server run would refuse says so —
       // the run's own text, which names who acts (the server's operator, or
       // whoever holds the workspace); never for a journey a run would
@@ -1005,6 +1011,9 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         // one its run record names as packB.refreshedAt — or null when no
         // run has kept one.
         livePack: kept.get(name) || null,
+        // A Run newer than the last check that stopped on a partial scan: { startedAt, notRead,
+        // candidates, firstReason }, or null.
+        stoppedRun: stoppedSummary(stopped),
         // Step 5: the declared cadence (parsed the way the CLI parses it —
         // cadenceMs null with a note for an irregular cron), the posture
         // budget inputs and the notify block as env var NAMES only (with
@@ -1020,7 +1029,12 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
         lastRun: lastRun && {
           startedAt: lastRun.startedAt,
           outcome: lastRun.outcome,
-          alignmentPct: lastRun.drift?.alignmentPct ?? null,
+          // The match only over a comparison and over a live side that gave data (null otherwise,
+          // whatever an older record says), with what it rests on: compared, the vantage read as
+          // tools/lib/run-basis.mjs reads it, the reading (nothing-compared, vantage-lost), the first
+          // probe error (one masked line), the families not read, the scan's counts and filter,
+          // comparable — counts, names and bounded lines only.
+          ...basisSummary(lastRun),
           gradeScore: lastRun.grade?.score ?? null,
           // The grade schema that score was scored under (studio/diagnostic-grade.mjs GRADE_SCHEMA), null when the record names none.
           gradeSchema: Number.isInteger(lastRun.grade?.schema) ? lastRun.grade.schema : null,

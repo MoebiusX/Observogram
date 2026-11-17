@@ -34,8 +34,12 @@ import {
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, LIVE_PACK,
   scopeFormValues, scopeFromValues, scopeSummary, liveScopeDefaultsOf, SCOPE_FIELDS,
   serviceAsideKey, serviceTargetsKey, studioTargetsCounted, serviceMatrix, envRank,
+  runToastModel, runRecordedToast,
 } from '../studio/overview-model.mjs';
-import { renderOverview, renderServiceList, readTokenDrafts } from '../studio/overview-view.mjs';
+import { renderOverview, renderServiceList, readTokenDrafts, runToastText } from '../studio/overview-view.mjs';
+// The rule the server lists a run by (GET /api/journeys), and the engine's causes: a row and a board read as they are fed.
+import { basisSummary } from '../tools/lib/run-basis.mjs';
+import { rankCauses } from '../tools/lib/chain-history.mjs';
 import { loadServiceListFacts, loadRepositoryFolders, computeOverviewDiagnostic } from '../studio/overview-api.mjs';
 import { runServiceRecord, servicesRefusal } from '../studio/services-api.mjs';
 import { CLAUSE_FIX } from '../studio/clause-fixes.mjs';
@@ -106,6 +110,15 @@ const lostRun = { ...run, outcome: 'vantage-lost' };
 const partialRun = restamp(fixture('krystaline-run-partial'));
 // The same journey reading a recording as Pack B (a file path, not "mcp: …").
 const fileJourney = { ...journey, packB: 'C:/demo/.observogram-demo/journeys/krystaline/live/2026-10-07T12-00-00-000Z.json' };
+// No figure without its basis: an older record over an empty union (100, a pass); a Run that stopped on a
+// partial scan (C8); a lost run whose families answered empty (C4); an older pass whose every probe failed
+// (defect 1 as history holds it); a comparison of live-only things alone.
+const nothingRun = { ...run, outcome: 'pass', drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, outOfScope: 0, scaffold: 0 }, gate: { thresholds: { minAlignmentPct: 85 }, breaches: [] }, probes: { attempted: ['alert_rules'], succeeded: ['alert_rules'], empty: [], failed: [], unsupported: [] }, probeErrors: {}, vantage: 'full', causes: null, transition: { reason: 'first run', changed: [] } };
+const stoppedRun = { journey: run.journey, startedAt: run.startedAt, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)', packA: { source: run.packA.source, scan: { source: 'acme/checkout', files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: run.packB.source }, scope: run.scope, gate: { thresholds: {}, breaches: [] }, notify: null };
+const { drift: _noDrift, grade: _noGrade, ...ungraded } = run;
+const noDataRun = { ...ungraded, outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: ['alert_rules', 'dashboards'], failed: [], unsupported: [] }, probeErrors: {}, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost: no probe family returned data — nothing was compared' }] } };
+const oldAllFailed = { ...run, outcome: 'pass', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: [], failed: ['dashboards', 'alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500', dashboards: 'dashboards_search: HTTP 500' } };
+const liveOnlyRun = { ...run, drift: { alignmentPct: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 5, setAside: { declaredNotLive: 3, liveNotDeclared: 0 } } };
 
 // The live pack the server kept from that run (GET /api/journeys `livePack`), and its catalogue entry.
 const LIVE_ENTRY = { id: 'uploaded-krystaline-live-5e1f', label: 'krystaline · prod · live', description: 'Uploaded pack — journey-live:krystaline', live: 'scaffold', source: 'uploaded', ok: true };
@@ -417,7 +430,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
 // ---------- is that still true right now? ----------
 
 test('stillTrueModel: never checked (no journey; a journey without a run, with and without an env), the live wording and the Check button only for a live journey', () => {
-  assert.deepEqual(OVERVIEW_STATUS, { never: 'Never checked', unchanged: 'Unchanged', changed: 'Changed', unreachable: 'Unreachable' });
+  assert.deepEqual(OVERVIEW_STATUS, { never: 'Never checked', unchanged: 'Unchanged', changed: 'Changed', unreachable: 'Unreachable', nothing: 'Nothing compared' });
   assert.equal(FRESH_WINDOW_MS, 24 * HOUR);
   // S0: no journey at all.
   const s0 = keep(stillTrueModel({ journey: null, run: null, now: NOW }));
@@ -480,6 +493,8 @@ test('stillTrueModel: Unchanged with the Check again primary; stale after a day 
     status: 'unreachable', pill: 'Unreachable',
     sentence: 'Last check 2 hours ago: the live side did not answer, so nothing is known about it right now.',
     note: '', cadence: 'Checks run only when you click.', stale: false, canCheck: false, checkLabel: '', checkPrimary: false, tone: 'warn', error: null, pending: false, running: false, ago: '2 hours ago',
+    // The reason beneath: the first probe error the record carries.
+    reason: 'Live did not answer — grafana_dashboards_search: Error: HTTP 401: Unauthorized — http://kx-krystalinex-grafana:3000/api/search?limit=100&type=dash-db',
   });
   assert.equal(keep(stillTrueModel({ journey, run: lostRun, now: STALE_NOW })).stale, true);
   // A recording as Pack B: the words say so with its day, and nothing can be checked from here.
@@ -708,8 +723,16 @@ const STATES = {
   loading: { services: null, servicesStatus: { kind: 'loading', error: null } },
   empty: { services: [] },
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
+  'nothing compared': { run: nothingRun },
+  'nothing compared (recording)': { journeys: [fileJourney], run: nothingRun },
+  'nothing compared, live-only things alone': { run: liveOnlyRun },
+  'stopped on a partial scan': { run: stoppedRun },
+  'stopped on a partial scan (recording)': { journeys: [fileJourney], run: stoppedRun },
+  'no live data': { run: noDataRun },
+  'an older pass whose every probe failed': { run: oldAllFailed },
+  'a partial scan, compared': { run: { ...run, packA: { ...run.packA, scan: { files: 171, candidates: 220, partial: true, notRead: 49 } }, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' } } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable', 'stopped on a partial scan (recording)']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -1527,6 +1550,131 @@ const stringsOf = (value, out = []) => {
   return out;
 };
 
+// ---------- what a run's figures rest on: nothing compared, a live side that gave nothing, a stopped Run ----------
+
+test('OM3 stillTrueModel and nextActionModel over nothing compared: the fifth status word, never "it matches" or "live matches" over an empty comparison (an older record\'s 100 included) nor over a stopped Run; the stopped Run\'s reading and its Check again; Open in Diagnose is the one primary; the status strip says nothing compared', () => {
+  const s = keep(stillTrueModel({ journey, run: nothingRun, now: NOW }));
+  assert.deepEqual([s.status, s.pill, s.tone, s.canCheck, s.checkLabel, s.checkPrimary], ['nothing', 'Nothing compared', 'warn', true, 'Check again', false]);
+  assert.equal(s.sentence, 'Checked 2 hours ago against live — nothing was compared. Neither side had anything this check could compare.');
+  const n = keep(nextActionModel({ still: s, grade: liveGrade, run: nothingRun, journey, now: NOW }));
+  assert.deepEqual([n.sentence, n.button, n.primary], ['Nothing was compared, so nothing is confirmed live: see what each side holds.', { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, true]);
+  assert.ok(![s.sentence, n.sentence].some((x) => /matches/.test(x)), 'never "matches" over nothing');
+  // The first reason that holds: the live side read in part, the declared things it could not read.
+  const unread = { ...nothingRun, vantage: 'partial', probes: { ...nothingRun.probes, attempted: ['alert_rules', 'dashboards'], failed: ['dashboards'] }, probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, packB: { ...nothingRun.packB, liveScope: { metricPrefixes: ['shop_'] } }, drift: { ...nothingRun.drift, setAside: { declaredNotLive: 2, liveNotDeclared: 1 } } };
+  const su = keep(stillTrueModel({ journey, run: unread, now: NOW }));
+  assert.equal(su.sentence, 'Checked 2 hours ago against live — nothing was compared. Live answered in part: dashboards not read. 3 are set aside for this service.');
+  const nu = keep(nextActionModel({ still: su, grade: liveGrade, run: unread, journey, now: NOW }));
+  assert.deepEqual(nu.why, ['Part of the live side could not be read: its dashboards.', 'The live read was scoped to part of the estate; what lies outside it was not compared.', '3 differences are set aside for this service.']);
+  // Only live-only things compared: nothing the repository declares was, so nothing of it matches.
+  const lo = keep(stillTrueModel({ journey, run: liveOnlyRun, now: NOW }));
+  assert.deepEqual([lo.status, lo.pill, lo.tone, lo.checkPrimary], ['nothing', 'Nothing compared', 'warn', false]);
+  assert.equal(lo.sentence, 'Checked 2 hours ago against live — nothing the repository declares was compared: 5 things run live that it does not declare. 3 are set aside for this service.');
+  const nlo = keep(nextActionModel({ still: lo, grade: liveGrade, run: liveOnlyRun, journey, now: NOW }));
+  assert.deepEqual([nlo.sentence, nlo.button?.action, nlo.primary], ['Nothing the repository declares was compared; 5 things run live that it does not declare yet.', 'ov-next-neuron', true]);
+  // A stopped Run (C8) as the newest record: nothing was compared, the previous pack is kept; Check again checks it.
+  const st = keep(stillTrueModel({ journey, run: stoppedRun, now: NOW }));
+  assert.deepEqual([st.status, st.pill, st.tone, st.canCheck, st.tried], ['nothing', 'Nothing compared', 'warn', false, true]);
+  assert.equal(st.sentence, 'Last Run 2 hours ago: the repository was read in part (49 of 220 files not read), so nothing was compared; the previous pack is kept.');
+  const nst = keep(nextActionModel({ still: st, grade: packGrade, run: stoppedRun, journey, now: NOW }));
+  assert.deepEqual([nst.button, nst.primary, nst.why], [{ label: 'Check again', action: 'ov-check' }, true, ['49 of 220 files were not read.', 'The first not read: grafana/a.json — it could not be downloaded (HTTP 403).']]);
+  assert.ok(/previous pack is kept/.test(nst.sentence));
+  const nstRec = keep(nextActionModel({ still: keep(stillTrueModel({ journey: fileJourney, run: stoppedRun, now: NOW })), grade: packGrade, run: stoppedRun, journey: fileJourney, now: NOW }));
+  assert.deepEqual([nstRec.button, nstRec.primary], [null, false], 'a recording: nothing to check from here');
+  // A Run that stopped after the last check: the check reads as it did, the stopped Run said beneath.
+  const after = keep(stillTrueModel({ journey, run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() }, now: NOW }));
+  assert.deepEqual([after.status, after.stopped], ['unchanged', 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.']);
+  assert.equal(keep(stillTrueModel({ journey, run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 - HOUR).toISOString() }, now: NOW })).stopped, undefined, 'an older stop is no news');
+  // The whole screen: one primary; the strip says nothing compared, and "tried" after a stopped Run.
+  const m = screen({ run: nothingRun, layout: 'board' });
+  assert.deepEqual([m.still.status, m.primary, m.next.button?.action], ['nothing', 'next', 'ov-next-diagnose']);
+  const c = overviewContainer();
+  renderOverview(c, keep(m), { overview: {} });
+  assert.ok(c.innerHTML.includes('<span class="ov-status__part ov-status__part--nothing">nothing compared</span>'), 'the status strip says nothing compared');
+  assert.ok(c.innerHTML.includes('ov-status--warn'));
+  const c2 = overviewContainer();
+  renderOverview(c2, keep(screen({ run: stoppedRun, layout: 'board' })), { overview: {} });
+  assert.ok(c2.innerHTML.includes('ov-status__part--when">tried 2 hours ago</span>'), 'a stopped Run was tried, not checked');
+  // Not comparable with the check before: the since clause says so, never "got worse since".
+  const nc = keep(stillTrueModel({ journey, run: { ...run, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, transition: { since: '2026-10-27T18:48:29.174Z', changed: [{ direction: 'worse' }, { direction: 'worse' }], reason: null } }, now: NOW }));
+  assert.equal(nc.sentence, 'Checked 2 hours ago against live — 43 things differ from what the repository declares. Not comparable with the check before: this scan could not read 49 of 220 files.');
+  const ncGrade = gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: { ...run, comparable: { withPrevious: false, reason: 'the previous run read every file' } }, journey, now: NOW });
+  assert.equal(ncGrade.source, 'Graded against live, 2 hours ago. Not comparable with the check before: the previous run read every file.');
+});
+
+test('OM4 a lost live side: the reason beneath the sentence names the first probe error; a lost run whose families answered empty says the live side answered with no data; an older pass record where no family answered reads Unreachable and does not letter the board; a vantage lost before a good check, or a stopped Run before one, is a recovery, never "showed less"; fidelity and changes withhold their counts over nothing compared and over a stopped Run', () => {
+  const nd = keep(stillTrueModel({ journey, run: noDataRun, now: NOW }));
+  assert.deepEqual([nd.status, nd.pill, nd.reason], ['unreachable', 'Unreachable', undefined]);
+  assert.equal(nd.sentence, 'Last check 2 hours ago: the live side answered but returned nothing this check reads, so nothing is known about it right now.');
+  const nnd = keep(nextActionModel({ still: nd, grade: packGrade, run: noDataRun, journey, now: NOW }));
+  assert.deepEqual([nnd.sentence, nnd.why, nnd.primary], ['Check again once the live side returns data; until then nothing is known.', ['The live side answered the last check, but returned nothing this check reads.'], true]);
+  // An older pass whose every probe failed (defect 1 as history holds it).
+  const old = keep(stillTrueModel({ journey, run: oldAllFailed, now: NOW }));
+  assert.deepEqual([old.status, old.reason], ['unreachable', 'Live did not answer — alert_rules_list: HTTP 500: no backend session']);
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: oldAllFailed, journey, now: NOW }));
+  assert.deepEqual([g.basis, g.source], ['repository', 'Graded from the repository alone; the last live check could not see production.']);
+  assert.equal(runGradesBoard(oldAllFailed, krystalinePack), false);
+  const f = fidelityModel({ run: oldAllFailed, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([f.known, f.alignmentPct, f.tiles], [false, null, []], 'no ring over a live side that gave nothing');
+  // A vantage lost before a good check is a recovery; so is a stopped Run before one (its record carries no live picture).
+  const recovered = { ...run, causes: { vantage: { changed: true, from: { vantage: 'lost', failed: ['alert_rules'] }, to: { vantage: 'partial', failed: ['dashboards'] } } } };
+  assert.deepEqual(vantageShrank(recovered), []);
+  const { transitions: _t, ...causes } = rankCauses({ previous: stoppedRun, baseline: null, current: { ...run, causes: undefined }, deploys: [] });
+  assert.equal(causes.vantage?.from, null, 'the engine compares with a record that has no vantage');
+  const afterStop = { ...run, causes };
+  assert.deepEqual(vantageShrank(afterStop), [], 'never "the live side showed less" after a stopped Run');
+  assert.equal(keep(stillTrueModel({ journey, run: afterStop, now: NOW })).status, 'changed');
+  assert.equal(runGradesBoard({ ...afterStop, grade: { ...afterStop.grade, schema: GRADE_SCHEMA } }, krystalinePack), true, 'it letters the board');
+  // Nothing compared and a stopped Run: the counts are withheld with the reason, never drawn as zeros.
+  const fn = fidelityModel({ run: nothingRun, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([fn.known, fn.nothing, fn.tiles, fn.note], [false, true, [], 'Nothing was compared on the last check, so there is nothing to count. Neither side had anything this check could compare.']);
+  assert.equal(changesModel({ fidelity: fn }).sentence, 'Nothing was compared on the last check, so there is nothing to change yet.');
+  const fs2 = fidelityModel({ run: stoppedRun, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual([fs2.known, fs2.nothing, fs2.note], [false, true, 'The last Run read the repository in part and stopped before comparing anything; the previous pack is kept.']);
+  const fp = fidelityModel({ run: { ...nothingRun, probes: { ...nothingRun.probes, attempted: ['alert_rules', 'dashboards'], failed: ['dashboards'] } }, journey, pack: krystalinePack, now: NOW });
+  assert.deepEqual(fp.partial, ['dashboards'], 'the families live could not read are still named');
+  const gs = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic, run: stoppedRun, journey, now: NOW }));
+  assert.equal(gs.source, 'Graded from the repository alone; the last Run read the repository in part and stopped before checking.');
+  // The rendered board: the reason beneath the sentence, the vantage term kept.
+  const c = overviewContainer();
+  renderOverview(c, keep(screen({ run: oldAllFailed, layout: 'board' })), { overview: {} });
+  assert.ok(c.innerHTML.includes('<p class="ov-live__reason og-muted">Live did not answer — alert_rules_list: HTTP 500: no backend session</p>'));
+});
+
+test('OM5 nextActionModel: "The chain matches live" only when a link of the chain matched; a chain with nothing compared says so', () => {
+  const tier = (o = {}) => ({ aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, notRead: 0, setAside: 0, ...o });
+  const tiers = (exporters) => ({ exporters, alerts: tier(), dashboards: tier(), mttx: tier(), detail: { ...tier({ drifted: 2 }), families: { recording_rule: 2 } }, machinery: { ...tier(), families: {} } });
+  const chainRun = (exporters) => ({ ...run, drift: { ...run.drift, aligned: exporters.aligned, drifted: 2, declaredNotLive: 0, liveNotDeclared: 0, tiers: tiers(exporters) } });
+  const none = chainRun(tier());
+  const nn = keep(nextActionModel({ still: keep(stillTrueModel({ journey, run: none, now: NOW })), grade: liveGrade, run: none, journey, now: NOW }));
+  assert.equal(nn.sentence, 'Nothing in the chain was compared; look at the 2 details beyond it.');
+  const matched = chainRun(tier({ aligned: 5 }));
+  const nm = keep(nextActionModel({ still: keep(stillTrueModel({ journey, run: matched, now: NOW })), grade: liveGrade, run: matched, journey, now: NOW }));
+  assert.equal(nm.sentence, 'The chain matches live; look at the 2 details beyond it.');
+});
+
+test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a partial scan, the scope, the grade where one exists, the match only over a comparison, nothing compared, live answered in part, not comparable with the check before, the filter warning; ok only for a whole reading; a whole reading is today\'s toast byte for byte; a Run recorded with an error says its reading', () => {
+  const row = { name: 'Checkout', env: 'prod', repository: { text: 'acme/checkout' } };
+  const whole = { record: { outcome: 'pass', vantage: 'full', probes: { attempted: ['alert_rules'], succeeded: ['alert_rules'], empty: [], failed: [], unsupported: [] }, grade: { letter: 'B' }, drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, packB: {} }, scan: { files: 12, candidates: 12, source: 'acme/checkout' } };
+  const mw = keep(runToastModel(row, whole));
+  assert.deepEqual([runToastText(mw), mw.tone], ['Checkout · prod checked: 12 files from acme/checkout, grade B, 92% matches live.', 'ok']);
+  const worst = { record: { ...whole.record, vantage: 'partial', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], empty: [], failed: ['dashboards'], unsupported: [] }, grade: { letter: 'C' }, drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, packB: { liveScope: { metricPrefixes: ['shop_'] } }, comparable: { withPrevious: false, reason: 'x' } },
+    scan: { files: 171, candidates: 220, source: 'acme/checkout', partial: true, skipped: 49, excludedMost: true, filter: { surface: 'kubernetes', excluded: 120 } } };
+  const mx = keep(runToastModel(row, worst));
+  assert.deepEqual([runToastText(mx), mx.tone], ['Checkout · prod checked: 171 of 220 files from acme/checkout (49 not read) — a partial scan, live read scoped to 1 prefix, grade C, nothing compared, live answered in part (its dashboards not read), not comparable with the check before, the kubernetes filter excluded more than half of the files the scan recognised.', '']);
+  // A 200 from a server that still graded a live side that gave nothing: no grade, no figure.
+  const lost = { record: { ...whole.record, probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } }, scan: null };
+  const ml = keep(runToastModel(row, lost));
+  assert.deepEqual([runToastText(ml), ml.tone], ['Checkout · prod checked: the pack file acme/checkout, live did not answer — alert_rules_list: HTTP 500.', '']);
+  // A Run the server answered with an error but recorded: the refreshed listing's reading.
+  const before = { name: 'checkout.prod', lastRun: { startedAt: '2026-11-16T09:00:00.000Z', outcome: 'pass' } };
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, lastRun: { startedAt: '2026-11-16T10:00:00.000Z', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: 'alert_rules_list: HTTP 500', liveLoss: 'error' } } }),
+    { text: 'Checkout · prod: Live did not answer — alert_rules_list: HTTP 500.', tone: 'error' });
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220 } } }),
+    { text: 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'error' });
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: before }), null, 'nothing new recorded: the run did not finish');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: { lastRun: { startedAt: 't', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: null, liveLoss: 'no-data' } } }).text, 'Checkout · prod: Live returned no data.', 'a first Run');
+});
+
 test('vocabulary: no string of any model built above carries a percentage, a layer code, an artefact id, engine jargon or the product name', () => {
   assert.ok(builtModels.length >= 60, `the guard saw ${builtModels.length} models`);
   const all = stringsOf(builtModels);
@@ -1545,9 +1693,9 @@ test('vocabulary: no string of any model built above carries a percentage, a lay
     const offenders = all.filter(hit);
     assert.deepEqual(offenders, [], `${what} reaches the screen: ${JSON.stringify(offenders)}`);
   }
-  // The four status words, and only those, ever reach the pill.
+  // The five status words, and only those, ever reach the pill.
   const pills = new Set(builtModels.map((m) => m?.pill ?? m?.still?.pill).filter(Boolean));
-  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Unchanged', 'Unreachable']);
+  assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Nothing compared', 'Unchanged', 'Unreachable']);
 });
 
 test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 of a point, as the engine scores them, so the list is offered for the letter it explains (seen on the demo 2026-10-28 when a check moved 84 to 85)', () => {
@@ -1831,6 +1979,91 @@ const svcRow = (over = {}) => ({
 const lastRunAt = new Date(NOW - 2 * HOUR).toISOString();
 const listJourney = (name, scope, lastRun, packA = '/w/packs/x.pack.yaml') => ({ name, scope, packA, packB: 'mcp: https://mcp.example.test/mcp', lastRun });
 
+// ---------- the row's five states ----------
+
+// A journeys-listing entry as GET /api/journeys lists a record (server/index.mjs: the outcome, then
+// tools/lib/run-basis.mjs basisSummary, then the grade's fields).
+const listedRun = (record, over = {}) => ({ startedAt: lastRunAt, outcome: record.outcome, ...basisSummary(record), gradeScore: record.grade?.score ?? null, breaches: record.gate?.breaches?.length ?? 0, ...over });
+const probeTable = (o) => ({ attempted: [], succeeded: [], empty: [], failed: [], unsupported: [], ...o });
+const ROW_RECORDS = {
+  lost: { outcome: 'vantage-lost', error: 'alert_rules_list: HTTP 500: no backend session', vantage: 'lost', probes: probeTable({ attempted: ['alert_rules'], failed: ['alert_rules'] }), probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' }, gate: { breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } },
+  noData: { outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: probeTable({ attempted: ['alert_rules'], empty: ['alert_rules'] }), probeErrors: {}, gate: { breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } },
+  oldAllFailed: { outcome: 'pass', vantage: 'partial', probes: probeTable({ attempted: ['alert_rules', 'dashboards'], failed: ['alert_rules', 'dashboards'] }), probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 69 }, gate: { breaches: [] } },
+  nothingOld: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 69 }, gate: { breaches: [] } },
+  nothingUnread: { outcome: 'gate-failed', vantage: 'partial', probes: probeTable({ attempted: ['dashboards', 'alert_rules'], succeeded: ['alert_rules'], failed: ['dashboards'] }), probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0, tiers: { dashboards: { notRead: 7 } } }, grade: { score: 40 }, gate: { breaches: [{ criterion: 'minAlignmentPct', detail: 'nothing was compared' }] } },
+  livePart: { outcome: 'gate-failed', vantage: 'partial', probes: probeTable({ attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], failed: ['dashboards'] }), probeErrors: { dashboards: 'dashboards_search: HTTP 401' }, drift: { alignmentPct: 78, aligned: 252, drifted: 5, declaredNotLive: 38, liveNotDeclared: 30 }, grade: { score: 69 }, gate: { breaches: [{ criterion: 'minAlignmentPct' }] } },
+  partialScan: { outcome: 'gate-failed', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 54, compared: 100, aligned: 54, drifted: 6, declaredNotLive: 30, liveNotDeclared: 10 }, grade: { score: 55 },
+    packA: { scan: { files: 171, candidates: 220, partial: true, notRead: 49, filter: { surface: 'kubernetes', excluded: 12 }, excludedMost: false } }, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, gate: { breaches: [{ criterion: 'scanComplete' }] } },
+  capped: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, grade: { score: 88 },
+    packA: { scan: { files: 200, candidates: 394, partial: false, notRead: 194, filter: { surface: 'compose', excluded: 30 }, excludedMost: true } }, gate: { breaches: [] } },
+  checked: { outcome: 'pass', vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 }, grade: { score: 88 }, gate: { breaches: [] } },
+};
+const ROW_KEYS = Object.keys(ROW_RECORDS);
+const fiveStateList = (extra = {}) => {
+  const services = [svcRow({ id: 90, slug: 'never', name: 'Never' }), ...ROW_KEYS.map((k, i) => svcRow({ id: 100 + i, slug: k.toLowerCase(), name: k }))];
+  const journeys = ROW_KEYS.map((k) => ({ ...listJourney(`${k.toLowerCase()}.prod`, { service: k.toLowerCase(), env: 'prod' }, listedRun(ROW_RECORDS[k])), ...(extra[k] || {}) }));
+  return serviceListModel({ services, servicesStatus: { kind: 'ok' }, journeys, endpoints: [EP], now: NOW });
+};
+
+test('OM1 the service list\'s five states from the listing: never; unreachable (Live did not answer with the first probe error; Live returned no data; an older pass whose every probe failed); nothing compared (an older record\'s 100 over an empty union; with the first reason that holds); checked (partial) (a partial live side; a partial scan); checked — no figure without a comparison, the letter only where a grade exists, never a gate pass over nothing; the notes beside it', () => {
+  const stopped = { startedAt: new Date(NOW - HOUR).toISOString(), notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)' };
+  const m = fiveStateList({ checked: { stoppedRun: stopped } });
+  const last = Object.fromEntries(m.rows.map((r) => [r.name, r.last]));
+  const pick = (l) => [l.state, l.word, l.label, l.reason, l.letter, l.alignmentPct, l.gate, l.when];
+  assert.deepEqual(pick(last.Never), ['never', 'Never checked', 'Not checked yet', '', null, null, null, '']);
+  assert.deepEqual(pick(last.lost), ['unreachable', 'Unreachable', 'Live did not answer', 'alert_rules_list: HTTP 500: no backend session', null, null, 'fail', 'Tried 2 hours ago']);
+  assert.deepEqual(pick(last.noData), ['unreachable', 'Unreachable', 'Live returned no data', '', null, null, 'fail', 'Tried 2 hours ago']);
+  assert.deepEqual(pick(last.oldAllFailed), ['unreachable', 'Unreachable', 'Live did not answer', 'alert_rules_list: HTTP 500: no backend session', null, null, 'fail', 'Tried 2 hours ago'], 'defect 1 as history holds it: never 100% match, never a pass');
+  assert.deepEqual(pick(last.nothingOld), ['nothing', 'Nothing compared', 'Nothing compared', 'Neither side had anything this check could compare', 'B', null, null, 'Checked 2 hours ago'], 'alignmentPct 100 and aligned 0 over an empty union: Nothing compared');
+  assert.deepEqual(pick(last.nothingUnread), ['nothing', 'Nothing compared', 'Nothing compared', '7 declared things not read live', 'C', null, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(pick(last.livePart), ['partial', 'Checked (partial) 2 hours ago', '', 'Live answered in part: dashboards not read', 'B', 78, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(pick(last.partialScan), ['partial', 'Checked (partial) 2 hours ago', '', '49 of 220 files not read', 'C', 54, 'fail', 'Checked 2 hours ago']);
+  assert.deepEqual(last.partialScan.notes, [{ text: '12 files excluded by the kubernetes filter', tone: 'neutral' }, { text: 'Not comparable with the check before: this scan could not read 49 of 220 files', tone: 'warn' }]);
+  assert.deepEqual(pick(last.capped), ['checked', 'Checked 2 hours ago', '', '194 of 394 files not read', 'A', 92, 'pass', 'Checked 2 hours ago'], 'a capped scan is not partial: its files not read are said beside the figure');
+  assert.deepEqual(last.capped.notes, [{ text: '30 files excluded by the compose filter — more than half of the files the scan recognised', tone: 'warn' }]);
+  assert.deepEqual(pick(last.checked), ['checked', 'Checked 2 hours ago', '', '', 'A', 92, 'pass', 'Checked 2 hours ago']);
+  assert.deepEqual(last.checked.notes, [{ text: 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'warn' }], 'after a stopped Run: the last check, and the stop beside it');
+  // Every record but one that compared something has no gate pass; no percentage in a string.
+  assert.deepEqual(m.rows.filter((r) => r.last.gate === 'pass').map((r) => r.name).sort(), ['capped', 'checked']);
+  const strings = [];
+  const walk = (v) => { if (typeof v === 'string') strings.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+  walk(m);
+  assert.deepEqual(strings.filter((x) => x.includes('%')), []);
+  // A journey whose only records stopped: never checked, the stop said.
+  const onlyStopped = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [{ ...listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, null), stoppedRun: stopped }], endpoints: [EP], now: NOW });
+  assert.deepEqual([onlyStopped.rows[0].last.state, onlyStopped.rows[0].last.notes.length], ['never', 1]);
+  // A stopped Run's record as the listing's last run (an older listing): nothing compared, tried.
+  const asLast = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { startedAt: lastRunAt, outcome: 'scan-partial', scan: { notRead: 49, candidates: 220 } })], endpoints: [EP], now: NOW });
+  assert.deepEqual(pick(asLast.rows[0].last), ['nothing', 'Nothing compared', 'Nothing compared', 'Partial scan — 49 of 220 files not read; the previous pack is kept', null, null, null, 'Tried 2 hours ago']);
+});
+
+test('OM2 renderServiceList: each state\'s cell — the match only over a comparison, Live did not answer with its first error beneath (whole on hover, wrapping), Nothing compared with why, what was not read beside a figure, a filter\'s exclusions and the more-than-half warning, a stopped Run beside the last check, an environment the server default no longer scopes; a checked cell keeps today\'s bytes', () => {
+  const m = fiveStateList({ checked: { stoppedRun: { startedAt: new Date(NOW - HOUR).toISOString(), notRead: 49, candidates: 220 } } });
+  m.rows.find((r) => r.name === 'checked').scope = { text: null, from: null, defaultIgnored: '2 prefixes, 1 rule group' };
+  const c = overviewContainer();
+  renderServiceList(c, m, formModel(FORM_CLOSED), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<b title="Live did not answer — alert_rules_list: HTTP 500: no backend session">Live did not answer</b></span><span class="ov-mx__why">alert_rules_list: HTTP 500: no backend session</span>'), 'the first probe error beneath, the whole on hover');
+  assert.ok(html.includes('<b>Live returned no data</b></span><span class="ov-mx__when'), 'no data: no error to name');
+  assert.ok(html.includes('<b title="Nothing compared — Neither side had anything this check could compare">Nothing compared</b></span><span class="ov-mx__why">Neither side had anything this check could compare</span>'));
+  assert.ok(html.includes('<b title="78% match — Live answered in part: dashboards not read">78% match</b></span><span class="ov-mx__why">Live answered in part: dashboards not read</span>'), 'what was not read, beside the figure');
+  assert.ok(html.includes('<span class="ov-mx__note">12 files excluded by the kubernetes filter</span><span class="ov-mx__note ov-mx__note--warn">Not comparable with the check before: this scan could not read 49 of 220 files</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">30 files excluded by the compose filter — more than half of the files the scan recognised</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.</span>'));
+  assert.ok(html.includes('No live scope — the server default no longer applies here; set one</span>') && !html.includes('scoped: null'), 'an environment the server default no longer scopes says so');
+  assert.ok(!/100% match|null%|undefined%/.test(html), 'no figure over nothing');
+  // A plain checked cell: today's bytes.
+  const plain = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, listedRun(ROW_RECORDS.checked))], endpoints: [EP], now: NOW });
+  const c2 = overviewContainer();
+  renderServiceList(c2, plain, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c2.innerHTML.includes('<b>92% match</b></span><span class="ov-mx__when og-muted">'), 'the match, then when');
+  // The listing could not be read: the word, as before.
+  const unknown = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeysError: '500: x', endpoints: [EP], now: NOW });
+  const c3 = overviewContainer();
+  renderServiceList(c3, unknown, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c3.innerHTML.includes('<b>Not known</b>'));
+});
+
 test('Record a chaos run…: the experiments a run can be recorded for, the form it opens (now, Passed, every expected alert ticked), what Save sends and what it refuses, Forget, the tile\'s and the control room\'s button, a studio run said as the studio\'s', () => {
   const T = Date.parse('2026-11-11T15:00:00Z');
   const layered = { layers: { L1: [], L2: [], L3: [], L4: {}, L5: [
@@ -1945,7 +2178,7 @@ test('serviceListModel: one row per service and environment with its two places 
   const [checkout, searchStaging, basket, ledger, searchProd] = m.rows;
   assert.deepEqual(checkout.repository.text, 'acme/checkout');
   assert.deepEqual(checkout.live, { id: 7, name: 'prod-mcp', origin: 'https://mcp.example.test' });
-  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail' });
+  assert.deepEqual(checkout.last, { state: 'checked', word: 'Checked 2 hours ago', ago: '2 hours ago', letter: 'B', tone: 'warn', gradeLabel: 'Industrial grade', alignmentPct: 75.4, gate: 'fail', label: '', reason: '', notes: [], when: 'Checked 2 hours ago' });
   assert.deepEqual(checkout.run, { enabled: true, reason: null, running: false });
   assert.equal(checkout.journey, 'checkout.prod');
   assert.deepEqual([searchStaging.last.state, searchStaging.last.word, searchStaging.last.letter], ['unreachable', 'Unreachable', null]);

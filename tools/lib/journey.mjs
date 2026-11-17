@@ -129,6 +129,8 @@ import { CHAOS_RUNS_MAX, chaosRunErrors, withStudioRuns } from '../../studio/cha
 import { storedTargetsError, withStudioTargets } from '../../studio/mttx-targets.mjs';
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
+// The report's reading of a run's figure (renderJourneyMarkdown): the match only over a comparison.
+import { comparedOf, firstProbeErrorOf, liveLossOf, matchPctOf, scanFactsOf, scanPartialReading, filesNotReadWords } from './run-basis.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -1779,22 +1781,60 @@ function stackLine(r) {
   return `sampled ${s.sampled ?? 0} · empty ${s.empty ?? 0} · failed ${s.failed ?? 0}`;
 }
 
+// A run's figure, the report's way: 'nothing compared' · '92%' · 'not recorded' — never "null%".
+function alignmentHead(r) {
+  if (comparedOf(r.drift) === 0) return 'nothing compared';
+  const pct = matchPctOf(r);
+  return pct === null ? 'not recorded' : `${pct}%`;
+}
+// A percentage cell, or 'not measured' when nothing on it could be observed (never "null%").
+const pctCell = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v}%` : 'not measured');
+
 export function renderJourneyMarkdown(r) {
   if (r.outcome === 'vantage-lost') {
+    // The first probe error the record carries (one line, credentials masked), else its own error;
+    // a live side that answered with no data says so.
+    const noData = liveLossOf(r).cause === 'no-data';
+    const error = firstProbeErrorOf(r) || (noData ? 'Live answered, but no probe family returned data.' : r.error || '?');
     return [
       `## ⚠️ Journey \`${r.journey}\` — VANTAGE LOST`,
       '',
       `| | |`,
       `|---|---|`,
       `| Declared (A) | \`${r.packA?.name || '?'}@${r.packA?.version || '?'}\` — ${r.packA?.source || '?'} |`,
-      `| Live (B) | ${r.packB?.source || '?'} — **unreachable** |`,
-      `| Error | ${r.error || '?'} |`,
+      `| Live (B) | ${r.packB?.source || '?'} — **${noData ? 'no data' : 'unreachable'}** |`,
+      `| Error | ${mdCell(error)} |`,
+      ...(Array.isArray(r.probes?.attempted) && r.probes.attempted.length ? [`| Live probes | ${probesLine(r)} |`] : []),
       `| Took | ${r.tookMs ?? '?'}ms |`,
       '',
-      '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
+      noData
+        ? '_No verdict: the live vantage point answered, but no probe family returned data, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._'
+        : '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
       ...notifyLines(r),
     ].join('\n');
   }
+  // A Run that stopped on a partial scan: nothing was compared, the previous pack is kept.
+  if (r.outcome === 'scan-partial') {
+    const sc = scanFactsOf(r.packA?.scan);
+    const reasons = Array.isArray(r.packA?.scan?.notReadReasons) ? r.packA.scan.notReadReasons.filter((x) => x && typeof x === 'object').slice(0, 5) : [];
+    return [
+      `## ⚠️ Journey \`${r.journey}\` — PARTIAL SCAN`,
+      '',
+      `| | |`,
+      `|---|---|`,
+      `| Declared (A) | ${r.packA?.source ? mdCell(r.packA.source) : 'no pack kept yet'} |`,
+      `| Live (B) | ${mdCell(r.packB?.source || '?')} — **not read** |`,
+      `| Scan | ${mdCell(scanPartialReading(r.packA?.scan))}${sc?.files !== null && sc?.files !== undefined ? ` (${sc.files} read)` : ''} |`,
+      ...(reasons.length ? [`| Not read first | ${reasons.map((x) => mdCell(`${x.path ?? '?'} — ${x.why ?? '?'}`)).join('; ')} |`] : []),
+      `| Took | ${r.tookMs ?? '?'}ms |`,
+      '',
+      '_No verdict: the repository was read in part, so the run stopped before comparing anything; the previous pack is kept._',
+      ...notifyLines(r),
+    ].join('\n');
+  }
+  const scan = scanFactsOf(r.packA?.scan);
+  const scanFiles = filesNotReadWords(scan);
+  const notComparable = r.comparable && typeof r.comparable === 'object' && r.comparable.withPrevious === false;
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   const lines = [
     `## ${icon} Journey \`${r.journey}\` — ${r.outcome === 'pass' ? 'PASS' : 'GATE FAILED'}`,
@@ -1807,7 +1847,8 @@ export function renderJourneyMarkdown(r) {
     `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%)${Array.isArray(r.grade.off) && r.grade.off.length ? ` — on ${GRADE_CRITERION_KEYS.length - r.grade.off.length} of ${GRADE_CRITERION_KEYS.length} criteria (not graded: ${r.grade.off.join(', ')})` : ''} |`,
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
     ...(r.drift.tiers ? [`| The chain | ${mdCell(chainLine(r.drift.tiers))} |`] : []),
-    `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.declaredAhead ? `${r.drift.declaredAhead} declared ahead · ` : ''}${r.drift.liveNotDeclared} live-not-declared |`,
+    `| Alignment | **${alignmentHead(r)}** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.declaredAhead ? `${r.drift.declaredAhead} declared ahead · ` : ''}${r.drift.liveNotDeclared} live-not-declared |`,
+    ...(scanFiles ? [`| Repository scan | ${mdCell(scanFiles)}${scan.partial ? ' — a partial scan' : ''}${notComparable ? '; not comparable with the run before' : ''} |`] : []),
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
     `| Live probes | ${probesLine(r)} |`,
     `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
@@ -1818,11 +1859,14 @@ export function renderJourneyMarkdown(r) {
   lines.push(...stackEvidenceTable(r.stackEvidence));
   lines.push(...inventoryTable(r));
   lines.push(...requirementChainsTable(r.branches));
-  lines.push(...transitionsSection(r));
+  // A run the record marks not comparable with the one before (its scan read other files): no chain moves are said.
+  lines.push(...(notComparable
+    ? ['', '### Transitions since previous run', '', `_not comparable with the previous run${r.comparable.reason ? `: ${mdCell(r.comparable.reason)}` : ''}_`]
+    : transitionsSection(r)));
   lines.push(...causesSection(r));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
-    for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion)}** — ${mdCell(b.detail)}`);
+    for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion ?? b.key)}** — ${mdCell(b.detail)}`);
   }
   lines.push(...notifyLines(r));
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
@@ -1878,7 +1922,7 @@ function requirementChainsTable(branches) {
   for (const b of rows.slice(0, CHAIN_REPORT_ROW_CAP)) {
     const worst = Array.isArray(b.degraded) && b.degraded[0] ? worstNodeCell(b.degraded[0]) : '-';
     const more = Array.isArray(b.degraded) && b.degraded.length > 1 ? ` (+${b.degraded.length - 1}${b.truncated ? '+' : ''} more)` : (b.truncated ? ' (+more)' : '');
-    out.push(`| ${mdCell(b.title || b.rootKey)} | ${mdCell(b.verdict)} | ${mdCell(b.ladderVerdict)} | ${mdCell(b.integrityPct)}% | ${mdCell(b.ladderIntegrityPct)}% | ${mdCell(worst)}${more} |`);
+    out.push(`| ${mdCell(b.title || b.rootKey)} | ${mdCell(b.verdict)} | ${mdCell(b.ladderVerdict)} | ${pctCell(b.integrityPct)} | ${pctCell(b.ladderIntegrityPct)} | ${mdCell(worst)}${more} |`);
   }
   if (rows.length > CHAIN_REPORT_ROW_CAP) out.push('', `_${rows.length - CHAIN_REPORT_ROW_CAP} more chain(s) not shown._`);
   out.push('', '_Ladder columns are on-wire liveness beside the scored verdict — unscored; `unobserved` means the vantage could not look, never "absent"._');

@@ -58,7 +58,7 @@ import { host as appHost } from './host.mjs';
 const overCriteria = (off) => (Array.isArray(off) && off.length && off.length < 7 ? ` on ${7 - off.length} of 7 criteria` : '');
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
-  notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing,
+  notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing, readingOf, scanPartialText,
 } from './journeys-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
@@ -84,7 +84,12 @@ const blastItem = (n, label) => ({ label, values: [n.slos, n.alerts, Math.max(0,
 const countTicks = (maxV) => (maxV <= 6 ? { yMax: Math.max(1, maxV), yTicks: Array.from({ length: Math.max(1, maxV) + 1 }, (_, i) => i) } : { yMax: null, yTicks: null });
 const MAX_STACK_PANELS = 12;
 // The evidence blocks "Investigate cause" and the cause links can open.
-const EVIDENCE_KEYS = ['vantage', 'gate', 'causes', 'chains', 'delivery', 'schedule', 'record'];
+const EVIDENCE_KEYS = ['vantage', 'scan', 'gate', 'causes', 'chains', 'delivery', 'schedule', 'record'];
+// The newest record's match in a few words, from the model (neuron-model.mjs latest: the figure only
+// over a comparison): 'alignment 92%' · 'nothing compared' · 'alignment not recorded'.
+const latestAlignmentWords = (last) => (last?.compared === 0 ? 'nothing compared' : typeof last?.alignment === 'number' ? `alignment ${last.alignment}%` : 'alignment not recorded');
+// A null integrity (nothing on the chain could be observed) is not measured, never 100.
+const integrityText = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v}%` : 'not measured');
 
 let _libs = null;
 async function neuronLibs() {
@@ -133,12 +138,12 @@ export function renderNeuronView(view) {
 // The explanation that used to open the page — now on demand, with the
 // outcome guide and where the neuron shows up elsewhere in the studio.
 function aboutNeuronHtml() {
-  const guide = ['never-run', 'vantage-lost', 'gate-failed', 'pass'].map((k) => {
+  const guide = ['never-run', 'vantage-lost', 'scan-partial', 'nothing-compared', 'gate-failed', 'pass'].map((k) => {
     const o = CHECK_OUTCOMES[k];
     return `<dt>${outcomeChipHtml(k)}</dt><dd>${escapeHtml(o.meaning)} <span class="nrn-guide-remedy">${escapeHtml(o.remedy)}</span></dd>`;
   });
   const df = DELIVERY_OUTCOMES.failed;
-  guide.splice(3, 0, `<dt>${deliveryChipHtml('failed')}</dt><dd>${escapeHtml(df.meaning)} <span class="nrn-guide-remedy">${escapeHtml(df.remedy)}</span></dd>`);
+  guide.splice(5, 0, `<dt>${deliveryChipHtml('failed')}</dt><dd>${escapeHtml(df.meaning)} <span class="nrn-guide-remedy">${escapeHtml(df.remedy)}</span></dd>`);
   return `
     <p>Neuron is the monitor of the monitors. Every saved journey re-checks, run after run, that the artefacts which
       observe a system — dashboards, alerts, rules, scrape jobs and the chains that tie them to an objective — are still
@@ -267,7 +272,9 @@ function outcomeCounts(o) {
   return listSentence([
     o.pass && `${o.pass} passed`,
     o['gate-failed'] && `${o['gate-failed']} failed`,
+    o['nothing-compared'] && `${o['nothing-compared']} compared nothing`,
     o['vantage-lost'] && `${o['vantage-lost']} unable to observe`,
+    o['scan-partial'] && `${o['scan-partial']} stopped on a partial scan`,
     o['never-run'] && `${o['never-run']} not run yet`,
   ]);
 }
@@ -296,6 +303,8 @@ const ATTENTION_TEXT = {
   'load-error': { label: 'definition does not load', why: 'It cannot run until the journey file is fixed.', tone: 'fail' },
   'gate-failed': { label: 'check failed', why: CHECK_OUTCOMES['gate-failed'].remedy, tone: 'fail' },
   'vantage-lost': { label: 'unable to observe', why: CHECK_OUTCOMES['vantage-lost'].remedy, tone: 'warn' },
+  'scan-partial': { label: 'stopped on a partial scan', why: CHECK_OUTCOMES['scan-partial'].remedy, tone: 'warn' },
+  'nothing-compared': { label: 'nothing compared', why: CHECK_OUTCOMES['nothing-compared'].remedy, tone: 'warn' },
   'notify-failed': { label: 'notification failed', why: DELIVERY_OUTCOMES.failed.remedy, tone: 'fail' },
   overdue: { label: 'its schedule stopped running', why: 'No run for more than two of its cadences. Check the scheduler that runs it.', tone: 'warn' },
   'never-run': { label: 'not run yet', why: CHECK_OUTCOMES['never-run'].remedy, tone: 'info' },
@@ -305,7 +314,9 @@ const ATTENTION_TEXT = {
 function investigateKey(c) {
   if (!c || c.loadError) return 'record';
   if (c.outcome === 'vantage-lost') return 'vantage';
-  if (c.outcome === 'gate-failed') return 'gate';
+  if (c.outcome === 'scan-partial') return 'scan';
+  if (c.outcome === 'gate-failed' || (c.outcome === 'nothing-compared' && c.breaches)) return 'gate';
+  if (c.outcome === 'nothing-compared') return 'record';
   if (c.delivery === 'failed') return 'delivery';
   if (c.overdue || c.outcome === 'never-run') return 'schedule';
   return 'record';
@@ -331,7 +342,11 @@ function renderDecision(model, d, c, attention) {
   } else {
     switch (c.outcome) {
       case 'never-run': html = `${e(d.name)} has never run, so nothing is being checked yet.`; break;
-      case 'vantage-lost': html = `${e(who)} lost its ${termHtml('vantage', 'vantage point')} ${e(ago)}.`; break;
+      case 'vantage-lost': html = c.noData
+        ? `${e(who)} reached its ${termHtml('vantage', 'vantage point')} ${e(ago)}, but the live source returned no data.`
+        : `${e(who)} lost its ${termHtml('vantage', 'vantage point')} ${e(ago)}.`; break;
+      case 'scan-partial': html = `${e(who)} stopped ${e(ago)}: the repository was read in part, so nothing was compared.`; break;
+      case 'nothing-compared': html = `${e(who)} ran ${e(ago)}, but nothing was compared${c.breaches ? `: ${e(plural(c.breaches, 'criterion', 'criteria'))} of its gate ${c.breaches === 1 ? 'was' : 'were'} breached` : ''}.`; break;
       case 'gate-failed': html = `${e(who)} failed ${e(ago)}${c.breaches ? `: ${e(plural(c.breaches, 'criterion', 'criteria'))} of its gate ${c.breaches === 1 ? 'was' : 'were'} breached` : ''}.`; break;
       case 'pass': html = `${e(who)} passed ${e(ago)}.`; break;
       default: html = `${e(who)} ran ${e(ago)} with an outcome this studio does not recognise.`;
@@ -353,9 +368,15 @@ function renderDecision(model, d, c, attention) {
   const own = [];
   const last = d.latest;
   if (c.outcome === 'vantage-lost') {
-    own.push({ title: 'The live source did not answer', why: errorGist(c.error), actionLabel: 'See what failed', actionId: 'evidence:vantage', tone: 'warn' });
+    own.push(c.noData
+      ? { title: 'The live source returned no data', why: 'It answered, but returned nothing this check reads.', actionLabel: 'See what it answered', actionId: 'evidence:vantage', tone: 'warn' }
+      : { title: 'The live source did not answer', why: errorGist(c.firstProbeError || c.error), actionLabel: 'See what failed', actionId: 'evidence:vantage', tone: 'warn' });
   }
-  if (c.outcome === 'gate-failed' && last) {
+  if (c.outcome === 'scan-partial') {
+    const sc = c.scan;
+    own.push({ title: 'The repository was read in part', why: `${sc && sc.notRead !== null && sc.candidates !== null ? `${sc.notRead} of ${sc.candidates} files not read; ` : ''}the previous pack is kept.`, actionLabel: 'See what was not read', actionId: 'evidence:scan', tone: 'warn' });
+  }
+  if ((c.outcome === 'gate-failed' || c.outcome === 'nothing-compared') && last) {
     const bs = last.breaches;
     if (bs.length === 1) own.push({ title: `Breached: ${bs[0].criterion || '?'}`, why: bs[0].detail || '', actionLabel: 'See the gate', actionId: 'evidence:gate', tone: 'fail' });
     else if (bs.length) own.push({ title: `${bs.length} gate criteria breached`, why: bs.slice(0, 3).map((b) => `${b.criterion || '?'}${b.detail ? ` (${b.detail})` : ''}`).join(' · ') + (bs.length > 3 ? ` · +${bs.length - 3} more` : ''), actionLabel: 'See the gate', actionId: 'evidence:gate', tone: 'fail' });
@@ -420,7 +441,9 @@ function decisionMeasures(model, d, trend) {
   const ran = f.journeys - o['never-run'];
   const notPassed = listSentence([
     o['gate-failed'] && `${o['gate-failed']} failed`,
+    o['nothing-compared'] && `${o['nothing-compared']} compared nothing`,
     o['vantage-lost'] && `${o['vantage-lost']} unable to observe`,
+    o['scan-partial'] && `${o['scan-partial']} stopped on a partial scan`,
     o['never-run'] && `${o['never-run']} not run yet`,
   ]);
   const del = Object.fromEntries(f.delivery.map((x) => [x.key, x.count]));
@@ -438,7 +461,7 @@ function decisionMeasures(model, d, trend) {
     {
       label: 'Latest outcomes', value: ran ? `${o.pass} of ${ran} passed` : 'none yet',
       note: notPassed || (ran ? 'every journey that ran passed' : 'no journey has run'),
-      tone: o['gate-failed'] ? 'fail' : o['vantage-lost'] ? 'warn' : ran ? 'ok' : 'neutral',
+      tone: o['gate-failed'] ? 'fail' : o['vantage-lost'] || o['nothing-compared'] || o['scan-partial'] ? 'warn' : ran ? 'ok' : 'neutral',
     },
     {
       label: 'Notifications, latest runs',
@@ -491,17 +514,23 @@ function renderLatestRecord(d, c) {
     </section>`;
 }
 
-// The evidence behind the outcome, or the prerequisite that was missing.
-function evidenceLine(d, c) {
+// The evidence behind the outcome, or the prerequisite that was missing (exported for its test).
+export function evidenceLine(d, c) {
   const last = d.latest;
   if (d.loadError) return ['Missing prerequisite', `The journey definition does not load: <code>${escapeHtml(d.loadError)}</code>`];
   if (!last) return ['Evidence', 'None yet — the first run takes the first reading.'];
   if (c.outcome === 'vantage-lost') {
-    return ['Missing prerequisite', `The live source (Pack B <code>${escapeHtml(d.packB || '?')}</code>) did not answer${last.error ? `: <code>${escapeHtml(last.error)}</code>` : ''}. No drift, grade or requirement chain was read on this run.`];
+    const err = last.firstProbeError || last.error;
+    return ['Missing prerequisite', last.noData
+      ? `The live source (Pack B <code>${escapeHtml(d.packB || '?')}</code>) answered, but returned no data. No drift, grade or requirement chain was read on this run.`
+      : `The live source (Pack B <code>${escapeHtml(d.packB || '?')}</code>) did not answer${err ? `: <code>${escapeHtml(err)}</code>` : ''}. No drift, grade or requirement chain was read on this run.`];
+  }
+  if (c.outcome === 'scan-partial') {
+    return ['Missing prerequisite', `The repository was read in part: ${escapeHtml(scanPartialText(last.scan))}. The run stopped before comparing anything.`];
   }
   const ch = last.chains;
   const facts = [
-    last.drift ? `alignment ${last.drift.alignmentPct}%` : null,
+    last.drift ? latestAlignmentWords(last) : null,
     last.grade ? `grade ${last.grade.score}%${last.grade.letter ? ` (${last.grade.letter})` : ''}${overCriteria(last.grade.off)}` : null,
     ch && ch.declaredTotal ? `${ch.intact ?? 0} of ${ch.declaredTotal} requirement chains intact` : null,
   ].filter(Boolean).map(escapeHtml).join(' · ');
@@ -621,7 +650,7 @@ function renderTiles(model, data) {
   if (f.chains.declaredTotal) {
     const chainsPct = Math.round((f.chains.intact / f.chains.declaredTotal) * 100);
     tiles.push(tile({ label: 'requirement chains intact', value: `${f.chains.intact}/${f.chains.declaredTotal}`, unit: `${chainsPct}%`, acc: 'is-cyan',
-      note: `ladder: ${f.chains.ladder.healthy} healthy · ${f.chains.ladder.degraded} degraded · ${f.chains.ladder.broken} broken · ${f.chains.ladder.unobserved} unobserved${f.chains.integrityPct !== null ? ` · integrity ${f.chains.integrityPct}% scored / ${pct(f.chains.ladderIntegrityPct)}% ladder` : ''}${f.chains.degradedNodes ? ` · ${plural(f.chains.degradedNodes, 'degraded node')}` : ''}` }));
+      note: `ladder: ${f.chains.ladder.healthy} healthy · ${f.chains.ladder.degraded} degraded · ${f.chains.ladder.broken} broken · ${f.chains.ladder.unobserved} unobserved${f.chains.integrityPct !== null ? ` · integrity ${f.chains.integrityPct}% scored / ${integrityText(f.chains.ladderIntegrityPct)} ladder` : ''}${f.chains.degradedNodes ? ` · ${plural(f.chains.degradedNodes, 'degraded node')}` : ''}` }));
   }
   if (f.chains.journeys) {
     tiles.push(tile({ label: 'chains getting worse', value: f.chains.worse.length, acc: f.chains.worse.length ? 'is-red' : 'is-gray', warn: !!f.chains.worse.length, note: f.chains.worse.length ? `moved down since the run before: ${escapeHtml(few(f.chains.worse))}` : 'no chain moved down on the latest runs' }));
@@ -779,7 +808,7 @@ function renderHeatmap(model, ui) {
       ${r.cells.length ? '' : '<span class="nrn-muted">never run</span>'}
     </div>`).join('');
   return `<div class="nrn-heat">${rows}</div>
-    <div class="nrn-heat-legend"><span class="nrn-cell is-pass"></span> passed <span class="nrn-cell is-gate-failed"></span> check failed <span class="nrn-cell is-vantage-lost"></span> unable to observe (vantage lost) <span class="nrn-cell is-none"></span> no run</div>`;
+    <div class="nrn-heat-legend"><span class="nrn-cell is-pass"></span> passed <span class="nrn-cell is-gate-failed"></span> check failed <span class="nrn-cell is-nothing-compared"></span> nothing compared <span class="nrn-cell is-vantage-lost"></span> unable to observe (vantage lost) <span class="nrn-cell is-scan-partial"></span> partial scan <span class="nrn-cell is-none"></span> no run</div>`;
 }
 
 // ---------- the journey in focus ----------
@@ -814,7 +843,7 @@ function renderFocus(d, charts, stackLib, schedLib, trend, fleetReady) {
     <div class="nrn-focus-head">
       <span class="journey-name">${escapeHtml(d.name)}</span>
       ${outcomeChipHtml(last ? last.outcome : 'never-run')}
-      ${last ? `<span class="journey-outcome">${last.drift ? `alignment ${last.drift.alignmentPct}% · grade ${last.grade?.score ?? '?'}%${last.grade?.letter ? ` (${escapeHtml(last.grade.letter)})` : ''}${overCriteria(last.grade?.off)} · ` : ''}${escapeHtml(agoText(Date.now() - Date.parse(last.startedAt || '')))}</span>` : ''}
+      ${last ? `<span class="journey-outcome">${last.drift ? `${escapeHtml(latestAlignmentWords(last))}${last.grade ? ` · grade ${last.grade.score ?? '?'}%${last.grade.letter ? ` (${escapeHtml(last.grade.letter)})` : ''}${overCriteria(last.grade.off)}` : ''} · ` : ''}${escapeHtml(agoText(Date.now() - Date.parse(last.startedAt || '')))}</span>` : ''}
       <button type="button" class="ctrl-btn nrn-run-focus" data-journey="${escapeHtml(d.name)}">▶ run now</button>
     </div>
     <div class="journey-card-meta">
@@ -837,9 +866,9 @@ function renderFocus(d, charts, stackLib, schedLib, trend, fleetReady) {
   let chartsHtml;
   if (trend.ready) {
     const ag = trend.observedReady
-      ? panel('Alignment and grade', 'per run · gaps = unable to observe', charts.lineChart({ series: [{ name: 'alignment', points: d.alignment, color: ACCENT }, { name: 'grade', points: d.grade, color: MUTED }], yMin: 0, yMax: 100, yTicks: [0, 25, 50, 75, 100], yFormat: (v) => `${v}%`, ariaLabel: `${d.name}: alignment and grade per run`, h: 170 }).svg,
+      ? panel('Alignment and grade', 'per run · gaps = unable to observe or nothing compared', charts.lineChart({ series: [{ name: 'alignment', points: d.alignment, color: ACCENT }, { name: 'grade', points: d.grade, color: MUTED }], yMin: 0, yMax: 100, yTicks: [0, 25, 50, 75, 100], yFormat: (v) => `${v}%`, ariaLabel: `${d.name}: alignment and grade per run`, h: 170 }).svg,
         `<div class="nrn-legend"><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${ACCENT}"></span>alignment</span><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${MUTED}"></span>grade</span></div>`)
-      : panel('Alignment and grade', '', emptyStateHtml({ title: `This line appears after ${trend.minRuns} runs that could observe; ${trend.observed} of ${trend.runs} could.`, body: 'A run that lost its vantage point is a gap, never a zero.' }));
+      : panel('Alignment and grade', '', emptyStateHtml({ title: `This line appears after ${trend.minRuns} runs that could observe; ${trend.observed} of ${trend.runs} could.`, body: 'A run that lost its vantage point, or compared nothing, is a gap, never a zero.' }));
     const ladderBars = d.ladder.map((l) => ({ t: l.t, values: LADDER_KEYS.map((k) => l[k]), title: `${LADDER_KEYS.map((k) => `${l[k]} ${k}`).join(' · ')} · ${l.intact}/${l.declaredTotal} intact${l.t ? ` · ${new Date(l.t).toLocaleString()}` : ''}` }));
     const ladder = d.ladder.length
       ? charts.stackedBarChart({ bars: ladderBars, keys: LADDER_KEYS, colors: LADDER_COLORS, ariaLabel: `${d.name}: ladder buckets per run`, h: 170 }).svg
@@ -974,7 +1003,13 @@ function renderLatestDetails(d) {
   const parts = [];
 
   if (last.outcome === 'vantage-lost') {
-    parts.push(details(`Unable to observe <span class="nrn-muted">the vantage was lost</span>`, `<p class="nrn-muted">The live source did not answer — no verdict, the loss is a point in the history. Nothing about the artefacts was read on this run.</p><pre class="nrn-pre">${escapeHtml(last.error || 'unreachable')}</pre>`, { open: true, key: 'vantage' }));
+    parts.push(details(`Unable to observe <span class="nrn-muted">the vantage was lost</span>`, last.noData
+      ? '<p class="nrn-muted">The live source answered, but returned no data — no verdict, the loss is a point in the history. Nothing about the artefacts was read on this run.</p>'
+      : `<p class="nrn-muted">The live source did not answer — no verdict, the loss is a point in the history. Nothing about the artefacts was read on this run.</p><pre class="nrn-pre">${escapeHtml(last.firstProbeError || last.error || 'unreachable')}</pre>`, { open: true, key: 'vantage' }));
+  }
+  if (last.outcome === 'scan-partial') {
+    const reasons = Array.isArray(last.packA?.scan?.notReadReasons) ? last.packA.scan.notReadReasons.filter((x) => x && typeof x === 'object').slice(0, 5) : [];
+    parts.push(details(`Partial scan <span class="nrn-muted">the run stopped before comparing anything</span>`, `<p class="nrn-muted">${escapeHtml(scanPartialText(last.scan))}.</p>${reasons.length ? `<ul class="nrn-list">${reasons.map((x) => `<li><code>${escapeHtml(String(x.path ?? '?'))}</code> <span class="nrn-muted">${escapeHtml(String(x.why ?? ''))}</span></li>`).join('')}</ul>` : ''}`, { open: true, key: 'scan' }));
   }
 
   // Requirement chains of the newest record.
@@ -984,7 +1019,7 @@ function renderLatestDetails(d) {
       `<strong>${escapeHtml(b.title || b.rootKey || '?')}</strong><br><span class="nrn-muted">${escapeHtml(b.rootKind || '')}</span>`,
       escapeHtml(b.verdict || '?'),
       escapeHtml(b.ladderVerdict || '?'),
-      `${val(b.integrityPct)}% / ${val(b.ladderIntegrityPct)}%`,
+      `${escapeHtml(integrityText(b.integrityPct))} / ${escapeHtml(integrityText(b.ladderIntegrityPct))}`,
       escapeHtml(b.confidence || ''),
       (Array.isArray(b.missingRoles) && b.missingRoles.length) ? escapeHtml(b.missingRoles.join(', ')) : '—',
       (Array.isArray(b.degraded) && b.degraded.length)
@@ -1016,15 +1051,15 @@ function renderLatestDetails(d) {
 
   // Gate.
   const breaches = last.breaches || [];
-  parts.push(details(`Gate <span class="nrn-muted">${breaches.length ? `${breaches.length} breach${breaches.length === 1 ? '' : 'es'}` : last.outcome === 'vantage-lost' ? 'not evaluated — unable to observe' : 'no breach'}</span>`,
-    `${tbl(['criterion', 'detail'], breaches.map((b) => [escapeHtml(b.criterion || '?'), escapeHtml(b.detail || val(b))]))}<p class="nrn-muted">thresholds: ${escapeHtml(gateBits(d.gate))}</p>`, { open: breaches.length > 0, key: 'gate' }));
+  parts.push(details(`Gate <span class="nrn-muted">${breaches.length ? `${breaches.length} breach${breaches.length === 1 ? '' : 'es'}` : last.outcome === 'vantage-lost' ? 'not evaluated — unable to observe' : last.outcome === 'scan-partial' ? 'not evaluated — partial scan' : 'no breach'}</span>`,
+    `${tbl(['criterion', 'detail'], breaches.map((b) => [escapeHtml(b.criterion || b.key || '?'), escapeHtml(b.detail || val(b))]))}<p class="nrn-muted">thresholds: ${escapeHtml(gateBits(d.gate))}</p>`, { open: breaches.length > 0, key: 'gate' }));
 
   // Drift, grade, conformance, freshness.
   if (last.drift) {
     parts.push(details('Drift, grade, conformance, freshness', kv([
-      ['alignment', `${last.drift.alignmentPct}% — ${last.drift.aligned ?? '?'} aligned · ${last.drift.drifted ?? '?'} drifted · ${last.drift.declaredNotLive ?? '?'} declared-not-live · ${last.drift.liveNotDeclared ?? '?'} live-not-declared${last.drift.outOfScope ? ` · ${last.drift.outOfScope} out of scope` : ''}${last.drift.scaffold ? ` · ${last.drift.scaffold} scaffold` : ''}`],
+      ['alignment', `${last.compared === 0 ? 'nothing compared' : typeof last.alignment === 'number' ? `${last.alignment}%` : 'not recorded'} — ${last.drift.aligned ?? '?'} aligned · ${last.drift.drifted ?? '?'} drifted · ${last.drift.declaredNotLive ?? '?'} declared-not-live · ${last.drift.liveNotDeclared ?? '?'} live-not-declared${last.drift.outOfScope ? ` · ${last.drift.outOfScope} out of scope` : ''}${last.drift.scaffold ? ` · ${last.drift.scaffold} scaffold` : ''}`],
       ['grade', last.grade ? `${last.grade.score}% (${last.grade.pass ? 'PASS' : 'FAIL'} at ${last.grade.threshold ?? '?'}%)${last.grade.letter ? ` · ${last.grade.letter}${last.grade.letterLabel ? ` ${last.grade.letterLabel}` : ''}` : ''} · schema ${last.grade.schema ?? 1}${last.grade.driftConstruct ? ` · ${last.grade.driftConstruct}` : ''}` : '—'],
-      ['traceability', last.traceability ? `${last.traceability.integrityPct}% integrity · ${last.traceability.intact} intact · ${last.traceability.partial} partial · ${last.traceability.broken} broken · ${last.traceability.undeclared} undeclared of ${last.traceability.declaredTotal} declared` : '—'],
+      ['traceability', last.traceability ? `${typeof last.traceability.integrityPct === 'number' ? `${last.traceability.integrityPct}% integrity` : 'integrity not measured'} · ${last.traceability.intact} intact · ${last.traceability.partial} partial · ${last.traceability.broken} broken · ${last.traceability.undeclared} undeclared of ${last.traceability.declaredTotal} declared` : '—'],
       ['conformance', last.conformance ? `${last.conformance.scorePercent}% (MUST ${last.conformance.mustPercent}%) · ${last.conformance.conformant ? 'conformant' : 'not conformant'}${last.conformance.declaredTier ? ` · tier ${last.conformance.declaredTier}` : ''}` : '—'],
       ['live freshness', last.freshness ? `${last.freshness.liveAgeHours ?? '?'} h old${last.freshness.refreshedAt ? ` (refreshed ${new Date(last.freshness.refreshedAt).toLocaleString()})` : ''}` : '—'],
       ['took', last.tookMs !== null ? `${last.tookMs} ms` : '—'],
@@ -1115,7 +1150,7 @@ async function runJourneys(names, { container, host, btn = null }) {
   if (!names.length) return;
   container.querySelectorAll('#nrn-run-now, #nrn-run-all, .nrn-run-focus').forEach((b) => { b.disabled = true; });
   btn?.setAttribute('aria-busy', 'true');
-  const tally = { pass: 0, 'gate-failed': 0, 'vantage-lost': 0, error: 0 };
+  const tally = { pass: 0, 'gate-failed': 0, 'nothing-compared': 0, 'vantage-lost': 0, 'scan-partial': 0, error: 0 };
   const failures = [];
   for (const [i, name] of names.entries()) {
     if (btn) btn.textContent = names.length > 1 ? `Running ${i + 1} of ${names.length}…` : 'Running…';
@@ -1123,8 +1158,10 @@ async function runJourneys(names, { container, host, btn = null }) {
     try {
       const r = await api(`/api/journeys/${enc(name)}/run`, POST);
       const rec = r.record || {};
-      tally[rec.outcome] = (tally[rec.outcome] || 0) + 1;
-      if (names.length === 1) toast(runResultText(name, rec), rec.outcome === 'pass' && rec.notify?.status !== 'failed' ? '' : 'error');
+      // Counted as a reader says it: a pass over nothing compared is not a pass.
+      const reading = readingOf(rec);
+      tally[reading] = (tally[reading] || 0) + 1;
+      if (names.length === 1) toast(runResultText(name, rec), reading === 'pass' && rec.notify?.status !== 'failed' ? '' : 'error');
     } catch (err) {
       tally.error += 1;
       failures.push({ name, message: err?.message || String(err) });

@@ -16,7 +16,7 @@ import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, verificationNote, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel, healthPctOf,
 } from './proto-shared.mjs';
 
 let step = 1;                  // current Diagnose step (session-only)
@@ -125,7 +125,7 @@ function stepEvidence(m) {
     <div class="pc-card">
       <header>Signal drift</header>
       <div class="pb-lattice">
-        ${donutSvg([{ value: m.totals.aligned, color: 'var(--pass-border)' }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], m.weighted.healthPct + '%', { size: 88 })}
+        ${donutSvg([{ value: m.totals.aligned, color: 'var(--pass-border)' }, { value: m.weighted.totalBadness, color: 'var(--ink-4)' }], healthPctOf(m.weighted, m.totals.aligned) === null ? '—' : healthPctOf(m.weighted, m.totals.aligned) + '%', { size: 88 })}
         <ul class="pb-lattice-legend">
           <li>${m.totals.aligned} aligned</li>
           <li>${m.totals.drifted} drifted</li>

@@ -35,7 +35,7 @@ import {
   buildVerdictModel, projectGrade, projectionSentence,
   loadRunHistory, runSeries, deltaVsPrevious,
   kpiTile, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
-  partialEvidenceBanner, scaffoldOosNotes, buildEvidenceRows, deploySelectionFromItems,
+  partialEvidenceBanner, scaffoldOosNotes, buildEvidenceRows, deploySelectionFromItems, healthPctOf,
 } from './verdict-ui.mjs';
 // App-level callbacks, injected by the host studio at boot (app.mjs calls
 // initHost right before boot()) — dependency inversion instead of importing
@@ -373,11 +373,11 @@ function buildTrendTiles(vm, diagnostic) {
     }),
     kpiTile({
       accent: 'amber', label: 'DRIFT FIDELITY',
-      value: vm.haveB && vm.diff ? `${vm.weighted.healthPct}` : '—',
+      value: vm.haveB && vm.diff && healthPctOf(vm.weighted, vm.totals.aligned) !== null ? `${healthPctOf(vm.weighted, vm.totals.aligned)}` : '—',
       unit: vm.haveB && vm.diff ? '%' : '',
       series: alignSeries, deltaText: deltaVsPrevious(alignSeries),
       note: vm.haveB && vm.diff ? `${fmtUnits(vm.weighted.totalBadness)} badness units` : 'load a Pack B to measure',
-      warn: vm.haveB && vm.diff && vm.weighted.healthPct < DRIFT_HEALTH_PASS_PCT,
+      warn: vm.haveB && vm.diff && healthPctOf(vm.weighted, vm.totals.aligned) !== null && vm.weighted.healthPct < DRIFT_HEALTH_PASS_PCT,
     }),
     kpiTile({
       accent: 'purple', label: 'CHAIN INTEGRITY',
@@ -452,11 +452,11 @@ function buildPanels(vm, ctx) {
     panels.push(mcPanel({
       id: 'lattice', accent: 'amber', title: 'Signal Lattice',
       question: vm.mode === 'drift' ? `does the declared pack match ${vm.bName}?` : `how far from ${vm.bName}?`,
-      micro: chip(vm.weighted.healthPct >= DRIFT_HEALTH_PASS_PCT ? 'pass' : vm.weighted.healthPct >= 60 ? 'partial' : 'fail', `${vm.weighted.healthPct}% health`)
+      micro: healthPctOf(vm.weighted, vm.totals.aligned) === null ? chip('info', 'nothing compared') : chip(vm.weighted.healthPct >= DRIFT_HEALTH_PASS_PCT ? 'pass' : vm.weighted.healthPct >= 60 ? 'partial' : 'fail', `${vm.weighted.healthPct}% health`)
         + (ctx.lensLabel ? ` ${chip('info', `LENS · ${ctx.lensLabel.toUpperCase()}`)}` : ''),
       body: `
         <div class="mc-lattice">
-          <figure>${donutSvg([{ value: vm.totals.aligned, color: C_LATTICE.aligned }, { value: vm.weighted.totalBadness, color: 'var(--ink-4)' }], vm.weighted.healthPct + '%', { size: 96 })}<figcaption>weighted health</figcaption></figure>
+          <figure>${donutSvg([{ value: vm.totals.aligned, color: C_LATTICE.aligned }, { value: vm.weighted.totalBadness, color: 'var(--ink-4)' }], healthPctOf(vm.weighted, vm.totals.aligned) === null ? '—' : vm.weighted.healthPct + '%', { size: 96 })}<figcaption>weighted health</figcaption></figure>
           <figure>${donutSvg([
             { value: vm.weighted.driftedUnits, color: C_LATTICE.drifted },
             { value: vm.weighted.onlyInAUnits, color: C_LATTICE.decl },

@@ -1063,6 +1063,48 @@ try {
   assert(/^pay-vs-curated\tpass · .* · stack none · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliList.stdout), 'journey list prints stack none for a file-sourced journey, then the chains status', cliList.stdout);
   assert(!/^lost\t.*stack/m.test(cliList.stdout) && !/^lost\t.*chains/m.test(cliList.stdout), 'a vantage-lost line carries no stack or chains status');
 
+  // --- no figure without its basis: the report and `journey list` over records old and new ---
+  {
+    const base = { ...readJourneyRuns('pay-vs-curated')[0] };
+    // An older record over an empty union: alignment 100, a pass — Nothing compared.
+    const emptyOld = { ...base, drift: { ...base.drift, alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } };
+    const mdEmpty = renderJourneyMarkdown(emptyOld);
+    assert(/\| Alignment \| \*\*nothing compared\*\* — 0 aligned/.test(mdEmpty) && !/100%\*\*/.test(mdEmpty), 'the report over an empty union says nothing compared, never 100%');
+    assert(!/null%/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null, compared: 0 } })), 'the report never prints null%');
+    assert(/\| Alignment \| \*\*not recorded\*\*/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null } })), 'a figure the record does not carry: not recorded');
+    // A stopped Run (C8): no grade, no drift — rendered, never thrown.
+    const stopped = { journey: 'shop.prod', startedAt: '2026-11-16T10:00:00.000Z', tookMs: 9, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)',
+      packA: { source: '/w/packs/shop.pack.yaml', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, gate: { thresholds: {}, breaches: [] }, notify: null };
+    let mdStopped = '';
+    try { mdStopped = renderJourneyMarkdown(stopped); } catch (e) { mdStopped = `threw ${e.message}`; }
+    assert(/— PARTIAL SCAN/.test(mdStopped) && /\| Scan \| Partial scan — 49 of 220 files not read; the previous pack is kept \(171 read\) \|/.test(mdStopped) && /\| Not read first \| grafana\/a\.json — it could not be downloaded \(HTTP 403\) \|/.test(mdStopped),
+           'the report over a stopped Run: PARTIAL SCAN, its counts and the first files not read', mdStopped.split('\n').slice(0, 12));
+    // A lost run (C4): the first probe error, the probe table; one whose families answered empty: no data.
+    const lost = { journey: 'shop.prod', startedAt: '2026-11-16T11:00:00.000Z', tookMs: 4, outcome: 'vantage-lost', error: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500', packA: { source: 'a', name: 'shop', version: '1' }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, vantage: 'lost',
+      probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: ['dashboards'], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500' }, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } };
+    const mdLost = renderJourneyMarkdown(lost);
+    assert(/\| Error \| alert_rules_list: HTTP 500: no backend session \|/.test(mdLost) && /\| Live probes \| 2 attempted/.test(mdLost) && /— \*\*unreachable\*\*/.test(mdLost), 'the lost report names the first probe error and the probe table', mdLost.split('\n').slice(0, 10));
+    const noData = { ...lost, error: 'no probe family returned data', probes: { ...lost.probes, empty: ['alert_rules', 'dashboards'], failed: [] }, probeErrors: {} };
+    const mdNoData = renderJourneyMarkdown(noData);
+    assert(/— \*\*no data\*\*/.test(mdNoData) && /answered, but no probe family returned data/.test(mdNoData), 'a live side that answered with no data says so', mdNoData.split('\n').slice(0, 10));
+    // A null integrity (nothing on a chain observable) is not measured, never null%; a run not comparable with the one before says so.
+    const nulls = { ...base, branches: [{ title: 'checkout', verdict: 'intact', ladderVerdict: 'unobserved', integrityPct: null, ladderIntegrityPct: null, degraded: [] }], comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, packA: { ...base.packA, scan: { files: 171, candidates: 220, partial: true, notRead: 49 } } };
+    const mdNulls = renderJourneyMarkdown(nulls);
+    assert(/\| checkout \| intact \| unobserved \| not measured \| not measured \|/.test(mdNulls) && !/null%/.test(mdNulls), 'a null integrity reads not measured');
+    assert(/_not comparable with the previous run: this scan could not read 49 of 220 files_/.test(mdNulls) && /\| Repository scan \| 49 of 220 files not read — a partial scan; not comparable with the run before \|/.test(mdNulls), 'not comparable: said in place of the chain moves, the scan said beside', mdNulls.split('\n').filter((l) => /scan|comparable/i.test(l)));
+    // journey list over seeded records: nothing compared, a stopped Run — never undefined% or null%.
+    for (const [name, rec] of [['seeded-empty', emptyOld], ['seeded-stop', stopped]]) {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA:`, `  file: ${PACK_A.replaceAll('\\', '/')}`, `packB:`, `  file: ${PACK_B.replaceAll('\\', '/')}`].join('\n'));
+      mkdirSync(join(TMP, 'runs', name), { recursive: true });
+      writeFileSync(join(TMP, 'runs', name, `${String(rec.startedAt).replace(/[:.]/g, '-')}.json`), JSON.stringify({ ...rec, journey: name }));
+    }
+    const seeded = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+    assert(/^seeded-empty\tnothing-compared · \S+ · nothing compared · /m.test(seeded.stdout), 'journey list: an older 100 over an empty union reads nothing compared', seeded.stdout.split('\n').filter((l) => l.startsWith('seeded-')));
+    assert(/^seeded-stop\tscan-partial · 2026-11-16T10:00:00\.000Z · Partial scan — 49 of 220 files not read; the previous pack is kept$/m.test(seeded.stdout), 'journey list: a stopped Run reads its partial scan', seeded.stdout.split('\n').filter((l) => l.startsWith('seeded-')));
+    assert(!/undefined%|null%/.test(seeded.stdout), 'journey list never prints undefined% or null%');
+    for (const name of ['seeded-empty', 'seeded-stop']) { rmSync(join(TMP, 'journeys', `${name}.journey.yaml`)); rmSync(join(TMP, 'runs', name), { recursive: true, force: true }); }
+  }
+
   // --- step 4: the live-pack snapshot (policy, files, pruning, read-back) ---
   // Pure policy first: every branch of livePackDecision.
   {
@@ -1775,7 +1817,9 @@ try {
         assert(notifyStatusLine(n2) === 'notify sent' && notifyStatusLine(n1) === 'notify skipped' && notifyStatusLine({ notify: null }) === null && notifyStatusLine({}) === null, 'notifyStatusLine reads the status or nothing');
         const cliN = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
         assert(/^notified\tpass · .* · chains \d+\/\d+ intact · ladder [^\n]* · notify sent$/m.test(cliN.stdout), 'journey list appends notify sent as the last segment (after cause / vantage)', cliN.stdout.split('\n').filter(l => l.startsWith('notified')));
-        assert(/^plain-twin\tpass · [^\n]*$/m.test(cliN.stdout) && !/^plain-twin\t.*notify/m.test(cliN.stdout), 'a journey without notify: gets no notify segment');
+        // The fake's every probe family answered empty: the live side returned no data, so the line reads
+        // vantage-lost (tools/lib/run-basis.mjs, whatever the record's own outcome says), never a match.
+        assert(/^plain-twin\tvantage-lost · \S+ · Live returned no data$/m.test(cliN.stdout) && !/^plain-twin\t.*notify/m.test(cliN.stdout), 'a journey without notify: gets no notify segment (and a live side that returned no data reads so)', cliN.stdout.split('\n').filter((l) => l.startsWith('plain-twin')));
       }
       // (c) 500 then 202 → two attempts, sent.
       mode = 'flaky'; flakyLeft = 1; hits.length = 0;

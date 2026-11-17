@@ -91,8 +91,12 @@ the board.
 ## If live is down
 
 The check comes back *Unreachable — Last check just now: the live side did
-not answer, so nothing is known about it right now.* and the next step reads
-*Check again once the live side answers*. Say: *"That is the product telling
+not answer, so nothing is known about it right now.*, with the first probe
+error beneath (*Live did not answer — …*), and the next step reads *Check
+again once the live side answers*. A live side that answers but returns no
+data says so (*the live side answered but returned nothing this check
+reads*); the Services list's cell reads *Live did not answer* or *Live
+returned no data*, never a percentage. Say: *"That is the product telling
 you your monitoring is blind right now — the thing nobody's dashboard tells
 them."* Do not retry on stage; the morning pre-flight decides which beat
 this is.

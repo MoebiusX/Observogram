@@ -1608,18 +1608,27 @@ docs/NOTIFY_HOOKS.md has the rule's every sentence and the migration of a
 journey that names another variable.
 
 The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
-`always` posts every run; `breach` posts a gate-failed or vantage-lost run
+`always` posts every run; `breach` posts a gate-failed or vantage-lost run,
+a Run that stopped on a partial scan (`scan-partial`, reason *partial scan*),
 and once when the breach clears; `transitions` (the default) posts when the
 outcome changed, a chain got worse (`transition.changed[].direction ===
 'worse'`), a new candidate cause appeared (kind + evidence not on the
 previous run) or the vantage changed — a first run is a baseline, not a
 transition (skipped; deliberately unlike `keepLivePack`, which snapshots
 the first run), and a vantage-lost run after a vantage-lost run is skipped
-(nobody is paged every 15 minutes for one outage).
+(nobody is paged every 15 minutes for one outage), as is a stopped Run after
+a stopped Run. A stopped Run before a run observed nothing: no outcome
+changed since it, no vantage changed from it (its record has no vantage), no
+breach cleared. A run whose record says it is not comparable with the one
+before (`comparable.withPrevious: false`: its scan read other files) posts
+`not comparable with the previous run` in place of a chain that got worse or
+an outcome that changed across the pair.
 
 The payload (`kind: observogram.journey`, `version: 1`) copies the record —
 `transition`, `causes` (with its *not a root-cause verdict* note), `chains`,
-trimmed `stack` rows, `grade`, `drift`, `gate.breaches`, `packs` with
+trimmed `stack` rows, `grade`, `drift` (with `compared`, the number of things
+compared; `alignmentPct` is `null` when nothing was, and the `format: text` body
+says `match: nothing compared`), `gate.breaches`, `packs` with
 `//user:pass@` redacted — plus `reason`, `triggers`, a one-line `text`
 (`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`) and
 `links` when `studioUrl` is set. It never carries a definition key, an env

@@ -7728,6 +7728,9 @@ button.observa-service:focus-visible { outline: 2px solid var(--CMP); outline-of
 .nrn-cell.is-gate-failed { background: var(--fail-border, #DC2626); }
 .nrn-cell.is-vantage-lost { background: var(--warn, #B45309); }
 .nrn-cell.is-unknown { background: var(--ink-5); }
+/* A run that compared nothing, or stopped on a partial scan: an outline, never a filled pass or fail. */
+.nrn-cell.is-nothing-compared { background: transparent; border: 2px solid var(--ink-4, #6B6B6B); box-sizing: border-box; }
+.nrn-cell.is-scan-partial { background: transparent; border: 2px solid var(--warn, #B45309); box-sizing: border-box; }
 .nrn-cell.is-none { background: transparent; border: 1px dashed var(--line); box-sizing: border-box; }
 
 .nrn-section-title { margin: 20px 0 8px; font: 700 14px/1.3 var(--sans); color: var(--ink-1); }

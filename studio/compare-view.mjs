@@ -43,6 +43,8 @@ import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 // traceability section's own ux-kit imports can never collide with these.
 import * as diagUx from './ux-kit.mjs';
 import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
+// The weighted health only over a comparison (null: nothing compared, never 100).
+import { healthPctOf } from './verdict-ui.mjs';
 import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, remediationFlowHtml } from './remediation-flow-view.mjs';
 // A service's grade criteria in Diagnose: what the grade is taken over, and who may keep a set.
 import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from './grade-criteria-ui.mjs';
@@ -1832,6 +1834,8 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
     onlyInA: totA,
     onlyInB: totB,
   });
+  // No health figure over nothing compared (verdict-ui.mjs healthPctOf).
+  const healthPct = healthPctOf(weighted, totAligned);
   const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
   const legendHtml = [
     { n: totAligned, units: 0, color: C_ALIGNED, label: 'Aligned', hint: 'shape matches', weightClass: 'good', weightText: '0' },
@@ -1890,7 +1894,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
   const weightsBody = `
     <div class="drift-charts">
       <figure class="drift-chart">
-        ${donut([{ value: totAligned, color: C_ALIGNED }, { value: weighted.totalBadness, color: 'var(--ink-4)' }], weighted.healthPct + '%')}
+        ${donut([{ value: totAligned, color: C_ALIGNED }, { value: weighted.totalBadness, color: 'var(--ink-4)' }], healthPct === null ? '—' : `${healthPct}%`)}
         <figcaption>weighted health</figcaption>
       </figure>
       <span class="drift-charts-arrow" aria-hidden="true">→</span>
@@ -1904,7 +1908,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       </figure>
       <ul class="drift-legend">${legendHtml}</ul>
     </div>
-    <p class="drift-risk-note">${escapeHtml(frame.riskNote)} Health = aligned / (aligned + weighted badness): ${weighted.healthPct}% here, ${escapeHtml(fmtUnits(weighted.totalBadness))} badness units. A structural difference (an additional artefact) costs a fraction of a quality gap (a missing or changed one).</p>`;
+    <p class="drift-risk-note">${escapeHtml(frame.riskNote)} Health = aligned / (aligned + weighted badness): ${healthPct === null ? 'not measured here, because nothing was compared' : `${healthPct}% here`}, ${escapeHtml(fmtUnits(weighted.totalBadness))} badness units. A structural difference (an additional artefact) costs a fraction of a quality gap (a missing or changed one).</p>`;
 
   wrap.innerHTML = `
     <div class="benchmark-block-head">

@@ -16,7 +16,11 @@
 // was ever checked. Every input is explicit, so the same functions run under
 // node:test (tools/test-overview-model.mjs) and in the browser.
 //
-// Four status words, ever: Never checked · Unchanged · Changed · Unreachable.
+// Five status words, ever: Never checked · Unchanged · Changed · Unreachable ·
+// Nothing compared — what the last check found. A service row's last check is
+// in one of five states, which say what it rests on (lastCheckOf): Never
+// checked · Unreachable · Nothing compared · Checked (partial) · Checked. No
+// match figure without a comparison, no gate passed over nothing.
 // No layer code, no artefact id, no percentage reaches a string this module
 // returns (the test holds it to that). The formal terms live behind
 // termHtml hovers in the renderer, never in the sentence.
@@ -55,6 +59,7 @@ export const OVERVIEW_STATUS = Object.freeze({
   unchanged: 'Unchanged',
   changed: 'Changed',
   unreachable: 'Unreachable',
+  nothing: 'Nothing compared',
 });
 
 // The grade engine's freshness window (diagnostic-grade.mjs, the `fresh`
@@ -179,12 +184,159 @@ const listWords = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).joi
 export function vantageShrank(run) {
   const v = run?.causes?.vantage;
   if (!v || !v.changed) return [];
-  // The check before saw nothing at all: there is no earlier picture to have
-  // shrunk from (the first good check after an outage is a recovery).
-  if (v.from?.vantage === 'lost') return [];
+  // The check before saw nothing at all, or carried no live picture (a Run that stopped on a
+  // partial scan): there is no earlier picture to have shrunk from (the first good check after
+  // an outage is a recovery).
+  if (!v.from || v.from.vantage === 'lost') return [];
   const from = Array.isArray(v.from?.failed) ? v.from.failed : [];
   const to = Array.isArray(v.to?.failed) ? v.to.failed : [];
   return to.filter((f) => !from.includes(f));
+}
+
+// ---------- what a run's figures rest on ----------
+//
+// The studio's copy of tools/lib/run-basis.mjs (a studio module never imports tools/lib;
+// tools/test-run-basis.mjs pins the two equal): no figure without its basis. A run's match is a
+// figure only over a comparison (drift.compared, or the four counts of an older record) and a
+// live side that returned data; a vantage is lost when no probe family returned data, whatever an
+// older record says; the first probe error is shown on one line, credentials masked.
+const isPlain = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const finiteOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const countOf = (v) => { const n = finiteOf(v); return n !== null && n >= 0 ? Math.floor(n) : null; };
+const namesOf = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : null);
+const DRIFT_COUNTS = ['aligned', 'drifted', 'declaredNotLive', 'liveNotDeclared'];
+const PROBE_ORDER = ['metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'scrape_configs', 'alerting_routes'];
+const probeRank = (f) => { const i = PROBE_ORDER.indexOf(f); return i < 0 ? PROBE_ORDER.length : i; };
+const inProbeOrder = (xs) => xs.slice().sort((a, b) => probeRank(a) - probeRank(b) || a.localeCompare(b, 'en'));
+// tools/lib/mcp-url-safety.mjs credentialParamName, restated: a name that is or ends in a credential word.
+const CREDENTIAL_WORDS = ['token', 'tokens', 'key', 'keys', 'secret', 'secrets', 'pass', 'passwd', 'password', 'passphrase', 'passcode', 'pwd', 'auth', 'authorization', 'sig', 'signature', 'credential', 'credentials', 'jwt', 'session', 'sessionid', 'sessid', 'cookie', 'bearer', 'sas'];
+const ORDINARY_WORDS = ['bypass', 'compass', 'overpass', 'surpass', 'monkey', 'donkey', 'turkey', 'hockey', 'jockey', 'whiskey', 'hotkey', 'obsession'];
+const credentialWord = (w) => CREDENTIAL_WORDS.some((c) => w.endsWith(c)) && !ORDINARY_WORDS.some((o) => w.endsWith(o));
+export function credentialName(name) {
+  const text = String(name ?? '');
+  const words = text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').split(/[^A-Za-z]+/).filter(Boolean).map((w) => w.toLowerCase());
+  return words.some(credentialWord) || credentialWord(text.replace(/[^A-Za-z]+/g, '').toLowerCase());
+}
+const decodedParam = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+export function safeErrorText(text, max = 200) {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim()
+    .replace(/\/\/[^/\s@]+@/g, '//***@')
+    .replace(/([?&;])([^=&;#\s]+)=([^&;#\s]*)/g, (m, sep, name) => (credentialName(decodedParam(name)) ? `${sep}${name}=***` : m))
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***');
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+export const NOTHING_REASON = 'Neither side had anything this check could compare';
+
+export function comparedOf(drift) {
+  if (!isPlain(drift)) return null;
+  const c = countOf(drift.compared);
+  if (c !== null) return c;
+  if (!DRIFT_COUNTS.some((k) => finiteOf(drift[k]) !== null)) return null;
+  return DRIFT_COUNTS.reduce((s, k) => s + Math.max(0, finiteOf(drift[k]) ?? 0), 0);
+}
+export function vantageOf(record) {
+  if (!isPlain(record)) return null;
+  const p = isPlain(record.probes) ? record.probes : null;
+  const attempted = p ? namesOf(p.attempted) : null;
+  const succeeded = p ? namesOf(p.succeeded) : null;
+  if (record.vantage === 'lost' || (attempted?.length && succeeded && !succeeded.length)) return 'lost';
+  const v = typeof record.vantage === 'string' && record.vantage ? record.vantage : null;
+  return v === 'restricted' ? 'full' : v;
+}
+export function matchPctOf(record) {
+  if (!isPlain(record) || !isPlain(record.drift)) return null;
+  if (comparedOf(record.drift) === 0 || vantageOf(record) === 'lost') return null;
+  return finiteOf(record.drift.alignmentPct);
+}
+export function firstProbeErrorOf(record) {
+  if (!isPlain(record)) return null;
+  const errs = isPlain(record.probeErrors) ? record.probeErrors : {};
+  const text = (v) => (typeof v === 'string' && v.trim() ? v : '');
+  const raw = inProbeOrder(namesOf(record.probes?.failed) || []).map((f) => text(errs[f])).find(Boolean)
+    || inProbeOrder(Object.keys(errs)).map((f) => text(errs[f])).find(Boolean) || '';
+  if (raw) return safeErrorText(raw.split(' · ')[0]);
+  if (!isPlain(record.probes) && (record.outcome === 'vantage-lost' || record.outcome === 'error') && text(record.error)) return safeErrorText(record.error);
+  return null;
+}
+export function liveLossOf(record) {
+  const error = firstProbeErrorOf(record);
+  if (error) return { cause: 'error', error };
+  const lost = vantageOf(record) === 'lost';
+  if (lost && isPlain(record?.probes) && !(namesOf(record.probes.failed) || []).length) return { cause: 'no-data', error: null };
+  return { cause: lost || record?.outcome === 'vantage-lost' || record?.outcome === 'error' ? 'error' : 'unknown', error: null };
+}
+export function readingOutcome(x) {
+  if (!isPlain(x)) return null;
+  const outcome = typeof x.outcome === 'string' && x.outcome ? x.outcome : null;
+  if (outcome === 'scan-partial' || outcome === 'error') return outcome;
+  if (outcome === 'vantage-lost' || vantageOf(x) === 'lost') return 'vantage-lost';
+  const compared = isPlain(x.drift) ? comparedOf(x.drift) : countOf(x.compared);
+  if ((outcome === 'pass' || outcome === 'gate-failed') && compared === 0) return 'nothing-compared';
+  return outcome;
+}
+const lineOf = (v, max) => (typeof v === 'string' && v.trim() ? safeErrorText(v, max) : null);
+export function scanFactsOf(scan) {
+  if (!isPlain(scan)) return null;
+  let filter = null;
+  if (isPlain(scan.filter) && lineOf(scan.filter.surface, 40)) filter = { surface: lineOf(scan.filter.surface, 40), excluded: countOf(scan.filter.excluded) ?? 0 };
+  else if (isPlain(scan.environment) && (countOf(scan.environment.excluded) ?? 0) > 0) filter = { surface: lineOf(scan.environment.profile, 40), excluded: countOf(scan.environment.excluded) };
+  return {
+    partial: scan.partial === true, notRead: countOf(scan.notRead), candidates: countOf(scan.candidates), files: countOf(scan.files),
+    treeTruncated: scan.treeTruncated === true || scan.truncated === true, filter, excludedMost: scan.excludedMost === true,
+  };
+}
+export function filesNotReadWords(s) {
+  if (!isPlain(s)) return '';
+  const known = s.notRead !== null && s.notRead > 0 && s.candidates !== null;
+  const head = known ? `${s.notRead} of ${s.candidates} files not read` : s.partial ? 'The scan did not read every file' : '';
+  const cut = s.treeTruncated ? 'the host cut its file list short' : '';
+  return head && cut ? `${head}; ${cut}` : head || (cut ? `${cut[0].toUpperCase()}${cut.slice(1)}` : '');
+}
+export function scanPartialReading(scan) {
+  const s = scanFactsOf(scan);
+  return s && s.notRead !== null && s.candidates !== null
+    ? `Partial scan — ${s.notRead} of ${s.candidates} files not read; the previous pack is kept`
+    : 'Partial scan — the previous pack is kept';
+}
+export function basisFactsOf(record) {
+  const r = isPlain(record) ? record : {};
+  const tiers = isPlain(r.drift?.tiers) ? r.drift.tiers : null;
+  const aside = isPlain(r.drift?.setAside) ? (countOf(r.drift.setAside.declaredNotLive) ?? 0) + (countOf(r.drift.setAside.liveNotDeclared) ?? 0) : 0;
+  return {
+    notReadLive: tiers ? Object.values(tiers).reduce((s, t) => s + (isPlain(t) ? countOf(t.notRead) ?? 0 : 0), 0) : null,
+    probesFailed: inProbeOrder(namesOf(r.probes?.failed) || []).slice(0, 8).map((f) => f.slice(0, 40)),
+    scoped: isPlain(r.packB?.liveScope) && Object.keys(r.packB.liveScope).length > 0,
+    setAsideCount: aside,
+    scan: scanFactsOf(r.packA?.scan),
+  };
+}
+export function nothingReason(facts) {
+  const x = isPlain(facts) ? facts : {};
+  const unread = countOf(x.notReadLive);
+  if (unread) return `${unread} declared ${unread === 1 ? 'thing' : 'things'} not read live`;
+  const failed = namesOf(x.probesFailed) || [];
+  if (failed.length) return `Live answered in part: ${listWords(failed.map(familyWord))} not read`;
+  const files = filesNotReadWords(x.scan);
+  if (files) return files;
+  if (x.scoped === true) return 'The live read was scoped to part of the estate';
+  if (countOf(x.setAsideCount)) return 'Every difference was set aside';
+  return NOTHING_REASON;
+}
+export function partialParts(facts, vantage) {
+  const x = isPlain(facts) ? facts : {};
+  const failed = namesOf(x.probesFailed) || [];
+  return [
+    vantage === 'partial' ? (failed.length ? `Live answered in part: ${listWords(failed.map(familyWord))} not read` : 'Live answered in part') : '',
+    filesNotReadWords(x.scan),
+  ].filter(Boolean);
+}
+// The line a stopped Run adds beside the last check (the journeys listing's stoppedRun, or the
+// record itself): "Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept."
+export function stoppedNote(stopped) {
+  if (!isPlain(stopped)) return '';
+  const s = isPlain(stopped.packA?.scan) ? scanFactsOf(stopped.packA.scan) : { notRead: countOf(stopped.notRead), candidates: countOf(stopped.candidates) };
+  const files = s && s.notRead !== null && s.candidates !== null ? ` — ${s.notRead} of ${s.candidates} files not read` : '';
+  return `Last Run stopped: partial scan${files}; the previous pack is kept.`;
 }
 
 // ---------- the grade ----------
@@ -234,8 +386,10 @@ const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.o
 // not this engine's either. A record that names no schema is not judged by it.
 const otherSchema = (schema) => schema != null && Number(schema) !== GRADE_SCHEMA;
 const sameTerms = (run, off, aside, targets = '') => !otherSchema(run?.grade?.schema) && offKey(run?.grade?.off) === offKey(off) && asideKey(run) === (aside || '') && runTargetsKey(run) === (targets || '');
+// A run whose live side returned no data (an older record whose every probe failed still carried a
+// letter) is never the board's letter either.
 export function runGradesBoard(run, pack, off = [], aside = '', targets = '') {
-  return runFinishedWithLetter(run) && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
+  return runFinishedWithLetter(run) && vantageOf(run) !== 'lost' && !vantageShrank(run).length && runGradedPack(run, pack) && sameTerms(run, off, aside, targets);
 }
 // The key of a service's MTTD / MTTR targets now ('' for none).
 export const serviceTargetsKey = (service) => targetsTermKey(service?.targets ?? null);
@@ -509,9 +663,11 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     const label = shortGradeLabel({ label: run.grade.letterLabel || ig.label });
     const recording = journey ? !journeyIsLive(journey) : !/^mcp:/i.test(String(run.packB?.source || ''));
     const against = recording ? 'against a live recording' : 'against live';
+    // A run the record marks not comparable with the one before (its scan read other files) says so.
+    const notComparable = run.comparable?.withPrevious === false ? ` Not comparable with the check before${typeof run.comparable.reason === 'string' && run.comparable.reason.trim() ? `: ${safeErrorText(run.comparable.reason)}` : ''}.` : '';
     return {
       letter, label, word: verdictWordFor(run.grade.score),
-      source: `Graded ${against}, ${agoText(run.startedAt, now)}.`,
+      source: `Graded ${against}, ${agoText(run.startedAt, now)}.${notComparable}`,
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
       ...criteria,
@@ -525,8 +681,11 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     return { letter: '·', label: 'Reading…', word: '', source: '', tone: 'neutral', title: '', basis: 'pending', why: [], points: '' };
   }
   const ig = diagnostic.overall.instrumentGrade || instrumentGradeFor(diagnostic.overall.audit?.scorePctExact ?? 0);
-  const lost = run && run.outcome === 'vantage-lost' && runGradedPack(run, pack);
-  const partial = !lost && run && shrank.length > 0 && runGradedPack(run, pack);
+  // A live side that gave no data — a lost run, or an older record whose every probe failed.
+  const lost = run && (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') && runGradedPack(run, pack);
+  // A Run that stopped on a partial scan checked nothing (the board reads the last check that did).
+  const stopped = !lost && run?.outcome === 'scan-partial';
+  const partial = !lost && !stopped && run && shrank.length > 0 && runGradedPack(run, pack);
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
   const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
@@ -541,6 +700,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   return {
     letter: ig.letter, label: shortGradeLabel(ig), word: diagnostic.overall.verdict?.word || verdictWordFor(diagnostic.overall.audit?.scorePctExact),
     source: lost ? 'Graded from the repository alone; the last live check could not see production.'
+      : stopped ? 'Graded from the repository alone; the last Run read the repository in part and stopped before checking.'
       : partial ? 'Graded from the repository alone; the last live check saw only part of production.'
         : regraded ? (liveCheck ? `Graded from the repository alone: ${whatChanged} since the last live check. Check again to grade against live.`
           : `Graded from the repository alone: ${whatChanged} since the last check.`)
@@ -548,7 +708,7 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
     tone: GRADE_TONE[ig.tier] || 'neutral', title: `${ig.letter} · ${ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
     basis: 'repository',
     ...criteria,
-    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off, checked: !!(lost || partial || regraded) }),
+    ...gradeWhy({ diagnostic, letter: ig.letter, score: diagnostic.overall.audit?.scorePctExact, now, off, checked: !!(lost || stopped || partial || regraded) }),
   };
 }
 
@@ -609,12 +769,30 @@ export function chainWords(split) {
 }
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-// stillTrueModel({ journey, run, now, running, startError, journeysError })
+// stillTrueModel({ journey, run, now, running, startError, journeysError, stopped })
 //   journey   the GET /api/journeys entry for this service (or null)
-//   run       its newest run record (GET /api/journeys/:name/runs?limit=1), or null
+//   run       its newest run record that checked something (GET /api/journeys/:name/runs), or null
+//   stopped   a Run newer than `run` that stopped on a partial scan (outcome scan-partial), or null
 // Returns { status (one of OVERVIEW_STATUS keys or null), pill, sentence, note,
-//   cadence, stale, canCheck, checkLabel, checkPrimary, tone, error }.
-export function stillTrueModel({ journey = null, run = null, now = Date.now(), running = false, startError = null, journeysError = null, pending = false } = {}) {
+//   cadence, stale, canCheck, checkLabel, checkPrimary, tone, error } and, only when there is one,
+//   `reason` (why the live side gave nothing: its first probe error) and `stopped` (the stopped
+//   Run's line). Nothing compared is never "it matches"; a run the record marks not comparable
+//   with the one before says so in place of what moved since.
+export function stillTrueModel(input = {}) {
+  const s = stillTrueCore(input);
+  const run = input.run || null;
+  const stopped = input.stopped?.outcome === 'scan-partial' && run?.outcome !== 'scan-partial'
+    && (!run || String(input.stopped.startedAt || '') > String(run.startedAt || '')) ? stoppedNote(input.stopped) : '';
+  return stopped && s.status !== null ? { ...s, stopped } : s;
+}
+
+const declaredSideCompared = (run) => {
+  const d = run?.drift || {};
+  return (Number(d.aligned) || 0) + (Number(d.drifted) || 0) + (Number(d.declaredNotLive) || 0) > 0;
+};
+const asideCountOf = (run) => (Number(run?.drift?.setAside?.declaredNotLive) || 0) + (Number(run?.drift?.setAside?.liveNotDeclared) || 0);
+
+function stillTrueCore({ journey = null, run = null, now = Date.now(), running = false, startError = null, journeysError = null, pending = false } = {}) {
   const live = journeyIsLive(journey);
   // The cadence line belongs to a check this screen can run; a recording has nothing to click.
   const cadence = journey && live ? (journey.schedule ? 'Checks run on a schedule.' : 'Checks run only when you click.') : '';
@@ -639,10 +817,23 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   base.ago = ago;
   const startedMs = Date.parse(run.startedAt || '');
   const stale = Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS;
-  if (run.outcome === 'vantage-lost') {
+  // A live side that gave nothing — a lost run, or an older record whose every probe failed: the
+  // reason beneath names the first probe error; a live side that answered with no data says so.
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') {
+    const loss = liveLossOf(run);
     return { ...base, status: 'unreachable', pill: OVERVIEW_STATUS.unreachable, tone: 'warn', stale,
-      sentence: `Last check ${ago}: the live side did not answer, so nothing is known about it right now.`,
-      canCheck: false, checkLabel: '' };
+      sentence: loss.cause === 'no-data'
+        ? `Last check ${ago}: the live side answered but returned nothing this check reads, so nothing is known about it right now.`
+        : `Last check ${ago}: the live side did not answer, so nothing is known about it right now.`,
+      canCheck: false, checkLabel: '', ...(loss.error ? { reason: `Live did not answer — ${loss.error}` } : {}) };
+  }
+  // A Run that stopped on a partial scan compared nothing: the previous pack is kept.
+  if (run.outcome === 'scan-partial') {
+    const s = scanFactsOf(run.packA?.scan);
+    const files = s && s.notRead !== null && s.candidates !== null ? ` (${s.notRead} of ${s.candidates} files not read)` : '';
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Last Run ${ago}: the repository was read in part${files}, so nothing was compared; the previous pack is kept.`,
+      canCheck: false, checkLabel: '', tried: true };
   }
   const recording = !live;
   const when = run.packB?.refreshedAt ? dayMonth(run.packB.refreshedAt) : '';
@@ -663,6 +854,11 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   if (!firstRun && worseCount > 0) since = ` ${worseCount} got worse since the check before.`;
   else if (!firstRun && changedCount > 0 && betterCount === changedCount) since = ` ${changedCount} recovered since the check before.`;
   else if (!firstRun && changedCount > 0) since = ` ${changedCount} changed since the check before.`;
+  // Not comparable with the check before (its scan read other files): nothing moved "since" it.
+  if (run.comparable?.withPrevious === false) {
+    const why = typeof run.comparable.reason === 'string' && run.comparable.reason.trim() ? `: ${safeErrorText(run.comparable.reason)}` : '';
+    since = ` Not comparable with the check before${why}.`;
+  }
   // The live side showed less than the check before: the counts are not
   // comparable, so the sentence says so instead of announcing a difference,
   // and Check again (the next step's primary) is the one thing to do.
@@ -675,6 +871,21 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
   // A record that counts the chain says it in the chain's words: exporters, alerts, dashboards.
   const split = chainDifferences(run);
   const cw = chainWords(split);
+  // Nothing compared: never "it matches". The first reason that holds is said.
+  const compared = comparedOf(run.drift);
+  const asideN2 = asideCountOf(run);
+  const asideIs = asideN2 ? ` ${asideN2} ${asideN2 === 1 ? 'is' : 'are'} set aside for this service.` : '';
+  if (compared === 0) {
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing was compared. ${nothingReason(basisFactsOf(run))}.${asideIs}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
+  // Only live-only things were compared: nothing the repository declares was, so nothing of it "matches".
+  if (k === 0 && compared !== null && !declaredSideCompared(run)) {
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing the repository declares was compared: ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.${asideIs}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
   if (k === 0 && cw) {
     const said = cw.unread
       ? `${cw.matched ? `its ${cw.matched} match live; ` : ''}not read live, so not compared: ${cw.unread}.`
@@ -712,7 +923,9 @@ export function stillTrueModel({ journey = null, run = null, now = Date.now(), r
 
 function statusOf(run) {
   if (!run) return 'never';
-  if (run.outcome === 'vantage-lost') return 'unreachable';
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') return 'unreachable';
+  if (run.outcome === 'scan-partial' || comparedOf(run.drift) === 0) return 'nothing';
+  if (differenceCount(run) === 0 && comparedOf(run.drift) !== null && !declaredSideCompared(run)) return 'nothing';
   return differenceCount(run) === 0 ? 'unchanged' : 'changed';
 }
 
@@ -753,8 +966,11 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
       : { sentence: 'The saved check reads a recording; open Expert mode to run it.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
   if (still.status === 'unreachable') {
+    const noData = liveLossOf(run).cause === 'no-data';
     return live
-      ? { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
+      ? noData
+        ? { sentence: 'Check again once the live side returns data; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side answered the last check, but returned nothing this check reads.'], primary: true }
+        : { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
       : { sentence: 'The recording could not be read; open Expert mode to look.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
   // The live side showed less than the check before: the one thing to do is
@@ -769,6 +985,7 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     const ago = run?.startedAt ? agoText(run.startedAt, now) : '';
     return { sentence: 'Check it against live now.', button: { label: 'Check now', action: 'ov-check' }, why: [`The last check is ${ago.replace(/ ago$/, '')} old; readings older than a day are not trusted.`], primary: true };
   }
+  if (still.status === 'nothing') return nothingNext(run, live);
   if (still.status === 'unchanged') {
     // The still-true panel's Check again is the primary when there is one.
     const extra = Number(run?.drift?.liveNotDeclared) || 0;
@@ -805,11 +1022,14 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     if (cw.unread) why.push(`Not read live, so not compared: ${cw.unread}.`);
     const beyondWhy = split.beyond ? `Beyond the chain, ${split.beyond} ${split.beyond === 1 ? 'detail differs' : 'details differ'}.` : '';
     // In the chain's words: never "things", never "the chain matches" over a link live did not read.
+    // "The chain matches" only when a link of it matched; a chain with nothing compared says so.
     const sentence = split.chain
       ? `Fix the ${cw.differ} the live side does differently.`
       : cw.unread
         ? `${cw.matched ? `${cap(cw.matched)} match live, ${cw.unread} could not be read` : `Nothing in the chain could be compared: ${cw.unread} could not be read`}; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond the chain.`
-        : `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
+        : cw.matched
+          ? `The chain matches live; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`
+          : `Nothing in the chain was compared; look at the ${split.beyond} ${split.beyond === 1 ? 'detail' : 'details'} beyond it.`;
     const shown = beyondWhy ? [...why.slice(0, 2), beyondWhy] : why.slice(0, 3);
     return { sentence, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: shown, primary: true };
   }
@@ -823,6 +1043,38 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
   if (Array.isArray(run?.probes?.failed) && run.probes.failed.length) why.push('Part of the live side could not be read.');
   const k = differenceCount(run);
   return { sentence: `Fix the ${things(k)} the live side does differently.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
+}
+
+// The next step when the last check compared nothing: a stopped Run checks the kept pack again;
+// only live-only things compared are differences to see; otherwise what each side holds, in
+// Diagnose, with the reasons nothing was compared.
+function nothingNext(run, live) {
+  if (run?.outcome === 'scan-partial') {
+    const s = scanFactsOf(run.packA?.scan);
+    const first = Array.isArray(run.packA?.scan?.notReadReasons) ? run.packA.scan.notReadReasons.find(isPlain) : null;
+    const why = [
+      s && s.notRead !== null && s.candidates !== null ? `${s.notRead} of ${s.candidates} files were not read.` : '',
+      first ? `The first not read: ${safeErrorText(`${first.path ?? '?'} — ${first.why ?? '?'}`)}.` : '',
+    ].filter(Boolean);
+    return live
+      ? { sentence: 'The last Run read the repository in part and stopped, so the previous pack is kept: check it against live again, and run the service again once its repository answers in full.', button: { label: 'Check again', action: 'ov-check' }, why, primary: true }
+      : { sentence: 'The last Run read the repository in part and stopped, so the previous pack is kept; run the service again once its repository answers in full.', button: null, why, primary: false };
+  }
+  const extra = Number(run?.drift?.liveNotDeclared) || 0;
+  const facts = basisFactsOf(run);
+  const cw = chainWords(chainDifferences(run));
+  const aside = asideCountOf(run);
+  const why = [
+    facts.notReadLive ? (cw?.unread ? `Not read live, so not compared: ${cw.unread}.` : `${things(facts.notReadLive)} the repository declares could not be read live.`) : '',
+    facts.probesFailed.length ? `Part of the live side could not be read: its ${listWords(facts.probesFailed.map(familyWord))}.` : '',
+    filesNotReadWords(facts.scan) ? `${filesNotReadWords(facts.scan)}.` : '',
+    facts.scoped ? 'The live read was scoped to part of the estate; what lies outside it was not compared.' : '',
+    aside ? `${aside} ${aside === 1 ? 'difference is' : 'differences are'} set aside for this service.` : '',
+  ].filter(Boolean).slice(0, 3);
+  if (extra && comparedOf(run?.drift) !== 0) {
+    return { sentence: `Nothing the repository declares was compared; ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why, primary: true };
+  }
+  return { sentence: 'Nothing was compared, so nothing is confirmed live: see what each side holds.', button: { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, why, primary: true };
 }
 
 // ---------- the board: what is in place ----------
@@ -1224,8 +1476,19 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const against = journey ? (journeyIsLive(journey) ? 'live' : 'recording') : (/^mcp:/i.test(String(run?.packB?.source || '')) || !run ? 'live' : 'recording');
   const base = { known: false, alignmentPct: null, tiles: [], chains: null, against, note: '', partial: [], chain: null };
   if (!run || !runGradedPack(run, pack)) return { ...base, note: 'Never checked against live.' };
-  if (run.outcome === 'vantage-lost') return { ...base, note: 'The live side did not answer the last check, so nothing is known about it right now.' };
+  if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') {
+    return { ...base, note: liveLossOf(run).cause === 'no-data'
+      ? 'The live side answered the last check but returned nothing this check reads, so nothing is known about it right now.'
+      : 'The live side did not answer the last check, so nothing is known about it right now.' };
+  }
+  // Nothing compared: the counts are withheld with the reason, never drawn as zeros; the families
+  // the live side could not read are still named (the status strip says them).
+  if (run.outcome === 'scan-partial') return { ...base, nothing: true, note: 'The last Run read the repository in part and stopped before comparing anything; the previous pack is kept.' };
   if (vantageShrank(run).length) return { ...base, note: 'The live side showed less than the check before, so the counts cannot be compared yet.' };
+  if (comparedOf(run.drift) === 0) {
+    const failedWords = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
+    return { ...base, nothing: true, note: `Nothing was compared on the last check, so there is nothing to count. ${nothingReason(basisFactsOf(run))}.`, partial: failedWords };
+  }
   const n = (x) => Number(x) || 0;
   const d = run.drift || {};
   const tiles = [
@@ -1243,7 +1506,8 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
     // (partial), a link the promise rests on is missing (broken).
     sentence: `${n(t.intact)} of ${total} promises hold in every link${n(t.partial) ? `, ${n(t.partial)} in part` : ''}${n(t.broken) ? `, ${n(t.broken)} broken` : ''}.`,
   } : null;
-  const pct = Number(d.alignmentPct);
+  // A figure only where the record has one (Number(null) is 0).
+  const pct = typeof d.alignmentPct === 'number' ? d.alignmentPct : NaN;
   // A live side that answered only in part (a probe family failed) is said
   // beside the numbers: they count what could be seen.
   const failed = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
@@ -1319,7 +1583,7 @@ export function scanModel({ run = null } = {}) {
 //   chain's links alone and `beyond` says the rest in one line ('' when the
 //   record counts everything together).
 export function changesModel({ fidelity = null } = {}) {
-  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: 'Check against live to count what to change.', beyond: '' };
+  if (!fidelity?.known) return { known: false, items: [], total: 0, sentence: fidelity?.nothing ? 'Nothing was compared on the last check, so there is nothing to change yet.' : 'Check against live to count what to change.', beyond: '' };
   const chain = fidelity.chain;
   if (chain) {
     const num = (l, k) => Number(l.counts?.[k]) || 0;
@@ -1418,6 +1682,8 @@ export function buildOverviewModel(input = {}) {
     running = false, startError = null, now = Date.now(), productName = '', pending = false,
     layout = 'board', cells = null, layered = null, unkinded = null, conformance = null, conformanceError = null, access = null, start = null, startable = false,
     listable = false, gradeSwitches = false, controlRoom = false, controlRoomOpen = false,
+    // A Run newer than `run` that stopped on a partial scan (its record, outcome scan-partial), or null.
+    stopped = null,
   } = input;
   const ordered = orderServicesForOverview(services, catalog, { isLiveAggregatePack });
   const picked = pickOverviewService(services, catalog, { serviceId, env, isLiveAggregatePack });
@@ -1469,7 +1735,7 @@ export function buildOverviewModel(input = {}) {
     switches: { enabled: access?.canWrite !== false, reason: access?.canWrite !== false ? null : (access?.reason || 'Not available for your role here.') },
     graded: GRADE_CRITERIA.filter((c) => !offKeys.includes(c.key)).map((c) => ({ key: c.key, label: c.label })),
   } : graded0;
-  const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending });
+  const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending, stopped: journey ? stopped : null });
   // A service with no pack at all has nothing to grade: the drift check
   // starts here, as with no service, under the service's own header — the
   // start's cards are the way in, not "Open Expert mode". (A member-only row,
@@ -1671,12 +1937,54 @@ const targetsDiffer = (runTargets, targets) => {
   const was = targetsTermKey(runTargets ?? null);
   return !!was && was !== (targets || '');
 };
+// The row's five states (the listing's lastRun is the newest run that is not a stopped Run; its
+// facts are tools/lib/run-basis.mjs basisSummary's — an older server's listing has none, and its
+// row reads as before):
+//   never        no run                       label 'Not checked yet'
+//   unreachable  the live side gave nothing   label 'Live did not answer' (reason: its first probe
+//                                             error) or 'Live returned no data'; no letter; the gate failed
+//   nothing      nothing was compared         label 'Nothing compared', reason the first that holds
+//   partial      a match, live answered in part or the scan lost files: the figure, and what was
+//                not read beside it (reason)
+//   checked      the figure; files the scan did not read (its caps) beside it
+// → { state, word, ago, letter, tone, gradeLabel?, alignmentPct, gate, label, reason, notes, when }
+//   label   the cell's words in place of the figure ('' when the figure is the words)
+//   notes   [{ text, tone }]: a Run that stopped since, the files a surface filter excluded (a
+//           warning past half), not comparable with the check before
+// No figure without a comparison; a gate never passes over nothing.
+const stoppedNoteOf = (journey) => (journey?.stoppedRun && typeof journey.stoppedRun === 'object' ? stoppedNote(journey.stoppedRun) : '');
+function lastCheckNotes(journey, last) {
+  const notes = [];
+  const stopped = stoppedNoteOf(journey);
+  if (stopped) notes.push({ text: stopped, tone: 'warn' });
+  const f = last?.scan?.filter;
+  const excluded = countOf(f?.excluded);
+  if (f && excluded) {
+    const said = `${excluded} ${excluded === 1 ? 'file' : 'files'} excluded by the ${f.surface || 'environment'} filter`;
+    notes.push(last.scan.excludedMost === true ? { text: `${said} — more than half of the files the scan recognised`, tone: 'warn' } : { text: said, tone: 'neutral' });
+  }
+  if (last?.comparable && last.comparable.withPrevious === false) {
+    notes.push({ text: `Not comparable with the check before${typeof last.comparable.reason === 'string' && last.comparable.reason ? `: ${last.comparable.reason}` : ''}`, tone: 'warn' });
+  }
+  return notes;
+}
 function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
   const last = journey?.lastRun || null;
-  if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null };
+  const notes = lastCheckNotes(journey, last);
+  if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: 'Not checked yet', reason: '', notes, when: '' };
   const ago = agoText(last.startedAt, now);
-  if (last.outcome === 'vantage-lost' || last.outcome === 'error') {
-    return { state: 'unreachable', word: OVERVIEW_STATUS.unreachable, ago, letter: null, tone: 'warn', alignmentPct: null, gate: null };
+  const reading = readingOutcome(last);
+  // A stopped Run as the last run (a listing that names one): it compared nothing.
+  if (reading === 'scan-partial') {
+    return { state: 'nothing', word: OVERVIEW_STATUS.nothing, ago, letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: OVERVIEW_STATUS.nothing, reason: scanPartialReading(last.scan), notes, when: ago ? `Tried ${ago}` : '' };
+  }
+  if (reading === 'vantage-lost' || reading === 'error') {
+    const error = typeof last.firstProbeError === 'string' && last.firstProbeError ? last.firstProbeError : '';
+    return {
+      state: 'unreachable', word: OVERVIEW_STATUS.unreachable, ago, letter: null, tone: 'warn', alignmentPct: null,
+      gate: reading === 'vantage-lost' ? 'fail' : null,
+      label: !error && last.liveLoss === 'no-data' ? 'Live returned no data' : 'Live did not answer', reason: error, notes, when: ago ? `Tried ${ago}` : '',
+    };
   }
   const score = Number.isFinite(last.gradeScore) ? last.gradeScore : null;
   const ig = score === null ? null : instrumentGradeFor(score);
@@ -1693,15 +2001,83 @@ function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
         : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';
   const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
   const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
+  // How much it compared: the listing's count (null from an older server, which is read as before).
+  const compared = countOf(last.compared);
+  const alignmentPct = compared === 0 ? null : (Number.isFinite(last.alignmentPct) ? last.alignmentPct : null);
+  const graded = {
+    ago, letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${asideSaid}${before}` : '',
+    alignmentPct,
+    gate: last.outcome === 'gate-failed' ? 'fail' : (last.outcome === 'pass' && compared !== 0 ? 'pass' : null),
+  };
+  const facts = { notReadLive: last.notReadLive, probesFailed: last.probesFailed, scan: last.scan, scoped: last.scoped, setAsideCount: last.setAsideCount };
+  const when = ago ? `Checked ${ago}` : '';
+  if (compared === 0) {
+    return { state: 'nothing', word: OVERVIEW_STATUS.nothing, ...graded, label: OVERVIEW_STATUS.nothing, reason: nothingReason(facts), notes, when };
+  }
+  const vantage = vantageOf(last);
+  const partial = vantage === 'partial' || last.scan?.partial === true;
   return {
-    state: 'checked', word: ago ? `Checked ${ago}` : 'Checked', ago,
-    letter: ig ? ig.letter : null, tone: ig ? (GRADE_TONE[ig.tier] || 'neutral') : 'neutral', gradeLabel: ig ? `${shortGradeLabel(ig)}${over}${asideSaid}${before}` : '',
-    alignmentPct: Number.isFinite(last.alignmentPct) ? last.alignmentPct : null,
-    gate: last.outcome === 'pass' ? 'pass' : (last.outcome === 'gate-failed' ? 'fail' : null),
+    state: partial ? 'partial' : 'checked', word: ago ? `Checked${partial ? ' (partial)' : ''} ${ago}` : `Checked${partial ? ' (partial)' : ''}`, ...graded,
+    label: alignmentPct === null ? 'Match not known' : '', reason: partialParts(facts, vantage).join(' · '), notes, when,
   };
 }
 
 export const rowKey = (serviceId, env) => `${serviceId}:${env ?? ''}`;
+
+// The Run's toast, as facts (overview-view.mjs runToastText writes the words and the signs): what the
+// scan read, the live read's scope, the grade where one exists, the match only over a comparison, and
+// what the reading leaves out. `row`: the list row ({ name, env, repository }); `answer`: POST
+// /api/services/:id/run's 200 body ({ record, scan }).
+//   → { head, read, scoped, letter, pct, nothing, unreachable, livePart, notComparable, filterWarn, tone }
+//   tone  'ok' only for a whole reading: nothing lost or capped by the scan, something compared, the
+//         live side whole, comparable with the check before, no filter warning; else ''
+export function runToastModel(row, answer) {
+  const record = isPlain(answer?.record) ? answer.record : null;
+  const scan = isPlain(answer?.scan) ? answer.scan : null;
+  const of = scan && Number(scan.candidates) > Number(scan.files) ? ` of ${scan.candidates}` : '';
+  const loss = scanLossText(scan);
+  const read = scan
+    ? `${scan.files ?? '?'}${of} files from ${scan.source || 'the repository'}${loss ? ` (${loss})` : ''}${scan.partial === true ? ' — a partial scan' : ''}`
+    : `the pack file${row?.repository?.text ? ` ${row.repository.text}` : ''}`;
+  const vantage = vantageOf(record);
+  const lost = vantage === 'lost';
+  const gone = lost ? liveLossOf(record) : null;
+  const failed = namesOf(record?.probes?.failed) || [];
+  const s = scanFactsOf(scan);
+  const filterWarn = s?.excludedMost ? `the ${s.filter?.surface || 'environment'} filter excluded more than half of the files the scan recognised` : '';
+  const nothing = comparedOf(record?.drift) === 0;
+  const notComparable = record?.comparable?.withPrevious === false;
+  return {
+    head: `${row?.name ?? '?'} · ${row?.env ?? '?'} checked`,
+    read,
+    scoped: record?.packB?.liveScope ? `live read scoped to ${scopeSummary(record.packB.liveScope)}` : '',
+    letter: !lost && typeof record?.grade?.letter === 'string' && record.grade.letter ? record.grade.letter : null,
+    pct: matchPctOf(record),
+    nothing,
+    unreachable: lost ? (gone.error ? `live did not answer — ${gone.error}` : gone.cause === 'no-data' ? 'live returned no data' : 'live did not answer') : '',
+    livePart: vantage === 'partial' ? (failed.length ? `live answered in part (its ${listWords(inProbeOrder(failed).map(familyWord))} not read)` : 'live answered in part') : '',
+    notComparable,
+    filterWarn,
+    tone: !loss && scan?.partial !== true && !nothing && !lost && vantage !== 'partial' && !notComparable && !filterWarn ? 'ok' : '',
+  };
+}
+
+// A Run the server answered with an error but recorded (502: the live side gave nothing; 409: the scan
+// lost files and the Run stopped): what the refreshed listing says of it, or null when no record of
+// this Run is listed (it did not finish). `before` / `after`: the row's journeys-listing entry before
+// the Run and after it (null when there was none).
+//   → { text, tone: 'error' } | null (the toast's own tones: 'ok' · 'error' · '')
+export function runRecordedToast({ name = '?', env = '?', before = null, after = null } = {}) {
+  if (!isPlain(after)) return null;
+  const newer = (a, b) => isPlain(a) && typeof a.startedAt === 'string' && a.startedAt !== (isPlain(b) ? b.startedAt : undefined);
+  const head = `${name} · ${env}`;
+  if (newer(after.stoppedRun, before?.stoppedRun)) return { text: `${head}: ${scanPartialReading(after.stoppedRun)}.`, tone: 'error' };
+  if (newer(after.lastRun, before?.lastRun) && readingOutcome(after.lastRun) === 'vantage-lost') {
+    const error = typeof after.lastRun.firstProbeError === 'string' && after.lastRun.firstProbeError ? after.lastRun.firstProbeError : '';
+    return { text: `${head}: ${error ? `Live did not answer — ${error}` : after.lastRun.liveLoss === 'no-data' ? 'Live returned no data' : 'Live did not answer'}.`, tone: 'error' };
+  }
+  return null;
+}
 
 // serviceListModel({ services, servicesStatus, catalog, isLiveAggregatePack, journeys, journeysError,
 //   endpoints, access, now, running, results, showAll, heldTokens, repoSignIn })

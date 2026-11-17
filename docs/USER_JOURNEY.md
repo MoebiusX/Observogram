@@ -359,11 +359,28 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    is unproven. Each line counts what the engine counted, so the seven lines
    still add up to the letter.
 
-6. **Overview speaks plainly, with one primary button.** Four status words
+6. **Overview speaks plainly, with one primary button.** Five status words
    on the board and no others — *Never checked · Unchanged · Changed ·
-   Unreachable*; the Services list's last check reads *Checked 2 hours ago*,
-   *Never checked*, *Unreachable*, or *Not known* when the checks could not
-   be read. No sentence the model returns carries a percentage, a layer code,
+   Unreachable · Nothing compared*: what the last check found. A service
+   row's last check is in one of five states, which say what that check
+   rests on: *Never checked* (no run), *Unreachable* (the live side gave
+   nothing: *Live did not answer* with its first probe error beneath, or
+   *Live returned no data*), *Nothing compared* (with the first reason that
+   holds — *7 declared things not read live*, *Live answered in part:
+   dashboards not read*, *49 of 220 files not read*, *The live read was
+   scoped to part of the estate*, *Every difference was set aside*, else
+   *Neither side had anything this check could compare*), *Checked
+   (partial)* (a match, with what was not read beside it: *Live answered in
+   part: dashboards not read*, *49 of 220 files not read*) and *Checked*
+   (*92% match*); *Not known* when the checks could not be read. The
+   board's Unchanged and Changed are a row's Checked or Checked (partial).
+   No percentage without a comparison anywhere — a record written before
+   this rule that claims 100 over an empty comparison reads *Nothing
+   compared*, and one whose every probe failed reads *Unreachable* — and a
+   gate never reads as passed over nothing. A Run that stopped on a partial
+   scan leaves the last check as it was and says so beside it (*Last Run
+   stopped: partial scan — 49 of 220 files not read; the previous pack is
+   kept.*). No sentence the model returns carries a percentage, a layer code,
    an artefact id or an engine state word (declared only, scaffold,
    candidate, recorded live); a number is drawn as a picture — the ring, the
    bars — and the renderer puts the sign on it. At most one primary button
@@ -446,9 +463,16 @@ Belongs here:
   a Run asked for is open under the row, once for the service;
 - each environment's cell: the endpoint's name (it opens **Change** on that
   environment) and its host, whole on hover; the branch its Run reads (its
-  own, else the repository's); the grade letter with how much matches live
-  (*92% match*), *Not checked yet* or *Live did not answer*; *Checked 2
-  hours ago*; **Run**, **Open** (the board, offered when the service has
+  own, else the repository's); the grade letter (only where the run graded)
+  with how much matches live (*92% match*, only where something was
+  compared), *Not checked yet*, *Live did not answer* with the first probe
+  error beneath (whole on hover), *Live returned no data* or *Nothing
+  compared* with why; what a reading leaves out beside the figure (*Live
+  answered in part: dashboards not read*, *49 of 220 files not read*); its
+  notes — a Run that stopped since, the files a deployment-surface filter
+  excluded (*12 files excluded by the kubernetes filter*, a warning past
+  half), *Not comparable with the check before: …*; *Checked 2 hours ago*
+  (*Tried 2 hours ago* when the live side gave nothing); **Run**, **Open** (the board, offered when the service has
   a pack of its own or a check) and **Change** (that environment's form) —
   or *Not declared* with **Add**;
 - on the row, **Run all** (two or more environments that can run, one after
@@ -501,7 +525,14 @@ Belongs here:
   against it with no MCP call, and the matrix cell says *Live export* and the
   file's name and age where the endpoint and its host would be;
 - the toast a Run ends with: *… checked: 200 of 396 files from … (196 past the
-  file cap, 62 recognised as nothing), grade …, …% matches live.*;
+  file cap, 62 recognised as nothing), grade …, …% matches live.*, each part
+  of what a reading leaves out said only when it holds (*a partial scan*,
+  *nothing compared* in place of the figure, *live answered in part (its
+  dashboards not read)*, *not comparable with the check before*, *the …
+  filter excluded more than half of the files the scan recognised*); a Run
+  the server answered with an error but recorded says its reading (*Live did
+  not answer — <first probe error>.*, *Partial scan — 49 of 220 files not
+  read; the previous pack is kept.*);
 - a missing answer marked where it goes once a save was tried; the server's
   refusal shown as its sentence; a Run that did not finish says why on its
   row, in the server's words;
@@ -682,8 +713,11 @@ Belongs here:
   and *See the rules in Expert* (Conformance); the next step, one sentence and one button, in the chain's
   words (*Fix the 1 exporter and 2 alerts the live side does differently.*,
   *Exporters and alerts match live, the 7 dashboards could not be read; look
-  at the 32 details beyond the chain.*, or *The chain matches live; look at
-  the 31 details beyond it.*) — **See the
+  at the 32 details beyond the chain.*, *The chain matches live; look at
+  the 31 details beyond it.* only when a link of the chain matched, else
+  *Nothing in the chain was compared; look at …*; over nothing compared,
+  *Nothing was compared, so nothing is confirmed live: see what each side
+  holds.* with **Open in Diagnose**) — **See the
   differences** (Neuron, on the run whose numbers the board showed), **See
   what to fix** (Expert's Diagnose, with the assessment's first three causes
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
@@ -1067,7 +1101,8 @@ The path a person takes today, end to end:
    promises; the status strip, which names any probe family the live side
    could not read.
 6. If the board reads *Unreachable*, or *the live side showed less than the
-   check before*, press **Check again** before reading any count.
+   check before*, press **Check again** before reading any count; if it reads
+   *Nothing compared*, open Diagnose to see what each side holds.
 7. **Open in Diagnose**: Expert's Assessment of the scan against the live
    pack the board graded, with the same letter. Explain the remaining drift
    from the drift drill under Comparison and the requirement chains;

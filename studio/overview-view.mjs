@@ -130,12 +130,15 @@ function liveRowHtml(s, primary) {
   const sentenceHtml = sentence.includes('\u0000')
     ? escapeHtml(sentence).replace('\u0000', termHtml('vantage', 'live side'))
     : escapeHtml(s.sentence);
-  // No leading newline: the simple layout's bytes stay those of its first release.
+  // No leading newline: the simple layout's bytes stay those of its first release. The reason the
+  // live side gave nothing, and a Run that stopped since, ride on the row's closing line, so a state
+  // without them keeps its bytes.
+  const below = `${s.reason ? `<p class="ov-live__reason og-muted">${escapeHtml(s.reason)}</p>` : ''}${s.stopped ? `<p class="ov-live__reason ov-live__reason--warn">${escapeHtml(s.stopped)}</p>` : ''}`;
   return `<div class="ov-live__row">
         ${pill}
         <p class="ov-live__sentence">${sentenceHtml}</p>
         ${button}
-      </div>
+      </div>${below}
       ${s.error ? `<div class="og-callout og-callout--warn ov-live__error" role="status">The check could not start: ${escapeHtml(s.error)}</div>` : ''}
       ${s.cadence ? `<p class="ov-live__cadence og-muted">${escapeHtml(s.cadence)}</p>` : ''}`;
 }
@@ -395,11 +398,12 @@ function discoverColHtml(L, S = null, C = null) {
 // the signals show — the alignment as a ring, the four counts, the promises
 // that hold, and the still-true row with its Check button.
 function statusStripHtml(g, s, f) {
-  const partial = f?.known && Array.isArray(f.partial) && f.partial.length ? f.partial : [];
+  // The families live could not read are named even when the counts are withheld (nothing compared).
+  const partial = Array.isArray(f?.partial) && f.partial.length ? f.partial : [];
   const tone = !s ? 'neutral'
     : s.status === 'unreachable' ? 'fail'
       : (s.status === 'never' || s.pending) ? 'neutral'
-        : (s.stale || partial.length) ? 'warn' : 'ok';
+        : (s.stale || partial.length || s.status === 'nothing') ? 'warn' : 'ok';
   const parts = [];
   if (g?.basis === 'live') parts.push(['source', 'Graded against live']);
   else if (g?.basis === 'recording') parts.push(['source', 'Graded against a recording']);
@@ -407,8 +411,9 @@ function statusStripHtml(g, s, f) {
   // A letter over fewer criteria says so beside its source ("on 6 of 7 criteria").
   if (g?.criteria) parts.push(['criteria', String(g.criteria).replace(/^Graded /, '')]);
   if (s?.running) parts.push(['when', 'checking now…']);
-  else if (s?.ago) parts.push(['when', `checked ${s.ago}`]);
+  else if (s?.ago) parts.push(['when', `${s.tried ? 'tried' : 'checked'} ${s.ago}`]);
   else if (s?.status === 'never') parts.push(['when', 'never checked against live']);
+  if (s?.status === 'nothing' && !s.running) parts.push(['nothing', 'nothing compared']);
   if (partial.length) parts.push(['partial', `live side partial: ${partial.join(', ')} not read`]);
   if (s?.stale) parts.push(['stale', 'older than a day']);
   // The cadence rides at the end; a short screen drops it (it is a fact about
@@ -811,19 +816,26 @@ function mxCellHtml(r, col, svc, canWrite) {
     ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
     : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
   const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
-  // The live read's scope, where it has one: the environment's own, or the server's snapshot scope.
-  const scope = r.scope ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
+  // The live read's scope, where it has one: the environment's own, or the server's snapshot scope; an
+  // environment that relied on the server's default, which no longer applies to it, says so.
+  const scope = r.scope?.defaultIgnored
+    ? `<span class="ov-mx__scope ov-mx__scope--warn" title="${attr(`This environment has no live scope of its own. The server's snapshot scope (${typeof r.scope.defaultIgnored === 'string' ? r.scope.defaultIgnored : 'its default'}) applied to it before; it no longer applies, so its Run reads the whole estate the endpoint serves.`)}">No live scope — the server default no longer applies here; set one</span>`
+    : r.scope?.text ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
   const l = r.last;
   let grade;
+  let why = '';
   if (r.run.running) grade = '<span class="ov-mx__grade" role="status"><span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">…</span><b>Running…</b></span>';
   else {
     const letter = l.letter ? `<span class="ov-svc__letter ov-tone-${attr(l.tone)}" aria-label="Grade ${attr(l.letter)}"${l.gradeLabel ? ` title="${attr(l.gradeLabel)}"` : ''}>${escapeHtml(l.letter)}</span>` : '<span class="ov-svc__letter ov-svc__letter--none" aria-hidden="true">–</span>';
-    const what = l.state === 'checked' && l.alignmentPct !== null ? `${Math.round(l.alignmentPct)}% match`
-      : l.state === 'unreachable' ? 'Live did not answer'
-        : l.state === 'never' ? 'Not checked yet' : l.state === 'checked' ? 'Match not known' : l.word;
-    grade = `<span class="ov-mx__grade">${letter}<b>${escapeHtml(what)}</b></span>`;
+    // The model's words in place of a figure (Live did not answer, Nothing compared, …); the figure
+    // only where something was compared. A row model without them (the listing could not be read) says its word.
+    const what = l.label || (typeof l.alignmentPct === 'number' ? `${Math.round(l.alignmentPct)}% match` : l.word);
+    grade = `<span class="ov-mx__grade">${letter}<b${l.reason ? ` title="${attr(`${what} — ${l.reason}`)}"` : ''}>${escapeHtml(what)}</b></span>`;
+    // Why, beneath: the first probe error, why nothing was compared, what a reading left out. It wraps.
+    why = `${l.reason ? `<span class="ov-mx__why">${escapeHtml(l.reason)}</span>` : ''}${(Array.isArray(l.notes) ? l.notes : []).map((n) => `<span class="ov-mx__note${n.tone === 'warn' ? ' ov-mx__note--warn' : ''}">${escapeHtml(n.text)}</span>`).join('')}`;
   }
-  const when = !r.run.running && l.ago ? `<span class="ov-mx__when og-muted">${svcIcon('clock')}${escapeHtml(l.state === 'unreachable' ? `Tried ${l.ago}` : `Checked ${l.ago}`)}</span>` : '';
+  const whenText = typeof l.when === 'string' ? l.when : (l.ago ? (l.state === 'unreachable' ? `Tried ${l.ago}` : `Checked ${l.ago}`) : '');
+  const when = !r.run.running && whenText ? `<span class="ov-mx__when og-muted">${svcIcon('clock')}${escapeHtml(whenText)}</span>` : '';
   const runBtn = r.run.enabled || r.run.running
     ? `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-svc-run" data-key="${attr(r.key)}"${r.run.running ? ' aria-busy="true" disabled' : ''} aria-label="Run ${attr(r.name)} in ${attr(r.env)}">${r.run.running ? 'Running…' : 'Run'}</button>`
     : `<button type="button" class="og-btn ov-svc__run" data-ux-action="ov-explain" aria-disabled="true" data-reason="${attr(r.run.reason)}" title="${attr(r.run.reason)}" aria-label="Run ${attr(r.name)} in ${attr(r.env)}">Run</button>`;
@@ -833,7 +845,7 @@ function mxCellHtml(r, col, svc, canWrite) {
   const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`;
   return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
             <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}${scope}</div>
-            ${grade}${when}
+            ${grade}${why}${when}
             <div class="ov-mx__acts">${runBtn}${openBtn}${editBtn}</div>
           </div>`;
 }
@@ -1164,6 +1176,17 @@ function svcFormHtml(f) {
         <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
       </div>
     </form>`;
+}
+
+// The Run's toast from its model (overview-model.mjs runToastModel): the renderer writes the sign. A
+// whole reading is the toast it always was; each part of what a reading leaves out only when it holds.
+export function runToastText(m) {
+  const parts = [
+    m.read, m.scoped, !m.unreachable && m.letter ? `grade ${m.letter}` : '',
+    m.unreachable || (m.nothing ? 'nothing compared' : (typeof m.pct === 'number' && Number.isFinite(m.pct) ? `${Math.round(m.pct)}% matches live` : '')),
+    m.livePart, m.notComparable ? 'not comparable with the check before' : '', m.filterWarn,
+  ].filter(Boolean);
+  return `${m.head}: ${parts.join(', ')}.`;
 }
 
 export function serviceListHtml(list, form, ov = {}) {
