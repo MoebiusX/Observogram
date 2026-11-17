@@ -544,8 +544,13 @@ function chaosLine(crit, liveUnobserved) {
 // "zero hours old", and would count a point the engine never gave.
 function liveGradeLines(run, { against, where, now }) {
   if (run?.grade?.driftConstruct !== 'requirement-chain' || !(Number(run.traceability?.declaredTotal) > 0)) return null;
+  // Nothing compared (drift.compared 0, or an older record's four counts): the engine scores Drift-free
+  // nothing and backs it with no figure — the chains' declared links would read broken for want of
+  // anything compared (studio/diagnostic-grade.mjs) — so the line says nothing was compared, and why,
+  // never "0 in 100 hold up".
+  const nothing = comparedOf(run.drift) === 0;
   const pct = Number(run.traceability.integrityPct);
-  if (!Number.isFinite(pct)) return null;
+  if (!nothing && !Number.isFinite(pct)) return null;
   const ageHours = run.freshness?.liveAgeHours;
   const dated = typeof ageHours === 'number' && Number.isFinite(ageHours);
   const fresh = dated && ageHours * 3600e3 <= FRESH_WINDOW_MS;
@@ -559,8 +564,10 @@ function liveGradeLines(run, { against, where, now }) {
   // two measures, not a contradiction.
   const promises = Number(run.traceability.declaredTotal);
   return [
-    { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
-      text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
+    nothing
+      ? { ok: 'no', score: 0, text: `Nothing was compared on the last check, so no promise is confirmed ${where}. ${nothingReason(basisFactsOf(run))}.` }
+      : { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
+        text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
       text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
         : dated ? `The ${picture} was more than a day old when it was checked.`
@@ -798,6 +805,15 @@ const declaredSideCompared = (run) => {
   const d = run?.drift || {};
   return (Number(d.aligned) || 0) + (Number(d.drifted) || 0) + (Number(d.declaredNotLive) || 0) > 0;
 };
+// Only live-only things were compared (every declared one of their families set aside, or none left in
+// the comparison): something was compared (C2 — a figure, 0, over it), nothing the repository declares
+// was. The board reads it Changed with that sentence, never "it matches" and never Nothing compared — the
+// row (lastCheckOf), the ring (fidelityModel) and the Run's toast show the figure, and one record reads
+// one way everywhere.
+const liveOnlyAlone = (run) => {
+  const compared = comparedOf(run?.drift);
+  return compared !== null && compared > 0 && differenceCount(run) === 0 && (Number(run?.drift?.liveNotDeclared) || 0) > 0 && !declaredSideCompared(run);
+};
 const asideCountOf = (run) => (Number(run?.drift?.setAside?.declaredNotLive) || 0) + (Number(run?.drift?.setAside?.liveNotDeclared) || 0);
 
 function stillTrueCore({ journey = null, run = null, now = Date.now(), running = false, startError = null, journeysError = null, pending = false } = {}) {
@@ -888,10 +904,11 @@ function stillTrueCore({ journey = null, run = null, now = Date.now(), running =
       sentence: `Checked ${ago} ${against} — nothing was compared. ${nothingReason(basisFactsOf(run))}.${asideIs}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
   }
-  // Only live-only things were compared: nothing the repository declares was, so nothing of it "matches".
-  if (k === 0 && compared !== null && !declaredSideCompared(run)) {
-    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
-      sentence: `Checked ${ago} ${against} — nothing the repository declares was compared: ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.${asideIs}`,
+  // Only live-only things were compared: nothing the repository declares was, so nothing of it "matches";
+  // what live runs undeclared was compared, and differs (liveOnlyAlone).
+  if (liveOnlyAlone(run)) {
+    return { ...base, status: 'changed', pill: OVERVIEW_STATUS.changed, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing the repository declares was compared: ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.${asideIs}${since}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
   }
   if (k === 0 && cw) {
@@ -933,15 +950,18 @@ function statusOf(run) {
   if (!run) return 'never';
   if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') return 'unreachable';
   if (run.outcome === 'scan-partial' || comparedOf(run.drift) === 0) return 'nothing';
-  if (differenceCount(run) === 0 && comparedOf(run.drift) !== null && !declaredSideCompared(run)) return 'nothing';
+  if (liveOnlyAlone(run)) return 'changed';
   return differenceCount(run) === 0 ? 'unchanged' : 'changed';
 }
 
 // ---------- what to do next ----------
 
-// nextActionModel({ still, grade, decision, run, journey })
+// nextActionModel({ still, grade, decision, run, journey, stopped })
 //   decision  buildAssessmentDecision(...) for the pack alone (its causes name
 //             what keeps the grade down when nothing live was checked)
+//   stopped   a Run newer than `run` that stopped on a partial scan (its record), as stillTrueModel
+//             takes it: the stop is the next step's news (still.stopped says one is there; the record
+//             gives its counts and first reason)
 // Returns { sentence, button: { label, action } | null, why: [string] (≤ 3),
 //   primary: boolean } — across the whole screen exactly one primary button
 //   exists: this one, or the still-true panel's Check button when that is the
@@ -956,7 +976,7 @@ export function nextActionModel(input = {}) {
 
 // `rulesLeft`: the specification's rules Remediate lists as not met (rulesModel's `missing`): with
 // live in agreement, the next step says those are what is left, never "nothing to do".
-function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now(), rulesLeft = 0 } = {}) {
+function nextActionCore({ still = null, grade = null, decision = null, run = null, journey = null, now = Date.now(), rulesLeft = 0, stopped = null } = {}) {
   const live = journeyIsLive(journey);
   if (grade?.basis === 'none' || grade?.basis === 'error') {
     return { sentence: 'Open Expert mode to register or repair the pack.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
@@ -981,6 +1001,9 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
         : { sentence: 'Check again once the live side answers; until then nothing is known.', button: { label: 'Check again', action: 'ov-check' }, why: ['The live side did not answer the last check.'], primary: true }
       : { sentence: 'The recording could not be read; open Expert mode to look.', button: { label: 'Open Expert mode', action: 'ov-expert' }, why: [], primary: true };
   }
+  // A Run stopped on a partial scan after the check on screen: the check shown is the one before it,
+  // and the stop is what is new — never "nothing to do" beside it.
+  if (still.stopped) return stoppedNext(stopped?.outcome === 'scan-partial' ? stopped : null, live, { after: true });
   // The live side showed less than the check before: the one thing to do is
   // to check again; the differences are not worth a trip until it answers.
   const shrank = vantageShrank(run);
@@ -1016,6 +1039,12 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
     return { sentence: 'Nothing to do right now: live matches what the repository declares.', button: null, why: [], primary: false };
   }
   // changed
+  // Live-only things alone (liveOnlyAlone): nothing the repository declares was compared, and what runs
+  // live undeclared is the thing to look at — never "fix 0 things".
+  if (liveOnlyAlone(run)) {
+    const extra = Number(run.drift.liveNotDeclared) || 0;
+    return { sentence: `Nothing the repository declares was compared; ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: nothingWhy(run), primary: true };
+  }
   // A record that counts the chain: the chain's differences are the thing to fix; the
   // details beyond it are one line.
   const split = chainDifferences(run);
@@ -1053,36 +1082,46 @@ function nextActionCore({ still = null, grade = null, decision = null, run = nul
   return { sentence: `Fix the ${things(k)} the live side does differently.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why: why.slice(0, 3), primary: true };
 }
 
-// The next step when the last check compared nothing: a stopped Run checks the kept pack again;
-// only live-only things compared are differences to see; otherwise what each side holds, in
-// Diagnose, with the reasons nothing was compared.
-function nothingNext(run, live) {
-  if (run?.outcome === 'scan-partial') {
-    const s = scanFactsOf(run.packA?.scan);
-    const first = Array.isArray(run.packA?.scan?.notReadReasons) ? run.packA.scan.notReadReasons.find(isPlain) : null;
-    const why = [
-      s && s.notRead !== null && s.candidates !== null ? `${s.notRead} of ${s.candidates} files were not read.` : '',
-      first ? `The first not read: ${safeErrorText(`${first.path ?? '?'} — ${first.why ?? '?'}`)}.` : '',
-    ].filter(Boolean);
-    return live
-      ? { sentence: 'The last Run read the repository in part and stopped, so the previous pack is kept: check it against live again, and run the service again once its repository answers in full.', button: { label: 'Check again', action: 'ov-check' }, why, primary: true }
-      : { sentence: 'The last Run read the repository in part and stopped, so the previous pack is kept; run the service again once its repository answers in full.', button: null, why, primary: false };
-  }
-  const extra = Number(run?.drift?.liveNotDeclared) || 0;
+// The next step after a Run that stopped on a partial scan (`stopped`, its record; null when the host
+// gave only the panel's line): check against live again, and run the service again once its
+// repository answers in full. `after`: the stop came after the check on screen, which is the one
+// before it; else the stop is the newest record itself, and the previous pack is kept.
+function stoppedNext(stopped, live, { after = false } = {}) {
+  const s = scanFactsOf(stopped?.packA?.scan);
+  const first = Array.isArray(stopped?.packA?.scan?.notReadReasons) ? stopped.packA.scan.notReadReasons.find(isPlain) : null;
+  const why = [
+    s && s.notRead !== null && s.candidates !== null ? `${s.notRead} of ${s.candidates} files were not read.` : '',
+    first ? `The first not read: ${safeErrorText(`${first.path ?? '?'} — ${first.why ?? '?'}`)}.` : '',
+  ].filter(Boolean);
+  const head = after
+    ? 'The last Run read the repository in part and stopped, so the check shown is the one before it'
+    : 'The last Run read the repository in part and stopped, so the previous pack is kept';
+  return live
+    ? { sentence: `${head}: check it against live again, and run the service again once its repository answers in full.`, button: { label: 'Check again', action: 'ov-check' }, why, primary: true }
+    : { sentence: `${head}; run the service again once its repository answers in full.`, button: null, why, primary: false };
+}
+
+// Why nothing the repository declares was compared, in at most three plain items: the declared things
+// live could not read, the families it could not read, the files the scan did not read, a scoped live
+// read, the differences set aside.
+function nothingWhy(run) {
   const facts = basisFactsOf(run);
   const cw = chainWords(chainDifferences(run));
   const aside = asideCountOf(run);
-  const why = [
+  return [
     facts.notReadLive ? (cw?.unread ? `Not read live, so not compared: ${cw.unread}.` : `${things(facts.notReadLive)} the repository declares could not be read live.`) : '',
     facts.probesFailed.length ? `Part of the live side could not be read: its ${listWords(facts.probesFailed.map(familyWord))}.` : '',
     filesNotReadWords(facts.scan) ? `${filesNotReadWords(facts.scan)}.` : '',
     facts.scoped ? 'The live read was scoped to part of the estate; what lies outside it was not compared.' : '',
     aside ? `${aside} ${aside === 1 ? 'difference is' : 'differences are'} set aside for this service.` : '',
   ].filter(Boolean).slice(0, 3);
-  if (extra && comparedOf(run?.drift) !== 0) {
-    return { sentence: `Nothing the repository declares was compared; ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare yet.`, button: { label: 'See the differences', action: 'ov-next-neuron' }, why, primary: true };
-  }
-  return { sentence: 'Nothing was compared, so nothing is confirmed live: see what each side holds.', button: { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, why, primary: true };
+}
+
+// The next step when the last check compared nothing: a stopped Run checks the kept pack again;
+// otherwise what each side holds, in Diagnose, with the reasons nothing was compared.
+function nothingNext(run, live) {
+  if (run?.outcome === 'scan-partial') return stoppedNext(run, live);
+  return { sentence: 'Nothing was compared, so nothing is confirmed live: see what each side holds.', button: { label: 'Open in Diagnose', action: 'ov-next-diagnose' }, why: nothingWhy(run), primary: true };
 }
 
 // ---------- the board: what is in place ----------
@@ -1810,7 +1849,7 @@ export function buildOverviewModel(input = {}) {
   const startHere = startable && picked.how === 'none';
   // The specification's rules not met, which Remediate lists (read before the next step, which names them when live agrees).
   const rules = picked.how === 'primary' && !pending ? rulesModel(conformance, { error: conformanceError }) : null;
-  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now, rulesLeft: rules && !rules.unknown ? rules.missing.length : 0 });
+  const next = startHere ? { sentence: '', button: null, why: [], primary: false } : nextActionModel({ still, grade, decision, run: journey ? run : null, journey, now, rulesLeft: rules && !rules.unknown ? rules.missing.length : 0, stopped: journey ? stopped : null });
   // One primary button on the screen: the next step's when it has one, else
   // the still-true panel's Check button; none over the start.
   const primary = startHere ? null : (next.button && next.primary ? 'next' : (still.checkPrimary ? 'check' : null));

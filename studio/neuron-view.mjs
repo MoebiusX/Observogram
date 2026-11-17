@@ -59,7 +59,9 @@ const overCriteria = (off) => (Array.isArray(off) && off.length && off.length < 
 import {
   renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
   notifyHookExample, notifyKeyNote, notifySetupLine, notifyUnavailableOf, fetchJourneyListing, readingOf, scanPartialText,
+  lostRunOf,
 } from './journeys-view.mjs';
+import { requestJson } from './services-api.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
 } from './ux-kit.mjs';
@@ -90,6 +92,45 @@ const EVIDENCE_KEYS = ['vantage', 'scan', 'gate', 'causes', 'chains', 'delivery'
 const latestAlignmentWords = (last) => (last?.compared === 0 ? 'nothing compared' : typeof last?.alignment === 'number' ? `alignment ${last.alignment}%` : 'alignment not recorded');
 // A null integrity (nothing on the chain could be observed) is not measured, never 100.
 const integrityText = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v}%` : 'not measured');
+// Why the newest run's live side gave nothing (neuron-model.mjs latest: its first probe error, or that it
+// answered with no data).
+const latestLossWords = (last) => (last?.noData ? 'the live source answered, but returned no data'
+  : last?.firstProbeError ? `the live source did not answer: ${last.firstProbeError}` : 'the live source did not answer');
+const gradeWords = (g) => `grade ${g.score ?? '?'}%${g.letter ? ` (${g.letter})` : ''}${overCriteria(g.off)}`;
+
+// The focus head's words beside the outcome chip, for the newest record (neuron-model.mjs latest), plain
+// text: a run whose live side gave nothing says why, with no grade (an older record whose every probe
+// failed still carried one); any other run its match only over a comparison and its grade where it has
+// one. Then how long ago.
+export function focusOutcomeWords(last, now = Date.now()) {
+  if (!last) return '';
+  const ago = agoText(now - Date.parse(last.startedAt || ''));
+  if (last.outcome === 'vantage-lost') return `${latestLossWords(last)} · ${ago}`;
+  if (!last.drift) return ago;
+  return `${latestAlignmentWords(last)}${last.grade ? ` · ${gradeWords(last.grade)}` : ''} · ${ago}`;
+}
+
+// The newest record's drift, grade, conformance and freshness as [label, plain text] rows: a run whose
+// live side gave nothing has no figure over it — its alignment, grade and chain integrity read unable
+// to observe; a run that compared nothing says so, its chains' integrity included (the links would read
+// broken for want of anything compared).
+export function latestFactRows(last) {
+  const lost = last?.outcome === 'vantage-lost';
+  const nothing = !lost && last?.compared === 0;
+  const d = last?.drift || {};
+  const t = last?.traceability;
+  const g = last?.grade;
+  return [
+    ['alignment', `${lost ? 'unable to observe' : nothing ? 'nothing compared' : typeof last?.alignment === 'number' ? `${last.alignment}%` : 'not recorded'} — ${d.aligned ?? '?'} aligned · ${d.drifted ?? '?'} drifted · ${d.declaredNotLive ?? '?'} declared-not-live · ${d.liveNotDeclared ?? '?'} live-not-declared${d.outOfScope ? ` · ${d.outOfScope} out of scope` : ''}${d.scaffold ? ` · ${d.scaffold} scaffold` : ''}`],
+    ['grade', lost ? '— (unable to observe)' : g ? `${g.score}% (${g.pass ? 'PASS' : 'FAIL'} at ${g.threshold ?? '?'}%)${g.letter ? ` · ${g.letter}${g.letterLabel ? ` ${g.letterLabel}` : ''}` : ''} · schema ${g.schema ?? 1}${g.driftConstruct ? ` · ${g.driftConstruct}` : ''}` : '—'],
+    ['traceability', lost ? '— (unable to observe)' : t ? `${nothing ? 'integrity not measured: nothing was compared' : typeof t.integrityPct === 'number' ? `${t.integrityPct}% integrity` : 'integrity not measured'} · ${t.intact} intact · ${t.partial} partial · ${t.broken} broken · ${t.undeclared} undeclared of ${t.declaredTotal} declared` : '—'],
+    ['conformance', last?.conformance ? `${last.conformance.scorePercent}% (MUST ${last.conformance.mustPercent}%) · ${last.conformance.conformant ? 'conformant' : 'not conformant'}${last.conformance.declaredTier ? ` · tier ${last.conformance.declaredTier}` : ''}` : '—'],
+    ['live freshness', last?.freshness ? `${last.freshness.liveAgeHours ?? '?'} h old${last.freshness.refreshedAt ? ` (refreshed ${new Date(last.freshness.refreshedAt).toLocaleString()})` : ''}` : '—'],
+    ['took', last?.tookMs !== null && last?.tookMs !== undefined ? `${last.tookMs} ms` : '—'],
+    ['pack A', last?.packA ? `${last.packA.name || '?'} ${last.packA.version || ''} · ${last.packA.source || ''}` : '—'],
+    ['pack B', last?.packB ? `${last.packB.name || '?'} ${last.packB.version || ''} · ${last.packB.source || ''}` : '—'],
+  ];
+}
 
 let _libs = null;
 async function neuronLibs() {
@@ -843,7 +884,7 @@ function renderFocus(d, charts, stackLib, schedLib, trend, fleetReady) {
     <div class="nrn-focus-head">
       <span class="journey-name">${escapeHtml(d.name)}</span>
       ${outcomeChipHtml(last ? last.outcome : 'never-run')}
-      ${last ? `<span class="journey-outcome">${last.drift ? `${escapeHtml(latestAlignmentWords(last))}${last.grade ? ` · grade ${last.grade.score ?? '?'}%${last.grade.letter ? ` (${escapeHtml(last.grade.letter)})` : ''}${overCriteria(last.grade.off)}` : ''} · ` : ''}${escapeHtml(agoText(Date.now() - Date.parse(last.startedAt || '')))}</span>` : ''}
+      ${last ? `<span class="journey-outcome">${escapeHtml(focusOutcomeWords(last))}</span>` : ''}
       <button type="button" class="ctrl-btn nrn-run-focus" data-journey="${escapeHtml(d.name)}">▶ run now</button>
     </div>
     <div class="journey-card-meta">
@@ -1056,16 +1097,7 @@ function renderLatestDetails(d) {
 
   // Drift, grade, conformance, freshness.
   if (last.drift) {
-    parts.push(details('Drift, grade, conformance, freshness', kv([
-      ['alignment', `${last.compared === 0 ? 'nothing compared' : typeof last.alignment === 'number' ? `${last.alignment}%` : 'not recorded'} — ${last.drift.aligned ?? '?'} aligned · ${last.drift.drifted ?? '?'} drifted · ${last.drift.declaredNotLive ?? '?'} declared-not-live · ${last.drift.liveNotDeclared ?? '?'} live-not-declared${last.drift.outOfScope ? ` · ${last.drift.outOfScope} out of scope` : ''}${last.drift.scaffold ? ` · ${last.drift.scaffold} scaffold` : ''}`],
-      ['grade', last.grade ? `${last.grade.score}% (${last.grade.pass ? 'PASS' : 'FAIL'} at ${last.grade.threshold ?? '?'}%)${last.grade.letter ? ` · ${last.grade.letter}${last.grade.letterLabel ? ` ${last.grade.letterLabel}` : ''}` : ''} · schema ${last.grade.schema ?? 1}${last.grade.driftConstruct ? ` · ${last.grade.driftConstruct}` : ''}` : '—'],
-      ['traceability', last.traceability ? `${typeof last.traceability.integrityPct === 'number' ? `${last.traceability.integrityPct}% integrity` : 'integrity not measured'} · ${last.traceability.intact} intact · ${last.traceability.partial} partial · ${last.traceability.broken} broken · ${last.traceability.undeclared} undeclared of ${last.traceability.declaredTotal} declared` : '—'],
-      ['conformance', last.conformance ? `${last.conformance.scorePercent}% (MUST ${last.conformance.mustPercent}%) · ${last.conformance.conformant ? 'conformant' : 'not conformant'}${last.conformance.declaredTier ? ` · tier ${last.conformance.declaredTier}` : ''}` : '—'],
-      ['live freshness', last.freshness ? `${last.freshness.liveAgeHours ?? '?'} h old${last.freshness.refreshedAt ? ` (refreshed ${new Date(last.freshness.refreshedAt).toLocaleString()})` : ''}` : '—'],
-      ['took', last.tookMs !== null ? `${last.tookMs} ms` : '—'],
-      ['pack A', last.packA ? `${last.packA.name || '?'} ${last.packA.version || ''} · ${last.packA.source || ''}` : '—'],
-      ['pack B', last.packB ? `${last.packB.name || '?'} ${last.packB.version || ''} · ${last.packB.source || ''}` : '—'],
-    ])));
+    parts.push(details('Drift, grade, conformance, freshness', kv(latestFactRows(last))));
   }
 
   // Stack evidence of the newest record. The table fits its panel: a sampled
@@ -1156,16 +1188,25 @@ async function runJourneys(names, { container, host, btn = null }) {
     if (btn) btn.textContent = names.length > 1 ? `Running ${i + 1} of ${names.length}…` : 'Running…';
     announce(names.length > 1 ? `Running ${i + 1} of ${names.length}: ${name}…` : `Running ${name}…`);
     try {
-      const r = await api(`/api/journeys/${enc(name)}/run`, POST);
+      // requestJson keeps the server's answer: a 502 that recorded a lost run throws with its `.outcome`.
+      const r = await requestJson(`/api/journeys/${enc(name)}/run`, POST);
       const rec = r.record || {};
       // Counted as a reader says it: a pass over nothing compared is not a pass.
       const reading = readingOf(rec);
       tally[reading] = (tally[reading] || 0) + 1;
       if (names.length === 1) toast(runResultText(name, rec), reading === 'pass' && rec.notify?.status !== 'failed' ? '' : 'error');
     } catch (err) {
-      tally.error += 1;
-      failures.push({ name, message: err?.message || String(err) });
-      if (names.length === 1) toast(runErrorText(name, err), 'error');
+      // A live side that gave nothing left a lost record: the run finished, unable to observe — counted
+      // and said so (lostRunOf), never "did not finish" with the server's raw answer.
+      const lost = lostRunOf(err);
+      if (lost) {
+        tally['vantage-lost'] += 1;
+        if (names.length === 1) toast(runResultText(name, lost), 'error');
+      } else {
+        tally.error += 1;
+        failures.push({ name, message: err?.message || String(err) });
+        if (names.length === 1) toast(runErrorText(name, err), 'error');
+      }
     }
   }
   if (names.length > 1) toast(runAllText(names, tally, failures), tally.pass === names.length ? '' : 'error');

@@ -142,9 +142,9 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   const decision = notifyDecision({ record, previousRun: pass('t1') });
   const links = { runs: 'https://studio/api/journeys/j/runs?limit=1', journey: 'https://studio/#journeys' };
   const payload = buildNotifyPayload({ record, previousRun: pass('t1'), decision, links, text: 'j: pass · chains 2/3 intact' });
-  assert(Object.keys(payload).join() === 'kind,version,journey,runId,startedAt,tookMs,outcome,previousOutcome,reason,triggers,error,gate,grade,drift,freshness,vantage,probes,transition,causes,chains,stack,livePack,packs,links,text',
+  assert(Object.keys(payload).join() === 'kind,version,journey,runId,startedAt,tookMs,outcome,reading,previousOutcome,reason,triggers,error,gate,grade,drift,freshness,vantage,probes,transition,causes,chains,stack,livePack,packs,links,text',
          'the payload carries the documented keys in order', Object.keys(payload));
-  assert(payload.kind === 'observogram.journey' && payload.version === 1 && payload.journey === 'j' && payload.runId === '2026-09-20T10-15-30-123Z' && payload.outcome === 'pass' && payload.previousOutcome === 'pass', 'identity fields come from the record and the previous run');
+  assert(payload.kind === 'observogram.journey' && payload.version === 1 && payload.journey === 'j' && payload.runId === '2026-09-20T10-15-30-123Z' && payload.outcome === 'pass' && payload.reading === 'pass' && payload.previousOutcome === 'pass', 'identity fields come from the record and the previous run; the reading beside the outcome');
   assert(payload.reason === decision.reason && payload.triggers.join() === decision.triggers.join() && payload.triggers !== decision.triggers, 'reason and triggers come from the decision (copied)');
   assert(payload.transition === record.transition && payload.causes === record.causes && payload.chains === record.chains && payload.livePack === record.livePack, 'transition, causes, chains and livePack are the record\'s own objects — copied, never recomputed');
   assert(payload.packs.b.source === 'mcp:https://***@host/mcp' && payload.packs.a.source === 'C:/repo/pack.yaml' && payload.packs.b.name === 'production-live', 'pack B userinfo arrives redacted');
@@ -226,6 +226,49 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   // A breach written { key } is read by it.
   assert(notifyDecision({ policy: 'breach', record: { ...failed('t1'), gate: { breaches: [{ key: 'vantage', detail: 'x' }] } } }).reason === 'gate failed: vantage', 'a breach { key } names its key');
   assert(/- vantage — x/.test(renderNotifyText({ gate: { breaches: [{ key: 'vantage', detail: 'x' }] } })), 'the text names a breach { key }');
+}
+
+// --- a run that compared nothing is no pass: a gate whose own keys held (freshness only, or none) still passed it ---
+{
+  const NOTHING = { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
+  const passNothing = (startedAt, gate = { maxLiveAgeHours: 48 }) => pass(startedAt, { gate: { thresholds: gate, breaches: [] }, drift: NOTHING });
+  const compared = (startedAt) => pass(startedAt, { drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 } });
+  // breach: posted as nothing compared, a gate it breached named beside it.
+  assert(JSON.stringify(notifyDecision({ policy: 'breach', record: passNothing('t2'), previousRun: compared('t1') })) === JSON.stringify({ send: true, reason: 'nothing compared', triggers: ['nothing-compared'] }), 'breach: a pass over nothing compared is posted — never "outcome pass, no breach to clear"');
+  assert(JSON.stringify(notifyDecision({ policy: 'breach', record: passNothing('t2', {}) })) === JSON.stringify({ send: true, reason: 'nothing compared', triggers: ['nothing-compared'] }), 'breach: with no gate configured too — nothing was compared, so nothing is confirmed');
+  const nothingFailed = failed('t2', ['minAlignmentPct'], { drift: NOTHING });
+  assert(JSON.stringify(notifyDecision({ policy: 'breach', record: nothingFailed })) === JSON.stringify({ send: true, reason: 'nothing compared · gate failed: minAlignmentPct', triggers: ['nothing-compared', 'gate-failed:minAlignmentPct'] }), 'breach: a failed gate over nothing says both');
+  assert(notifyDecision({ policy: 'breach', record: compared('t3'), previousRun: passNothing('t2') }).reason === 'breach cleared: nothing-compared → pass', 'breach: a comparison that passes after nothing compared clears it');
+  // An older record over an empty union (its four counts, alignment 100) reads the same.
+  const { compared: _c, ...olderNothing } = NOTHING;
+  assert(notifyDecision({ policy: 'breach', record: pass('t2', { drift: { ...olderNothing, alignmentPct: 100 } }) }).reason === 'nothing compared', 'an older record over an empty union is no pass either');
+  // transitions: pass → nothing compared is a transition; a repeat is skipped, as a repeated outage is.
+  assert(notifyDecision({ record: passNothing('t2'), previousRun: compared('t1') }).triggers.join() === 'outcome changed pass → nothing-compared', 'transitions: a check that stops comparing anything is news');
+  assert(JSON.stringify(notifyDecision({ record: passNothing('t3'), previousRun: passNothing('t2') })) === JSON.stringify({ send: false, reason: 'still nothing-compared since t2', triggers: [] }), 'transitions: nothing compared after nothing compared is skipped');
+  assert(notifyDecision({ record: compared('t3'), previousRun: passNothing('t2') }).triggers.join() === 'outcome changed nothing-compared → pass', 'transitions: comparing again is news');
+  // The payload: the record's outcome as it is, beside `reading`; the one-line text never leads with pass.
+  const p = buildNotifyPayload({ record: passNothing('t2'), decision: notifyDecision({ policy: 'breach', record: passNothing('t2') }), text: 'j: pass · nothing compared · chains 0/6 intact' });
+  assert(p.outcome === 'pass' && p.reading === 'nothing-compared' && p.text === 'j: nothing compared · chains 0/6 intact', 'the payload reads nothing compared, never pass', { outcome: p.outcome, reading: p.reading, text: p.text });
+  assert(renderNotifyText(p).startsWith('j: nothing compared · chains 0/6 intact\n\nreason: nothing compared\nmatch: nothing compared\n'), 'the text form leads with it', renderNotifyText(p).split('\n').slice(0, 4));
+  assert(renderNotifyText({ ...p, text: '' }).startsWith('j: nothing compared\n'), 'a payload without a summary leads with the reading too');
+  assert(buildNotifyPayload({ record: nothingFailed, decision: { reason: 'r', triggers: [] }, text: 'j: gate-failed · nothing compared · chains 0/6 intact' }).text === 'j: gate-failed · nothing compared · chains 0/6 intact', 'a failed gate over nothing keeps its summary');
+  assert(buildNotifyPayload({ record: compared('t1'), decision: { reason: 'r', triggers: [] }, text: 'j: pass · chains 2/3 intact' }).text === 'j: pass · chains 2/3 intact' && buildNotifyPayload({ record: compared('t1'), decision: { reason: 'r', triggers: [] } }).reading === 'pass', 'a pass over a comparison is a pass');
+}
+
+// --- the reading rule is run-basis's, restated (this module stays zero-import) ---
+{
+  const rb = await import('./lib/run-basis.mjs');
+  const { readingOutcome } = await import('./lib/journey-notify.mjs');
+  const probes = (o) => ({ attempted: [], succeeded: [], empty: [], failed: [], unsupported: [], ...o });
+  const records = [
+    null, {}, { outcome: 'pass' }, { outcome: 'scan-partial' }, { outcome: 'error', error: 'x' }, { outcome: 'vantage-lost' },
+    { outcome: 'pass', vantage: 'lost' }, { outcome: 'pass', probes: probes({ attempted: ['alert_rules'], failed: ['alert_rules'] }), drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } },
+    { outcome: 'pass', vantage: 'full', probes: probes({ attempted: ['alert_rules'] }) },
+    { outcome: 'pass', drift: { alignmentPct: null, compared: 0 } }, { outcome: 'gate-failed', drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } },
+    { outcome: 'pass', drift: { alignmentPct: 90 } }, { outcome: 'pass', drift: { alignmentPct: 0, compared: 1, liveNotDeclared: 1 } }, { outcome: 'gate-failed', drift: { compared: 3, aligned: 3 } },
+    { outcome: 'pass', compared: 0 }, { outcome: 'pass', drift: { aligned: -2, drifted: 0 } }, { outcome: 'pass', drift: [] },
+  ];
+  for (const r of records) assert(readingOutcome(r) === rb.readingOutcome(r), 'journey-notify readingOutcome gives run-basis\'s answer', { r, notify: readingOutcome(r), rb: rb.readingOutcome(r) });
 }
 
 report('journey-notify', 'all journey-notify assertions pass.');

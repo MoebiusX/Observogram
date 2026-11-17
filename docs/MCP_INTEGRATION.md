@@ -1648,17 +1648,24 @@ credentials: <redacted>`, and a failed lookup or connection reads
 docs/NOTIFY_HOOKS.md has the rule's every sentence and the migration of a
 journey that names another variable.
 
-The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
+The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe), over
+each run as every reader reads it (its `readingOutcome`, run-basis's rule
+restated so the module stays zero-import): a pass or a failed gate over
+nothing compared is `nothing-compared`, never a pass, and an older record
+whose every probe failed is `vantage-lost`.
 `always` posts every run; `breach` posts a gate-failed or vantage-lost run,
+a run that compared nothing (reason *nothing compared*, with `· gate
+failed: <criteria>` when its gate breached any; trigger `nothing-compared`),
 a Run that stopped on a partial scan (`scan-partial`, reason *partial scan*),
 and once when the breach clears; `transitions` (the default) posts when the
-outcome changed, a chain got worse (`transition.changed[].direction ===
+outcome read changed (`pass → nothing-compared` included), a chain got worse (`transition.changed[].direction ===
 'worse'`), a new candidate cause appeared (kind + evidence not on the
 previous run) or the vantage changed — a first run is a baseline, not a
 transition (skipped; deliberately unlike `keepLivePack`, which snapshots
 the first run), and a vantage-lost run after a vantage-lost run is skipped
 (nobody is paged every 15 minutes for one outage), as is a stopped Run after
-a stopped Run. A stopped Run before a run observed nothing: no outcome
+a stopped Run, and a run that compared nothing after another that compared
+nothing. A stopped Run before a run observed nothing: no outcome
 changed since it, no vantage changed from it (its record has no vantage), no
 breach cleared. A run whose record says it is not comparable with the one
 before (`comparable.withPrevious: false`: its scan read other files, or its
@@ -1671,9 +1678,12 @@ The payload (`kind: observogram.journey`, `version: 1`) copies the record —
 trimmed `stack` rows, `grade`, `drift` (with `compared`, the number of things
 compared; `alignmentPct` is `null` when nothing was, and the `format: text` body
 says `match: nothing compared`), `gate.breaches`, `packs` with
-`//user:pass@` redacted — plus `reason`, `triggers`, a one-line `text`
-(`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`) and
-`links` when `studioUrl` is set. It never carries a definition key, an env
+`//user:pass@` redacted — plus `reading` beside the record's `outcome` (what
+the run is read as: `nothing-compared` for a pass or a failed gate over
+nothing compared), `reason`, `triggers`, a one-line `text`
+(`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`; a
+pass over nothing compared leads `<journey>: nothing compared · …`, never
+with *pass*) and `links` when `studioUrl` is set. It never carries a definition key, an env
 value or a `historyError` path. The POST is bounded: one `AbortController`
 per attempt, a second attempt only after a network error / timeout, a 429 or
 a 5xx (any other 4xx is final), worst case 2 × `timeoutMs` + connect.
@@ -1681,7 +1691,9 @@ a 5xx (any other 4xx is final), worst case 2 × `timeoutMs` + connect.
 Order on disk: the record is written FIRST, then posted, then rewritten with
 `notify` (same stem) — a record on disk before anything touches the wire.
 The outcome never changes the exit code (a failed delivery on a passing run
-still exits 0). `renderJourneyMarkdown` ends with `notify: sent (202) —
+still exits 0; a run that compared nothing exits 1 under a gate, whose own
+keys may have held, and 0 with no gate configured — the report heads
+`NOTHING COMPARED` either way, never `✅ PASS`). `renderJourneyMarkdown` ends with `notify: sent (202) —
 <reason>` / `notify: skipped — …` / `notify: failed after N attempts —
 <error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
 carries `notify` as names (`{ urlEnv, authEnv, on, format }`, plus

@@ -43,6 +43,43 @@ const CAUSES_IN_TEXT = 3;
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
+// ---------- what a run rests on (tools/lib/run-basis.mjs, restated) ----------
+//
+// This module stays zero-import, so it carries its own copy of run-basis's reading rule;
+// tools/test-journey-notify.mjs pins the two equal over the request's records. A run that compared
+// nothing (drift.compared 0, or the four counts of an older record) is no pass: its gate cannot pass on
+// it, so a notification never reads it as one.
+const finiteOf = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const countOf = (v) => { const n = finiteOf(v); return n !== null && n >= 0 ? Math.floor(n) : null; };
+const namesOf = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : null);
+const DRIFT_COUNTS = ['aligned', 'drifted', 'declaredNotLive', 'liveNotDeclared'];
+function comparedOf(drift) {
+  if (!isObj(drift)) return null;
+  const c = countOf(drift.compared);
+  if (c !== null) return c;
+  if (!DRIFT_COUNTS.some((k) => finiteOf(drift[k]) !== null)) return null;
+  return DRIFT_COUNTS.reduce((s, k) => s + Math.max(0, finiteOf(drift[k]) ?? 0), 0);
+}
+function vantageLost(record) {
+  const p = isObj(record.probes) ? record.probes : null;
+  const attempted = p ? namesOf(p.attempted) : null;
+  const succeeded = p ? namesOf(p.succeeded) : null;
+  return record.vantage === 'lost' || !!(attempted?.length && succeeded && !succeeded.length);
+}
+// The outcome a person reads (run-basis.mjs readingOutcome): a pass or a failed gate over nothing compared
+// is 'nothing-compared'; a run whose live side gave nothing — its own outcome, or an older record whose
+// probes were attempted and none returned data — 'vantage-lost'; a stopped Run and an error as they are;
+// null for no record.
+export function readingOutcome(x) {
+  if (!isObj(x)) return null;
+  const outcome = typeof x.outcome === 'string' && x.outcome ? x.outcome : null;
+  if (outcome === 'scan-partial' || outcome === 'error') return outcome;
+  if (outcome === 'vantage-lost' || vantageLost(x)) return 'vantage-lost';
+  const compared = isObj(x.drift) ? comparedOf(x.drift) : countOf(x.compared);
+  if ((outcome === 'pass' || outcome === 'gate-failed') && compared === 0) return 'nothing-compared';
+  return outcome;
+}
+
 // Whether a run record's chain transition got worse — the same predicate
 // journey.mjs transitionGotWorse applies to `transition.changed` (that
 // function also consults the ranker's top cause; the ranker only ranks
@@ -67,19 +104,24 @@ export function newCandidateCauses(record, previousRun) {
 }
 
 // The decision: { send, reason, triggers[] }. Pure over the record and the
-// newest previous record (null on a first run).
+// newest previous record (null on a first run), each read as a person reads
+// it (readingOutcome, above): a pass or a failed gate over nothing compared
+// is 'nothing-compared' — no pass, whatever the gate's own keys said.
 //   always      → send every run.
-//   breach      → send on a non-pass run (gate-failed / vantage-lost / a Run
-//                 that stopped on a partial scan) and once when a breach
-//                 clears; a pass after a pass is skipped.
-//   transitions → send when the outcome changed, a chain got worse, a new
-//                 candidate cause appeared or the vantage changed. A first
-//                 run is a baseline, not a transition (skipped — this
-//                 deliberately differs from livePackDecision, which keeps
-//                 the first run's snapshot). A vantage-lost run after a
-//                 vantage-lost run is skipped: nobody is paged every 15 min
-//                 for an outage they already know about; so is a stopped Run
-//                 after a stopped Run.
+//   breach      → send on a run that is no pass (gate-failed / nothing
+//                 compared / vantage-lost / a Run that stopped on a partial
+//                 scan) and once when a breach clears; a pass after a pass
+//                 is skipped.
+//   transitions → send when the outcome read changed (pass → nothing
+//                 compared too), a chain got worse, a new candidate cause
+//                 appeared or the vantage changed. A first run is a
+//                 baseline, not a transition (skipped — this deliberately
+//                 differs from livePackDecision, which keeps the first run's
+//                 snapshot). A vantage-lost run after a vantage-lost run is
+//                 skipped: nobody is paged every 15 min for an outage they
+//                 already know about; so is a stopped Run after a stopped
+//                 Run, and a run that compared nothing after another that
+//                 compared nothing.
 // A stopped Run (outcome scan-partial) is no observation of the artefacts: a
 // run after one changed no outcome since it, its vantage did not "change"
 // from it, and no breach "cleared". A run the record marks not comparable
@@ -88,9 +130,9 @@ export function newCandidateCauses(record, previousRun) {
 // that changed across the pair.
 export function notifyDecision({ policy = NOTIFY_DEFAULT_POLICY, record, previousRun = null } = {}) {
   const p = NOTIFY_POLICIES.includes(policy) ? policy : NOTIFY_DEFAULT_POLICY;
-  const outcome = String(record?.outcome ?? 'unknown');
+  const outcome = readingOutcome(record) ?? String(record?.outcome ?? 'unknown');
   const prev = isObj(previousRun) ? previousRun : null;
-  const prevOutcome = prev ? String(prev.outcome ?? 'unknown') : null;
+  const prevOutcome = prev ? (readingOutcome(prev) ?? String(prev.outcome ?? 'unknown')) : null;
   if (p === 'always') return { send: true, reason: 'policy always', triggers: ['always'] };
   const prevStopped = prevOutcome === 'scan-partial';
   if (p === 'breach') {
@@ -99,14 +141,17 @@ export function notifyDecision({ policy = NOTIFY_DEFAULT_POLICY, record, previou
     if (outcome !== 'pass') {
       const criteria = (Array.isArray(record?.gate?.breaches) ? record.gate.breaches : []).map(b => String(b?.criterion ?? b?.key ?? '?'));
       const uniq = [...new Set(criteria)];
-      return { send: true, reason: `gate failed: ${uniq.join(', ') || outcome}`, triggers: uniq.length ? uniq.map(c => `gate-failed:${c}`) : [`gate-failed`] };
+      const failed = uniq.length ? uniq.map(c => `gate-failed:${c}`) : [`gate-failed`];
+      // Nothing compared: posted as such — with the criteria its gate breached, when it breached any.
+      if (outcome === 'nothing-compared') return { send: true, reason: `nothing compared${uniq.length ? ` · gate failed: ${uniq.join(', ')}` : ''}`, triggers: ['nothing-compared', ...(uniq.length ? failed : [])] };
+      return { send: true, reason: `gate failed: ${uniq.join(', ') || outcome}`, triggers: failed };
     }
     if (prev && prevOutcome !== 'pass' && !prevStopped) return { send: true, reason: `breach cleared: ${prevOutcome} → pass`, triggers: ['breach-cleared'] };
     return { send: false, reason: 'outcome pass, no breach to clear', triggers: [] };
   }
   // transitions
   if (!prev) return { send: false, reason: 'first run: no previous run to compare against', triggers: [] };
-  if ((outcome === 'vantage-lost' || outcome === 'scan-partial') && prevOutcome === outcome) {
+  if ((outcome === 'vantage-lost' || outcome === 'scan-partial' || outcome === 'nothing-compared') && prevOutcome === outcome) {
     return { send: false, reason: `still ${outcome} since ${prev.startedAt || '?'}`, triggers: [] };
   }
   const notComparable = isObj(record?.comparable) && record.comparable.withPrevious === false;
@@ -139,12 +184,25 @@ const packRef = (p) => ({
   source: p?.source == null ? null : redactUrlCredentials(p.source),
 });
 
+// The one-line summary never leads with a pass over nothing compared: the
+// caller's `<journey>: pass · nothing compared · …` (journey.mjs
+// notifyTextLine) leads with what the run is read as — `<journey>: nothing
+// compared · …`. Any other summary is passed through as given.
+function summaryOf(r, text) {
+  const t = String(text ?? '');
+  const head = `${r.journey ?? '?'}: pass`;
+  if (r.outcome !== 'pass' || readingOutcome(r) !== 'nothing-compared' || !(t === head || t.startsWith(`${head} `))) return t;
+  return `${r.journey ?? '?'}: nothing compared${t.slice(head.length).replace(/^ · nothing compared(?= · |$)/, '')}`;
+}
+
 // The JSON-serialisable payload. Everything is COPIED from the record
 // (transition, causes, chains, stack rows), never recomputed; nothing from
 // the definition's notify block, no env value, no raw userinfo and none of
 // the record's historyError paths ride along. `text` is the one-line
 // summary the caller assembled (journey.mjs has chainStatusLine /
 // causeLine / vantageLine); `links` is {} unless notify.studioUrl is set.
+// `reading` is the outcome as a person reads it (readingOutcome): a pass or a
+// failed gate over nothing compared is 'nothing-compared', never a pass.
 export function buildNotifyPayload({ record, previousRun = null, decision, links = {}, text = '' } = {}) {
   const r = isObj(record) ? record : {};
   const rows = Array.isArray(r.stackEvidence?.rows) ? r.stackEvidence.rows.filter(isObj) : [];
@@ -156,6 +214,7 @@ export function buildNotifyPayload({ record, previousRun = null, decision, links
     startedAt: r.startedAt ?? null,
     tookMs: r.tookMs ?? null,
     outcome: r.outcome ?? null,
+    reading: readingOutcome(r),
     previousOutcome: isObj(previousRun) ? (previousRun.outcome ?? null) : null,
     reason: decision?.reason ?? null,
     triggers: Array.isArray(decision?.triggers) ? decision.triggers.slice() : [],
@@ -176,7 +235,7 @@ export function buildNotifyPayload({ record, previousRun = null, decision, links
     livePack: r.livePack ?? null,
     packs: { a: packRef(r.packA), b: packRef(r.packB) },
     links: isObj(links) ? links : {},
-    text: String(text ?? ''),
+    text: summaryOf(r, text),
   };
 }
 
@@ -186,7 +245,7 @@ export function buildNotifyPayload({ record, previousRun = null, decision, links
 // first line is the notification, the rest is the body.
 export function renderNotifyText(payload) {
   const p = isObj(payload) ? payload : {};
-  const out = [String(p.text || `${p.journey ?? '?'}: ${p.outcome ?? '?'}`), ''];
+  const out = [String(p.text || `${p.journey ?? '?'}: ${p.reading === 'nothing-compared' && p.outcome === 'pass' ? 'nothing compared' : (p.outcome ?? '?')}`), ''];
   out.push(`reason: ${p.reason ?? '-'}`);
   if (p.error) out.push(`error: ${p.error}`);
   // Nothing compared: no match figure, and the text says so.

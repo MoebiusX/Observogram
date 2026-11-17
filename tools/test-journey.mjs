@@ -1081,6 +1081,28 @@ try {
     const mdEmpty = renderJourneyMarkdown(emptyOld);
     assert(/\| Alignment \| \*\*nothing compared\*\* — 0 aligned/.test(mdEmpty) && !/100%\*\*/.test(mdEmpty), 'the report over an empty union says nothing compared, never 100%');
     assert(!/null%/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null, compared: 0 } })), 'the report never prints null%');
+    // Nothing compared is never ✅ PASS: under a gate whose own keys held it cannot pass (GATE NOT PASSED), a failed
+    // gate says both, and a journey with no gate has no gate verdict — NOTHING COMPARED alone; the reason is said.
+    {
+      const nothingDrift = { ...base.drift, alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
+      const head = (rec) => renderJourneyMarkdown(rec).split('\n')[0];
+      const gatedPass = { ...base, outcome: 'pass', drift: nothingDrift, gate: { thresholds: { maxLiveAgeHours: 48 }, breaches: [] } };
+      assert(head(gatedPass) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED · GATE NOT PASSED` && !/✅|— PASS/.test(renderJourneyMarkdown(gatedPass)),
+             'a pass over nothing compared under a gate: NOTHING COMPARED · GATE NOT PASSED, never ✅ PASS', head(gatedPass));
+      assert(/\n_Nothing was compared \(neither side had anything this check could compare\), so this run says nothing about whether the declared artefacts work, and its gate cannot pass on it\._\n/.test(renderJourneyMarkdown(gatedPass)),
+             'the report says why, and that the gate cannot pass on it', renderJourneyMarkdown(gatedPass).split('\n').slice(0, 4));
+      const open = { ...gatedPass, gate: { thresholds: {}, breaches: [] } };
+      assert(head(open) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED` && /; with no gate configured, it has no gate verdict\._\n/.test(renderJourneyMarkdown(open)),
+             'no gate configured: no gate verdict, and still nothing compared', head(open));
+      const failedGate = { ...gatedPass, outcome: 'gate-failed', gate: { thresholds: { minAlignmentPct: 85 }, breaches: [{ criterion: 'minAlignmentPct', detail: 'nothing was compared — no alignment figure to hold against the required 85%' }] } };
+      assert(head(failedGate) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED · GATE FAILED` && /### Gate breaches\n\n- \*\*minAlignmentPct\*\* — nothing was compared/.test(renderJourneyMarkdown(failedGate)),
+             'a failed gate over nothing compared: both, the breaches listed', head(failedGate));
+      assert(head(emptyOld).startsWith(`## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED`), 'an older pass over an empty union is no pass either', head(emptyOld));
+      // An older pass whose every probe failed is a lost vantage, as every reader reads it.
+      const oldAllFailed = { ...emptyOld, vantage: 'partial', probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' } };
+      assert(head(oldAllFailed) === `## ⚠️ Journey \`${base.journey}\` — VANTAGE LOST` && /\| Error \| alert_rules_list: HTTP 500: no backend session \|/.test(renderJourneyMarkdown(oldAllFailed)), 'an older pass whose every probe failed reads VANTAGE LOST with its first probe error', head(oldAllFailed));
+      assert(head(base) === `## ✅ Journey \`${base.journey}\` — PASS`, 'a pass over a comparison is ✅ PASS, as before', head(base));
+    }
     assert(/\| Alignment \| \*\*not recorded\*\*/.test(renderJourneyMarkdown({ ...base, drift: { ...base.drift, alignmentPct: null } })), 'a figure the record does not carry: not recorded');
     // A stopped Run (C8): no grade, no drift — rendered, never thrown.
     const stopped = { journey: 'shop.prod', startedAt: '2026-11-16T10:00:00.000Z', tookMs: 9, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)',
@@ -2108,6 +2130,43 @@ try {
       assert(readJourneyRunsIn(TMP2, 'all-pass').length === 3, 'each --all run appends to every journey\'s history');
       const none = packc(['journey', 'run', '--all'], TMP3);
       assert(none.status === 0 && /^\(no journeys saved — add \.observogram\/journeys\/<name>\.journey\.yaml\)$/m.test(none.stdout), 'run --all over zero journeys prints the existing no-journeys line and exits 0', { status: none.status, out: none.stdout });
+      // (k2) a run that compared nothing — Pack A against a live export whose only data is a scrape job it
+      // declares nothing of — is never ✅ PASS, and cannot pass a gate: under one whose own keys held (freshness
+      // only) it exits 1 (NOTHING COMPARED · GATE NOT PASSED); a journey with no gate configured has no gate
+      // verdict, so it exits 0 there, its report saying NOTHING COMPARED.
+      {
+        const TMP4 = mkdtempSync(join(tmpdir(), 'observogram-journey-nothing-'));
+        try {
+          const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+          const { probeCandidates } = await import('./lib/contracts/mcp-capabilities.mjs');
+          const first = probeCandidates('scrape_configs')[0];
+          const targetsTool = typeof first === 'string' ? first : first.name;
+          const unsupported = { tool: null, attempted: ['x'], adapted: null, outcome: 'unsupported' };
+          const probeResults = Object.fromEntries(['metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'alerting_routes'].map((f) => [f, unsupported]));
+          probeResults.scrape_configs = { tool: targetsTool, attempted: [targetsTool], adapted: [{ job: 'shop-api', targets: [{ instance: 'shop-api:9100', health: 'down', lastScrape: null, lastError: 'connection refused' }] }], outcome: 'data' };
+          const live = buildCanonicalPack({ refreshedAt: new Date().toISOString(), mcpUrl: 'https://mcp.example.com/mcp', health: { services: [] }, topology: { dependencies: [] }, probeResults, probeFailures: {} });
+          mkdirSync(join(TMP4, 'journeys'), { recursive: true });
+          const liveFile = join(TMP4, 'live.pack.json').replaceAll('\\', '/');
+          writeFileSync(liveFile, JSON.stringify(live));
+          writeFileSync(join(TMP4, 'journeys', 'nothing-gated.journey.yaml'), ['name: nothing-gated', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`, 'gate: { maxLiveAgeHours: 48 }'].join('\n'));
+          writeFileSync(join(TMP4, 'journeys', 'nothing-open.journey.yaml'), ['name: nothing-open', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`].join('\n'));
+          const gated = packc(['journey', 'run', 'nothing-gated'], TMP4);
+          const gatedRec = readJourneyRunsIn(TMP4, 'nothing-gated')[0];
+          assert(gatedRec?.outcome === 'pass' && gatedRec.drift?.compared === 0 && gatedRec.gate.breaches.length === 0, 'fixture: the freshness-only gate held, and nothing was compared', gatedRec && { outcome: gatedRec.outcome, drift: gatedRec.drift, breaches: gatedRec.gate.breaches });
+          assert(gated.status === 1 && /^## ⚠️ Journey `nothing-gated` — NOTHING COMPARED · GATE NOT PASSED$/m.test(gated.stdout) && !/✅|— PASS/.test(gated.stdout),
+                 'under a gate, nothing compared cannot pass it: exit 1, never ✅ PASS', { status: gated.status, head: gated.stdout.split('\n')[0], err: gated.stderr });
+          const open = packc(['journey', 'run', 'nothing-open'], TMP4);
+          assert(open.status === 0 && /^## ⚠️ Journey `nothing-open` — NOTHING COMPARED$/m.test(open.stdout) && !/✅|GATE/.test(open.stdout.split('\n')[0]),
+                 'no gate configured: no gate verdict (exit 0), and the report still says nothing compared', { status: open.status, head: open.stdout.split('\n')[0], err: open.stderr });
+          const allNothing = packc(['journey', 'run', '--all', '--json'], TMP4);
+          const arrNothing = JSON.parse(allNothing.stdout);
+          assert(allNothing.status === 1 && arrNothing.map((r) => `${r.name}:${r.exitCode}`).join() === 'nothing-gated:1,nothing-open:0', 'run --all: each by the same rule, the worst is the exit code', arrNothing.map((r) => [r.name, r.exitCode]));
+          const listNothing = packc(['journey', 'list'], TMP4);
+          assert(/^nothing-gated\tnothing-compared · /m.test(listNothing.stdout) && /^nothing-open\tnothing-compared · /m.test(listNothing.stdout), 'journey list reads both nothing compared', listNothing.stdout.split('\n'));
+        } finally {
+          rmSync(TMP4, { recursive: true, force: true });
+        }
+      }
       // (l) schedule: every format, --json, the placeholder + stderr note, the exits.
       writeFileSync(join(TMP2, 'journeys', 'sched-env.journey.yaml'), ['name: sched-env', `packA: { file: ${A} }`, 'packB: { mcp: { url: https://mcp.example.invalid/mcp, authEnv: MY_MCP_TOKEN } }', 'schedule: { cron: "0 */2 * * *", timezone: Europe/Madrid }', 'notify: { urlEnv: MY_HOOK_URL, authEnv: MY_HOOK_TOKEN }'].join('\n'));
       const secretEnv = { MY_HOOK_URL: 'https://hooks.example/s3cr3t-value', MY_HOOK_TOKEN: 's3cr3t-token', MY_MCP_TOKEN: 's3cr3t-mcp' };

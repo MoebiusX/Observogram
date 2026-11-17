@@ -726,14 +726,16 @@ const STATES = {
   'services error': { services: null, servicesStatus: { kind: 'error', error: '503: down' } },
   'nothing compared': { run: nothingRun },
   'nothing compared (recording)': { journeys: [fileJourney], run: nothingRun },
-  'nothing compared, live-only things alone': { run: liveOnlyRun },
+  'live-only things alone': { run: liveOnlyRun },
   'stopped on a partial scan': { run: stoppedRun },
   'stopped on a partial scan (recording)': { journeys: [fileJourney], run: stoppedRun },
+  'a Run stopped after a check that matched': { run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() } },
+  'a Run stopped after a check that matched (recording)': { journeys: [fileJourney], run: unchangedRun, stopped: { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() } },
   'no live data': { run: noDataRun },
   'an older pass whose every probe failed': { run: oldAllFailed },
   'a partial scan, compared': { run: { ...run, packA: { ...run.packA, scan: { files: 171, candidates: 220, partial: true, notRead: 49 } }, comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' } } },
 };
-const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable', 'stopped on a partial scan (recording)']);
+const NONE_ALLOWED = new Set(['unchanged (recording)', 'stale unchanged (recording)', 'journeys error', 'pending', 'loading', 'empty', 'services error', 'no pack, startable', 'empty, startable', 'stopped on a partial scan (recording)', 'a Run stopped after a check that matched (recording)']);
 const EITHER = new Set(['running, no run', 'running, changed', 'running, unchanged', 'running, unreachable', 'running, showed less than the check before']);
 const primariesOf = (m) => (m.primary === 'next' && m.next?.button ? 1 : 0) + (m.primary === 'check' && m.still?.checkPrimary ? 1 : 0);
 
@@ -1567,9 +1569,10 @@ test('OM3 stillTrueModel and nextActionModel over nothing compared: the fifth st
   assert.equal(su.sentence, 'Checked 2 hours ago against live — nothing was compared. Live answered in part: dashboards not read. 3 are set aside for this service.');
   const nu = keep(nextActionModel({ still: su, grade: liveGrade, run: unread, journey, now: NOW }));
   assert.deepEqual(nu.why, ['Part of the live side could not be read: its dashboards.', 'The live read was scoped to part of the estate; what lies outside it was not compared.', '3 differences are set aside for this service.']);
-  // Only live-only things compared: nothing the repository declares was, so nothing of it matches.
+  // Only live-only things compared: nothing the repository declares was, so nothing of it matches — but
+  // something was compared (C2): Changed, the figure on the ring and the row (OM8), never Nothing compared.
   const lo = keep(stillTrueModel({ journey, run: liveOnlyRun, now: NOW }));
-  assert.deepEqual([lo.status, lo.pill, lo.tone, lo.checkPrimary], ['nothing', 'Nothing compared', 'warn', false]);
+  assert.deepEqual([lo.status, lo.pill, lo.tone, lo.checkPrimary], ['changed', 'Changed', 'warn', false]);
   assert.equal(lo.sentence, 'Checked 2 hours ago against live — nothing the repository declares was compared: 5 things run live that it does not declare. 3 are set aside for this service.');
   const nlo = keep(nextActionModel({ still: lo, grade: liveGrade, run: liveOnlyRun, journey, now: NOW }));
   assert.deepEqual([nlo.sentence, nlo.button?.action, nlo.primary], ['Nothing the repository declares was compared; 5 things run live that it does not declare yet.', 'ov-next-neuron', true]);
@@ -1685,6 +1688,51 @@ test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: null, outcome: 'scan-partial', scan: { notRead: 49, candidates: 220 }, kept: { id: 'p1', label: 'x' } }).text, 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.');
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: before }), null, 'nothing new recorded: the run did not finish');
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: { lastRun: { startedAt: 't', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: null, liveLoss: 'no-data' } } }).text, 'Checkout · prod: Live returned no data.', 'a first Run');
+});
+
+test('OM7 why this grade over nothing compared: the Drift-free line says nothing was compared and why — never "N in 100 hold up live" over links nothing could read (the engine scored it nothing, with no figure); the points stay the engine\'s; a comparison keeps the integrity line', () => {
+  // The requirement-chain construct over an empty union: the engine's Drift-free is 0, "nothing compared"; the
+  // chains' scored integrity (0) counts the declared links broken for want of anything compared.
+  const nothingDrift = { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
+  const nothingChain = { ...run, outcome: 'gate-failed', drift: nothingDrift, traceability: { ...run.traceability, integrityPct: 0 }, grade: { ...run.grade, score: 58.6, letter: 'C', letterLabel: 'Field Grade' } };
+  const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey, now: NOW }));
+  assert.deepEqual([g.basis, g.letter], ['live', 'C']);
+  const driftLine = (m) => m.why.find((w) => w.key === 'drift-free');
+  assert.deepEqual([driftLine(g).ok, driftLine(g).text], ['no', 'Nothing was compared on the last check, so no promise is confirmed live. Live answered in part: dashboards not read.']);
+  assert.ok(!g.why.some((w) => /in 100 hold up/.test(w.text)), 'no measured-looking figure over nothing compared');
+  assert.equal(g.points, '4.1 of 7 points. B starts at 4.4.', 'the points are the engine\'s: Drift-free earned nothing');
+  // An older record over an empty union (its four counts, no drift.compared) reads the same; a recording says so.
+  const { compared: _c, ...olderDrift } = nothingDrift;
+  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...nothingChain, drift: { ...olderDrift, alignmentPct: 100 } }, journey, now: NOW }))).text, driftLine(g).text);
+  assert.ok(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey: fileJourney, now: NOW }))).text.startsWith('Nothing was compared on the last check, so no promise is confirmed in the recording.'));
+  // A comparison with something in it keeps the integrity line, unchanged.
+  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }))).text, "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85.");
+});
+
+test('OM9 a Run stopped on a partial scan after the check on screen: the next step says the stop — the check shown is the one before it — with its counts and first file, and Check again as the one primary; never "Nothing to do right now" beside the stop', () => {
+  const later = { ...stoppedRun, startedAt: new Date(T0 + HOUR).toISOString() };
+  const still = keep(stillTrueModel({ journey, run: unchangedRun, stopped: later, now: NOW }));
+  assert.equal(still.stopped, 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.');
+  const next = keep(nextActionModel({ still, grade: liveGrade, run: unchangedRun, journey, now: NOW, stopped: later }));
+  assert.deepEqual([next.sentence, next.button, next.primary, next.why], [
+    'The last Run read the repository in part and stopped, so the check shown is the one before it: check it against live again, and run the service again once its repository answers in full.',
+    { label: 'Check again', action: 'ov-check' }, true,
+    ['49 of 220 files were not read.', 'The first not read: grafana/a.json — it could not be downloaded (HTTP 403).'],
+  ]);
+  assert.ok(!/Nothing to do/.test(next.sentence));
+  // A host that gives the panel's line but not the record: the stop is said, without its counts.
+  const bare = keep(nextActionModel({ still, grade: liveGrade, run: unchangedRun, journey, now: NOW }));
+  assert.deepEqual([bare.sentence, bare.why], [next.sentence, []]);
+  // Over a check whose differences stand, the stop is still the news.
+  const changedStill = keep(stillTrueModel({ journey, run, stopped: later, now: NOW }));
+  assert.equal(keep(nextActionModel({ still: changedStill, grade: liveGrade, run, journey, now: NOW, stopped: later })).sentence, next.sentence);
+  // The whole screen: the stop's Check again is the one primary.
+  const m = keep(screen({ run: unchangedRun, stopped: later }));
+  assert.deepEqual([m.next.sentence, m.primary, m.next.button?.action], [next.sentence, 'next', 'ov-check']);
+  // A stop older than the check on screen is no news: the check's own next step.
+  const older = { ...stoppedRun, startedAt: new Date(T0 - HOUR).toISOString() };
+  const s0 = keep(stillTrueModel({ journey, run: unchangedRun, stopped: older, now: NOW }));
+  assert.equal(keep(nextActionModel({ still: s0, grade: liveGrade, run: unchangedRun, journey, now: NOW, stopped: older })).sentence, 'Nothing to do right now: live matches what the repository declares.');
 });
 
 test('vocabulary: no string of any model built above carries a percentage, a layer code, an artefact id, engine jargon or the product name', () => {
@@ -2079,6 +2127,30 @@ test('OM2 renderServiceList: each state\'s cell — the match only over a compar
   const c3 = overviewContainer();
   renderServiceList(c3, unknown, formModel(FORM_CLOSED), { overview: {} });
   assert.ok(c3.innerHTML.includes('<b>Not known</b>'));
+});
+
+test('OM8 live-only things alone (every declared difference set aside): one record, one reading — something was compared, so the row, the ring, the Run\'s toast and the board all carry the figure, and the board says Changed with what runs live undeclared, never Nothing compared beside a ring that shows one, never "it matches"', () => {
+  // The engine's set-aside path: the two declared differences set aside, one live rule the repository does not
+  // declare left in the comparison (drift.compared 1, alignment 0).
+  const liveOnly = { ...run, vantage: 'full', probes: probeTable({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), probeErrors: {},
+    drift: { alignmentPct: 0, compared: 1, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 1, setAside: { declaredNotLive: 2, liveNotDeclared: 0 } } };
+  // The row, from the listing.
+  const row = serviceListModel({ services: [svcRow()], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, listedRun(liveOnly))], endpoints: [EP], now: NOW }).rows[0].last;
+  assert.deepEqual([row.state, row.alignmentPct, row.label], ['checked', 0, '']);
+  // The board: Changed with the figure on the ring; the next step is what runs live undeclared.
+  const m = screen({ run: liveOnly, layout: 'board' });
+  assert.deepEqual([m.still.status, m.still.pill, m.still.tone], ['changed', 'Changed', 'warn']);
+  assert.equal(m.still.sentence, 'Checked 2 hours ago against live — nothing the repository declares was compared: 1 thing runs live that it does not declare. 2 are set aside for this service.');
+  assert.deepEqual([m.board.fidelity.known, m.board.fidelity.alignmentPct, m.board.fidelity.tiles.map((t) => t.value)], [true, 0, [0, 0, 0, 1]]);
+  assert.deepEqual([m.next.sentence, m.next.button?.action, m.primary], ['Nothing the repository declares was compared; 1 thing runs live that it does not declare yet.', 'ov-next-neuron', 'next']);
+  const c = overviewContainer();
+  renderOverview(c, m, { overview: {} });
+  assert.ok(!c.innerHTML.includes('ov-status__part--nothing'), 'the status strip never says nothing compared beside the figure');
+  // While a check runs, the pill is the same word.
+  assert.equal(stillTrueModel({ journey, run: liveOnly, now: NOW, running: true }).status, 'changed');
+  // The Run's toast.
+  const toast = runToastModel({ name: 'Checkout', env: 'prod' }, { record: liveOnly, scan: null });
+  assert.deepEqual([toast.pct, toast.nothing], [0, false]);
 });
 
 test('Record a chaos run…: the experiments a run can be recorded for, the form it opens (now, Passed, every expected alert ticked), what Save sends and what it refuses, Forget, the tile\'s and the control room\'s button, a studio run said as the studio\'s', () => {

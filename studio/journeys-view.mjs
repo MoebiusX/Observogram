@@ -21,7 +21,10 @@ import { host as appHost } from './host.mjs';
 import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
 // What a run's figure rests on (the board unit's copy of tools/lib/run-basis.mjs): no match without a
 // comparison, a run whose live side gave nothing read as unable to observe, whatever its record says.
-import { comparedOf, matchPctOf, readingOutcome, liveLossOf, scanFactsOf, scanPartialReading } from './overview-model.mjs';
+import { comparedOf, matchPctOf, readingOutcome, liveLossOf, scanFactsOf, scanPartialReading, safeErrorText } from './overview-model.mjs';
+// A run's POST through the call that keeps the server's answer: a refusal throws its sentence with
+// `.status`, and a 502 that recorded a lost run its `.outcome` (services-api.mjs servicesRefusal).
+import { requestJson } from './services-api.mjs';
 
 // tools/lib/stack-evidence.mjs — the browser-safe history helpers over the
 // run records (step 3). The server exposes tools/lib at /lib (the same
@@ -227,6 +230,20 @@ export function runResultText(name, rec) {
 // none. Said so, not guessed.
 export function runErrorText(name, err) {
   return `${name}: the run did not finish — ${err?.message || err}. If the live source did not answer, the history now shows it as unable to observe.`;
+}
+
+// The engine's sentence for a lost run whose families all answered, none with data (tools/lib/journey.mjs
+// NO_PROBE_DATA; a studio module never imports tools/lib — tools/test-neuron-model.mjs pins the two).
+const NO_PROBE_DATA = 'no probe family returned data';
+// A run the server answered 502 but recorded as lost — its body's `outcome` 'vantage-lost', which the
+// thrown error carries (services-api.mjs servicesRefusal) — as the record it left reads, from what the
+// answer says: its first probe error, or a live side that answered with no data. null for any other
+// error: that run did not finish (runErrorText).
+export function lostRunOf(err) {
+  if (err?.outcome !== 'vantage-lost') return null;
+  const said = String(err.message ?? '').replace(/^\d{3}: /, '').trim();
+  const noData = said === NO_PROBE_DATA;
+  return { outcome: 'vantage-lost', firstProbeError: said && !noData ? safeErrorText(said) : null, liveLoss: noData ? 'no-data' : 'error' };
 }
 
 // One line for several runs (Neuron's Run all): how many ended which way,
@@ -573,13 +590,14 @@ async function runJourneyNow(name, listHost, btn, onRun = null) {
   btn.textContent = '… running';
   announce(`Running ${name}…`);
   try {
-    const r = await api(`/api/journeys/${encodeURIComponent(name)}/run`, {
+    const r = await requestJson(`/api/journeys/${encodeURIComponent(name)}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: '{}',
     });
     const rec = r.record;
-    toast(runResultText(name, rec), rec.outcome === 'pass' ? '' : 'error');
+    // Read as a reader reads it: a pass over nothing compared is no pass.
+    toast(runResultText(name, rec), readingOf(rec) === 'pass' ? '' : 'error');
     if (resultEl) {
       resultEl.hidden = false;
       resultEl.innerHTML = `<pre class="journey-result-pre">${escapeHtml(JSON.stringify({
@@ -589,11 +607,13 @@ async function runJourneyNow(name, listHost, btn, onRun = null) {
     // Refresh the whole list so the sparkline + history pick up the run.
     after();
   } catch (e) {
-    toast(runErrorText(name, e), 'error');
+    // A live source that gave nothing left a vantage-lost record: the run finished, and is said as the
+    // history reads it (lostRunOf), never "did not finish" with the server's raw answer.
+    const lost = lostRunOf(e);
+    toast(lost ? runResultText(name, lost) : runErrorText(name, e), 'error');
     btn.disabled = false;
     btn.removeAttribute('aria-busy');
     btn.textContent = '▶ run now';
-    // A live source that did not answer still left a vantage-lost record.
     after();
   }
 }

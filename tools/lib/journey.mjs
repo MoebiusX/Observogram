@@ -137,7 +137,7 @@ import { storedTargetsError, withStudioTargets } from '../../studio/mttx-targets
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 // The report's reading of a run's figure (renderJourneyMarkdown): the match only over a comparison.
-import { comparedOf, firstProbeErrorOf, liveLossOf, matchPctOf, scanFactsOf, scanPartialReading, filesNotReadWords, stoppedRunKept } from './run-basis.mjs';
+import { comparedOf, firstProbeErrorOf, liveLossOf, matchPctOf, scanFactsOf, scanPartialReading, filesNotReadWords, stoppedRunKept, readingOutcome, nothingReason, basisFactsOf } from './run-basis.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -2130,9 +2130,15 @@ function alignmentHead(r) {
 }
 // A percentage cell, or 'not measured' when nothing on it could be observed (never "null%").
 const pctCell = (v) => (typeof v === 'number' && Number.isFinite(v) ? `${v}%` : 'not measured');
+// A reason inside a sentence ("Live answered in part: …" → "live answered in part: …").
+const lowerFirst = (s) => (s ? `${s[0].toLowerCase()}${s.slice(1)}` : s);
 
 export function renderJourneyMarkdown(r) {
-  if (r.outcome === 'vantage-lost') {
+  // The run as a person reads it (tools/lib/run-basis.mjs readingOutcome): a live side that gave nothing
+  // — a lost run, or an older record whose every probe failed — is a lost vantage; a pass or a failed gate
+  // over nothing compared is nothing compared.
+  const reading = readingOutcome(r);
+  if (reading === 'vantage-lost') {
     // The first probe error the record carries (one line, credentials masked), else its own error;
     // a live side that answered with no data says so.
     const noData = liveLossOf(r).cause === 'no-data';
@@ -2180,10 +2186,17 @@ export function renderJourneyMarkdown(r) {
   const scan = scanFactsOf(r.packA?.scan);
   const scanFiles = filesNotReadWords(scan);
   const notComparable = r.comparable && typeof r.comparable === 'object' && r.comparable.withPrevious === false;
-  const icon = r.outcome === 'pass' ? '✅' : '❌';
+  // Nothing compared is never a pass: no gate passes on it (one configured reads GATE NOT PASSED, or GATE
+  // FAILED with its breaches), and a journey with no gate has no gate verdict to give — NOTHING COMPARED alone.
+  const nothing = reading === 'nothing-compared';
+  const gated = !!r.gate?.thresholds && typeof r.gate.thresholds === 'object' && Object.keys(r.gate.thresholds).length > 0;
+  const icon = nothing ? '⚠️' : r.outcome === 'pass' ? '✅' : '❌';
+  const verdict = nothing ? `NOTHING COMPARED${r.outcome === 'pass' ? (gated ? ' · GATE NOT PASSED' : '') : ' · GATE FAILED'}`
+    : r.outcome === 'pass' ? 'PASS' : 'GATE FAILED';
   const lines = [
-    `## ${icon} Journey \`${r.journey}\` — ${r.outcome === 'pass' ? 'PASS' : 'GATE FAILED'}`,
+    `## ${icon} Journey \`${r.journey}\` — ${verdict}`,
     '',
+    ...(nothing ? [`_Nothing was compared (${mdCell(lowerFirst(nothingReason(basisFactsOf(r))))}), so this run says nothing about whether the declared artefacts work${r.outcome === 'pass' && !gated ? '; with no gate configured, it has no gate verdict' : ', and its gate cannot pass on it'}._`, ''] : []),
     `| | |`,
     `|---|---|`,
     `| Declared (A) | \`${r.packA.name || '?'}@${r.packA.version || '?'}\` — ${r.packA.source} |`,
