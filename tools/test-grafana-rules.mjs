@@ -29,6 +29,8 @@ import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { grafanaRuleCondition, grafanaRuleFacts } from './lib/sli-inference.mjs';
 import { fetchMcp, buildCanonicalPack, PROBES } from './fetch-live-pack.mjs';
 import { probeCandidates, capabilityTool, productAttestedByTool } from './lib/contracts/mcp-capabilities.mjs';
+import { evaluateGate } from './lib/journey.mjs';
+import { partialLiveEvidence } from '../studio/diagnostic-grade.mjs';
 
 delete process.env.OBSERVOGRAM_TRANSPORT_HOOK;
 const SCHEMA = JSON.parse(readFileSync(new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
@@ -75,10 +77,11 @@ function fakeMcp(tools, { listed = true } = {}) {
   return { transport: { fetchImpl }, calls };
 }
 const CORE = { [T.health]: () => ({ services: [{ name: 'shop' }] }), [T.topology]: () => ({ dependencies: [] }) };
-// A live draft as the Services Run reads one (tools/lib/journey.mjs resolvePackB).
-async function livePack(tools, { scope = null, listed = true } = {}) {
+// A live draft as the Services Run reads one (tools/lib/journey.mjs resolvePackB); `mode: 'snapshot'`
+// reads as a snapshot does, `probeMemory` is a journey's memory (fetchMcp's).
+async function livePack(tools, { scope = null, listed = true, mode = 'draft', probeMemory = null } = {}) {
   const fake = fakeMcp({ ...CORE, ...tools }, { listed });
-  const fetched = await fetchMcp({ mcpUrl: 'https://mcp.shop.example/mcp', transport: fake.transport, ...(scope ? { scope } : {}) });
+  const fetched = await fetchMcp({ mcpUrl: 'https://mcp.shop.example/mcp', transport: fake.transport, mode, ...(scope ? { scope } : {}), ...(probeMemory ? { probeMemory } : {}) });
   const canonical = buildCanonicalPack({ refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.shop.example', ...fetched });
   if (fetched.liveScope) canonical.metadata.annotations = { ...canonical.metadata.annotations, ...scopeAnnotations(fetched.liveScope.scope, fetched.liveScope.learned) };
   return { canonical, fetched, calls: fake.calls };
@@ -298,14 +301,18 @@ test('what a read could not hold is not checked, with the reason: a declared Gra
     ['recording_rule::{"record":"shop:latency:p95_5m"}', 'this MCP offers no recording rules tool'],
   ]);
   assert.deepEqual(declaredNotLive(grafanaOnly), []);
-  // A read whose recording-rule family answered (vmalert): a Grafana-managed recording rule is still no ruler's.
+  // A read whose recording-rule family answered (vmalert): a Grafana-managed recording rule is still no ruler's. Grafana's
+  // alert-rule answer was read, and may hold it, but is read for its alert rules alone: not compared, and said so — never
+  // "not read". With no Grafana alert-rule tool, it was not read.
   const vmRec = { groups: [{ name: 'slo', rules: [{ record: 'shop:requests:ratio_5m', query: 'sum(x)' }, { name: 'ShopDown', type: 'alerting', query: 'up{job="shop"} == 0', labels: {} }] }] };
   const withRecording = diffPacks(adapt(mixed), adapt((await livePack({ [T.vmalert]: () => vmRec, [T.grafana]: () => clone(PROVISIONING) })).canonical));
   assert.deepEqual(unreadOf(withRecording), [
     ['alert_rule::{"name":"shoplogerrors"}', 'no alert-rule tool reads a Loki ruler, so Loki rules were not read'],
-    ['recording_rule::{"record":"shop:latency:p95_5m"}', 'no recording-rule tool reads Grafana-managed recording rules, so they were not read'],
+    ['recording_rule::{"record":"shop:latency:p95_5m"}', 'Grafana-managed recording rules are not compared: no recording-rule tool reads them, and the Grafana alert-rule answer is read for its alert rules alone, so they were not checked'],
   ]);
   assert.deepEqual(declaredNotLive(withRecording), [], 'the Prometheus rule pairs; nothing reads declared, not live');
+  const noGrafana = diffPacks(adapt(mixed), adapt((await livePack({ [T.vmalert]: () => vmRec })).canonical));
+  assert.equal(unreadOf(noGrafana).find(([key]) => key.startsWith('recording_rule::'))?.[1], 'no recording-rule tool reads Grafana-managed recording rules, so they were not read');
   // The whole family blind (refused everywhere, or not offered): the declared alert rules are not checked.
   for (const tools of [{ [T.grafana]: () => ({ isError: 'HTTP 403: Forbidden' }) }, {}]) {
     const blind = await livePack(tools);
@@ -352,4 +359,200 @@ test('a Grafana-managed rule on an SLO\'s recorded series states its condition a
   const burn = Object.values(d.layers).flatMap((l) => l.inBoth).find((e) => e.key.startsWith('burn_rate::'));
   assert.equal(burn?.match, 'drifted', JSON.stringify(burn?.deltas));
   assert.deepEqual(burn.deltas.filter((x) => x.field === 'condition').map((x) => [x.rule, x.a, x.b]), [['CheckoutBurn', 'B = threshold(A > 0); condition B', 'B = threshold(A > 0.5); condition B']]);
+});
+
+// ---- what a rule's own source states, one rule two tools list, a store that serves none ----
+
+test('a rule is a Loki rule only when its own expression says so — a pipeline stage PromQL has no operator for — never by the path it ships under nor by a selector PromQL has too: a mixin\'s PromQL alert on loki_* series that is missing live reads declared-not-live wherever it ships, and fails the gate', async () => {
+  const rec = 'groups:\n  - name: slo\n    rules:\n      - record: shop:requests:rate5m\n        expr: sum(rate(http_requests_total{job="shop"}[5m]))\n      - alert: ShopDown\n        expr: up{job="shop"} == 0\n';
+  const mixin = 'groups:\n  - name: loki_alerts\n    rules:\n      - alert: LokiRequestErrors\n        expr: sum(rate(loki_request_duration_seconds_count{status_code=~"5.."}[2m])) by (job) / sum(rate(loki_request_duration_seconds_count[2m])) by (job) > 0.1\n        for: 15m\n';
+  const vm = { groups: [{ name: 'slo', rules: [{ name: 'shop:requests:rate5m', type: 'recording', query: 'sum(rate(http_requests_total{job="shop"}[5m]))' }, { name: 'ShopDown', type: 'alerting', query: 'up{job="shop"} == 0', labels: {} }] }] };
+  const live = adapt((await livePack({ [T.vmalert]: () => clone(vm) })).canonical);
+  for (const path of ['monitoring/loki/alerts.yml', 'monitoring/rules/loki-mixin.yaml', 'prometheus/rules/loki.yaml', 'charts/monitoring/templates/loki-alerts.yaml']) {
+    const declared = scan({ 'prometheus/slo.yaml': rec, [path]: mixin }).canonical;
+    assert.equal(declared.spec.alerting.rules.find((x) => x.name === 'LokiRequestErrors')?.engine, 'prometheus', path);
+    const d = diffPacks(adapt(declared), live);
+    const r = rules(d);
+    assert.deepEqual([alertKeys(r.onlyInA), alertKeys(r.notObserved)], [['alert_rule::{"name":"lokirequesterrors"}'], []], `${path}: missing live, never "not checked"`);
+    assert.deepEqual(evaluateGate({ maxDeclaredNotLive: 0 }, { compared: d.summary.union, declaredNotLive: d.summary.onlyInA }).map((b) => b.criterion), ['maxDeclaredNotLive'], path);
+  }
+  // PromQL a selector heuristic took for LogQL: a selector over a range, a selector before `!=`.
+  const lookalikes = scan({ 'prometheus/alerts.yml': 'groups:\n  - name: api\n    rules:\n      - alert: ApiErrorBurst\n        expr: sum(rate({__name__="http_requests_total",job="api",code=~"5.."}[5m])) > 10\n      - alert: ReplicasShort\n        expr: kube_deployment_status_replicas_available{deployment="api"} != kube_deployment_spec_replicas{deployment="api"}\n' }).canonical;
+  assert.deepEqual(lookalikes.spec.alerting.rules.map((x) => [x.name, x.engine]), [['ApiErrorBurst', 'prometheus'], ['ReplicasShort', 'prometheus']]);
+  // LogQL its expression states — a line filter (one against a string with `!=` too), a parser stage — wherever it ships:
+  // Loki's, not checked against any read.
+  const logs = scan({ 'prometheus/slo.yaml': rec, 'rules/logs.yaml': 'groups:\n  - name: logs\n    rules:\n      - alert: ShopPanics\n        expr: sum(count_over_time({app="shop"} |= "panic" [5m])) > 0\n      - alert: ShopErrors\n        expr: sum(rate({app="shop"} | json | level="error" [5m])) > 1\n      - alert: ShopNoise\n        expr: sum(count_over_time({app="shop"} != "debug" [5m])) > 1000\n' }).canonical;
+  assert.deepEqual(logs.spec.alerting.rules.filter((x) => x.name !== 'ShopDown').map((x) => [x.name, x.engine]), [['ShopPanics', 'loki'], ['ShopErrors', 'loki'], ['ShopNoise', 'loki']]);
+  const r = rules(diffPacks(adapt(logs), live));
+  assert.deepEqual([alertKeys(r.onlyInA), alertKeys(r.notObserved)], [[], ['alert_rule::{"name":"shoperrors"}', 'alert_rule::{"name":"shopnoise"}', 'alert_rule::{"name":"shoppanics"}']]);
+});
+
+test('one Grafana-managed rule two tools list is one live rule: the provisioning answer beside the same rules in Grafana\'s Prometheus-compatible listing (names, queries, the group — with or without the uid beside each, whichever tool answers which, draft or snapshot) is three rules, never three more read live-not-declared, and the threshold raised in Grafana reads drifted on condition; never by name alone — a copy whose terms differ stays, and so does a ruler\'s rule of the same title and terms', async () => {
+  const rec = 'groups:\n  - name: slo\n    rules:\n      - record: shop:requests:rate5m\n        expr: sum(rate(http_requests_total{job="shop"}[5m]))\n';
+  const vmRec = { groups: [{ name: 'slo', rules: [{ name: 'shop:requests:rate5m', type: 'recording', query: 'sum(rate(http_requests_total{job="shop"}[5m]))' }] }] };
+  const declared = adapt(scan({ 'grafana/provisioning/alerting/shop.yaml': YAML, 'prometheus/rules.yml': rec }).canonical);
+  // Grafana as the fixture has it, the rename undone: only the threshold raised.
+  const grafana = clone(PROVISIONING).map((r) => (r.uid === 'cart-restarts' ? { ...r, title: 'CartPodRestarts' } : r));
+  const listing = (withUid, edit = (x) => x) => ({ status: 'success', data: { groups: [{ name: 'shop', file: 'Shop', interval: 60, rules: grafana.map((r) => edit({
+    state: 'inactive', name: r.title, ...(withUid ? { uid: r.uid, folderUid: r.folderUID } : {}), query: r.data[0].model.expr,
+    duration: Number.parseInt(r.for, 10) * 60, labels: r.labels, annotations: r.annotations || {}, health: 'ok', type: 'alerting',
+  })) }] } });
+  for (const withUid of [false, true]) {
+    for (const [label, tools] of [
+      ['an unattested tool lists them', { [T.vmalert]: () => clone(vmRec), [T.grafana]: () => clone(grafana), [T.other]: () => listing(withUid) }],
+      ['the Grafana tool lists them, another tool answers the provisioning API', { [T.vmalert]: () => clone(vmRec), [T.grafana]: () => listing(withUid), [T.other]: () => clone(grafana) }],
+    ]) {
+      for (const mode of ['draft', 'snapshot']) {
+        const where = `${label}${withUid ? ', uids listed' : ''} (${mode})`;
+        const { canonical } = await livePack(tools, { mode });
+        assert.deepEqual(canonical.spec.alerting.rules.map((r) => `${r.name}/${r.engine}`).sort(), ['CartPodRestarts/grafana', 'CheckoutErrorRatioHigh/grafana', 'PaymentsLatencyHigh/grafana'], where);
+        const r = rules(diffPacks(declared, adapt(canonical)));
+        assert.deepEqual(r.inBoth.map((e) => [e.key, e.match, e.deltas.map((x) => x.field)]).sort(), [
+          ['alert_rule::{"name":"cartpodrestarts"}', 'aligned', []],
+          ['alert_rule::{"name":"checkouterrorratiohigh"}', 'aligned', []],
+          ['alert_rule::{"name":"paymentslatencyhigh"}', 'drifted', ['condition']],
+        ], where);
+        assert.deepEqual([r.onlyInA.length, r.onlyInB.length], [0, 0], where);
+      }
+    }
+  }
+  // Never by name alone: a copy whose query differs is another rule, and so is a ruler's (vmalert's) rule of the same title and terms.
+  const first = grafana[0];
+  const vmSame = { groups: [{ name: 'shop', rules: [{ name: first.title, type: 'alerting', query: first.data[0].model.expr, duration: Number.parseInt(first.for, 10) * 60, labels: first.labels }, ...vmRec.groups[0].rules] }] };
+  const changed = listing(false, (x) => (x.name === 'CartPodRestarts' ? { ...x, query: `${x.query} * 2` } : x));
+  const { canonical } = await livePack({ [T.vmalert]: () => vmSame, [T.grafana]: () => clone(grafana), [T.other]: () => changed });
+  assert.deepEqual(canonical.spec.alerting.rules.map((r) => `${r.name}/${r.engine ?? 'prometheus'}`).sort(),
+    ['CartPodRestarts/grafana', 'CartPodRestarts/prometheus', 'CheckoutErrorRatioHigh/grafana', 'CheckoutErrorRatioHigh/victoriametrics', 'PaymentsLatencyHigh/grafana']);
+  // A listing whose uid names no rule Grafana's store holds, or whose group names another folder than the rule's: another rule.
+  // Against the ruler's answer (it names each folder's title): a Prometheus ruler's group names its rule file, never a Grafana
+  // folder, so its rule of the same name, query, wait, labels and group stays; Grafana's own listing names the folder, and is
+  // its copy. A tool that listed Grafana's rules alone read Grafana's store, never a ruler's: a declared ruler rule is not checked.
+  const sameTitles = clone(RULER);
+  sameTitles.Shop[0].rules = sameTitles.Shop[0].rules.map((r) => (r.grafana_alert.uid === 'cart-restarts' ? { ...r, grafana_alert: { ...r.grafana_alert, title: 'CartPodRestarts' } } : r));
+  const names = (c) => c.spec.alerting.rules.map((r) => `${r.name}/${r.engine ?? 'prometheus'}`).sort();
+  const three = ['CartPodRestarts/grafana', 'CheckoutErrorRatioHigh/grafana', 'PaymentsLatencyHigh/grafana'];
+  const foreignUid = listing(true, (x) => ({ ...x, uid: `${x.uid}-elsewhere` }));
+  assert.deepEqual(names((await livePack({ [T.grafana]: () => clone(grafana), [T.other]: () => foreignUid })).canonical), [...three, 'CartPodRestarts/prometheus', 'CheckoutErrorRatioHigh/prometheus', 'PaymentsLatencyHigh/prometheus'].sort(), 'uids that are not these rules');
+  const ruleFile = { ...listing(false), data: { groups: [{ ...listing(false).data.groups[0], file: '/etc/prometheus/rules/shop.yml' }] } };
+  assert.deepEqual(names((await livePack({ [T.grafana]: () => clone(sameTitles), [T.other]: () => ruleFile })).canonical), [...three, 'CartPodRestarts/prometheus', 'CheckoutErrorRatioHigh/prometheus', 'PaymentsLatencyHigh/prometheus'].sort(), 'a rule file is no Grafana folder');
+  const own = await livePack({ [T.grafana]: () => clone(sameTitles), [T.other]: () => listing(false) });
+  assert.deepEqual(names(own.canonical), three, 'the folder the listing names is the rules\'');
+  assert.equal(JSON.parse(own.canonical.metadata.annotations['observogram.unread.alert_rule']).ruler,
+    `the Prometheus-compatible rule tools listed Grafana-managed rules only (${T.other}), so rules a Prometheus-compatible ruler evaluates were not read`);
+});
+
+test('an alert-rule engine whose store has no rules API — it answers 400, 404 or 405, the scrape targets\' rule (the capability row\'s unsupportedOnHttpStatus) — is not served, never a failure: beside rules it does not make the read partial, alone the family is unsupported, and one a journey remembers stays so on a mere error, never on a refusal; a tool failing beside another that read its store is no hole, a refusal beside an empty answer of its store still is (C6)', async () => {
+  const vm = { groups: [{ name: 'shop', rules: [{ name: 'DiskFull', type: 'alerting', query: 'up == 0', labels: {} }] }] };
+  for (const [status, words] of [[400, 'Bad Request'], [404, 'Not Found'], [405, 'Method Not Allowed']]) {
+    const beside = await livePack({ [T.vmalert]: () => clone(vm), [T.grafana]: () => ({ isError: `HTTP ${status}: ${words}` }) });
+    const a = beside.canonical.metadata.annotations;
+    assert.deepEqual([beside.fetched.probeResults.alert_rules.outcome, a['mcp.probesPartial'], a['mcp.probeErrors.alert_rules'], partialLiveEvidence(beside.canonical).vantage],
+      ['data', undefined, undefined, 'full'], `${status}: not served beside rules is no hole`);
+    assert.equal(JSON.parse(a['observogram.unread.alert_rule']).grafana, `the Grafana alert-rule tool answered that its store serves none here (${T.grafana}: HTTP ${status} ${words}), so Grafana-managed rules were not read`, `${status}: the reason is the tool and the status`);
+    const alone = await livePack({ [T.grafana]: () => ({ isError: `HTTP ${status}: ${words}` }) });
+    assert.equal(alone.fetched.probeResults.alert_rules.outcome, 'unsupported', `${status}: alone, unsupported`);
+    assert.deepEqual(JSON.parse(alone.canonical.metadata.annotations['mcp.probeUnsupported.alert_rules']).tools, [T.grafana], status);
+  }
+  // Remembered (the journey's probeMemory): a mere error later stays not served, as remembered; a refusal is a hole.
+  const memo = { reason: `${T.grafana}: HTTP 404 Not Found`, since: '2026-11-01T00:00:00.000Z', tools: [T.grafana] };
+  const probeMemory = { unsupported: { alert_rules: memo } };
+  const unavailable = () => ({ isError: 'HTTP 503: Service Unavailable' });
+  const later = await livePack({ [T.vmalert]: () => clone(vm), [T.grafana]: unavailable }, { probeMemory });
+  assert.deepEqual([later.canonical.metadata.annotations['mcp.probesPartial'], partialLiveEvidence(later.canonical).vantage], [undefined, 'full'], 'a mere error, remembered');
+  const laterAlone = await livePack({ [T.grafana]: unavailable }, { probeMemory });
+  assert.deepEqual(JSON.parse(laterAlone.canonical.metadata.annotations['mcp.probeUnsupported.alert_rules']), { ...memo, remembered: true });
+  const refused = await livePack({ [T.vmalert]: () => clone(vm), [T.grafana]: () => ({ isError: 'HTTP 403: Forbidden' }) }, { probeMemory });
+  assert.equal(refused.canonical.metadata.annotations['mcp.probesPartial'], 'alert_rules', 'a refusal is never not served');
+  // Under a folder scope the Grafana tool is asked per folder first: a folder its store does not know (404) says
+  // nothing of a rules API, so the whole read decides — failing, the store is a hole; answering 404 too, not served.
+  const scope = { folderUids: [FOLDER_UID] };
+  const folderThenError = await livePack({ [T.vmalert]: () => clone(vm), [T.grafana]: (args) => ({ isError: args.folder_uid ? 'HTTP 404: Not Found' : 'HTTP 500: Internal Server Error' }) }, { scope });
+  assert.deepEqual([folderThenError.canonical.metadata.annotations['mcp.probesPartial'], /HTTP 500/.test(folderThenError.canonical.metadata.annotations['mcp.probeErrors.alert_rules'] ?? '')], ['alert_rules', true], 'judged by the whole read');
+  const notServedWhole = await livePack({ [T.vmalert]: () => clone(vm), [T.grafana]: () => ({ isError: 'HTTP 404: Not Found' }) }, { scope });
+  assert.equal(notServedWhole.canonical.metadata.annotations['mcp.probesPartial'], undefined, '404 per folder and whole: not served');
+  // One store, two tools: one failing while the other read the store is no hole; refused while the other answered empty is one.
+  const prom = { data: { groups: [{ name: 'shop', rules: [{ name: 'DiskFull', type: 'alerting', query: 'up == 0', labels: {} }] }] } };
+  const sameStore = await livePack({ [T.vmalert]: () => ({ isError: 'HTTP 500: Internal Server Error' }), [T.prometheus]: () => prom });
+  assert.deepEqual([sameStore.fetched.probeResults.alert_rules.outcome, sameStore.canonical.metadata.annotations['mcp.probesPartial'], partialLiveEvidence(sameStore.canonical).vantage], ['data', undefined, 'full']);
+  const refusedEmpty = await livePack({ [T.vmalert]: () => ({ isError: 'HTTP 403: Forbidden' }), [T.prometheus]: () => ({ data: { groups: [] } }), [T.grafana]: () => clone(PROVISIONING) });
+  const ra = refusedEmpty.canonical.metadata.annotations;
+  assert.deepEqual([ra['mcp.probesPartial'], /HTTP 403/.test(ra['mcp.probeErrors.alert_rules'] ?? '')], ['alert_rules', true], 'no honest zero beside a refusal of its store (C6)');
+  assert.match(JSON.parse(ra['observogram.unread.alert_rule']).ruler ?? '', /HTTP 403/, 'and that store\'s declared rules are not checked');
+});
+
+test('a burn-rate entry read from a Grafana-managed rule lives in Grafana\'s store (its source rules say `engine: grafana`): against a read that did not cover that store — no Grafana alert-rule tool offered, or the tool refused — it is not checked with that store\'s reason, never declared-not-live; read from rules in two stores, its windows are not compared on the rule the read did not cover, the pair naming it, while a rule missing from a store the read covered still drifts them', async () => {
+  const rec = 'groups:\n  - name: slo\n    rules:\n      - record: checkout:requests:ratio_5m\n        expr: sum(rate(http_requests_total{code!~"5.."}[5m])) / sum(rate(http_requests_total[5m]))\n';
+  const grafanaRule = (uid, title, expr, wait, severity) => `      - uid: ${uid}\n        title: ${title}\n        condition: B\n        for: ${wait}\n        labels:\n          severity: ${severity}\n        data:\n          - refId: A\n            datasourceUid: prom\n            model:\n              refId: A\n              expr: ${expr}\n          - refId: B\n            datasourceUid: __expr__\n            model:\n              refId: B\n              type: threshold\n              expression: A\n              conditions:\n                - evaluator:\n                    type: gt\n                    params: [0]\n`;
+  const file = (...list) => `apiVersion: 1\ngroups:\n  - name: slo\n    folder: Shop\n    rules:\n${list.join('')}`;
+  const declared = scan({ 'prometheus/slo.rules.yml': rec, 'grafana/provisioning/alerting/burn.yaml': file(grafanaRule('burn', 'CheckoutBurn', 'checkout:requests:ratio_5m < 0.99', '5m', 'critical')) }).canonical;
+  assert.equal(JSON.parse(declared.metadata.annotations['observogram.source_rules.policy.burn_rate_alerts.checkout_requests_99'])[0].engine, 'grafana', 'the rule says its store');
+  assert.equal(adapt(declared).layers.L4.policy.find((a) => a.sourceRules)?.sourceRules[0].engine, 'grafana', 'and the adapter keeps it beside the entry');
+  const recorded = { name: 'checkout:requests:ratio_5m', type: 'recording', query: 'sum(rate(http_requests_total{code!~"5.."}[5m])) / sum(rate(http_requests_total[5m]))' };
+  const vm = { groups: [{ name: 'slo', rules: [recorded, { name: 'DiskFull', type: 'alerting', query: 'node_filesystem_avail_bytes < 1', labels: {} }] }] };
+  const burn = (list) => list.filter((e) => e.key.startsWith('burn_rate::'));
+  for (const [label, tools] of [['no Grafana alert-rule tool offered', {}], ['the Grafana alert-rule tool refused', { [T.grafana]: () => ({ isError: 'HTTP 403: Forbidden' }) }]]) {
+    const live = (await livePack({ [T.vmalert]: () => clone(vm), ...tools })).canonical;
+    const r = rules(diffPacks(adapt(declared), adapt(live)));
+    assert.deepEqual(burn(r.onlyInA), [], `${label}: never declared, not live`);
+    assert.deepEqual(burn(r.notObserved).map((e) => [e.key, e.side, e.reason]),
+      [['burn_rate::{"slo":"checkout_requests_99"}', 'a', JSON.parse(live.metadata.annotations['observogram.unread.alert_rule']).grafana]], label);
+  }
+  // One SLO guarded by a Prometheus rule (the read covers it) and a Grafana-managed rule (it does not).
+  const prom = `${rec}      - alert: CheckoutBurnFast\n        expr: checkout:requests:ratio_5m < 0.98\n        for: 2m\n        labels:\n          severity: critical\n`;
+  const fast = { name: 'CheckoutBurnFast', type: 'alerting', query: 'checkout:requests:ratio_5m < 0.98', duration: 120, labels: { severity: 'critical' } };
+  const liveFast = adapt((await livePack({ [T.vmalert]: () => ({ groups: [{ name: 'slo', rules: [recorded, fast] }] }) })).canonical);
+  const mixed = scan({ 'prometheus/slo.rules.yml': prom, 'grafana/provisioning/alerting/slo.yaml': file(grafanaRule('burn-slow', 'CheckoutBurnSlow', 'checkout:requests:ratio_5m < 0.995', '30m', 'warning')) }).canonical;
+  const d = diffPacks(adapt(mixed), liveFast);
+  const pair = Object.values(d.layers).flatMap((l) => l.inBoth).find((e) => e.key === 'burn_rate::{"slo":"checkout_requests_99"}');
+  assert.deepEqual([pair?.match, pair?.deltas, pair?.unobserved], ['aligned', [], [{ field: 'windows', side: 'b', keys: [], rule: 'CheckoutBurnSlow' }]]);
+  assert.equal(d.summary.partlyCompared, 1, 'compared in part, counted once for the rule');
+  // Both rules in the Prometheus file, the slow one missing from the ruler the read covered: still drifted on the windows.
+  const both = scan({ 'prometheus/slo.rules.yml': `${prom}      - alert: CheckoutBurnSlow\n        expr: checkout:requests:ratio_5m < 0.995\n        for: 30m\n        labels:\n          severity: warning\n` }).canonical;
+  const missing = Object.values(diffPacks(adapt(both), liveFast).layers).flatMap((l) => l.inBoth).find((e) => e.key.startsWith('burn_rate::'));
+  assert.deepEqual([missing?.match, missing?.deltas.map((x) => x.field), missing?.unobserved], ['drifted', ['windows'], undefined]);
+});
+
+test('a ruler answer is told by its shape, whatever its folders are titled: a folder titled data, groups, rules or status beside the Shop folder is read with it and the three Shop rules pair as the fixture says; a listing\'s own empty keys still read as an honest zero', async () => {
+  const other = (title) => [{ name: 'misc', interval: '1m', rules: [{ for: '5m', labels: {}, annotations: {}, grafana_alert: { title: `${title} rule`, uid: `${title}-1`, namespace_uid: `${title}-uid`, rule_group: 'misc', condition: 'B', data: [{ refId: 'A', datasourceUid: 'prom', model: { refId: 'A', expr: 'up == 0' } }, { refId: 'B', datasourceUid: '__expr__', model: { refId: 'B', type: 'threshold', expression: 'A', conditions: [{ evaluator: { type: 'gt', params: [0] } }] } }] } }] }];
+  for (const title of ['data', 'groups', 'rules', 'status']) {
+    const { canonical, fetched } = await livePack({ [T.grafana]: () => ({ ...clone(RULER), [title]: other(title) }) });
+    assert.equal(fetched.probeResults.alert_rules.outcome, 'data', title);
+    assert.deepEqual(canonical.spec.alerting.rules.map((r) => r.name).sort(), ['CartPodRestarts #2', 'CheckoutErrorRatioHigh', 'PaymentsLatencyHigh', `${title} rule`].sort(), title);
+    assert.equal(JSON.parse(canonical.metadata.annotations['observogram.grafana_rule.alerting.rules[3]']).folder, title, `${title}: the folder's title is its key`);
+    const r = rules(diffPacks(adapt(DECLARED), adapt(canonical)));
+    assert.deepEqual([r.inBoth.length, r.onlyInA.length, r.notObserved.length], [3, 0, 0], title);
+  }
+  for (const answer of [{ groups: [] }, { data: { groups: [] } }, { rules: [] }]) {
+    assert.equal((await livePack({ [T.grafana]: () => answer })).fetched.probeResults.alert_rules.outcome, 'empty', JSON.stringify(answer));
+  }
+});
+
+test('a threshold the repository does not state — a chart value Grafana fills in at deploy time, a ${VAR} — is no stated condition: the pair is compared on the query, the condition said uncompared, never drifted against the number Grafana runs; grafanaRuleCondition states none for a value that is not a number', async () => {
+  const rule = (params) => ({ title: 'R', condition: 'B', data: [{ refId: 'A', datasourceUid: 'prom', model: { refId: 'A', expr: 'up' } }, { refId: 'B', datasourceUid: '__expr__', model: { refId: 'B', type: 'threshold', expression: 'A', conditions: [{ evaluator: { type: 'gt', params } }] } }] });
+  for (const params of [['helmvalue'], ['${THRESHOLD}'], [], [null], [true], ['']]) assert.equal(grafanaRuleCondition(rule(params)), null, JSON.stringify(params));
+  assert.equal(grafanaRuleCondition(rule(['3'])), 'B = threshold(A > 3); condition B', 'a number written as text is that number');
+  assert.equal(grafanaRuleCondition({ title: 'R', data: [{ refId: 'A', model: { expr: 'up' } }, { refId: 'B', datasourceUid: '__expr__', model: { type: 'reduce', expression: 'A', reducer: 'last', settings: { mode: 'replaceNN', replaceWithValue: 'helmvalue' } } }] }), null, 'a replacement value');
+  // A chart ships its rule to Grafana's sidecar in a ConfigMap; the threshold — or a math node's — is a chart value.
+  const head = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ include "shop.fullname" . }}-alerts\n  labels:\n    grafana_alert: "1"\ndata:\n  shop-alerts.yaml: |\n    apiVersion: 1\n    groups:\n      - orgId: 1\n        name: shop\n        folder: Shop\n        interval: 1m\n        rules:\n          - uid: cart-restarts\n            title: CartPodRestarts\n            condition: C\n            for: 15m\n            labels:\n              severity: warning\n            data:\n              - refId: A\n                datasourceUid: prom\n                model:\n                  refId: A\n                  expr: increase(kube_pod_container_status_restarts_total{container="cart"}[15m])\n              - refId: B\n                datasourceUid: __expr__\n                model:\n                  refId: B\n                  type: reduce\n                  expression: A\n                  reducer: last\n              - refId: C\n                datasourceUid: __expr__\n                model:\n                  refId: C\n';
+  const threshold = '                  type: threshold\n                  expression: B\n                  conditions:\n                    - evaluator:\n                        type: gt\n                        params: [{{ .Values.alerts.restartThreshold }}]\n';
+  const math = '                  type: math\n                  expression: $B > {{ .Values.alerts.restartThreshold }}\n';
+  const nodeOf = { threshold: { type: 'threshold', expression: 'B', conditions: [{ evaluator: { type: 'gt', params: [3] } }] }, math: { type: 'math', expression: '$B > 3' } };
+  for (const [label, node] of [['threshold', threshold], ['math', math]]) {
+    const declared = scan({
+      'charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 1.0.0\n',
+      'charts/shop/values.yaml': 'alerts:\n  restartThreshold: 3\n',
+      'charts/shop/templates/alerts.yaml': head + node,
+      'prometheus/rules.yml': 'groups:\n  - name: slo\n    rules:\n      - record: shop:requests:rate5m\n        expr: sum(rate(http_requests_total{job="shop"}[5m]))\n',
+    }).canonical;
+    assert.deepEqual(JSON.parse(declared.metadata.annotations['observogram.grafana_rule.alerting.rules[0]']), { uid: 'cart-restarts', folder: 'Shop', group: 'shop' }, `${label}: no condition stated`);
+    const answer = [{ uid: 'cart-restarts', title: 'CartPodRestarts', folderUID: FOLDER_UID, ruleGroup: 'shop', condition: 'C', for: '15m', labels: { severity: 'warning' }, annotations: {}, data: [
+      { refId: 'A', datasourceUid: 'prom', model: { refId: 'A', expr: 'increase(kube_pod_container_status_restarts_total{container="cart"}[15m])' } },
+      { refId: 'B', datasourceUid: '__expr__', model: { refId: 'B', type: 'reduce', expression: 'A', reducer: 'last' } },
+      { refId: 'C', datasourceUid: '__expr__', model: { refId: 'C', ...nodeOf[label] } },
+    ] }];
+    const vmRec = { groups: [{ name: 'slo', rules: [{ name: 'shop:requests:rate5m', type: 'recording', query: 'sum(rate(http_requests_total{job="shop"}[5m]))' }] }] };
+    const { canonical } = await livePack({ [T.vmalert]: () => vmRec, [T.grafana]: () => answer });
+    const pair = rules(diffPacks(adapt(declared), adapt(canonical))).inBoth.find((e) => e.key === 'alert_rule::{"name":"cartpodrestarts"}');
+    assert.deepEqual([pair?.match, pair?.deltas, pair?.unobserved], ['aligned', [], [{ field: 'condition', side: 'a', keys: [] }]], label);
+  }
 });

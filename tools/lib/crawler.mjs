@@ -1060,7 +1060,7 @@ export function crawlFiles(filesInput, opts = {}) {
   // them as marked placeholders.
   const ruleMeta = new Map(alertRules.map(r => [r.rule, r]));
   const operational = operationalAlertRules(alertRules.map(r => r.rule), (id) => haveRecordedSlis && sloMap.has(id), {
-    engineOf: (rule) => alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
+    engineOf: (rule) => alertRuleEngine(rule),
     sourceOf: (rule) => ruleMeta.get(rule)?.source,
   });
   summary.discovered.alertRules = operational.kept.length;
@@ -3039,15 +3039,18 @@ function containerPort(entry) {
   return m ? m[1] : null;
 }
 
-// A LogQL condition: a stream selector (`{app="x"}`) that is not a metric's
-// label matcher — it opens the expression or follows an operator / paren —
-// and is followed by a line filter (`|=`, `|~`, `!=`, `!~`), a parser stage
-// (`| json`, `| logfmt`, …) or a range (`[5m]`), as `rate({app="x"}[5m])` is.
-const LOGQL_STAGE_RE = /\{[^}]*\}\s*(?:\|[=~]|![=~]|\|\s*(?:json|logfmt|pattern|regexp|unpack|unwrap|line_format|label_format|drop|keep|decolorize)\b)/;
-const LOGQL_RANGE_RE = /(?:^|[(\s,])\{[^}]*\}\s*\[/;
-function looksLikeLogQL(expr) {
-  const e = String(expr || '');
-  return LOGQL_STAGE_RE.test(e) || LOGQL_RANGE_RE.test(e);
+// LogQL the expression itself states: a stream selector (`{app="x"}`)
+// followed by a pipeline stage PromQL has no operator for — a line filter
+// (`|=`, `|~`, `|>`, `!~`, `!>`, or `!=` against a string: `!= "debug"`), a
+// parser or format stage (`| json`, `| logfmt`, …) or a label filter
+// (`| level="error"`). No Prometheus-compatible ruler can evaluate it. Never a
+// guess from a shape PromQL has too: a selector over a range
+// (`rate({app="x"}[5m])`) or before `!=` and a number or a series
+// (`up{job="x"} != 1`) is valid PromQL, and a rule about Loki written in PromQL
+// (a mixin's alerts on loki_* series) is a Prometheus rule wherever it ships.
+const LOGQL_PIPELINE_RE = /\{[^}]*\}\s*(?:\||![~>]|!=\s*["`])/;
+function statesLogQL(expr) {
+  return LOGQL_PIPELINE_RE.test(String(expr || ''));
 }
 
 // What each Grafana-managed recording rule read states (grafanaRuleFacts), by
@@ -3055,15 +3058,34 @@ function looksLikeLogQL(expr) {
 // ride beside it (observogram.grafana_rule.queries.recording_rules[<i>]).
 const GRAFANA_RECORDING_FACTS = new WeakMap();
 
+// What a Grafana-managed rule states beyond the spec, as the repository writes
+// it (sli-inference.mjs grafanaRuleFacts, given what its group states): its
+// uid, folder and group, and its condition only when the repository states
+// that whole — a node holding a value a chart fills in at deploy time (the
+// placeholder stripGoTemplate leaves: a math expression's, a query's) states
+// no condition, as a threshold that is not a number does not. Held against
+// what Grafana runs, it would read as a difference that is not there; the
+// pair says the condition went uncompared instead.
+function grafanaFactsAsWritten(rule, group) {
+  const facts = grafanaRuleFacts(rule, { folder: group.folder, folderUid: group.folderUid ?? group.folderUID, group: group.name });
+  if (!facts?.condition || !new RegExp(`\\b${HELM_VALUE}\\b`).test(facts.condition)) return facts;
+  const { condition: _notStated, ...stated } = facts;
+  return Object.keys(stated).length ? stated : null;
+}
+
 // The engine that evaluates an alert rule, in the Product registry's words
-// (spec 1.4 $defs/AlertEngine): a Grafana-managed rule by its shape
-// (`title` + `data[]`), a Loki rule by the path it ships under or by its
-// LogQL, everything else the Prometheus rule-file format — `prometheus`,
-// the default, since a rule file cannot tell a Prometheus ruler from a
-// Mimir, Thanos or VictoriaMetrics one (the backends do).
-function alertRuleEngine(rule, relPath) {
+// (spec 1.4 $defs/AlertEngine), as the rule's own source states it: a
+// Grafana-managed rule by its shape (`title` + `data[]`), a Loki rule by the
+// LogQL its expression is written in, everything else the Prometheus
+// rule-file format — `prometheus`, the default, since a rule file cannot tell
+// a Prometheus ruler from a Mimir, Thanos or VictoriaMetrics one (the backends
+// do). Never by the path a file ships under: `loki/alerts.yml` and
+// `loki-mixin.yaml` hold the PromQL rules a Prometheus evaluates about Loki,
+// and a comparison parks a `loki` rule as not checked (no tool reads a Loki
+// ruler), so a guess would hide a rule missing live.
+function alertRuleEngine(rule) {
   if (isGrafanaManagedRule(rule)) return 'grafana';
-  if (/(^|[/_.-])loki([/_.-]|$)/i.test(String(relPath || '')) || looksLikeLogQL(alertRuleExpr(rule))) return 'loki';
+  if (statesLogQL(alertRuleExpr(rule))) return 'loki';
   return 'prometheus';
 }
 
@@ -3224,7 +3246,7 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     }
     recordingRules.push(entry);
     // A Grafana-managed recording rule says so beside the entry (no ruler a live read lists holds it).
-    const facts = grafanaRuleFacts(rule, { folder: group.folder, folderUid: group.folderUid ?? group.folderUID, group: group.name });
+    const facts = grafanaFactsAsWritten(rule, group);
     if (facts) GRAFANA_RECORDING_FACTS.set(entry, facts);
     evidence[id] = origin;
     summary.discovered.recordingRules++;
@@ -3240,7 +3262,7 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     const base = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
     // A Grafana-managed rule's uid, folder (the group's, a title), group and
     // condition (its threshold): what the spec's AlertRule cannot hold.
-    const facts = grafanaRuleFacts(rule, { folder: group.folder, folderUid: group.folderUid ?? group.folderUID, group: group.name });
+    const facts = grafanaFactsAsWritten(rule, group);
     const read = facts ? { ...base, grafana: facts } : base;
     const candidate = burnCandidateFromAlertRule(read);
     const { alertName, expr } = candidate;

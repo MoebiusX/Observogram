@@ -200,13 +200,29 @@ dropped for a title a ruler holds. A Grafana tool's answer is read in the
 provisioning API's shape (`GET /api/v1/provisioning/alert-rules`: `title`,
 `data[]`, `folderUID`, `ruleGroup`) and in the ruler's
 (`GET /api/ruler/grafana/api/v1/rules`: an object keyed by folder title, its
-groups' rules each a `grafana_alert`); each rule states beside the spec its
+groups' rules each a `grafana_alert`; the ruler is told by that shape alone, so
+a folder may be titled anything, `data` or `groups` included); each rule states beside the spec its
 uid, folder, group and condition (`observogram.grafana_rule.alerting.rules[<i>]`
-— the threshold node the query alone does not say). Without tools/list each
+— the threshold node the query alone does not say). One Grafana-managed rule
+two tools list is one rule: a copy that names no Grafana uid (Grafana's
+Prometheus-compatible listing: names, queries, the group) is the rule
+another tool read with its uid when the listing states that uid beside it, or
+when every term both readings state is the same and the folder its group
+names (`file`, a folder title in Grafana's listing, a rule file's path in a
+ruler's) does not contradict the rule's — never by name alone, never a copy
+from a tool that attests another product — and the copy with the uid stays; a
+tool that listed Grafana's rules alone read Grafana's store, not a ruler's.
+Without tools/list each
 store stops at its first answer with rules. A refused engine with nothing
-else answering is a FAILED family; beside rules from another engine, the
-family is listed in `mcp.probesPartial` with the error in
-`mcp.probeErrors.alert_rules`. What the read could not cover rides in
+else answering is a FAILED family; beside rules from another engine, when
+no other engine read its store, the family is listed in `mcp.probesPartial`
+with the error in `mcp.probeErrors.alert_rules` — a tool failing beside
+another that read its store is no hole, and one refused beside an empty
+answer of its store still is. An engine whose store has no rules API (it
+answers 400, 404 or 405 — the capability row's `unsupportedOnHttpStatus`, as
+for scrape targets) is not served: never a failure, never a partial read;
+the family is unsupported when every engine asked says so, and a journey
+that remembers it keeps it so on a mere error (never on a refusal). What the read could not cover rides in
 `observogram.unread.alert_rule` (`{ grafana?, ruler?, loki }`: why) and
 `observogram.unread.recording_rule` (`{ grafana }`), and the rule groups it
 listed, before a rule-group scope narrowed them, in

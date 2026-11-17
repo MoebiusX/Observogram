@@ -847,7 +847,12 @@ switches are a what-if only.
   writing `observogram.source_rules.policy.burn_rate_alerts.<slo>` — the list
   `sourceRuleTerms` (tools/lib/sli-inference.mjs) returns for its listing —
   beside each entry it reads from such rules; a host that writes none sees
-  the deltas it always had.
+  the deltas it always had. A burn-rate pair's `unobserved` note may name
+  `field: 'windows'` with its `rule`: a rule the entry was read from that
+  sits in a store the other side's read did not cover
+  (`observogram.unread.alert_rule`), so the pair's windows went uncompared; a
+  host whose packs carry no `engine: grafana` on their source rules, or no
+  `observogram.unread.*`, never sees it.
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.

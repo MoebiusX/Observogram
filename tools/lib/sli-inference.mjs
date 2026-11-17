@@ -308,7 +308,17 @@ const RANGE_EVALUATORS = Object.freeze({
   within_range_included: 'within (included)', outside_range_included: 'outside (included)',
 });
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
-const numberText = (x) => { const n = Number(x); return Number.isFinite(n) ? String(n) : 'NaN'; };
+// A threshold's number as both readers print it, or null when the value is
+// none: a placeholder a chart fills in at deploy time (the scan reads a Helm
+// template's `{{ .Values.x }}` as `helmvalue`), a `${VAR}` a deploy step
+// substitutes, an empty or missing param. Such a node states no threshold, so
+// the rule states no condition (never `NaN`, which reads as a difference from
+// the number Grafana runs).
+const numberText = (x) => {
+  if (typeof x === 'number') return Number.isFinite(x) ? String(x) : null;
+  if (typeof x === 'string' && x.trim() && Number.isFinite(Number(x))) return String(Number(x));
+  return null;
+};
 
 // JSON with its keys sorted at every depth: one text for one value, whatever
 // order a side wrote its keys in.
@@ -320,13 +330,22 @@ function canonicalJson(value) {
   return JSON.stringify(value ?? null);
 }
 
+// An evaluator as text, or null when a number it needs is not stated (numberText).
 function evaluatorText(ev) {
   const type = oneLine(ev?.type);
   const params = Array.isArray(ev?.params) ? ev.params : [];
-  if (EVALUATOR_OPS[type]) return `${EVALUATOR_OPS[type]} ${numberText(params[0])}`;
-  if (RANGE_EVALUATORS[type]) return `${RANGE_EVALUATORS[type]} ${numberText(params[0])}..${numberText(params[1])}`;
+  const stated = (...xs) => (xs.every((x) => x !== null) ? xs : null);
+  if (EVALUATOR_OPS[type]) {
+    const n = stated(numberText(params[0]));
+    return n ? `${EVALUATOR_OPS[type]} ${n[0]}` : null;
+  }
+  if (RANGE_EVALUATORS[type]) {
+    const n = stated(numberText(params[0]), numberText(params[1]));
+    return n ? `${RANGE_EVALUATORS[type]} ${n[0]}..${n[1]}` : null;
+  }
   if (type === 'no_value') return 'no value';
-  return `${type || '?'}${params.length ? ` ${params.map(numberText).join(' ')}` : ''}`;
+  const n = stated(...params.map(numberText));
+  return n ? `${type || '?'}${n.length ? ` ${n.join(' ')}` : ''}` : null;
 }
 
 const isExpressionNode = (node, model) => node?.datasourceUid === '__expr__' || model?.datasource?.uid === '__expr__' || GRAFANA_EXPRESSION_TYPES.has(model?.type);
@@ -334,17 +353,22 @@ const isExpressionNode = (node, model) => node?.datasourceUid === '__expr__' || 
 const without = (model, keys) => Object.fromEntries(Object.entries(model || {}).filter(([k]) => !keys.includes(k)));
 const NODE_PLUMBING = ['refId', 'datasource', 'intervalMs', 'maxDataPoints', 'hide'];
 
+// An expression node as text, or null when a number it needs is not stated (numberText).
 function expressionText(model) {
   const type = oneLine(model?.type);
   const input = oneLine(model?.expression);
   if (type === 'threshold') {
     const c = Array.isArray(model?.conditions) ? model.conditions[0] : null;
-    const recover = c?.unloadEvaluator ? `, recover ${evaluatorText(c.unloadEvaluator)}` : '';
-    return `threshold(${input} ${evaluatorText(c?.evaluator)}${recover})`;
+    const alert = evaluatorText(c?.evaluator);
+    const back = c?.unloadEvaluator ? evaluatorText(c.unloadEvaluator) : '';
+    if (alert === null || back === null) return null;
+    return `threshold(${input} ${alert}${back ? `, recover ${back}` : ''})`;
   }
   if (type === 'reduce') {
     const mode = oneLine(model?.settings?.mode);
-    const how = mode === 'replaceNN' ? `, replaceNN ${numberText(model.settings.replaceWithValue)}` : mode ? `, ${mode}` : '';
+    const replaceWith = mode === 'replaceNN' ? numberText(model.settings.replaceWithValue) : '';
+    if (replaceWith === null) return null;
+    const how = mode === 'replaceNN' ? `, replaceNN ${replaceWith}` : mode ? `, ${mode}` : '';
     return `reduce(${oneLine(model?.reducer) || '?'}, ${input}${how})`;
   }
   if (type === 'math') return `math(${input})`;
@@ -354,9 +378,10 @@ function expressionText(model) {
     const parts = (Array.isArray(model?.conditions) ? model.conditions : []).map((c, i) => {
       const op = i === 0 ? '' : `${oneLine(c?.operator?.type) || 'and'} `;
       const ref = Array.isArray(c?.query?.params) ? oneLine(c.query.params[0]) : '';
-      return `${op}${oneLine(c?.reducer?.type) || '?'}(${ref}) ${evaluatorText(c?.evaluator)}`;
+      const ev = evaluatorText(c?.evaluator);
+      return ev === null ? null : `${op}${oneLine(c?.reducer?.type) || '?'}(${ref}) ${ev}`;
     });
-    return `classic(${parts.join(' ')})`;
+    return parts.includes(null) ? null : `classic(${parts.join(' ')})`;
   }
   return `${type || 'expression'}(${canonicalJson(without(model, NODE_PLUMBING))})`;
 }
@@ -374,7 +399,9 @@ function queryText(model) {
  * `paused` — joined with `; `, cut at 2000 characters. The rule as a
  * provisioning file or the provisioning API spells it, or the ruler's
  * (`grafana_alert`). Null when the rule is not Grafana-managed, states none of
- * it, or a node cannot be read (a model that does not parse, a node with no ref).
+ * it, or a node cannot be read (a model that does not parse, a node with no ref,
+ * a threshold or replacement value that is not a number — a chart's or a
+ * deploy step's placeholder: the repository does not state what Grafana runs).
  */
 export function grafanaRuleCondition(rule) {
   const r = rule?.grafana_alert && typeof rule.grafana_alert === 'object' ? rule.grafana_alert : rule;
@@ -392,8 +419,11 @@ export function grafanaRuleCondition(rule) {
     if (!model) return null;
     const ref = oneLine(node?.refId ?? model.refId);
     if (!ref) return null;
-    if (isExpressionNode(node, model)) parts.push(`${ref} = ${expressionText(model)}`);
-    else if (ref !== queryRef) parts.push(`${ref} = query(${queryText(model)})`);
+    if (isExpressionNode(node, model)) {
+      const step = expressionText(model);
+      if (step === null) return null;
+      parts.push(`${ref} = ${step}`);
+    } else if (ref !== queryRef) parts.push(`${ref} = query(${queryText(model)})`);
   }
   const condition = oneLine(r.condition);
   if (condition) parts.push(`condition ${condition}`);
@@ -529,9 +559,12 @@ export function operationalAlertRules(rules, hasSlo, { engineOf = () => undefine
  * the first rule of a name and drop the others. Each is read with
  * operationalAlertRule, the one reading of a rule's terms for a rule file
  * and for a ruler's listing, and reduced to what is compared:
- *   { name, expr, for?, severity?, labels?, condition? }
+ *   { name, expr, for?, severity?, labels?, condition?, engine? }
  * (`condition`: a Grafana-managed rule's threshold and other steps,
- * grafanaRuleCondition, when the rule states them.)
+ * grafanaRuleCondition, when the rule states them; `engine: 'grafana'` for a
+ * Grafana-managed rule — the store it lives in, which a comparison reads
+ * against the stores the other side's read did not cover, never a term held
+ * to its counterpart.)
  * `partialOf(rule)` adds what the reader was shown of the rule only in part,
  * in the shape an artefact's `partial` has (`{ labels: [keys shown] }`).
  *
@@ -550,8 +583,9 @@ export function sourceRuleTerms(rules, hasSlo, { partialOf = () => null } = {}) 
     if (read.for) terms.for = read.for;
     if (read.severity) terms.severity = read.severity;
     if (read.labels) terms.labels = read.labels;
-    const condition = grafanaRuleFacts(rule)?.condition;
-    if (condition) terms.condition = condition;
+    const facts = grafanaRuleFacts(rule);
+    if (facts?.condition) terms.condition = facts.condition;
+    if (facts) terms.engine = 'grafana';
     const partial = partialOf(rule);
     if (partial && typeof partial === 'object' && !Array.isArray(partial) && Object.keys(partial).length) terms.partial = partial;
     if (!bySlo.has(slo)) bySlo.set(slo, []);
@@ -561,7 +595,8 @@ export function sourceRuleTerms(rules, hasSlo, { partialOf = () => null } = {}) 
   const labelsOf = (r) => JSON.stringify(Object.entries(r.labels || {}).sort(([x], [y]) => byText(x, y)));
   for (const list of bySlo.values()) {
     list.sort((x, y) => byText(x.name, y.name) || byText(x.expr, y.expr) || byText(x.for || '', y.for || '')
-      || byText(x.severity || '', y.severity || '') || byText(labelsOf(x), labelsOf(y)) || byText(x.condition || '', y.condition || ''));
+      || byText(x.severity || '', y.severity || '') || byText(labelsOf(x), labelsOf(y)) || byText(x.condition || '', y.condition || '')
+      || byText(x.engine || '', y.engine || ''));
   }
   return bySlo;
 }

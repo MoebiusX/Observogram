@@ -121,11 +121,13 @@ dashboards (folder uids, before the detail reads), alert rules (folder
 uids, when every rule names its folder; an engine whose tool takes a folder
 uid is asked once per folder) and alert and recording rules by rule group
 (when every rule the engines list names its group); every advertised alert-rule engine is read — by a draft too — and
-the rules unioned by store (Grafana's by uid, a ruler's by name), Grafana-managed rules read from the provisioning
-shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles), each stating its
+the rules unioned by store (Grafana's by uid, a ruler's by name; one Grafana rule two tools list is one, by its
+uid or its exact terms, never by name alone), Grafana-managed rules read from the provisioning
+shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles, whatever the titles), each stating its
 uid, folder, group and condition in `observogram.grafana_rule.*`; what the read could not cover in
-`observogram.unread.alert_rule` / `.recording_rule`, an engine that errored beside one that answered in
-`mcp.probesPartial`, the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
+`observogram.unread.alert_rule` / `.recording_rule`, a store no engine read (one errored or was refused) beside
+one that answered in `mcp.probesPartial` — an engine whose store has no rules API (400 / 404 / 405) is not served
+and never counts — the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
 `buildSnapshotPack` writes `mcp.url` as the origin and the
 `observogram.live.*`, `observogram.scope.<kind>` and
@@ -768,7 +770,7 @@ strings at 200 chars.
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
 | `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
-| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part. The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
+| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, condition?, engine?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part; `condition` a Grafana-managed rule's threshold and other steps, `engine: grafana` its store (a comparison parks the entry, or leaves its windows uncompared, where the other side's read did not cover it). The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `observogram.partial.alerting.rules[<i>]` | `labels=<keys>` | an alert rule whose listing gave no `labels` object: of its labels, the keys the listing did show — `labels=severity`, written for every rule of a listing in which no rule carries a labels map and at least one carries a flat `severity`. The comparison holds the rule to those keys (docs/DIFF.md) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
