@@ -304,12 +304,12 @@ test('GitHub, a public repository, read with no token: its files from raw.github
   }
   assert.equal(masked(read.source), `${gh.owner}/${gh.repo} on GitHub`);
   // A download that fails is skipped and named, never fatal: when
-  // raw.githubusercontent.com refuses every one (sent 8 at a time, each
-  // within 60 s, all within the read's 120 s), the files are 0 and each skip
-  // says "GitHub 429 on <path>" — or that the read's 120 s for its files ran
-  // out, when raw was too slow instead. The message names the first three, so
-  // the weekly run shows what raw answered; it is not skipped, that answer is
-  // the thing worth seeing.
+  // raw.githubusercontent.com refuses every one (sent at most 8 at a time,
+  // each within 60 s, all within the read's 120 s, a refused one tried four
+  // times), the files are 0 and each skip says "GitHub 429 on <path> — tried
+  // 4 times" — or that the read's 120 s for its files ran out, when raw was too
+  // slow instead. The message names the first three, so the weekly run shows
+  // what raw answered; it is not skipped, that answer is the thing worth seeing.
   const got = Object.keys(read.files).length;
   const skips = (read.skipped ?? []).map((s) => `${s.path}: ${s.why}`);
   const shown = skips.length ? ` — skipped: ${skips.slice(0, 3).join('; ')}${skips.length > 3 ? ` … and ${skips.length - 3} more` : ''}` : '';

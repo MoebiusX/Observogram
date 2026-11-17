@@ -47,7 +47,7 @@ import { listServicesForPack } from './store/pack-services.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
-import { crawlFiles, crawlToYaml, scanReport } from '../tools/lib/crawler.mjs';
+import { crawlFiles, crawlToYaml, scanReport, scanSkipKind } from '../tools/lib/crawler.mjs';
 import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
 import { diffPacks } from '../tools/lib/diff.mjs';
 import { comparePackBranches } from '../tools/lib/traceability-graph.mjs';
@@ -65,6 +65,7 @@ import { rebuildPack, foreignAsAdditions, applyAdditions, additionLabel, artefac
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
   validateSchedule, validateStackBudget, validateNotify, notifyTargetOf, scrubNotifyError,
+  BASELINE_SCAN_LIMIT, SCAN_PARTIAL_OUTCOME, writeStoppedRun,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
@@ -87,9 +88,9 @@ import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
 import { abortAllLiveJobs, snapshotScopeConfig } from './live-jobs.mjs';
 import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/lib/live-fetch.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
-import { envRefOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
+import { envRefOf, envSurfaceOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
-import { fetchRepositoryFiles } from './repo-sources.mjs';
+import { fetchRepositoryFiles, partialScanPolicy } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
 import { PACK_UPLOAD_WAYS, parsePackUpload } from './service-packs.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
@@ -1525,12 +1526,23 @@ function livePacksByJourney() {
 //   1. the targets — the environment's endpoint resolved as a journey's
 //      Pack B is (a refusal scans nothing and sends nothing), the folder
 //      rule read again for a folder repository;
-//   2. the scan — the repository read now (server/repo-sources.mjs), at the
-//      environment's own branch where the service names one (its envRefs),
-//      else the repository's, and
-//      crawled under the service's slug and the environment's name, so the
-//      scan is the service's own pack; registered under one label per
-//      service and environment, so the next Run replaces it;
+//   2. the scan — the repository read now (server/repo-sources.mjs: a file
+//      the host refused or dropped is tried again, the read slowing down for
+//      every file after a refusal), at the environment's own branch where the
+//      service names one (its envRefs), else the repository's, and
+//      crawled under the service's slug — every environment of a service
+//      reads the same files, unless the environment's deployment surface is
+//      set (its envSurfaces: the files of that surface alone); its name
+//      chooses nothing — so the scan is the service's own pack; registered
+//      under one label per service and environment, so the next Run replaces
+//      it. A scan that LOST files (scan.partial) is no scan: while a complete
+//      scan of the same repository and branch is kept, the Run stops — 409,
+//      a `scan-partial` run record (no grade, no drift; a notify block posts
+//      it), nothing registered, no live call — unless OBSERVOGRAM_PARTIAL_SCAN
+//      is `check`; with none kept (the first Run, another repository or
+//      branch, an evicted pack) or under `check`, the partial scan is checked,
+//      its gate failed (scanComplete) and its figures marked not comparable
+//      (the record's `comparable`). A read that lost every file stops.
 //      A pack file in place of the repository (its kind 'pack',
 //      server/service-packs.mjs) is no scan: the pack as uploaded is Pack A;
 //   3. the check, saved — the journey `<slug>.<env>`: the scan as Pack A,
@@ -1543,12 +1555,16 @@ function livePacksByJourney() {
 // saw (tools/lib/crawler.mjs scanReport: the files read, the files the rule
 // would read and the read did not, with why, the cap's and the environment
 // scope's leftovers, the files read and recognised as nothing, the crawl's
-// warnings), kept in the run record as packA.scan; 400/404 for a service,
-// environment or repository the request cannot use; 409 for a record that
-// says nowhere to look (no repository, no endpoint) or names a source the
-// org switched off (Settings → Repository sources); 422 for a scan that
-// read nothing or made no valid pack; 502 when the repository or the live
-// side did not answer (the live side's loss keeps a record, as a journey's).
+// warnings; `partial`, `lost`, `notRead`, `notReadReasons`, `cappedFiles`,
+// `treeTruncated`, `filter`, `excludedMost`), kept in the run record as
+// packA.scan; 400/404 for a service, environment or repository the request
+// cannot use; 409 for a record that says nowhere to look (no repository, no
+// endpoint) or names a source the org switched off (Settings → Repository
+// sources), and for a scan that lost files ({ ok: false, outcome:
+// 'scan-partial', error, journey, kept: { id, label } | null, scan, record });
+// 422 for a scan that read nothing or made no valid pack; 502 when the
+// repository or the live side did not answer (the live side's loss keeps a
+// record, as a journey's).
 // Writes the rows of both packs, a journey.capture row ({ via: 'service' })
 // and the journey.run row.
 app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async (req, res) => {
@@ -1667,25 +1683,90 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   const access = remote ? repositoryAccess(repository, credential) : null;
   const withAccess = (report) => (access ? { ...report, access } : report);
   let scan = withAccess(scanReport(read));
+  // Every environment of the service reads the same files unless its deployment surface is set
+  // (envSurfaceOf: null reads every file) — the environment's name chooses nothing.
+  let canonical = null;
+  let crawlError = null;
+  if (scan.files) {
+    try {
+      let summary;
+      ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name, surface: envSurfaceOf(service, env.name) }));
+      scan = withAccess(scanReport(read, summary));
+    } catch (e) { crawlError = e; }
+  }
+  // A scan that lost files: stopped while a complete scan of this repository is kept (the default
+  // policy) or when it read no file at all; else checked, marked partial (runJourney fails its gate).
+  if (scan.partial) {
+    const kept = keptCompleteScan(name, previous, read);
+    if (!scan.files || (kept && partialScanPolicy() === 'stop')) {
+      return stopOnPartialScan(req, res, { def, name, service, env, previous, kept, scan, targets, t0 });
+    }
+  }
   if (!scan.files) {
     return res.status(422).json({ ok: false, error: `${read.source} has no file the scan reads — Prometheus rules, OpenTelemetry collector configs, Grafana dashboards, compose files, Helm values or metrics code`, scan });
   }
-  let canonical;
-  try {
-    let summary;
-    ({ canonical, summary } = crawlFiles(read.files, { repoName: service.slug, environment: env.name }));
-    scan = withAccess(scanReport(read, summary));
-  } catch (e) { return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${e.message}`, scan }); }
+  if (crawlError) return res.status(422).json({ ok: false, error: `the scan of ${read.source} failed: ${crawlError.message}`, scan });
   const errors = validateCanonical(canonical, SCHEMA);
   if (errors.length) {
     return res.status(422).json({ ok: false, error: `the scan of ${read.source} did not make a valid pack: ${errors[0]}`, errors: errors.slice(0, 20), scan });
   }
   const label = `${service.name} · ${env.name} · repository`;
   const packId = registerUploadedPack(req, canonical, `repository:${service.repository.kind}`, label);
-  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.skipped ? `, ${scan.skipped} not read` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${scan.files} files from ${read.source}${scan.capped ? ` (${scan.capped} past the file cap)` : ''}${scan.notRead ? `, ${scan.notRead} not read${scan.lost ? ` (${scan.lost} could not be read: checked as a partial scan)` : ''}` : ''}${scan.truncated ? ', tree truncated' : ''} → ${packId} in ${Date.now() - t0}ms\n`);
   // 3. The check, saved and run.
   await check(packId, label, scan);
 });
+
+// The service's last complete scan of the repository a Run has just read: the
+// check's Pack A, still registered, made by the newest run that checked
+// something, whose scan read this same place and branch and lost nothing (a
+// record written before scans said so: none of its named files lost) — as
+// { id, label, source }, else null.
+function keptCompleteScan(name, previous, read) {
+  const ref = previous?.packA ? workspacePackRef(previous.packA) : null;
+  if (!ref) return null;
+  const last = readJourneyRuns(name, { limit: BASELINE_SCAN_LIMIT })
+    .find((r) => r && typeof r === 'object' && r.outcome !== SCAN_PARTIAL_OUTCOME && r.packA?.scan && typeof r.packA.scan === 'object');
+  const s = last?.packA?.scan;
+  if (!s || typeof last.packA.source !== 'string' || basename(last.packA.source) !== `${ref.id}.pack.yaml`) return null;
+  if ((s.source ?? null) !== (read.source ?? null) || (s.ref ?? null) !== (read.ref ?? null)) return null;
+  const lost = s.partial === true
+    || (s.partial === undefined && (Array.isArray(s.skippedFiles) ? s.skippedFiles : []).some((x) => scanSkipKind(x?.why) === 'lost'));
+  return lost ? null : { ...ref, source: last.packA.source };
+}
+
+// A Run stopped on a scan that lost files: the stored pack and the check's
+// Pack A untouched (the check saved again as it stands, so the listing shows
+// it), nothing registered, no live call; the scan-partial record written
+// (tools/lib/journey.mjs writeStoppedRun — a notify block posts it), its
+// journey.run row, one stderr line, and 409 with the sentence and the way
+// out (run it again; an operator may have partial scans checked instead).
+async function stopOnPartialScan(req, res, { def, name, service, env, previous, kept, scan, targets, t0 }) {
+  const startedAt = new Date(t0).toISOString();
+  if (kept) {
+    def.packA = previous.packA;
+    try { saveJourneyDef(name, withServiceGradeOff(def, getService(currentStore(), service.id) || service), { banner: serviceCheckBanner(service.slug, env.name) }); }
+    catch (e) { process.stderr.write(`[service-run] ${service.slug}/${env.name}: the check could not be saved again (${e.message})\n`); }
+  }
+  let notifyTarget = null;
+  if (def.notify && targets.notifyHook) {
+    try { notifyTarget = notifyTargetOf(def.notify, { url: targets.notifyHook.url, auth: targets.notifyHook.auth }); } catch { notifyTarget = null; }
+  }
+  const record = await writeStoppedRun({ ...def, name }, { kept: kept ? { source: kept.source } : null, scan, startedAt, tookMs: Date.now() - t0, notifyTarget });
+  const keptRef = kept ? { id: kept.id, label: kept.label } : null;
+  process.stderr.write(`[service-run] ${service.slug}/${env.name}: ${record.error} — the Run stopped; ${keptRef ? `the service keeps ${keptRef.id}` : 'no file of it could be read'}\n`);
+  const auditError = auditAfter(req, {
+    action: 'journey.run', targetKind: 'journey', targetId: bounded(name),
+    detail: {
+      startedAt: bounded(startedAt), outcome: SCAN_PARTIAL_OUTCOME, alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: finite(record.tookMs),
+      ...(def.notify ? { notify: { urlEnv: bounded(def.notify.urlEnv), status: ['sent', 'skipped', 'failed'].includes(record.notify?.status) ? record.notify.status : null, attempts: Number.isInteger(record.notify?.attempts) ? record.notify.attempts : 0 } } : {}),
+    },
+  }, { tag: 'journey' });
+  const way = keptRef
+    ? 'the service keeps its last complete scan of this repository; run it again (an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check)'
+    : 'no file of the repository could be read; run it again';
+  return res.status(409).json({ ok: false, outcome: SCAN_PARTIAL_OUTCOME, error: `${record.error} — the Run stopped: ${way}`, journey: name, kept: keptRef, scan, record, ...(auditError ? { auditError } : {}) });
+}
 
 // POST /api/journeys/capture — "save this comparison as a journey". The
 // server resolves the session's pack ids to durable sources: file-backed

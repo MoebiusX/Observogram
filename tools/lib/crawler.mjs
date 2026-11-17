@@ -113,7 +113,47 @@ export const SCAN_WHY = Object.freeze({
   tooLarge: (limit = SCAN_MAX_FILE_BYTES) => `it is larger than ${mbOf(limit)}`,
   totalCap: (limit) => `the scan stops at ${mbOf(limit)} in all`,
   notText: 'it is not UTF-8 text',
+  // A file past a host read's file cap (server/github-crawl.mjs HOST_READ_CAPS): named in a record's cappedFiles.
+  fileCap: (n) => `past the read's ${Number.isInteger(n) && n > 0 ? `${n}-file` : 'file'} cap (the likely artefacts are read first)`,
 });
+
+/**
+ * What a skipped entry's `why` says of the file, by the one wording every
+ * door writes (SCAN_WHY, a reader's "it could not be … (…)"):
+ *   'on-purpose'  a rule left it out — its name says it holds secrets, git
+ *                 ignores it or a folder on the way to it, or it lies in
+ *                 another org's part of the workspace: never a loss;
+ *   'lost'        the read failed — "it could not be downloaded (…)", "…
+ *                 read (…)", "… listed (…)" (a host refused or dropped it, the
+ *                 read's budget ran out, the disk would not give it): the scan
+ *                 is partial, and a Run says so;
+ *   'limit'       anything else — too large, past the total, not text, an
+ *                 archive entry the reader cannot open: counted as not read,
+ *                 the same on every read of the same files, never partial.
+ * A wording nobody planned for is a limit, so it never stops a Run for ever.
+ */
+export const SCAN_SKIP_KINDS = Object.freeze(['on-purpose', 'lost', 'limit']);
+const SKIP_LOST = /^it could not be (?:downloaded|read|listed) \(/;
+const SKIP_GITIGNORED_FOLDER = /^git ignores the folder .+\/ \(\.gitignore\)$/;
+const SKIP_REFUSED_PART = /^it (?:belongs to another org's part of the workspace|is not a path on a local drive)\b/;
+export function scanSkipKind(why) {
+  const w = String(why ?? '');
+  if (w === SCAN_WHY.secret || w === SCAN_WHY.gitignored || w === SCAN_WHY.gitignoredFolder || SKIP_GITIGNORED_FOLDER.test(w) || SKIP_REFUSED_PART.test(w)) return 'on-purpose';
+  if (SKIP_LOST.test(w)) return 'lost';
+  return 'limit';
+}
+
+/**
+ * The deployment surfaces an environment may read alone (a service
+ * environment's explicit setting, server/service-admin.mjs envSurfaces; the
+ * Run passes it to crawlFiles as `surface`), each mapped onto the filter's
+ * profile, and the words a sentence names it by. A surface is never named by
+ * an environment's name: "prod" is a name, not a surface.
+ */
+export const DEPLOYMENT_SURFACES = Object.freeze({ kubernetes: 'prod', eks: 'eks', 'local-kubernetes': 'local-k8s', compose: 'local-docker' });
+export const DEPLOYMENT_SURFACE_LABELS = Object.freeze({ kubernetes: 'Kubernetes and Helm', eks: 'Amazon EKS', 'local-kubernetes': 'local Kubernetes', compose: 'Docker Compose' });
+const SURFACE_OF_PROFILE = Object.freeze(Object.fromEntries(Object.entries(DEPLOYMENT_SURFACES).map(([id, profile]) => [profile, id])));
+const surfaceWords = (id) => DEPLOYMENT_SURFACE_LABELS[id] || String(id);
 
 // The folder and extension rule alone (scanReadsPath without the refusals).
 function scanTakesParts(parts, skipRoot) {
@@ -480,13 +520,17 @@ function normalizeDiffScopeMode(value) {
   return 'service';
 }
 
+// `chartRoots`: the folder of every Chart.yaml ('' for the repository's root,
+// else its path with a trailing `/`): a Helm chart, whatever folder it is in.
 function detectDeploymentSurfaces(files) {
   const out = {
     docker: false,
     k8s: false,
     eksSpecific: false,
     localK8sSpecific: false,
+    chartRoots: [],
   };
+  const roots = new Set();
   for (const relPath of files.keys()) {
     const p = normalizeRepoPath(relPath);
     const base = basenameOf(p);
@@ -496,6 +540,7 @@ function detectDeploymentSurfaces(files) {
     if (hasPathSegment(p, 'k8s') || hasPathSegment(p, 'helm') || hasPathSegment(p, 'charts') || base === 'chart.yaml') {
       out.k8s = true;
     }
+    if (base === 'chart.yaml') roots.add(p.slice(0, p.length - base.length));
     if (isEksSpecificPath(p)) {
       out.eksSpecific = true;
       out.k8s = true;
@@ -505,26 +550,38 @@ function detectDeploymentSurfaces(files) {
       out.k8s = true;
     }
   }
+  out.chartRoots = [...roots].sort();
   return out;
 }
 
-function isRootDockerConfig(relPath) {
+// What a Helm chart ships, under the folder its Chart.yaml is in: its
+// templates, files, dashboards, CRDs and subcharts, and its values schema —
+// the Kubernetes surface, never another one (a root chart's files/collector.yaml
+// is the chart's collector config, not a root Docker config).
+const CHART_CONTENT = /^(?:templates|files|dashboards|crds|charts)\//;
+function inChart(p, roots) {
+  return Array.isArray(roots) && roots.some((root) => p.startsWith(root) && (CHART_CONTENT.test(p.slice(root.length)) || p.slice(root.length) === 'values.schema.json'));
+}
+
+function isRootDockerConfig(relPath, surfaces = null) {
   const p = normalizeRepoPath(relPath);
   const base = basenameOf(p);
   if (/(^|\/)(docker-)?compose\.ya?ml$/.test(p) || /(^|\/)compose\.ya?ml$/.test(p)) return true;
+  if (inChart(p, surfaces?.chartRoots)) return false;
   if (hasPathSegment(p, 'k8s') || hasPathSegment(p, 'helm') || hasPathSegment(p, 'charts')) return false;
   if (hasPathSegment(p, 'config')) return true;
   return /^(prometheus|alertmanager|otel|otelcol|collector|loki|promtail)[\w.-]*\.ya?ml$/.test(base);
 }
 
-function isK8sPath(relPath) {
+function isK8sPath(relPath, surfaces = null) {
   const p = normalizeRepoPath(relPath);
   const base = basenameOf(p);
   return hasPathSegment(p, 'k8s')
       || hasPathSegment(p, 'helm')
       || hasPathSegment(p, 'charts')
       || base === 'chart.yaml'
-      || /^values[\w.-]*\.ya?ml$/.test(base);
+      || /^values[\w.-]*\.ya?ml$/.test(base)
+      || inChart(p, surfaces?.chartRoots);
 }
 
 function isSourceCodePath(relPath) {
@@ -543,58 +600,67 @@ function shouldIncludeForEnvironment(relPath, profile, surfaces) {
 
   if (profile === 'local-docker') {
     if (!surfaces.docker) return true;
-    return isRootDockerConfig(p);
+    return isRootDockerConfig(p, surfaces);
   }
 
   if (profile === 'local-k8s') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isEksSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   if (profile === 'prod') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isLocalK8sSpecificPath(p)) return false;
     if (isEksSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   if (profile === 'eks') {
     if (!surfaces.k8s) return true;
-    if (isRootDockerConfig(p) && surfaces.docker) return false;
+    if (isRootDockerConfig(p, surfaces) && surfaces.docker) return false;
     if (isLocalK8sSpecificPath(p)) return false;
-    return isK8sPath(p);
+    return isK8sPath(p, surfaces);
   }
 
   return true;
 }
 
-function scopeFilesForEnvironment(files, environment) {
-  const profile = normalizeEnvironmentProfile(environment);
+// The files a deployment profile reads (null: every file). `excluded` names
+// the files left out only when the filter applied: a filter that would leave
+// nothing (`emptied`) reads every file and leaves out none, and so does one
+// that drops nothing.
+function scopeFilesForProfile(files, profile) {
   const surfaces = detectDeploymentSurfaces(files);
   const result = {
     files,
     profile,
     surfaces,
     applied: false,
+    emptied: false,
     excluded: [],
   };
   if (!profile) return result;
 
   const scoped = new Map();
+  const excluded = [];
   for (const [relPath, content] of files) {
     if (shouldIncludeForEnvironment(relPath, profile, surfaces)) {
       scoped.set(relPath, content);
     } else {
-      result.excluded.push(relPath);
+      excluded.push(relPath);
     }
   }
 
-  if (scoped.size === 0 || scoped.size === files.size) return result;
+  if (scoped.size === 0 || scoped.size === files.size) {
+    result.emptied = scoped.size === 0 && files.size > 0;
+    return result;
+  }
   result.files = scoped;
   result.applied = true;
+  result.excluded = excluded;
   return result;
 }
 
@@ -636,8 +702,21 @@ export function crawlFiles(filesInput, opts = {}) {
   const binding = !opts.binding || bindingIgnored ? 'otel-elastic-prometheus-grafana' : opts.binding;
   const criticalityIgnored = opts.criticality !== undefined && opts.criticality !== null && !SPEC_CRITICALITIES.has(opts.criticality);
   const diffScopeMode = normalizeDiffScopeMode(opts.diffScopeMode || opts.diffScope || opts.liveScope);
-  // Profile detection reads the environment as given (it lowercases itself).
-  const envScope = scopeFilesForEnvironment(rawFiles, envRaw);
+  // Which files the crawl reads. `surface` given (a service environment's Run
+  // passes its setting, null for none): that deployment surface alone, or
+  // every file — the environment's name chooses nothing. Not given (the
+  // command line, Expert's crawl panel, POST /api/crawl and /api/crawl-github,
+  // a journey's crawl: source): the profile the environment's name maps to,
+  // prod by default, as before. Profile detection reads the name as given
+  // (it lowercases itself).
+  const explicitSurface = Object.hasOwn(opts, 'surface');
+  const surfaceGiven = explicitSurface && opts.surface !== null && opts.surface !== undefined && opts.surface !== '' && opts.surface !== 'none' ? String(opts.surface) : null;
+  const surfaceUnknown = surfaceGiven && !Object.hasOwn(DEPLOYMENT_SURFACES, surfaceGiven) ? surfaceGiven : null;
+  const profile = explicitSurface
+    ? (surfaceGiven && !surfaceUnknown ? DEPLOYMENT_SURFACES[surfaceGiven] : null)
+    : normalizeEnvironmentProfile(envRaw);
+  const envScope = scopeFilesForProfile(rawFiles, profile);
+  const askedSurface = profile ? SURFACE_OF_PROFILE[profile] : null;
   const files = envScope.files;
   const catalogue = resolveExporterCatalogue(opts.exporterCatalogue);
   const inputWarnings = [...catalogue.warnings];
@@ -679,8 +758,14 @@ export function crawlFiles(filesInput, opts = {}) {
       requested: envRaw,
       profile: envScope.profile,
       scoped: envScope.applied,
-      surfaces: envScope.surfaces,
+      surfaces: { docker: envScope.surfaces.docker, k8s: envScope.surfaces.k8s, eksSpecific: envScope.surfaces.eksSpecific, localK8sSpecific: envScope.surfaces.localK8sSpecific },
       excluded: envScope.excluded.slice(0, 40),
+      // The deployment surface whose files alone were read (kubernetes | eks | local-kubernetes | compose),
+      // or null: every file. `asked`: a surface asked for that would have left no file, so every file was read.
+      surface: askedSurface && !envScope.emptied ? askedSurface : null,
+      ...(askedSurface && envScope.emptied ? { asked: askedSurface } : {}),
+      // The filter left out more than half the files the scan recognises (set after the files are classified).
+      excludedMost: false,
     },
     comparison: {
       diffScopeMode,
@@ -701,8 +786,18 @@ export function crawlFiles(filesInput, opts = {}) {
     scaffold: [],
   };
   summary.warnings.push(...inputWarnings);
+  // The filter's words: an explicit surface by its label (the setting a person chose), a name's
+  // profile as it always read.
+  const scopeName = explicitSurface ? `The ${surfaceWords(askedSurface)} filter` : `Environment scope "${envScope.profile}"`;
+  const readsEvery = explicitSurface ? 'An environment with no deployment surface set reads every file.' : 'An environment that names no deployment profile (e.g. `all`) reads every file.';
+  if (surfaceUnknown) {
+    summary.warnings.push(`deployment surface "${surfaceUnknown}" is not one the scan knows (${Object.keys(DEPLOYMENT_SURFACES).join(', ')}); every file was read.`);
+  }
+  if (explicitSurface && envScope.emptied) {
+    summary.warnings.push(`The ${surfaceWords(askedSurface)} filter would leave no file, so every file was read.`);
+  }
   if (envScope.applied) {
-    summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
+    summary.warnings.push(`${scopeName} excluded ${envScope.excluded.length} file(s) from other deployment surfaces.`);
     // A file the scope leaves out may be the only one that shows how the
     // metrics are collected: say which, never drop them silently.
     const collection = envScope.excluded
@@ -710,7 +805,7 @@ export function crawlFiles(filesInput, opts = {}) {
       .filter(Boolean);
     if (collection.length) {
       const shown = collection.slice(0, 8).join('; ') + (collection.length > 8 ? `; … (${collection.length - 8} more)` : '');
-      summary.warnings.push(`Environment scope "${envScope.profile}" excluded ${collection.length} file(s) that carry scrape jobs or exporter evidence: ${shown}. An environment that names no deployment profile (e.g. \`all\`) reads every file.`);
+      summary.warnings.push(`${scopeName} excluded ${collection.length} file(s) that carry scrape jobs or exporter evidence: ${shown}. ${readsEvery}`);
     }
   }
   const evidence = {};   // <artefact-id> -> <relPath>
@@ -763,13 +858,35 @@ export function crawlFiles(filesInput, opts = {}) {
     summary.files.byKind[kind] = (summary.files.byKind[kind] || 0) + 1;
   }
 
+  // A filter that left out more than half the files the scan recognises: said, so a
+  // row can warn that most of the repository was not read for this environment.
+  if (envScope.applied) {
+    const excludedClassified = envScope.excluded
+      .filter((relPath) => detectArtefactKind(relPath, rawFiles.get(relPath), { exporterCatalogue: catalogue }) !== 'unknown').length;
+    summary.files.excludedClassified = excludedClassified;
+    if (excludedClassified > summary.files.classified) {
+      summary.environment.excludedMost = true;
+      summary.warnings.push(`${scopeName} left out ${excludedClassified} of the ${excludedClassified + summary.files.classified} files the scan recognises — more than half of them. ${readsEvery}`);
+    }
+  }
+
   // Honor Helm `enabled: false`: a component the selected environment disables
   // must not be declared as a live backend. The toggle often lives in an env
   // overlay (values-eks) while the image lives in base values.yaml, so merge
-  // `enabled` across the in-scope values files (overlays win) before walking.
-  const disabledComponents = collectDisabledComponents(
-    classified.filter((f) => f.kind === 'helm-values'),
-  );
+  // `enabled` across the in-scope values files (overlays win) before walking —
+  // when a deployment profile chose the files. With none (every file read, as a
+  // service environment reads by default), an overlay is some environment's,
+  // never every environment's: only the base values decide, and each overlay
+  // that would switch a component off is named in one warning.
+  const valuesFiles = classified.filter((f) => f.kind === 'helm-values');
+  const disabledComponents = collectDisabledComponents(envScope.profile ? valuesFiles : valuesFiles.filter((f) => isBaseValuesPath(f.relPath)));
+  if (!envScope.profile) {
+    const overlaid = overlaySwitchesOff(valuesFiles, disabledComponents);
+    if (overlaid.length) {
+      const shown = overlaid.slice(0, 8).map((o) => `${o.relPath} switches ${o.components.join(', ')} off`).join('; ') + (overlaid.length > 8 ? `; … (${overlaid.length - 8} more)` : '');
+      summary.warnings.push(`Every file is read, so only the base Helm values decide what is deployed: ${shown}. An environment that deploys with one of these overlays reads it alone through its deployment surface.`);
+    }
+  }
   if (disabledComponents.size) {
     summary.discovered.disabledComponents = [...disabledComponents];
   }
@@ -1328,10 +1445,29 @@ export function crawlFiles(filesInput, opts = {}) {
  *     unclassified, unknownFiles what it read and recognised as nothing,
  *     environment: { profile, excluded, excludedFiles }  what the
  *                      environment's deployment profile left out,
- *     warnings }
+ *     warnings,
+ *     partial          the read LOST files (a host refused or dropped them, the
+ *                      read's budget ran out, the disk would not give them):
+ *                      such a scan stops a Run, fails its gate and is not
+ *                      comparable with another (scanSkipKind 'lost'),
+ *     lost             how many,
+ *     notRead          every file the scan takes and did not read but those left
+ *                      out on purpose: the lost ones, those over the size caps
+ *                      or not text, and those past the file cap,
+ *     notReadReasons   the first 5 of them, lost first: [{ path, why }] — reasons
+ *                      only, never a host's body,
+ *     cappedFiles      the first 20 past the file cap,
+ *     treeTruncated    the host's own flag (`truncated`, kept for older readers),
+ *     filter: { surface, excluded[, asked] }  the deployment surface whose files
+ *                      alone were read (null: every file) and how many it left out,
+ *     excludedMost     it left out more than half the files the scan recognises }
+ * Each skippedFiles entry names its `kind` (scanSkipKind). `candidates` with no
+ * count from the read is the files read and those not read.
  * Without a summary (the scan read nothing) only the read's part is filled.
  */
 export const SCAN_REPORT_SHOWN = 50;
+export const SCAN_REASONS_SHOWN = 5;
+export const SCAN_CAPPED_SHOWN = 20;
 export function scanReport(read = {}, summary = null) {
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const fileCount = read.files && typeof read.files === 'object' ? Object.keys(read.files).length : n(read.files);
@@ -1340,15 +1476,24 @@ export function scanReport(read = {}, summary = null) {
   const env = summary?.environment || {};
   const excluded = Array.isArray(env.excluded) ? env.excluded : [];
   const short = (s, max = 500) => { const t = String(s ?? ''); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
+  const kinds = skipped.map((s) => scanSkipKind(s?.why));
+  const lost = skipped.filter((_, i) => kinds[i] === 'lost');
+  const limited = skipped.filter((_, i) => kinds[i] === 'limit');
+  const capped = n(read.capped);
+  const cappedPaths = (Array.isArray(read.cappedFiles) ? read.cappedFiles : []).filter((p) => typeof p === 'string');
+  const capWhy = SCAN_WHY.fileCap(Number.isInteger(read.fileCap) ? read.fileCap : null);
+  const notRead = lost.length + limited.length + capped;
+  const reasons = [...lost, ...limited, ...cappedPaths.slice(0, SCAN_REASONS_SHOWN).map((path) => ({ path, why: capWhy }))].slice(0, SCAN_REASONS_SHOWN);
   return {
     source: read.source ?? null,
     ref: read.ref ?? null,
     files: fileCount,
-    candidates: read.candidates === undefined ? fileCount : n(read.candidates),
-    capped: n(read.capped),
+    candidates: Number.isFinite(Number(read.candidates)) && read.candidates !== null && read.candidates !== undefined ? n(read.candidates) : fileCount + notRead,
+    capped,
     truncated: read.truncated === true,
     skipped: skipped.length,
-    skippedFiles: skipped.slice(0, SCAN_REPORT_SHOWN).map((s) => ({ path: short(s?.path, 300), why: short(s?.why, 200) })),
+    // A reason at most 300 characters: a host's sentence with the tries after it fits whole.
+    skippedFiles: skipped.slice(0, SCAN_REPORT_SHOWN).map((s, i) => ({ path: short(s?.path, 300), why: short(s?.why, 300), kind: kinds[i] })),
     classified: n(f.classified),
     byKind: f.byKind && typeof f.byKind === 'object' ? { ...f.byKind } : {},
     unclassified: n(f.unclassified),
@@ -1359,7 +1504,44 @@ export function scanReport(read = {}, summary = null) {
       excludedFiles: excluded.slice(0, SCAN_REPORT_SHOWN).map((p) => short(p, 300)),
     },
     warnings: (Array.isArray(summary?.warnings) ? summary.warnings : []).slice(0, 20).map((w) => short(w)),
+    partial: lost.length > 0,
+    lost: lost.length,
+    notRead,
+    notReadReasons: reasons.map((s) => ({ path: short(s?.path, 300), why: short(s?.why, 300) })),
+    cappedFiles: cappedPaths.slice(0, SCAN_CAPPED_SHOWN).map((p) => short(p, 300)),
+    treeTruncated: read.truncated === true,
+    filter: {
+      surface: typeof env.surface === 'string' ? env.surface : null,
+      excluded: n(f.excludedByEnvironment),
+      ...(typeof env.asked === 'string' ? { asked: env.asked } : {}),
+    },
+    excludedMost: env.excludedMost === true,
   };
+}
+
+/**
+ * A scan's loss in one sentence, for a stopped Run's answer and its record:
+ *   "<n> of <m> files not read: <path> — <why>"  (the first reason; lost first)
+ *   "<lost> of <m> files could not be read: <path> — <why> (<k> more not read: …)"
+ *     when files were also left out by the caps;
+ * "files or folders" when a folder is among them; '' when nothing is missing.
+ */
+export function notReadSentence(scan) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const notRead = n(scan?.notRead);
+  if (!notRead) return '';
+  const lost = n(scan?.lost);
+  const capped = n(scan?.capped);
+  const limited = Math.max(0, notRead - lost - capped);
+  const reasons = Array.isArray(scan?.notReadReasons) ? scan.notReadReasons : [];
+  const first = reasons[0] ? `: ${reasons[0].path} — ${reasons[0].why}` : '';
+  const noun = reasons.some((r) => String(r?.path ?? '').endsWith('/')) ? 'files or folders' : 'files';
+  const of = `of ${n(scan?.candidates)} ${noun}`;
+  if (lost && lost < notRead) {
+    const more = [limited ? `${limited} over the scan's limits` : '', capped ? `${capped} past the file cap` : ''].filter(Boolean).join(', ');
+    return `${lost} ${of} could not be read${first} (${notRead - lost} more not read: ${more})`;
+  }
+  return `${notRead} ${of} not read${first}`;
 }
 
 export function crawlToYaml(filesInput, opts) {
@@ -2337,26 +2519,46 @@ function recordExporter(exporters, name, source, summary) {
 // toggles, which is the convention these charts use.
 function collectDisabledComponents(valuesFiles) {
   const ordered = [...valuesFiles].sort((a, b) => {
-    const rank = (p) => (/(^|\/)values\.ya?ml$/i.test(normalizeRepoPath(p)) ? 0 : 1);
+    const rank = (p) => (isBaseValuesPath(p) ? 0 : 1);
     return rank(a.relPath) - rank(b.relPath);
   });
   const effective = new Map(); // top-level component -> enabled boolean
   for (const f of ordered) {
-    let docs;
-    try { docs = parseYamlDocs(f.content); } catch { continue; }
-    for (const obj of docs) {
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
-      for (const [key, val] of Object.entries(obj)) {
-        if (val && typeof val === 'object' && !Array.isArray(val)
-            && typeof val.enabled === 'boolean') {
-          effective.set(key, val.enabled);
-        }
-      }
-    }
+    for (const [key, on] of enabledTogglesOf(f)) effective.set(key, on);
   }
   const disabled = new Set();
   for (const [key, on] of effective) if (on === false) disabled.add(key);
   return disabled;
+}
+
+// A chart's base values (`values.yaml`), as against an overlay (`values-eks.yaml`, …).
+function isBaseValuesPath(relPath) {
+  return /(^|\/)values\.ya?ml$/i.test(normalizeRepoPath(relPath));
+}
+
+// A values file's top-level `<component>.enabled` toggles, in document order.
+function enabledTogglesOf(f) {
+  const out = [];
+  let docs;
+  try { docs = parseYamlDocs(f.content); } catch { return out; }
+  for (const obj of docs) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+    for (const [key, val] of Object.entries(obj)) {
+      if (val && typeof val === 'object' && !Array.isArray(val) && typeof val.enabled === 'boolean') out.push([key, val.enabled]);
+    }
+  }
+  return out;
+}
+
+// The overlays that would switch a component off the base values leave on:
+// [{ relPath, components }] in path order — said, never applied, when every file is read.
+function overlaySwitchesOff(valuesFiles, baseDisabled) {
+  const out = [];
+  for (const f of [...valuesFiles].filter((x) => !isBaseValuesPath(x.relPath)).sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))) {
+    const components = [...new Set(enabledTogglesOf(f).filter(([key, on]) => on === false && !baseDisabled.has(key)).map(([key]) => key))];
+    if (components.length) out.push({ relPath: f.relPath, components });
+  }
+  return out;
 }
 
 function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorState = newCollectorState() } = {}) {

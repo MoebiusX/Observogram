@@ -110,6 +110,83 @@ export function readSignal(signal = null) {
   return signal ? AbortSignal.any([AbortSignal.timeout(READ_TIMEOUT_MS), signal]) : AbortSignal.timeout(READ_TIMEOUT_MS);
 }
 
+// How long a host asks a reader to wait before it tries again, in ms, from its
+// answer's headers — `headers` a Headers or a plain object — or null when it
+// asks for nothing: `Retry-After` (seconds, or an HTTP date), else, only when
+// `x-ratelimit-remaining` is "0", `x-ratelimit-reset` (epoch seconds) — the
+// pair GitHub documents for a spent quota. Never negative. A number derived
+// from a header, never the header itself.
+export function hostWaitMs(headers, nowMs = Date.now()) {
+  const get = (name) => {
+    try {
+      if (typeof headers?.get === 'function') return headers.get(name);
+      if (headers && typeof headers === 'object') {
+        const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+        return key === undefined ? null : headers[key];
+      }
+    } catch { /* unreadable headers: nothing asked */ }
+    return null;
+  };
+  const after = String(get('retry-after') ?? '').trim();
+  if (after) {
+    if (/^\d+(?:\.\d+)?$/.test(after)) return Math.max(0, Math.round(Number(after) * 1000));
+    const at = Date.parse(after);
+    if (Number.isFinite(at)) return Math.max(0, at - nowMs);
+  }
+  if (String(get('x-ratelimit-remaining') ?? '').trim() === '0') {
+    const reset = String(get('x-ratelimit-reset') ?? '').trim();
+    if (/^\d+$/.test(reset)) return Math.max(0, Number(reset) * 1000 - nowMs);
+  }
+  return null;
+}
+
+// What a host's error answer says, for a sentence a person reads: the JSON
+// body's `message` — its first sentence only, on one line, at most 200
+// characters ("Not Found", "TF401019: The Git repository … does not exist.";
+// a host's further sentences may name an identity or an address) — never the
+// body itself, and nothing for a body that is not JSON (an HTML page, a
+// proxy's text): the status says it alone then.
+export function hostMessage(body) {
+  let message = null;
+  try { const j = JSON.parse(String(body ?? '')); if (j && typeof j.message === 'string') message = j.message; } catch { return ''; }
+  if (!message) return '';
+  const line = message.replace(/\s+/g, ' ').trim();
+  const first = /^(.*?[.!?])(?=\s|$)/.exec(line);
+  return (first ? first[1] : line).slice(0, 200);
+}
+
+// What a reader may do with a read that failed, decided from the status the
+// reader kept (`err.status`) or a cause's code, never from the words:
+//   'refused'  the host turned the request away and may take it later — 403,
+//              429, 503: tried again after the host's wait, else a backoff,
+//              and the read slows down for every file;
+//   'failed'   a server error (500–599 but 503) or a connection that dropped
+//              (undici's 'terminated' with no code or ECONNRESET, UND_ERR_SOCKET,
+//              EPIPE; 'fetch failed' with one of those): tried again alone;
+//   null       anything else — 401, 404, a redirect, the 60 s deadline (a
+//              TimeoutError), a body that could not be decoded (Z_*, HPE_*,
+//              UND_ERR_BODY_TIMEOUT), the read's budget (a ReadBudgetError):
+//              never tried again.
+const REFUSED_STATUS = new Set([403, 429, 503]);
+export function retryKind(error) {
+  if (!error || typeof error !== 'object') return null;
+  const status = Number(error.status);
+  if (Number.isInteger(status) && status > 0) {
+    if (REFUSED_STATUS.has(status)) return 'refused';
+    return status >= 500 && status <= 599 ? 'failed' : null;
+  }
+  for (let e = error, depth = 0; e && typeof e === 'object' && depth < 5; e = e.cause, depth++) {
+    if (e.name === 'TimeoutError' || e.name === 'ReadBudgetError') return null;
+    const message = typeof e.message === 'string' ? e.message.trim().toLowerCase() : '';
+    if (e instanceof TypeError && message === 'terminated') {
+      const code = codesOf(e.cause || {})[0] || '';
+      return !code || DROPPED.has(code) ? 'failed' : null;
+    }
+    if (e instanceof TypeError && /fetch failed/.test(message)) return codesOf(e.cause || {}).some((c) => DROPPED.has(c)) ? 'failed' : null;
+  }
+  return null;
+}
+
 // The status a proxy answered a CONNECT with, when it would not open the way
 // to the host. undici words it "Proxy response (407) !== 200 when HTTP
 // Tunneling", an UND_ERR_ABORTED one or two causes down (6.21–6.29).

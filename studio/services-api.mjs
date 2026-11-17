@@ -40,6 +40,14 @@ export function servicesRefusal(status, body) {
   // A repository its host would not show without the person's own token
   // (POST /api/services/:id/run): which host, and whether their token was refused.
   if (json?.repoAuth && typeof json.repoAuth === 'object') err.repoAuth = { ...json.repoAuth };
+  // A Run stopped on a scan that lost files (POST /api/services/:id/run's 409): what the scan
+  // read (counts and reasons only) and the scan the service keeps ({ id, label }, or null).
+  if (json?.outcome === 'scan-partial') {
+    err.outcome = 'scan-partial';
+    if (json.scan && typeof json.scan === 'object' && !Array.isArray(json.scan)) err.scan = json.scan;
+    err.kept = json.kept && typeof json.kept === 'object' && typeof json.kept.id === 'string'
+      ? { id: json.kept.id, label: typeof json.kept.label === 'string' ? json.kept.label : json.kept.id } : null;
+  }
   return err;
 }
 
@@ -165,7 +173,9 @@ export async function putLivePack(envId, { name, text }, { fetchFn = requestJson
 // scanned and checked against live. `repoAuth` is the person's own GitHub or Azure DevOps token,
 // for this read only. A 502 (the repository or the live side did not answer) throws its sentence
 // with `.status`; the live side's loss has kept a record, which the next read shows. A repository
-// that needs the person's token throws with `.repoAuth` ({ kind, label, refused }).
+// that needs the person's token throws with `.repoAuth` ({ kind, label, refused }). A scan that
+// lost files stops the Run (409): it throws with `.outcome` 'scan-partial', `.scan` (what it read)
+// and `.kept` (the scan the service keeps, { id, label }, or null); its record is kept.
 export async function runServiceRecord(id, env, { fetchFn = requestJson, repoAuth = null } = {}) {
   return fetchFn(`/api/services/${enc(id)}/run`, jsonBody('POST', { ...(env ? { env } : {}), ...(repoAuth ? { repoAuth } : {}) }));
 }

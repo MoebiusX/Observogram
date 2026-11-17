@@ -628,6 +628,34 @@ savePlan(values, { …, scopeDefaults: form.scopeDefaults });                   
 `resolvedScope` and `SCOPE_FIELDS` are the model's own (the studio never
 imports `tools/lib`; the server checks every value).
 
+**A deployment surface per environment** (README, *Every environment reads
+the same files*): every environment of a service reads the same files; step 3
+offers *Read only this deployment surface* under the repository (`formModel`'s
+`surface`: `{ shown, label, options: [{ id, label, selected }], hint }`; not
+shown for a pack file, nor when the services you pass carry no `envSurfaces` —
+an older server would drop the answer), its answer `values.surface` (`''` for
+every file), and `savePlan` puts the service's whole `envSurfaces` map into
+the create or patch when this environment's entry changes. The rows carry
+`surface` (`{ id, label }` or `null`). `DEPLOYMENT_SURFACE_CHOICES` and
+`surfaceLabel(id)` are the model's mirror of `tools/lib/crawler.mjs`
+`DEPLOYMENT_SURFACES` (pinned by a test). Nothing to wire: a select with
+`data-field` is handled as every answer is.
+
+**A Run stopped on a scan that lost files.** `runServiceRecord` throws
+`servicesRefusal`'s error with `.status` 409, `.outcome` `'scan-partial'`,
+`.scan` (what the scan read — counts and reasons only) and `.kept` (`{ id,
+label }`, the scan the service keeps, or `null`); the server has kept a
+`scan-partial` record. `loadOverviewFacts` answers `run` — the journey's
+newest run that checked something — and `stopped`, the newest record when it
+is such a stop (else `null`): a board that passes the newest record as `run`
+would read a stop, which carries no drift, as a check. A board unit older
+than this release reads a `scan-partial` record so: copy the Overview board
+unit with the server. `scanModel` reads a scan by kind when it counts what it
+did not read (`notRead`): `lost`, `limit`, `capped` (with the cap's files),
+`truncated`, `onPurpose` — a secrets file or one git ignores, never a
+warning — `excluded` (the filter, by its label) and `unknown`; an older
+record reads as before.
+
 **A repository read as the person who runs it.** A GitHub or Azure DevOps
 repository is read with the person's own token (README, *Whose access reads
 a repository*); the server's own only where it has no sign-in. A Run its host

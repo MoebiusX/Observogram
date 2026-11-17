@@ -39,11 +39,15 @@ const { createGitignore, parseGitignore } = await import('./lib/gitignore.mjs');
 const {
   crawlFiles, scanReadsPath, scanRefusal, scanRefusesName, SCAN_WHY, SCAN_MAX_FILE_BYTES,
   walkScanFolder, gitignoreOf, scanHonoursGitignore, scanReport, SCAN_REPORT_SHOWN,
+  scanSkipKind, SCAN_SKIP_KINDS, notReadSentence, DEPLOYMENT_SURFACES, DEPLOYMENT_SURFACE_LABELS,
 } = await import('./lib/crawler.mjs');
 const { planCrawlerFetch, selectCrawlerFiles, settleFetched, fetchGithubFiles, HOST_READ_CAPS, isUiSourcePath, isServiceSourcePath } = await import('../server/github-crawl.mjs');
 const { readRepoFolder } = await import('./lib/repo-folder.mjs');
-const { scanRepoFolder, walkRepoFiles, runJourney, readJourneyRuns } = await import('./lib/journey.mjs');
-const { scanModel, scanLossText } = await import('../studio/overview-model.mjs');
+const {
+  scanRepoFolder, walkRepoFiles, runJourney, readJourneyRuns, notifyTargetOf,
+  SCAN_PARTIAL_OUTCOME, inheritedScan, scanComparability, scanGateBreaches, writeStoppedRun,
+} = await import('./lib/journey.mjs');
+const { scanModel, scanLossText, DEPLOYMENT_SURFACE_CHOICES, surfaceLabel } = await import('../studio/overview-model.mjs');
 
 const write = (root, files) => {
   for (const [rel, text] of Object.entries(files)) {
@@ -369,4 +373,128 @@ test('scanModel and scanLossText: the board\'s line and its groups, the toast\'s
   assert.equal(scanModel({ run: { packA: {} } }), null);
   assert.equal(scanModel({ run: null }), null);
   assert.equal(scanModel({ run: { packA: { scan: { files: 3, candidates: 3, source: 'the folder /r' } } } }).tone, 'neutral');
+});
+
+// ---------- 7. what a scan did not read: lost, a limit, on purpose ----------
+
+test('scanSkipKind: a rule\'s skip is on purpose, a failed read lost, anything else a limit; scanReport counts every file not read but those left out on purpose, and is partial only for a loss; notReadSentence says it in one line', () => {
+  for (const why of [SCAN_WHY.secret, SCAN_WHY.gitignored, SCAN_WHY.gitignoredFolder, 'git ignores the folder tmp/ (.gitignore)', "it belongs to another org's part of the workspace — refused",
+    "it is not a path on a local drive, and a network share or a device path may lead into another org's part of the workspace — refused; name it by its path on a local drive (copy it there if it has none)"]) {
+    assert.equal(scanSkipKind(why), 'on-purpose', why);
+  }
+  for (const why of ['it could not be downloaded (GitHub 404 on a.yaml)', "it could not be downloaded (the read's 120 s for its files ran out)", 'it could not be read (EACCES)', 'it could not be listed (EACCES)']) assert.equal(scanSkipKind(why), 'lost', why);
+  for (const why of [SCAN_WHY.tooLarge(), SCAN_WHY.totalCap(16 * 1024 * 1024), SCAN_WHY.notText, 'it is encrypted', 'it is compressed with method 9, which is not read', 'it is damaged (it does not inflate)', "its name leaves the archive's folder", 'a wording nobody planned for', '', undefined]) {
+    assert.equal(scanSkipKind(why), 'limit', String(why));
+  }
+  assert.deepEqual(SCAN_SKIP_KINDS, ['on-purpose', 'lost', 'limit']);
+  assert.equal(SCAN_WHY.fileCap(200), "past the read's 200-file cap (the likely artefacts are read first)");
+  assert.equal(SCAN_WHY.fileCap(), "past the read's file cap (the likely artefacts are read first)");
+
+  const lost403 = 'it could not be downloaded (GitHub 403 on b.rules.yaml — tried 4 times)';
+  const lost502 = 'it could not be downloaded (GitHub 502 on c.rules.yaml — tried 4 times)';
+  const r = scanReport({
+    source: 'acme/shop on GitHub', ref: 'main', files: { 'a.rules.yaml': '' }, candidates: 9, capped: 2, cappedFiles: ['z1.yaml', 'z2.yaml'], fileCap: 200, truncated: true,
+    skipped: [{ path: 'b.rules.yaml', why: lost403 }, { path: 'big.json', why: SCAN_WHY.tooLarge() }, { path: 'c.rules.yaml', why: lost502 }, { path: 'values-secrets.yaml', why: SCAN_WHY.secret }],
+  }, null);
+  assert.deepEqual([r.partial, r.lost, r.notRead, r.treeTruncated, r.truncated, r.skipped], [true, 2, 5, true, true, 4], 'two lost, one over a limit, two past the cap; the secrets file is no loss');
+  assert.deepEqual(r.notReadReasons, [
+    { path: 'b.rules.yaml', why: lost403 }, { path: 'c.rules.yaml', why: lost502 }, { path: 'big.json', why: SCAN_WHY.tooLarge() },
+    { path: 'z1.yaml', why: SCAN_WHY.fileCap(200) }, { path: 'z2.yaml', why: SCAN_WHY.fileCap(200) },
+  ], 'the lost first, then the limits, then the cap\'s files: reasons only');
+  assert.deepEqual(r.skippedFiles.map((s) => s.kind), ['lost', 'limit', 'lost', 'on-purpose'], 'each skipped entry names its kind, in path order as before');
+  assert.deepEqual([r.cappedFiles, r.filter, r.excludedMost], [['z1.yaml', 'z2.yaml'], { surface: null, excluded: 0 }, false]);
+  assert.equal(notReadSentence(r), `2 of 9 files could not be read: b.rules.yaml — ${lost403} (3 more not read: 1 over the scan's limits, 2 past the file cap)`);
+  // A capped-only scan is not partial: its capped files are not read, and counted where the lost ones are.
+  const capped = scanReport({ files: { 'a.yaml': '' }, candidates: 394, capped: 194, cappedFiles: ['x.ts'], fileCap: 200, skipped: [] });
+  assert.deepEqual([capped.partial, capped.lost, capped.notRead, capped.notReadReasons], [false, 0, 194, [{ path: 'x.ts', why: SCAN_WHY.fileCap(200) }]]);
+  assert.equal(notReadSentence(capped), `194 of 394 files not read: x.ts — ${SCAN_WHY.fileCap(200)}`);
+  assert.deepEqual([scanGateBreaches(capped), scanComparability(capped, [])], [[], null], 'it passes or fails its gate on what was read, and stays comparable');
+  // A crawl: folder source counts no candidates: those read and those not read; a folder not listed is lost.
+  const folder = scanReport({ files: { 'a.yaml': '', 'b.yaml': '' }, skipped: [{ path: 'tmp/', why: 'it could not be listed (EACCES)' }, { path: 'secret.yaml', why: SCAN_WHY.secret }] });
+  assert.deepEqual([folder.candidates, folder.partial, folder.notRead], [3, true, 1]);
+  assert.equal(notReadSentence(folder), '1 of 3 files or folders not read: tmp/ — it could not be listed (EACCES)');
+  assert.equal(notReadSentence(scanReport({ files: { 'a.yaml': '' }, skipped: [{ path: 's.yaml', why: SCAN_WHY.secret }] })), '', 'nothing not read: no sentence');
+  const many = scanReport({ files: {}, capped: 30, cappedFiles: Array.from({ length: 30 }, (_, i) => `f${i}.yaml`), skipped: [] });
+  assert.equal(many.cappedFiles.length, 20, 'a record keeps the first 20 of the cap\'s files');
+});
+
+test('scanModel and scanLossText on a scan that counts what it did not read: by kind; a file left out on purpose is never a warning; the cap\'s files named; the filter by its label; the studio\'s surfaces are the crawler\'s', () => {
+  const base = { source: 'acme/shop on GitHub', files: 3, candidates: 3, capped: 0, truncated: false, treeTruncated: false, unclassified: 0, unknownFiles: [], environment: { profile: null, excluded: 0, excludedFiles: [] }, warnings: [], filter: { surface: null, excluded: 0 }, excludedMost: false };
+  const secretsOnly = { ...base, skipped: 1, skippedFiles: [{ path: 'k8s/values-secrets.yaml', why: SCAN_WHY.secret, kind: 'on-purpose' }], partial: false, lost: 0, notRead: 0, notReadReasons: [], cappedFiles: [] };
+  const quiet = scanModel({ run: { packA: { scan: secretsOnly } } });
+  assert.deepEqual([quiet.tone, quiet.sentence, scanLossText(secretsOnly)], ['neutral', 'Read 3 files from acme/shop on GitHub.', ''], 'a secrets file left out is no loss');
+  assert.deepEqual(quiet.groups.map((g) => [g.key, g.count, g.rows.length]), [['onPurpose', 1, 1]]);
+  const lossy = {
+    ...base, files: 200, candidates: 414, capped: 194, cappedFiles: ['apps/x.ts'],
+    skipped: 21, skippedFiles: [
+      { path: 'a.json', why: 'it could not be downloaded (Azure DevOps 403 — tried 4 times)', kind: 'lost' },
+      { path: 'big.json', why: SCAN_WHY.tooLarge(), kind: 'limit' },
+      { path: 'values-secrets.yaml', why: SCAN_WHY.secret, kind: 'on-purpose' },
+    ],
+    partial: true, lost: 19, notRead: 214, notReadReasons: [], unclassified: 2, unknownFiles: ['x.json', 'y.json'],
+    environment: { profile: 'prod', excluded: 14, excludedFiles: ['docker-compose.yml'] }, filter: { surface: 'kubernetes', excluded: 14 },
+  };
+  const m = scanModel({ run: { packA: { scan: lossy } } });
+  assert.equal(m.sentence, "Read 200 of 414 files from acme/shop on GitHub — 19 could not be read, 1 over the scan's limits, 194 past the file cap, 14 left out by the Kubernetes and Helm filter, 2 recognised as nothing.");
+  assert.equal(m.tone, 'warn');
+  assert.deepEqual(m.groups.map((g) => [g.key, g.count, g.rows.length]), [['lost', 19, 1], ['limit', 1, 1], ['capped', 194, 1], ['onPurpose', 1, 1], ['excluded', 14, 1], ['unknown', 2, 2]]);
+  assert.match(m.groups.find((g) => g.key === 'excluded').title, /^Left out by the Kubernetes and Helm filter — /);
+  assert.deepEqual([m.partial, m.notRead, m.candidates], [true, 214, 414]);
+  assert.equal(scanModel({ run: { packA: { scan: { ...secretsOnly, excludedMost: true, filter: { surface: 'compose', excluded: 9 } } } } }).tone, 'warn', 'a surface that left out most of the repository warns, nothing lost');
+  assert.deepEqual(DEPLOYMENT_SURFACE_CHOICES.map((c) => c.id), ['', ...Object.keys(DEPLOYMENT_SURFACES)], 'the form\'s choices are the crawler\'s surfaces, none first');
+  for (const id of Object.keys(DEPLOYMENT_SURFACES)) assert.equal(surfaceLabel(id), DEPLOYMENT_SURFACE_LABELS[id], id);
+  assert.equal(surfaceLabel('prod'), 'environment', 'a name is no surface');
+});
+
+test('a stopped Run\'s record (writeStoppedRun): no grade, no drift, a notify block posts it; its scan is never inherited; a scan that lost files fails a gate that asks nothing and its figures are not set beside the run before, nor the run after beside it; another reading of the files is said', async () => {
+  const { canonical } = crawlFiles({ 'prometheus/rules.yml': 'groups:\n  - name: g\n    rules:\n      - alert: Down\n        expr: up == 0\n' }, { repoName: 'svc' });
+  const dir = join(SCRATCH, 'packs-stop');
+  mkdirSync(dir, { recursive: true });
+  const a = join(dir, 'a.pack.json');
+  const b = join(dir, 'b.pack.json');
+  writeFileSync(a, JSON.stringify(canonical));
+  writeFileSync(b, JSON.stringify(canonical));
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  const def = { name: 'scan-stop', packA: { file: a }, packB: { file: b }, env: 'prod', service: 'svc', gate: {} };
+  const whole = scanReport({ source: 'acme/shop on GitHub', ref: 'main', files: { 'x.yaml': '' }, candidates: 3, skipped: [] }, null);
+  const first = await runJourney({ ...def }, { scan: whole });
+  assert.deepEqual([first.outcome, 'comparable' in first], ['pass', false], 'a whole scan and a gate that asks nothing: a pass, comparable');
+  await tick();
+  const LOST = 'it could not be downloaded (GitHub 403 on y.yaml — tried 4 times)';
+  const lostScan = scanReport({ source: 'acme/shop on GitHub', ref: 'main', files: { 'x.yaml': '' }, candidates: 3, skipped: [{ path: 'y.yaml', why: LOST }] }, null);
+  const posted = [];
+  const target = notifyTargetOf({ urlEnv: 'SCAN_STOP_HOOK_URL', on: 'breach' }, { url: 'https://hooks.example.com/stop' });
+  const notifier = async (req) => { posted.push(JSON.parse(req.body)); return { sent: true, httpStatus: 200, attempts: 1, tookMs: 1 }; };
+  const stopped = await writeStoppedRun({ ...def }, { kept: { source: first.packA.source }, scan: lostScan, tookMs: 12, notifyTarget: target, notifier });
+  assert.deepEqual(Object.keys(stopped), ['journey', 'startedAt', 'tookMs', 'outcome', 'error', 'packA', 'packB', 'scope', 'gate', 'notify']);
+  assert.deepEqual([stopped.outcome, stopped.error, stopped.packA, stopped.packB, stopped.scope, stopped.gate],
+    [SCAN_PARTIAL_OUTCOME, `1 of 3 files not read: y.yaml — ${LOST}`, { source: first.packA.source, scan: lostScan }, { source: b }, { env: 'prod', service: 'svc', scopeMode: null }, { thresholds: {}, breaches: [] }]);
+  assert.equal(stopped.notify.status, 'sent', 'a notify block posts it, as any run that did not pass');
+  assert.deepEqual([posted.length, posted[0].outcome, posted[0].reason], [1, SCAN_PARTIAL_OUTCOME, 'gate failed: scan-partial']);
+  assert.match(posted[0].text, /^scan-stop: scan-partial · 1 of 3 files not read: y\.yaml — .* — the Run stopped$/);
+  assert.deepEqual(readJourneyRuns('scan-stop', { limit: 1 })[0], stopped, 'written as any run');
+  const quiet = await writeStoppedRun({ ...def, name: 'scan-stop-quiet' }, { kept: null, scan: lostScan });
+  assert.deepEqual([quiet.packA.source, quiet.notify], [null, null], 'no kept pack: no source; no notify block: null, never unknown');
+  await tick();
+  // A Check now on the kept pack keeps the complete scan, never the stopped one's.
+  const again = await runJourney({ ...def });
+  assert.deepEqual(again.packA.scan, whole, 'Check now inherits the last complete scan, never a stopped Run\'s');
+  assert.equal(inheritedScan([stopped], first.packA.source), null);
+  await tick();
+  // Checked though partial (the policy `check`, or no complete scan kept): the gate fails though it asks nothing.
+  const partly = await runJourney({ ...def }, { scan: lostScan });
+  assert.equal(partly.outcome, 'gate-failed');
+  assert.deepEqual(partly.gate.breaches, [{ criterion: 'scanComplete', detail: `${stopped.error} — a check on part of the repository cannot pass` }]);
+  assert.deepEqual(partly.comparable, { withPrevious: false, reason: 'this scan could not read 1 of 3 files' });
+  assert.deepEqual(Object.keys(partly).slice(0, 6), ['journey', 'startedAt', 'tookMs', 'packA', 'comparable', 'packB'], 'comparable right after packA; the rest of the record as it was');
+  await tick();
+  const after = await runJourney({ ...def }, { scan: whole });
+  assert.deepEqual([after.outcome, after.comparable], ['pass', { withPrevious: false, reason: "the previous run's scan could not read 1 of 3 files" }], 'the whole scan after it is not set beside it either');
+  // Another reading of the files: a deployment surface applied in one run and not the other.
+  const k8sOnly = { ...whole, filter: { surface: 'kubernetes', excluded: 14 } };
+  assert.deepEqual(scanComparability(k8sOnly, [after]), { withPrevious: false, reason: 'the previous run read every file; this one reads only the Kubernetes and Helm files (14 left out)' });
+  assert.deepEqual(scanComparability(whole, [{ outcome: 'pass', grade: {}, packA: { scan: { environment: { profile: 'prod', excluded: 14 } } } }]),
+    { withPrevious: false, reason: 'the previous run read only the Kubernetes and Helm files (14 left out); this one reads every file' }, 'a record written before: its profile');
+  assert.deepEqual([scanComparability(whole, [after]), scanComparability(null, [after]), scanComparability(whole, [])], [null, null, null]);
+  assert.deepEqual([scanGateBreaches(whole), scanGateBreaches(null)], [[], []]);
 });

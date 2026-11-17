@@ -8,7 +8,7 @@
 
 import { isTestOrFixturePath } from '../tools/lib/exporter-metrics.mjs';
 import { SCAN_MAX_FILE_BYTES, SCAN_WHY, scanReadsPath, scanRefusal } from '../tools/lib/crawler.mjs';
-import { readSignal, unreachable } from './fetch-failure.mjs';
+import { hostMessage, hostWaitMs, readSignal, retryKind, unreachable } from './fetch-failure.mjs';
 
 export function parseGithubUrl(input) {
   if (typeof input !== 'string' || !input.trim()) return null;
@@ -164,9 +164,10 @@ const tierOf = (path) => (isCrawlerFile(path) ? 0
  * A secrets file, a blob the tree says is over `fileCapBytes` and a blob past
  * `totalCapBytes` (by the tree's sizes, in that order) are skipped and named,
  * never fetched.
- * → { selected: [node], candidates, capped, skipped: [{ path, why }] }
+ * → { selected: [node], candidates, capped, cappedFiles, skipped: [{ path, why }] }
  *   candidates  how many blobs the rule reads in the whole tree
  *   capped      how many of them the file cap left out
+ *   cappedFiles their paths, in plan order (a record keeps the first few)
  */
 export function planCrawlerFetch(tree, { maxFiles = 200, fileCapBytes = SCAN_MAX_FILE_BYTES, totalCapBytes = Infinity } = {}) {
   const blobs = (Array.isArray(tree) ? tree : []).filter(node => node?.type === 'blob' && typeof node.path === 'string');
@@ -181,17 +182,17 @@ export function planCrawlerFetch(tree, { maxFiles = 200, fileCapBytes = SCAN_MAX
     .sort((x, y) => x.tier - y.tier || x.i - y.i)
     .map(x => x.node);
   const selected = [];
-  let capped = 0;
+  const cappedFiles = [];
   let total = 0;
   for (const node of ordered) {
     const size = Number(node.size) || 0;
     if (size > fileCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.tooLarge(fileCapBytes) }); continue; }
-    if (selected.length >= maxFiles) { capped++; continue; }
+    if (selected.length >= maxFiles) { cappedFiles.push(node.path); continue; }
     if (total + size > totalCapBytes) { skipped.push({ path: node.path, why: SCAN_WHY.totalCap(totalCapBytes) }); continue; }
     total += size;
     selected.push(node);
   }
-  return { selected, candidates: takes.length, capped, skipped };
+  return { selected, candidates: takes.length, capped: cappedFiles.length, cappedFiles, skipped };
 }
 
 // planCrawlerFetch's blobs alone.
@@ -242,6 +243,14 @@ export const HOST_READ_PARALLEL = 8;
 // under this budget.
 export const HOST_READ_FILES_BUDGET_MS = 120_000;
 
+// How often a read tries one file (the first try included); the backoff
+// before a try again when the host asks for no wait — 1 s, 2 s, 4 s, each
+// × 0.5–1 — and the longest wait a host may ask of a read (never past the
+// read's own end: a host that asks for longer is not asked again in it).
+export const HOST_READ_ATTEMPTS = 4;
+export const HOST_READ_BACKOFF_MS = 1000;
+export const HOST_READ_MAX_WAIT_MS = 60_000;
+
 // The reason a read's budget aborts its files with: a ReadBudgetError, which
 // unreachable() leaves as it is (neither fetch's failure nor a TimeoutError),
 // so a file the time ran out for is skipped with exactly this sentence.
@@ -249,36 +258,165 @@ export function outOfTime(budgetMs) {
   return Object.assign(new Error(`the read's ${Math.round(budgetMs / 1000)} s for its files ran out`), { name: 'ReadBudgetError' });
 }
 
+// A wait that ends early, with the signal's reason, when the signal aborts.
+function sleepUnder(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener?.('abort', onAbort); resolve(); }, Math.max(0, ms));
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+const secondsOf = (ms) => Math.ceil(ms / 1000);
+// The wait before try `attempt + 1`: the host's own (err.retryAfterMs), else the backoff.
+const waitAfter = (e, attempt, backoffMs, random) => (Number.isFinite(e?.retryAfterMs) && e.retryAfterMs > 0
+  ? e.retryAfterMs : backoffMs * 2 ** (attempt - 1) * (0.5 + random() / 2));
+
 /**
- * The files of one host read, downloaded `parallel` at a time under one
- * budget of `budgetMs`: a pool of workers, each taking the next node of
+ * The files of one host read, downloaded at most `parallel` at a time under
+ * one budget of `budgetMs`: a pool of workers, each taking the next node of
  * `selected` in order (a slow file holds one slot, never the others), each
  * file awaited through `fetchText(node, signal)` — the budget's signal, which
  * the fetcher combines with its own deadline (fetch-failure.mjs readSignal).
+ *
+ * A file the host refused or dropped is tried again (fetch-failure.mjs
+ * retryKind), `attempts` tries in all: after the wait the host asked for
+ * (err.retryAfterMs, fetch-failure.mjs hostWaitMs), else a backoff. A refusal
+ * (403, 429, 503) slows the whole read down: every request pauses for the
+ * wait, and the pool halves — once for a burst, never once per refusal — then
+ * grows back by one after a round of answers, never to the size that was
+ * refused. A server error or a drop is tried again alone. A host that asks
+ * for a wait longer than `maxWaitMs`, or past the budget's end, is asked
+ * nothing more in this read. Nothing ever runs more than `parallel` at once.
+ *
  * When the budget runs out its controller aborts with outOfTime's error as
  * the reason: fetch(), res.text() and res.json() reject with the signal's
  * reason, so a file in flight ends with that sentence, and a file not started
  * by then is stored with it, no call made. Never fatal.
- * → Map(path → { text } | { error }), what settleFetched takes.
+ * → Map(path → { text } | { error, status?, attempts? }) — what settleFetched
+ * takes; `error` the host's sentence and, when it was tried more than once,
+ * "— tried <n> times" (or why it was not tried again); `status` the last
+ * answer's; `attempts` when more than one.
+ * `now`, `sleep` and `random` are test seams.
  */
-export async function downloadFiles(selected, fetchText, { parallel = HOST_READ_PARALLEL, budgetMs = HOST_READ_FILES_BUDGET_MS } = {}) {
+export async function downloadFiles(selected, fetchText, {
+  parallel = HOST_READ_PARALLEL, budgetMs = HOST_READ_FILES_BUDGET_MS, attempts = HOST_READ_ATTEMPTS,
+  backoffMs = HOST_READ_BACKOFF_MS, maxWaitMs = HOST_READ_MAX_WAIT_MS, now = Date.now, sleep = sleepUnder, random = Math.random,
+} = {}) {
   const texts = new Map();
   if (!selected.length) return texts;
   const budget = new AbortController();
   const reason = outOfTime(budgetMs);
   const timer = setTimeout(() => budget.abort(reason), budgetMs);
+  const deadline = now() + budgetMs;
+  const ranOut = `the read's ${Math.round(budgetMs / 1000)} s for its files ran out before it was tried again`;
+  const tries = Math.max(1, Math.floor(attempts) || 1);
+  // The pool: `limit` requests at once; after a refusal it grows back to `ceiling` at most.
+  let limit = Math.max(1, Math.floor(parallel) || 1);
+  let ceiling = limit;
+  let inFlight = 0;
+  let pauseUntil = 0;
+  let cuts = 0;
+  let streak = 0;
+  let gaveUp = null;
+  const waiters = [];
+  const wake = (all = false) => { while (waiters.length && (all || inFlight < limit)) waiters.shift()(); };
+  budget.signal.addEventListener('abort', () => wake(true), { once: true });
+  // A slot, before every request: never past the budget or a give-up, never during a pause.
+  // → how many cuts the pool had when the request started (a refusal of an older one is that cut's burst).
+  const acquire = async () => {
+    for (;;) {
+      if (budget.signal.aborted) throw reason;
+      if (gaveUp) throw gaveUp;
+      const wait = pauseUntil - now();
+      if (wait > 0) { await sleep(wait, budget.signal); continue; }
+      if (inFlight < limit) { inFlight++; return cuts; }
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+  };
+  const release = () => { inFlight--; wake(); };
+  const failed = (e, error, attempt) => ({ error, ...(Number.isInteger(e?.status) ? { status: e.status } : {}), ...(attempt > 1 ? { attempts: attempt } : {}) });
+  const tooLong = () => `the host asked to wait ${secondsOf(gaveUp.waitMs)} s, more than the read had left`;
   let next = 0;
   const worker = async () => {
     while (next < selected.length) {
       const node = selected[next++];
-      if (budget.signal.aborted) { texts.set(node.path, { error: reason.message }); continue; }
-      try { texts.set(node.path, { text: await fetchText(node, budget.signal) }); }
-      catch (e) { texts.set(node.path, { error: e.message }); }
+      let last = null;
+      for (let attempt = 1; attempt <= tries; attempt++) {
+        let startedAt;   // the pool's cut count when this request started
+        try { startedAt = await acquire(); }
+        catch (stop) {
+          // Not tried (again): the budget's sentence, unchanged for a file never started; or the give-up's.
+          if (!last) texts.set(node.path, stop === reason ? { error: reason.message } : failed(stop, stop.message, 1));
+          else texts.set(node.path, failed(last, `${last.message} — ${stop === reason ? ranOut : tooLong()}`, attempt - 1));
+          break;
+        }
+        let text;
+        try { text = await fetchText(node, budget.signal); }
+        catch (e) {
+          release();
+          if (e === reason || e?.name === 'ReadBudgetError') {
+            texts.set(node.path, last ? failed(last, `${last.message} — ${ranOut}`, attempt - 1) : { error: e.message });
+            break;
+          }
+          last = e;
+          const kind = retryKind(e);
+          const wait = waitAfter(e, attempt, backoffMs, random);
+          if (kind === 'refused') {
+            // One cut for a burst: a refusal of a request that started before the last cut is that burst's.
+            if (startedAt === cuts) { ceiling = Math.max(1, limit - 1); limit = Math.max(1, Math.floor(limit / 2)); cuts++; streak = 0; }
+            const hinted = Number.isFinite(e?.retryAfterMs) && e.retryAfterMs > 0;
+            if (hinted && (wait > maxWaitMs || now() + wait > deadline)) {
+              if (!gaveUp) {
+                gaveUp = Object.assign(new Error(`not tried: the host refused ${node.path} (${e.status}) and asked to wait ${secondsOf(wait)} s, more than the read had left`), { status: e.status, waitMs: wait });
+                wake(true);
+              }
+            } else pauseUntil = Math.max(pauseUntil, now() + wait);
+          }
+          if (!kind) { texts.set(node.path, failed(e, attempt > 1 ? `${e.message} — tried ${attempt} times` : e.message, attempt)); break; }
+          if (gaveUp) { texts.set(node.path, failed(e, `${e.message} — ${tooLong()}`, attempt)); break; }
+          if (attempt === tries) { texts.set(node.path, failed(e, tries > 1 ? `${e.message} — tried ${attempt} times` : e.message, attempt)); break; }
+          if (now() + wait > deadline) { texts.set(node.path, failed(e, `${e.message} — ${ranOut}`, attempt)); break; }
+          try { await sleep(wait, budget.signal); }
+          catch { texts.set(node.path, failed(e, `${e.message} — ${ranOut}`, attempt)); break; }
+          continue;
+        }
+        release();
+        streak++;
+        if (limit < ceiling && streak >= limit) { limit++; streak = 0; wake(); }
+        texts.set(node.path, { text });
+        break;
+      }
     }
   };
-  try { await Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, selected.length)) }, worker)); }
+  try { await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, selected.length)) }, worker)); }
   finally { clearTimeout(timer); }
   return texts;
+}
+
+/**
+ * One read that is no file of a read's (a repository's metadata, its tree),
+ * tried again as a file is when the host refused or dropped it — `attempts`
+ * tries in all, after the host's wait or a backoff, all the waits together at
+ * most `maxWaitMs` — each try under its own deadline (the caller's fetcher's).
+ * A read that still fails throws its last error, "— tried <n> times" added
+ * to its sentence; its status is the host's. `limits` as downloadFiles'.
+ */
+export async function retryRead(call, { attempts = HOST_READ_ATTEMPTS, backoffMs = HOST_READ_BACKOFF_MS, maxWaitMs = HOST_READ_MAX_WAIT_MS, sleep = sleepUnder, random = Math.random } = {}) {
+  const tries = Math.max(1, Math.floor(attempts) || 1);
+  let waited = 0;
+  for (let attempt = 1; ; attempt++) {
+    try { return await call(); }
+    catch (e) {
+      const wait = waitAfter(e, attempt, backoffMs, random);
+      if (!retryKind(e) || attempt >= tries || waited + wait > maxWaitMs) {
+        if (attempt > 1 && e && typeof e === 'object' && typeof e.message === 'string') e.message = `${e.message} — tried ${attempt} times`;
+        throw e;
+      }
+      waited += wait;
+      await sleep(wait, null);
+    }
+  }
 }
 
 // The JSON a GitHub REST answer carries, an answer that could not be read to
@@ -303,23 +441,17 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
   try { res = await fetch(`https://api.github.com${path}`, { ...init, headers, signal: readSignal(init.signal ?? null) }); }
   catch (e) { throw unreachable('GitHub', 'https://api.github.com', e); }
   if (!res.ok) {
-    const said = githubSays(await res.text().catch(() => ''));
+    // What GitHub says (fetch-failure.mjs hostMessage): its JSON `message`'s first sentence
+    // ("Not Found", "Bad credentials") — never the body itself, nothing of a body that is not JSON.
+    const said = hostMessage(await res.text().catch(() => ''));
     const err = new Error(`GitHub ${res.status} on ${path}${said ? `: ${said}` : ''}`);
     err.status = res.status;
+    // The wait GitHub asks for (a secondary limit's retry-after, a spent quota's reset), for a read that tries again.
+    const wait = hostWaitMs(res.headers);
+    if (wait !== null) err.retryAfterMs = wait;
     throw err;
   }
   return res;
-}
-
-// What a failed GitHub REST call says, for a sentence a person reads: the
-// JSON body's `message` ("Not Found", "Bad credentials") — never the body
-// itself, with its documentation_url and status — else the text, on one
-// line. At most 200 characters.
-function githubSays(body) {
-  const text = String(body ?? '');
-  let message = null;
-  try { const j = JSON.parse(text); if (j && typeof j.message === 'string') message = j.message; } catch { /* not JSON */ }
-  return (message ?? text).replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 // A public file's address on raw.githubusercontent.com.
@@ -344,6 +476,8 @@ export async function rawFetch(owner, repo, ref, path, { signal = null } = {}) {
   if (!res.ok) {
     const err = new Error(`GitHub ${res.status} on ${path}`);
     err.status = res.status;
+    const wait = hostWaitMs(res.headers);
+    if (wait !== null) err.retryAfterMs = wait;
     throw err;
   }
   return res;
@@ -358,25 +492,28 @@ export async function rawFetch(owner, repo, ref, path, { signal = null } = {}) {
  * before them keep their own 60 s each, apart — through the contents API
  * with a `token` (a private repository; repo-auth.mjs says whose), else
  * from raw.githubusercontent.com (rawFetch: a public one, no quota spent).
- * A file that fails or does not fit is skipped and named, never fatal (a
- * connection dropped while it was read is named as that; a file the budget
- * ran out for reads "it could not be downloaded (the read's 120 s for its
- * files ran out)"); a tree or repository error throws (err.status is
- * GitHub's; none when the host was not reached or its answer was cut short).
- * → { ref, candidates, capped, files, skipped: [{ path, why }], truncated }
+ * A file GitHub refused or dropped is tried again (downloadFiles), and so are
+ * the repository and tree reads (retryRead). A file that still fails or does
+ * not fit is skipped and named, never fatal (a connection dropped while it
+ * was read is named as that; a file the budget ran out for reads "it could
+ * not be downloaded (the read's 120 s for its files ran out)"); a tree or
+ * repository error throws (err.status is GitHub's; none when the host was not
+ * reached or its answer was cut short).
+ * → { ref, candidates, capped, cappedFiles, fileCap, files, skipped: [{ path, why }], truncated }
  * — candidates the blobs the crawler's rule reads, capped how many of them
- * the 200-file cap left out, truncated GitHub's own flag (a tree too large
- * to list whole: files may be missing that nothing here can name). The
- * POST /api/crawl-github route and a service's Run share it. `limits`
- * ({ parallel, budgetMs }) is a test seam for downloadFiles.
+ * the 200-file cap left out (cappedFiles their paths, fileCap the cap),
+ * truncated GitHub's own flag (a tree too large to list whole: files may be
+ * missing that nothing here can name). The POST /api/crawl-github route and a
+ * service's Run share it. `limits` ({ parallel, budgetMs, attempts, backoffMs,
+ * maxWaitMs, now, sleep, random }) is a test seam for downloadFiles and retryRead.
  */
 export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch, limits = {} } = {}) {
   let at = ref;
   if (!at) {
-    const repoMeta = await apiJson(await fetchFn(`/repos/${owner}/${repo}`));
+    const repoMeta = await retryRead(async () => apiJson(await fetchFn(`/repos/${owner}/${repo}`)), limits);
     at = repoMeta.default_branch || 'main';
   }
-  const treeResp = await apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`));
+  const treeResp = await retryRead(async () => apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`)), limits);
   const plan = planCrawlerFetch(treeResp.tree, HOST_READ_CAPS);
   const texts = await downloadFiles(plan.selected, async (node, signal) => {
     const contentRes = rawFn
@@ -390,5 +527,5 @@ export async function fetchGithubFiles({ owner, repo, ref = null }, { token = nu
     catch (e) { throw unreachable('GitHub', rawFn ? rawUrl(owner, repo, at, node.path) : 'https://api.github.com', e, { answered: true }); }
   }, limits);
   const { files, skipped } = settleFetched(plan.selected, texts, { ...HOST_READ_CAPS, planned: plan.skipped });
-  return { ref: at, candidates: plan.candidates, capped: plan.capped, files, skipped, truncated: !!treeResp.truncated };
+  return { ref: at, candidates: plan.candidates, capped: plan.capped, cappedFiles: plan.cappedFiles, fileCap: HOST_READ_CAPS.maxFiles, files, skipped, truncated: !!treeResp.truncated };
 }

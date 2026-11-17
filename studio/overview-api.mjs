@@ -30,13 +30,19 @@ export function computeOverviewDiagnostic(layered, posture = null, { off = [] } 
 
 // loadOverviewFacts({ pack, env, journeyFor, fetchFn }) → the facts the model
 // projects, each failure captured as a sentence, never thrown:
-//   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, runError }
+//   { layered, layeredError, conformance, conformanceError, journeys, journeysError, journey, run, stopped, runError }
 // `journeyFor(journeys)` picks this service's journey (the model's rule), so
 // the run is read for the right one. The conformance (the pack against the
 // specification's clauses for its tier) is Remediate's "Required by the
 // specification" block; a failure there costs that block and nothing else.
+// `run` is the journey's newest run that checked something; a Run stopped on
+// a scan that lost files (outcome 'scan-partial': the service kept its last
+// complete scan) is `stopped` when it is the newest, never `run` — the board
+// keeps showing the check of the pack the service kept.
+const STOPPED = 'scan-partial';
+const STOPPED_LOOK_BACK = 25;
 export async function loadOverviewFacts({ pack = null, env = null, journeyFor = () => null, fetchFn = requestJson } = {}) {
-  const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, runError: null };
+  const out = { layered: null, layeredError: null, conformance: null, conformanceError: null, journeys: null, journeysError: null, journey: null, run: null, stopped: null, runError: null };
   const reads = [];
   if (pack?.id) {
     const q = env ? `?env=${enc(env)}` : '';
@@ -54,8 +60,15 @@ export async function loadOverviewFacts({ pack = null, env = null, journeyFor = 
   out.journey = journeyFor(out.journeys) || null;
   if (out.journey?.lastRun) {
     try {
-      const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?limit=1`);
-      out.run = Array.isArray(body?.runs) ? body.runs[0] || null : null;
+      const runsOf = async (limit) => {
+        const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?limit=${limit}`);
+        return Array.isArray(body?.runs) ? body.runs : [];
+      };
+      // The newest record alone, as before; only when it is a stop, the ones behind it.
+      let runs = await runsOf(1);
+      if (runs[0]?.outcome === STOPPED) runs = await runsOf(STOPPED_LOOK_BACK);
+      out.stopped = runs[0]?.outcome === STOPPED ? runs[0] : null;
+      out.run = runs.find((r) => r && r.outcome !== STOPPED) || null;
     } catch (e) { out.runError = sentence(e); }
   }
   return out;

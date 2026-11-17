@@ -47,6 +47,8 @@ export const STRIP = [
   // The MCP server-settings policy (server/mcp-settings-policy.mjs), read once at start, and the opt-in
   // pass-through's switch, read per request.
   'MCP_SETTINGS_POLICY', 'MCP_ADMIN_PROXY',
+  // The Run's partial-scan policy (server/repo-sources.mjs partialScanPolicy), read per Run.
+  'PARTIAL_SCAN',
 ];
 
 // The per-org variables (an MCP endpoint's read token, OBSERVOGRAM_ORG_<KEY>_<NAME>) are read at request time

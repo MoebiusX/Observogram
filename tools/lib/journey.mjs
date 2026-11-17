@@ -106,7 +106,7 @@ import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
-import { crawlFiles, scanReport } from './crawler.mjs';
+import { crawlFiles, scanReport, notReadSentence, DEPLOYMENT_SURFACE_LABELS } from './crawler.mjs';
 import { readRepoFolder } from './repo-folder.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
@@ -489,6 +489,7 @@ export async function postNotification({ url, headers = {}, body = '', timeoutMs
 // The one-line summary a notification leads with:
 // `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`.
 function notifyTextLine(record) {
+  if (record.outcome === SCAN_PARTIAL_OUTCOME) return `${record.journey}: ${record.outcome} · ${redactUrlCredentials(record.error || 'the scan lost files')} — the Run stopped`;
   const bits = [`${record.journey}: ${record.outcome}`];
   if (record.outcome === 'vantage-lost') bits.push(redactUrlCredentials(record.error || 'live source unreachable'));
   else bits.push(chainStatusLine(record));
@@ -1253,6 +1254,102 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
     .sort();
 }
 
+// ---------- the scan behind Pack A ----------
+//
+// A service's Run scans its repository and checks the scan (packA.scan,
+// tools/lib/crawler.mjs scanReport). A scan that LOST files (scan.partial: a
+// host refused or dropped them, the read's budget ran out) is no basis for a
+// figure: under the server's default policy (server/repo-sources.mjs
+// partialScanPolicy) the Run stops and the service keeps its last complete
+// scan of the same repository — a record with outcome SCAN_PARTIAL_OUTCOME,
+// no grade and no drift (writeStoppedRun); otherwise the check runs, fails its
+// gate (scanGateBreaches: `scanComplete`) and says its figures are not
+// comparable with the run before (scanComparability, the record's
+// `comparable`). A stopped Run made no pack, so its scan is never one a later
+// run inherits (inheritedScan).
+export const SCAN_PARTIAL_OUTCOME = 'scan-partial';
+
+const isRecord = (r) => !!r && typeof r === 'object';
+// The newest record of `records` (newest first) that checked something — never a stopped Run's — or null.
+const checkedRecords = (records) => (Array.isArray(records) ? records : []).filter((r) => isRecord(r) && r.outcome !== SCAN_PARTIAL_OUTCOME);
+
+// The scan of the newest record of Pack A `source` that carries one — a Check
+// now on the last scan keeps the scan that made its file — never a stopped Run's. Or null.
+export function inheritedScan(records, source) {
+  const r = checkedRecords(records).find((x) => x.packA?.source === source && isRecord(x.packA.scan));
+  return r ? r.packA.scan : null;
+}
+
+// Which files a scan read, as { surface, excluded } — the deployment surface whose files alone it read
+// (null: every file) — from its filter, or for a record written before it, its environment's profile.
+const SURFACE_OF_PROFILE = { prod: 'kubernetes', eks: 'eks', 'local-k8s': 'local-kubernetes', 'local-docker': 'compose' };
+function filesReadBy(scan) {
+  if (!isRecord(scan)) return null;
+  const excluded = Number(scan.filter?.excluded ?? scan.environment?.excluded) || 0;
+  const surface = isRecord(scan.filter) ? scan.filter.surface : (SURFACE_OF_PROFILE[scan.environment?.profile] ?? null);
+  return { surface: excluded > 0 ? surface || 'environment' : null, excluded };
+}
+const filesReadWords = (read) => (read.surface ? `only the ${DEPLOYMENT_SURFACE_LABELS[read.surface] || read.surface} files (${read.excluded} left out)` : 'every file');
+const lostWords = (scan) => `${Number(scan.lost) || 0} of ${Number(scan.candidates) || 0} files`;
+
+// Whether this run's figures can be set beside the last graded run's, from the scans behind them:
+// null when they can (or nothing says otherwise), else { withPrevious: false, reason } — this scan
+// lost files; the previous graded run's scan did; or the two read other files (a deployment surface
+// applied in one and not the other, or another one).
+export function scanComparability(scan, records) {
+  if (!isRecord(scan)) return null;
+  if (scan.partial === true) return { withPrevious: false, reason: `this scan could not read ${lostWords(scan)}` };
+  const previous = checkedRecords(records).find((r) => isRecord(r.grade));
+  const before = previous?.packA?.scan;
+  if (!isRecord(before)) return null;
+  if (before.partial === true) return { withPrevious: false, reason: `the previous run's scan could not read ${lostWords(before)}` };
+  const was = filesReadBy(before);
+  const now = filesReadBy(scan);
+  if (was && now && was.surface !== now.surface) return { withPrevious: false, reason: `the previous run read ${filesReadWords(was)}; this one reads ${filesReadWords(now)}` };
+  return null;
+}
+
+// The gate breach a scan that lost files makes, whatever the check's thresholds: a check on part
+// of the repository cannot pass. [] for a whole scan, or none.
+export function scanGateBreaches(scan) {
+  if (!isRecord(scan) || scan.partial !== true) return [];
+  return [{ criterion: 'scanComplete', detail: `${notReadSentence(scan) || `this scan could not read ${lostWords(scan)}`} — a check on part of the repository cannot pass` }];
+}
+
+// A stopped Run's record (server/index.mjs POST /api/services/:id/run, a
+// scan that lost files while a complete scan of the same repository is kept):
+//   { journey, startedAt, tookMs, outcome: 'scan-partial', error (the scan's
+//     loss in one sentence), packA: { source (the kept pack's, or null), scan },
+//     packB: { source }, scope, gate: { thresholds, breaches: [] }, notify }
+// — no grade, no drift, no vantage: nothing was compared. Written as any run
+// is (the same stem and retention; write → post → rewrite). A notify block
+// posts it as any run that did not pass; the run before it is the newest
+// record whatever it holds, so a stop after a stop is no news under
+// `transitions`. → the record (historyError when the write failed).
+export async function writeStoppedRun(def, { kept = null, scan, startedAt = new Date().toISOString(), tookMs = 0, notifyTarget = null, notifier = postNotification } = {}) {
+  const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
+  const base = def.__baseDir || (def.__source ? dirname(def.__source) : journeysDir());
+  const packB = def.packB?.mcp ? `mcp:${packBSourceUrl(def.packB.mcp.url)}` : def.packB?.file ? resolve(base, def.packB.file) : null;
+  const record = {
+    journey: def.name,
+    startedAt,
+    tookMs,
+    outcome: SCAN_PARTIAL_OUTCOME,
+    error: notReadSentence(scan) || 'the scan lost files',
+    packA: { source: typeof kept?.source === 'string' ? kept.source : null, scan },
+    packB: { source: packB },
+    scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
+    gate: { thresholds: def.gate || {}, breaches: [] },
+  };
+  if (!notifyTarget) record.notify = null;
+  writeRunRecord(def.name, startedAt, record);
+  if (notifyTarget) {
+    record.notify = await deliverNotification(def, notifyTarget, record, previousRun, notifier);
+    writeRunRecord(def.name, startedAt, record);
+  }
+  return record;
+}
+
 // ---------- the run ----------
 
 // crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
@@ -1389,7 +1486,12 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     ...live,
     inventory,
   };
-  const breaches = evaluateGate(def.gate, facts);
+  // packA.scan only when a scan is known: the Run's, a crawl: source's, else the newest record's of the same Pack A file.
+  // A scan that lost files fails the gate whatever it asks, and its figures are not set beside the last graded run's.
+  const scanRecords = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
+  const packAScan = a.scan || scan || inheritedScan(scanRecords, a.source) || null;
+  const comparable = scanComparability(packAScan, scanRecords);
+  const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)];
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
 
@@ -1407,9 +1509,6 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const chains = chainSummary({ branches });
   const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
   const previousRun = recent[0] || null;
-  const packAScan = a.scan || scan
-    || recent.find((r) => r?.packA?.source === a.source && r.packA.scan && typeof r.packA.scan === 'object')?.packA.scan
-    || null;
   const baseline = recent.find(r => r && typeof r === 'object' && Array.isArray(r.branches)) || null;
   const skipped = (baseline ? recent.slice(0, recent.indexOf(baseline)) : recent)
     .slice(0, TRANSITION_SKIPPED_CAP)
@@ -1438,6 +1537,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // Workstream D gate-contract fields. This is VERIFICATION evidence.
     // packA.scan only when a scan is known (above): what it read, skipped and set aside.
     packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(packAScan ? { scan: packAScan } : {}) },
+    // Only when this run's figures cannot be set beside the last graded run's (scanComparability).
+    ...(comparable ? { comparable } : {}),
     // packB.unobserved: the artefact families Pack B says it had no way to
     // look at (its observogram.unobserved.<kind> annotations), sorted, so a
     // reader of the record alone (the Overview's "Why this grade") can say

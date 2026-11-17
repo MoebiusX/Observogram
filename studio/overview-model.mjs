@@ -1270,12 +1270,47 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
 // board says it beside the layers, so a grade never rests on files nobody
 // was told were missing.
 
+// The deployment surfaces an environment may read alone — tools/lib/crawler.mjs
+// DEPLOYMENT_SURFACES, mirrored here (a studio module never imports tools/lib;
+// tools/test-overview-model.mjs pins the ids): the service form's choices, the
+// first ('') reading every file, and the words a sentence names each by.
+export const DEPLOYMENT_SURFACE_CHOICES = Object.freeze([
+  Object.freeze({ id: '', label: 'No — every file the scan reads (default)' }),
+  Object.freeze({ id: 'kubernetes', label: 'Kubernetes and Helm' }),
+  Object.freeze({ id: 'eks', label: 'Kubernetes on Amazon EKS' }),
+  Object.freeze({ id: 'local-kubernetes', label: 'A local Kubernetes cluster (kind, minikube)' }),
+  Object.freeze({ id: 'compose', label: 'Docker Compose' }),
+]);
+const SURFACE_IDS = DEPLOYMENT_SURFACE_CHOICES.map((c) => c.id).filter(Boolean);
+const SURFACE_WORDS = Object.freeze({ kubernetes: 'Kubernetes and Helm', eks: 'Amazon EKS', 'local-kubernetes': 'local Kubernetes', compose: 'Docker Compose' });
+// A surface in a sentence ("14 left out by the Kubernetes and Helm filter"); 'environment' for anything else.
+export function surfaceLabel(id) {
+  return Object.hasOwn(SURFACE_WORDS, id) ? SURFACE_WORDS[id] : 'environment';
+}
+
 // The losses of a scan, in a few words ("347 past the 200-file cap, 3 not
 // read, …"), or '' when it read everything it takes. The Run's toast says it.
+// A record whose scan counts what it did not read (`notRead`, from this
+// release on) is said by kind — could not be read, over the scan's limits,
+// past the file cap — and a file left out on purpose (a secrets file, one git
+// ignores) is no loss; an older record reads as it always did.
 export function scanLossText(scan) {
   if (!scan || typeof scan !== 'object') return '';
   const n = (v) => Number(v) || 0;
   const parts = [];
+  if (typeof scan.notRead === 'number') {
+    const lost = n(scan.lost);
+    const capped = n(scan.capped);
+    const limit = Math.max(0, n(scan.notRead) - lost - capped);
+    if (lost) parts.push(`${lost} could not be read`);
+    if (limit) parts.push(`${limit} over the scan's limits`);
+    if (capped) parts.push(`${capped} past the file cap`);
+    if (scan.treeTruncated || scan.truncated) parts.push('the host cut its file list short');
+    const excluded = n(scan.filter?.excluded ?? scan.environment?.excluded);
+    if (excluded) parts.push(`${excluded} left out by the ${surfaceLabel(scan.filter?.surface)} filter`);
+    if (n(scan.unclassified)) parts.push(`${n(scan.unclassified)} recognised as nothing`);
+    return parts.join(', ');
+  }
   if (n(scan.capped)) parts.push(`${n(scan.capped)} past the file cap`);
   if (n(scan.skipped)) parts.push(`${n(scan.skipped)} not read`);
   if (scan.truncated) parts.push('the host cut its file list short');
@@ -1285,9 +1320,12 @@ export function scanLossText(scan) {
 }
 
 // scanModel({ run }) → null when the record carries no scan, else
-//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings }
-//   tone  'warn' when the scan lost files it takes (cap, not read, a cut
-//         list), else 'neutral'
+//   { sentence, tone, groups: [{ key, title, count, rows: [{ path, why }], more }], warnings,
+//     partial, notRead, candidates }
+//   tone  'warn' when the scan did not read files it takes (could not, over
+//         a limit, past the cap, a cut list) or its deployment surface left
+//         out most of the repository, else 'neutral' — a file left out on
+//         purpose never warns
 export function scanModel({ run = null } = {}) {
   const scan = run?.packA?.scan;
   if (!scan || typeof scan !== 'object') return null;
@@ -1300,12 +1338,30 @@ export function scanModel({ run = null } = {}) {
   const rowsOf = (list, why = '') => (Array.isArray(list) ? list : []).map((x) => (typeof x === 'string' ? { path: x, why } : { path: String(x?.path || ''), why: String(x?.why || why) }));
   const group = (key, title, count, rows) => ({ key, title, count, rows, more: Math.max(0, count - rows.length) });
   const groups = [];
+  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
+  if (typeof scan.notRead === 'number') {
+    const skippedOf = (kind) => rowsOf((Array.isArray(scan.skippedFiles) ? scan.skippedFiles : []).filter((x) => x?.kind === kind));
+    const lost = n(scan.lost);
+    const capped = n(scan.capped);
+    const limit = Math.max(0, n(scan.notRead) - lost - capped);
+    const onPurpose = Math.max(0, n(scan.skipped) - lost - limit);
+    const excluded = n(scan.filter?.excluded ?? scan.environment?.excluded);
+    const label = surfaceLabel(scan.filter?.surface);
+    if (lost) groups.push(group('lost', 'Could not be read — the host or the disk failed these; run it again', lost, skippedOf('lost')));
+    if (limit) groups.push(group('limit', 'Not read — over what a scan reads (too large, past the total, not text, an archive entry it cannot open)', limit, skippedOf('limit')));
+    if (capped) groups.push(group('capped', 'Past the file cap — the read takes the likely artefacts first and stops at its cap', capped, rowsOf(scan.cappedFiles, 'past the file cap')));
+    if (scan.treeTruncated || scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
+    if (onPurpose) groups.push(group('onPurpose', 'Skipped on purpose — a name that says it holds secrets, or git ignores it', onPurpose, skippedOf('on-purpose')));
+    if (excluded) groups.push(group('excluded', `Left out by the ${label} filter — files for other deployment surfaces`, excluded, rowsOf(scan.environment?.excludedFiles)));
+    if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
+    const warn = lost || limit || capped || scan.treeTruncated || scan.truncated || scan.excludedMost === true;
+    return { sentence, tone: warn ? 'warn' : 'neutral', groups, warnings, partial: scan.partial === true, notRead: n(scan.notRead), candidates };
+  }
   if (n(scan.skipped)) groups.push(group('skipped', 'Not read', n(scan.skipped), rowsOf(scan.skippedFiles)));
   if (n(scan.capped)) groups.push(group('capped', `Past the file cap — the read takes the likely artefacts first and stops at its cap`, n(scan.capped), []));
   if (scan.truncated) groups.push(group('truncated', 'The host cut its file list short: files it did not list were not read, and nothing here can name them', 0, []));
   if (n(scan.environment?.excluded)) groups.push(group('excluded', `Left out by the ${scan.environment.profile || 'environment'} scope — files for other deployment surfaces`, n(scan.environment.excluded), rowsOf(scan.environment.excludedFiles)));
   if (n(scan.unclassified)) groups.push(group('unknown', 'Read, recognised as nothing — no observability artefact the scan knows', n(scan.unclassified), rowsOf(scan.unknownFiles)));
-  const warnings = (Array.isArray(scan.warnings) ? scan.warnings : []).map(String);
   return { sentence, tone: n(scan.capped) || n(scan.skipped) || scan.truncated ? 'warn' : 'neutral', groups, warnings };
 }
 
@@ -1780,9 +1836,12 @@ export function serviceListModel(input = {}) {
       const remoteRepo = s.repository?.kind === 'github' || s.repository?.kind === 'ado';
       const ownRef = env ? ownRefOf(s, env.name) : null;
       const branch = remoteRepo ? { name: ownRef || s.repository.ref || null, own: !!ownRef } : null;
+      // The deployment surface this environment reads alone ({ id, label }), or null: every file.
+      const surfaceId = env ? ownSurfaceOf({ envSurfaces: s.envSurfaces }, env.name) : '';
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
         repository, live, livePack: exported, last, journey: journey?.name || null, branch,
+        surface: surfaceId ? { id: surfaceId, label: surfaceLabel(surfaceId) } : null,
         // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from }, or null when unscoped.
         scope: live && !exported ? (() => { const r = resolvedScope(env?.liveScope ?? null, liveScopeDefaults); return r.scope ? { text: scopeSummary(r.scope), from: r.from } : null; })() : null,
         run: { enabled: !why && !busy, reason: why, running: busy },
@@ -2024,14 +2083,21 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // branch where the rule makes it the environment's, else on the repository's.
   const record = s ? { repository: r ? { kind: r.kind, location: r.location || '', ref: r.ref || null } : null, environments: (s.environments || []).map((x) => ({ name: x?.name, endpointId: x?.mcpEndpoint?.id ?? null, livePack: x?.livePack ? { name: x.livePack.name, uploadedAt: x.livePack.uploadedAt || null } : null, liveScope: x?.liveScope ?? null })), envRefs: s.envRefs && typeof s.envRefs === 'object' ? { ...s.envRefs } : {} } : null;
   values.ref = (branchIsEnvironments(values, record) && ownRefOf(record, values.env)) || r?.ref || '';
+  const adding = !!addEnv && !!s;
+  // The deployment surface this environment reads alone, '' for every file (the service's envSurfaces).
+  if (record) record.envSurfaces = s.envSurfaces && typeof s.envSurfaces === 'object' ? { ...s.envSurfaces } : {};
+  values.surface = adding ? '' : ownSurfaceOf(record, values.env);
   const original = r ? { kind: r.kind, location: r.location || '', ref: values.ref } : null;
   // The environments to choose from, when the service's Change is asked for one of two or more.
   const names = record ? record.environments.map((x) => x.name).filter((n) => typeof n === 'string' && n) : [];
   const envChoices = pick && names.length > 1 ? [...names].sort((a, b) => (envRank(a) - envRank(b)) || a.localeCompare(b)) : null;
   // `defaultRef`: the repository's own branch, which an environment left blank reads.
-  const adding = !!addEnv && !!s;
   if (adding) values.env = '';
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  // The server keeps a surface per environment (its ServiceView carries envSurfaces; for a new
+  // service, any listed one does): only then is the setting offered, so an older server never
+  // takes an answer it would drop.
+  const surfaceKnown = s ? !!(s.envSurfaces && typeof s.envSurfaces === 'object') : (Array.isArray(services) && services.some((x) => x && x.envSurfaces && typeof x.envSurfaces === 'object'));
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, surfaceKnown, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
   return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
 }
@@ -2047,6 +2113,7 @@ function chooseEnvironment(form) {
   Object.assign(values, scopeFormValues(scoped.scope));
   form = { ...form, scopeFrom: scoped.from };
   values.ref = (branchIsEnvironments(values, form.record) && ownRefOf(form.record, e.name)) || form.record.repository?.ref || '';
+  values.surface = ownSurfaceOf(form.record, e.name);
   return { ...form, envFixed: true, values, original: form.original ? { ...form.original, ref: values.ref } : form.original };
 }
 
@@ -2054,6 +2121,14 @@ function chooseEnvironment(form) {
 const ownRefOf = (record, envName) => {
   const refs = record?.envRefs;
   return refs && typeof refs === 'object' && Object.hasOwn(refs, envName) && typeof refs[envName] === 'string' && refs[envName] ? refs[envName] : null;
+};
+
+// The deployment surface an environment reads alone (the service's envSurfaces' own entry, a surface
+// this build knows), else '' — every file.
+const ownSurfaceOf = (record, envName) => {
+  const map = record?.envSurfaces;
+  const id = map && typeof map === 'object' && Object.hasOwn(map, envName) ? map[envName] : '';
+  return SURFACE_IDS.includes(id) ? id : '';
 };
 
 // Whether the form's branch answer is the environment's own (the service's envRefs) rather than the
@@ -2132,6 +2207,8 @@ export function formRestored(services, draft, { endpoints = [], sources = null, 
     // know (an older or a broken draft) stays as the form opened it.
     if (field.startsWith('target') && draft.targetsTouched !== true) continue;
     if (field === 'targetProfile' && value !== '' && value !== MTTX_CUSTOM && !MTTX_PROFILES.some((p) => p.id === value)) continue;
+    // A deployment surface this build does not know stays as the form opened it.
+    if (field === 'surface' && value !== '' && !SURFACE_IDS.includes(value)) continue;
     form = formInput(form, field, value);
   }
   return form;
@@ -2420,6 +2497,8 @@ export function formModel(form, { endpoints = null, register = null, access = nu
     // Pack files, opt-in as Upload is (`uploads`): `wired` draws the Live answer's choice, `offered` its button.
     // The live scope (shown once the Live answer is an MCP endpoint): its fields and where the values came from.
     scope: scopeModel(form, v),
+    // The deployment surface this environment reads alone (step 3, under the repository), or { shown: false }.
+    surface: surfaceFormModel(form, v),
     packs: { repo: { offered: canWrite && !!uploads, ...packModel(form.packs?.repo, { now }) }, live: { wired: !!uploads, offered: canWrite && !!uploads, chosen: v.endpointId === LIVE_PACK, ...packModel(form.packs?.live, { now }) } },
     endpoints: eps.map((e) => ({ id: String(e.id), name: e.name, origin: e.origin || '', selected: String(e.id) === v.endpointId })),
     newEndpoint: { allowed: newAllowed, reason: newAllowed ? null : (register?.why || 'A new MCP endpoint cannot be registered here.'), selected: v.endpointId === NEW_ENDPOINT },
@@ -2625,6 +2704,19 @@ function scopeModel(form, v) {
   return { shown, from, hint, fields: SCOPE_FIELDS.map((f) => ({ value: f.value, label: f.label, placeholder: f.placeholder })) };
 }
 
+// formModel's `surface`: { shown, label, options: [{ id, label, selected }], hint } — the deployment
+// surface this environment reads alone, off ('') by default: every environment of a service reads the
+// same files. Not shown for a pack file (no scan) or on a server that keeps none (form.surfaceKnown).
+function surfaceFormModel(form, v) {
+  if (v.kind === 'pack' || !form.surfaceKnown) return { shown: false };
+  const chosen = SURFACE_IDS.includes(v.surface) ? v.surface : '';
+  const env = trimmed(v.env) || 'this environment';
+  const hint = chosen
+    ? `${env} reads only the ${surfaceLabel(chosen)} files; its row says how many the filter left out.`
+    : `Off: every environment of ${trimmed(v.name) || 'the service'} reads the same files. Chosen, ${env} reads only that surface's files, and its row says how many the filter left out.`;
+  return { shown: true, label: 'Read only this deployment surface', options: DEPLOYMENT_SURFACE_CHOICES.map((c) => ({ id: c.id, label: c.label, selected: c.id === chosen })), hint };
+}
+
 // formModel's `upload`: { offered, state: 'empty' | 'reading' | 'staged' | 'kept' | 'failed', text, note, error }.
 function uploadModel(form, v, { uploads, canWrite, now }) {
   if (v.kind !== 'upload') return { offered: !!uploads, state: null, text: '', note: '', error: null };
@@ -2671,7 +2763,8 @@ function uploadModel(form, v, { uploads, canWrite, now }) {
 // none of the environment's own (it reads that one anyway); the service's liveScopes map is sent
 // whole (POST, PATCH) only when this environment's entry changes. An export of live has no scope.
 // `scopeKnown`: the form was opened on this service's record (false for a blank Add that names an
-// existing service — its environment's scope was never drawn, so an empty answer leaves it as it is).
+// existing service — its environment's scope was never drawn, so an empty answer leaves it as it is;
+// the same for its deployment surface, envSurfaces).
 export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceId = null, upload = null, targetsTouched = false, packs = null, scopeDefaults = null, scopeKnown = true } = {}) {
   const name = trimmed(values.name);
   const envName = trimmed(values.env);
@@ -2725,12 +2818,25 @@ export function savePlan(values, { services = [], keyOf = defaultKeyOf, serviceI
     if (own) next[envName] = own; else if (scopeKnown) delete next[envName];
     if (!sameScope(current[envName] ?? null, next[envName] ?? null)) liveScopes = next;
   }
+  // The deployment surface this environment reads alone (values.surface, '' for every file): the
+  // service's envSurfaces map, sent whole only when this environment's entry changes. A pack file
+  // is no scan, so it leaves the setting as it is; so does a blank Add naming an existing service
+  // that never drew it (scopeKnown false), unless one is chosen.
+  let envSurfaces = null;
+  if (values.kind !== 'pack' && Object.hasOwn(values, 'surface')) {
+    const current = existing?.envSurfaces && typeof existing.envSurfaces === 'object' ? existing.envSurfaces : {};
+    const chosen = SURFACE_IDS.includes(trimmed(values.surface)) ? trimmed(values.surface) : '';
+    const next = { ...current };
+    if (chosen) next[envName] = chosen; else if (scopeKnown) delete next[envName];
+    const key = (m) => JSON.stringify(Object.keys(m).sort().map((k) => [k, m[k]]));
+    if (key(next) !== key(current)) envSurfaces = next;
+  }
   const patchOf = (repo) => {
-    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}), ...(liveScopes ? { liveScopes } : {}) };
+    const p = { ...(repo ? { repository: repo } : {}), ...(targetsChanged ? { targets } : {}), ...(envRefs ? { envRefs } : {}), ...(liveScopes ? { liveScopes } : {}), ...(envSurfaces ? { envSurfaces } : {}) };
     return Object.keys(p).length ? p : null;
   };
   let service;
-  const scopesOnCreate = liveScopes && Object.keys(liveScopes).length ? { liveScopes } : {};
+  const scopesOnCreate = { ...(liveScopes && Object.keys(liveScopes).length ? { liveScopes } : {}), ...(envSurfaces && Object.keys(envSurfaces).length ? { envSurfaces } : {}) };
   if (uploading) service = existing ? { id: existing.id, patch: patchOf(null) } : { create: { name, targets, ...scopesOnCreate } };
   else service = existing ? { id: existing.id, patch: patchOf(sameRepo(existing.repository) ? null : repository) } : { create: { name, repository, targets, ...scopesOnCreate } };
   const env = existing ? (existing.environments || []).find((e) => e.name === envName) || null : null;
