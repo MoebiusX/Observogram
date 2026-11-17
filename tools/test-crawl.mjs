@@ -1340,6 +1340,83 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'a dashboard stated in another folder: outside', parked);
   assert(/does not say which folder this dashboard is in/.test(parked.other || ''), 'a dashboard stating none: not checked for lack of a folder', parked.other);
 }
+// The provisioned folder as a repository writes it: a sidecar value read as YAML reads it (a comment,
+// a block scalar, quotes), a file mounted alone, and only a provider the dashboard's own container
+// reads — never one nothing mounts into Grafana, one mounted into another service, nor two nested ones.
+{
+  const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+  const { scopeAnnotations } = await import('./lib/live-fetch.mjs');
+  const dash = (uid, title) => JSON.stringify({ uid, title, schemaVersion: 39, tags: ['guessed-from-tag'], panels: [{ type: 'timeseries', title: 'p', targets: [{ expr: 'up{job="shop"}' }] }] });
+  const chart = (annotation) => ({
+    'charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'charts/shop/dashboards/node.json': dash('node', 'Node'),
+    'charts/shop/templates/dashboards.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-dashboards', '  labels:', '    grafana_dashboard: "1"', '  annotations:',
+      ...annotation.map((l) => `    ${l}`), 'data:', '{{ (.Files.Glob "dashboards/*.json").AsConfig | indent 2 }}', ''].join('\n'),
+  });
+  const folderOf = (files, id) => {
+    const d = crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' }).canonical.spec.dashboards.find((x) => x.id === id);
+    return [d?.folder ?? null, d?.params?.folderUid ?? null];
+  };
+  const SIDECAR = {
+    'a trailing comment': [['grafana_folder: "Shop Ops" # the team\'s folder'], 'Shop Ops'],
+    'a block scalar': [['grafana_folder: >-', '  Shop Ops'], 'Shop Ops'],
+    'a plain value with a comment': [['grafana_folder: Shop Ops # owned by the shop team'], 'Shop Ops'],
+    'a target directory with a comment': [['k8s-sidecar-target-directory: /tmp/dashboards/Platform  # where the sidecar writes'], 'Platform'],
+    'a single-quoted value': [["grafana_folder: 'Shop Ops'"], 'Shop Ops'],
+    'a value on the line below': [['grafana_folder:', '  Shop Ops'], 'Shop Ops'],
+    'a # inside quotes': [['grafana_folder: "Team #1"'], 'Team #1'],
+    'a flow value': [['grafana_folder: [Shop]'], 'guessed-from-tag'],
+    'text after a closing quote': [['grafana_folder: "Shop" Ops'], 'guessed-from-tag'],
+  };
+  const read = Object.fromEntries(Object.entries(SIDECAR).map(([k, [lines]]) => [k, folderOf(chart(lines), 'node')[0]]));
+  assert(JSON.stringify(read) === JSON.stringify(Object.fromEntries(Object.entries(SIDECAR).map(([k, [, title]]) => [k, title]))),
+    'a sidecar annotation is read as its YAML value — a comment, a block scalar, quotes; one that is no single scalar states no folder', read);
+  // Under a live folder scope that read "Shop Ops" and found no dashboard: the chart's dashboard is declared, not live — never "outside".
+  const live = buildCanonicalPack({
+    refreshedAt: '2026-06-05T00:00:00Z', mcpUrl: 'https://mcp.shop.example', health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] },
+    probeResults: { dashboards: { tool: 'search', attempted: ['search'], adapted: [], outcome: 'empty' } },
+  });
+  const scoped = (uid, title) => {
+    const pack = structuredClone(live);
+    Object.assign(pack.metadata.annotations, scopeAnnotations({ folderUids: [uid] }, { applied: ['dashboard'], folderTitles: { [uid]: title } }));
+    return pack;
+  };
+  const verdict = (files, pack) => {
+    const d = diffPacks(adapt(crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' }).canonical), adapt(pack));
+    const pick = (bucket) => Object.values(d.layers).flatMap((l) => l[bucket] || []).filter((e) => e.key.startsWith('dashboard::')).map((e) => [JSON.parse(e.key.slice('dashboard::'.length)).id, e.reason ?? null]);
+    return { declaredNotLive: pick('onlyInA'), notObserved: pick('notObserved') };
+  };
+  const commented = verdict(chart(['grafana_folder: "Shop Ops" # the team\'s folder']), scoped('shop-ops', 'Shop Ops'));
+  assert(JSON.stringify(commented) === JSON.stringify({ declaredNotLive: [['node', null]], notObserved: [] }), 'a commented sidecar value: the missing dashboard reads declared, not live', commented);
+  // Compose: the providers a container reads, and a file mounted alone.
+  const providers = (list) => ['apiVersion: 1', 'providers:', ...list.flatMap((p) => [`  - name: ${p.name}`, '    type: file', ...(p.folder ? [`    folder: ${p.folder}`] : []), ...(p.uid ? [`    folderUid: ${p.uid}`] : []), '    options:', `      path: ${p.path}`, ...(p.structure ? ['      foldersFromFilesStructure: true'] : [])]), ''].join('\n');
+  const SHOP = { name: 'shop', folder: 'Shop', uid: 'shop-dash', path: '/var/lib/grafana/dashboards/shop' };
+  const compose = (services) => `services:\n${Object.entries(services).map(([name, volumes]) => `  ${name}:\n    image: ${name === 'grafana' ? 'grafana/grafana:11.2.0' : 'alpine:3.20'}\n    volumes:\n${volumes.map((v) => `      - ${v}\n`).join('')}`).join('')}`;
+  const PROV = './grafana/provisioning:/etc/grafana/provisioning:ro';
+  const DASH = './grafana/dashboards:/var/lib/grafana/dashboards';
+  const repo = (services, list = [SHOP]) => ({ 'docker-compose.yml': compose(services), 'grafana/provisioning/dashboards/providers.yaml': providers(list), 'grafana/dashboards/shop/checkout.json': dash('checkout', 'Checkout') });
+  const COMPOSE = {
+    'the provider and the dashboards in one container': [repo({ grafana: [PROV, DASH] }), ['Shop', 'shop-dash']],
+    'another service mounting the dashboards first': [repo({ backup: ['./grafana/dashboards:/backup/dashboards:ro'], grafana: [PROV, DASH] }), ['Shop', 'shop-dash']],
+    'a provider file nothing mounts into Grafana': [repo({ grafana: [DASH] }), ['guessed-from-tag', null]],
+    'the provider mounted into another service than the dashboards': [repo({ grafana: [PROV], exporter: [DASH] }), ['guessed-from-tag', null]],
+    'nested providers (the outer one reads the inner folder too)': [repo({ grafana: [PROV, DASH] }, [{ name: 'all', folder: 'Everything', path: '/var/lib/grafana/dashboards' }, SHOP]), ['guessed-from-tag', null]],
+    'a provider whose Grafana reads another provisioning folder': [{ ...repo({ grafana: ['./grafana/provisioning:/etc/grafana/provisioning:ro', DASH] }), 'docker-compose.yml': `${compose({ grafana: ['./grafana/provisioning:/etc/grafana/provisioning:ro', DASH] })}    environment:\n      GF_PATHS_PROVISIONING: /provisioning\n` }, ['guessed-from-tag', null]],
+  };
+  const placed = Object.fromEntries(Object.entries(COMPOSE).map(([k, [files]]) => [k, folderOf(files, 'checkout')]));
+  assert(JSON.stringify(placed) === JSON.stringify(Object.fromEntries(Object.entries(COMPOSE).map(([k, [, want]]) => [k, want]))),
+    'a provider places a dashboard only where one container reads both, once', placed);
+  const TEAMS = { name: 'teams', path: '/var/lib/grafana/dashboards/teams', structure: true };
+  const single = {
+    'docker-compose.yml': compose({ grafana: [PROV, './grafana/dashboards/teams/root.json:/var/lib/grafana/dashboards/teams/root.json:ro', './grafana/dashboards/teams/Payments/payments.json:/var/lib/grafana/dashboards/teams/Payments/payments.json:ro'] }),
+    'grafana/provisioning/dashboards/providers.yaml': providers([TEAMS]),
+    'grafana/dashboards/teams/root.json': dash('teams-root', 'Teams root'),
+    'grafana/dashboards/teams/Payments/payments.json': dash('payments', 'Payments'),
+  };
+  assert(JSON.stringify([folderOf(single, 'teams-root')[0], folderOf(single, 'payments')[0]]) === JSON.stringify(['General', 'Payments']), 'a file mounted alone under a provider filing by folders: its folder, never its own name', [folderOf(single, 'teams-root'), folderOf(single, 'payments')]);
+  const alone = verdict(single, scoped('payments-uid', 'Payments'));
+  assert(JSON.stringify(alone.declaredNotLive) === JSON.stringify([['payments', null]]), 'the missing dashboard of a file mounted alone reads declared, not live', alone);
+}
 // A compose file as people write them: a port bound to a host address is the
 // container's, a value may stand on the line below its key, anchors and merge
 // keys share settings between services.

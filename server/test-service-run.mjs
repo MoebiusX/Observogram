@@ -2967,6 +2967,20 @@ test('POST /api/services/:id/scope-check: what a scope would leave out, from sto
     const prefixes = await check({ env: 'prod', scope: { metricPrefixes: ['zzz_'] } });
     const metric = prefixes.json.declared.families.find((x) => x.family === 'metric');
     assert.ok(metric.declared > 0 && metric.inside === 0 && metric.outside === metric.declared, JSON.stringify(metric));
+    // A folder scope over rules the provisioning file files by folder TITLE, the live read naming that folder's uid
+    // and no title: not known, and said for what it is — never that the rules state no folder.
+    const folders = await check({ env: 'prod', scope: { folderUids: ['shop-alerts'] } });
+    assert.equal(folders.status, 200, folders.text);
+    assert.deepEqual(folders.json.declared.families.find((x) => x.family === 'alert_rule'),
+      { family: 'alert_rule', declared: 3, inside: 0, outside: 0, unknown: 3, byTitle: 3, titles: ['Shop'], untitledFolders: ['shop-alerts'] });
+    // An exclude pattern whose work no bound holds (it passes the timed half: every adversarial id fails at its
+    // first character): refused at once, as the PATCH refuses it — never matched against the declared names.
+    const SLOW = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
+    const t0 = Date.now();
+    const slow = await check({ env: 'prod', scope: { metricExclude: [SLOW] } });
+    assert.deepEqual([slow.status, slow.json.error], [400, `liveScopes.prod: scope.metricExclude[0] "${SLOW}" is too slow to match (it crawls over a 256-character name)`]);
+    assert.ok(Date.now() - t0 < 2000, `answered in ${Date.now() - t0} ms`);
+    assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricExclude: [SLOW] } } })).status, 400, 'nor saved');
     // An environment not added yet: the service's own pack, no live read.
     const fresh = await check({ env: 'staging', scope: { ruleGroups: ['shop'] } });
     assert.equal(fresh.status, 200, fresh.text);
@@ -2980,27 +2994,129 @@ test('POST /api/services/:id/scope-check: what a scope would leave out, from sto
   }
 });
 
-test('a start rewrites the saved checks that still carry the server default\'s scope to their environment\'s own (none): a studio-written check of a service, one that names no environment; a check written by hand keeps its scope', async () => {
+test('the scope check over a live read that listed more rule groups than it kept (mcp.discovered.rule_groups_count): a group not among those kept is not known missing; one among them is there; a record that kept them all says which are missing', async () => {
+  const { scopeCheckAnswer } = await import('./scope-check.mjs');
+  const groups = Array.from({ length: 500 }, (_, i) => ({ group: `group-${String(i).padStart(3, '0')}`, folderUid: 'others', alert: 1, recording: 0 }));
+  const liveOf = (annotations) => ({ packId: 'l', label: 'live', refreshedAt: '2026-11-17T00:00:00.000Z', canonical: { metadata: { annotations } } });
+  const truncated = liveOf({ 'mcp.discovered.rule_groups': JSON.stringify(groups), 'mcp.discovered.rule_groups_count': '601' });
+  const unlisted = scopeCheckAnswer({ scope: { ruleGroups: ['zz-shop'] }, live: truncated }).live;
+  assert.deepEqual([unlisted.missingGroups, unlisted.ruleGroupsKept, unlisted.ruleGroups.length], [null, { kept: 500, of: 601 }, 500], 'not "Not in the last live read"');
+  assert.equal(scopeCheckAnswer({ scope: { ruleGroups: ['group-499'] }, live: truncated }).live.missingGroups, null);
+  const whole = scopeCheckAnswer({ scope: { ruleGroups: ['zz-shop', 'group-001'] }, live: liveOf({ 'mcp.discovered.rule_groups': JSON.stringify(groups) }) }).live;
+  assert.deepEqual([whole.missingGroups, whole.ruleGroupsKept], [['zz-shop'], null], 'every group kept: the missing one is said');
+});
+
+test('a start takes the server default\'s scope — and only that — out of the saved checks that still carry it: a studio-written check of a service, one that names no environment, one whose service is gone reads with none, logged by name; a scope typed into a capture by hand, a check written by hand and an environment whose own scope is the default\'s keep theirs; no default configured, nothing is the default\'s; a second start changes nothing', async () => {
   const made = await call('POST', '/api/services', { name: 'Scope Sync' });
   assert.equal(made.status, 201, made.text);
   const id = made.json.service.id;
-  const write = (name, banner, extra = []) => writeFileSync(journeyFileOf(name), [
+  // An environment whose own scope happens to be the default's (saved from the form's pre-fill).
+  const ownMade = await call('POST', '/api/services', { name: 'Scope Own', liveScopes: { prod: { ruleGroups: ['shop-a-slo'], metricExclude: ['^go_'] } } });
+  assert.equal(ownMade.status, 201, ownMade.text);
+  const DEFAULT_SCOPE = 'scope: { ruleGroups: ["shop-a-slo"], metricExclude: ["^go_"] }';
+  const write = (name, banner, extra = [], scope = DEFAULT_SCOPE) => writeFileSync(journeyFileOf(name), [
     ...(banner ? [`# ${banner}`] : []), `name: ${name}`, 'packA: { file: ../packs/none.pack.yaml }',
-    `packB: { mcp: { url: "${fake.url}", endpointId: ${ids.endpoint}, scope: { ruleGroups: ["shop-a-slo"], metricExclude: ["^go_"] } } }`,
+    `packB: { mcp: { url: "${fake.url}", endpointId: ${ids.endpoint}, ${scope} } }`,
     ...extra, 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
-  const names = ['scope-sync.prod', 'scope-sync-envless', 'scope-sync-by-hand'];
+  const names = ['scope-sync.prod', 'scope-sync-envless', 'scope-sync-by-hand', 'scope-sync-typed', 'scope-gone.prod', 'scope-own.prod'];
+  const text = (name) => readFileSync(journeyFileOf(name), 'utf8');
+  const restart = async () => {
+    const lines = [];
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk, ...rest) => { lines.push(String(chunk)); return write(chunk, ...rest); };
+    let again;
+    try { again = await start({ port: 0, host: '127.0.0.1', silent: false }); } finally { process.stdout.write = write; }
+    await new Promise((resolve) => again.close(resolve));
+    return lines.map((l) => l.trim()).filter((l) => /saved check/.test(l));
+  };
   try {
     write('scope-sync.prod', 'Saved by the service scope-sync, environment prod, on 2026-11-11T16:00:00.000Z.', ['env: prod', 'service: scope-sync']);
     write('scope-sync-envless', 'Captured from a studio session on 2026-11-11T16:00:00.000Z.', ['service: scope-sync']);
     write('scope-sync-by-hand', null, ['env: prod', 'service: scope-sync']);
-    const again = await start({ port: 0, host: '127.0.0.1', silent: true });
-    await new Promise((resolve) => again.close(resolve));
-    const text = (name) => readFileSync(journeyFileOf(name), 'utf8');
+    write('scope-gone.prod', 'Saved by the service scope-gone, environment prod, on 2026-11-11T16:00:00.000Z.', ['env: prod', 'service: scope-gone']);
+    write('scope-own.prod', 'Saved by the service scope-own, environment prod, on 2026-11-11T16:00:00.000Z.', ['env: prod', 'service: scope-own']);
+    // A capture its owner edited ("Edit freely"): a scope typed by hand, comments in the body.
+    writeFileSync(journeyFileOf('scope-sync-typed'), [
+      '# Captured from a studio session on 2026-11-11T16:00:00.000Z.', '# Edit freely — e.g. swap a frozen pack file for a crawl: source.',
+      'name: scope-sync-typed', 'service: scope-sync', 'env: prod', '# only the checkout metrics: the estate is shared',
+      'packA: { file: ../packs/none.pack.yaml }', `packB: { mcp: { url: "${fake.url}", endpointId: ${ids.endpoint}, scope: { metricPrefixes: ["checkout_"] } } }`,
+      'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+    const before = Object.fromEntries(names.map((n) => [n, text(n)]));
+    // No default configured: nothing is the default's, every check is left as it is.
+    assert.deepEqual(await restart(), []);
+    assert.deepEqual(Object.fromEntries(names.map((n) => [n, text(n)])), before, 'no configured default: no check is touched');
+    // The default the checks carry, configured.
+    process.env.OBSERVOGRAM_SNAPSHOT_RULE_GROUPS = 'shop-a-slo';
+    process.env.OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE = '^go_';
+    const log = await restart();
     assert.ok(!/scope:/.test(text('scope-sync.prod')) && text('scope-sync.prod').startsWith('# Saved by the service scope-sync'), text('scope-sync.prod'));
     assert.ok(!/scope:/.test(text('scope-sync-envless')), 'a check naming the service and no environment reads with none');
+    assert.ok(!/scope:/.test(text('scope-gone.prod')), 'a check whose service has no record reads with none');
     assert.match(text('scope-sync-by-hand'), /shop-a-slo/, 'a hand-written check keeps what its writer typed');
+    assert.equal(text('scope-sync-typed'), before['scope-sync-typed'], 'a scope typed into a capture is kept, comments and all');
+    assert.equal(text('scope-own.prod'), before['scope-own.prod'], 'the environment\'s own scope is the default\'s: kept');
+    assert.deepEqual(log, ["[studio] org default: the server's snapshot scope taken out of 3 saved checks (scope-gone.prod, scope-sync-envless, scope-sync.prod) — it no longer applies to a service environment; each reads its environment's own live scope, else none"]);
+    // Idempotent.
+    const after = Object.fromEntries(names.map((n) => [n, text(n)]));
+    assert.deepEqual(await restart(), []);
+    assert.deepEqual(Object.fromEntries(names.map((n) => [n, text(n)])), after, 'a second start changes nothing');
   } finally {
+    delete process.env.OBSERVOGRAM_SNAPSHOT_RULE_GROUPS;
+    delete process.env.OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE;
     await call('DELETE', `/api/services/${id}`);
+    await call('DELETE', `/api/services/${ownMade.json.service.id}`);
     forgetChecks(names);
+  }
+});
+
+test('a scope that is no longer an environment\'s own leaves its checks, so a Check now reads the environment\'s own, else none: an environment deleted and added again; a service made again over a check its namesake left with a scope', async () => {
+  const estate = await scopeEstate();
+  const ids_ = [];
+  const names = ['env-again.prod', 'made-again.prod'];
+  const alertsOf = (run) => { const t = run.json.record.drift.tiers.alerts; return [t.aligned, t.drifted, t.declaredNotLive, t.notRead]; };
+  try {
+    // An environment deleted and added again under its name: its old scope (another service's groups) leaves the check.
+    const a = await estate.make('Env Again', { prod: { ruleGroups: ['shop-other'] } });
+    ids_.push(a);
+    assert.equal((await call('POST', `/api/services/${a}/run`, { env: 'prod' })).status, 200);
+    assert.deepEqual((await loadDef('env-again.prod')).packB.mcp.scope, { ruleGroups: ['shop-other'] });
+    const envId = (await call('GET', `/api/services/${a}`)).json.service.environments[0].id;
+    assert.equal((await call('DELETE', `/api/environments/${envId}`)).status, 200);
+    assert.equal((await loadDef('env-again.prod')).packB.mcp.scope, undefined, 'the deleted environment\'s scope left its check');
+    assert.equal((await call('POST', `/api/services/${a}/environments`, { name: 'prod', mcpEndpointId: estate.endpoint })).status, 201);
+    const checkNow = await call('POST', '/api/journeys/env-again.prod/run');
+    assert.equal(checkNow.status, 200, checkNow.text);
+    assert.equal(checkNow.json.record.packB.liveScope, null, 'Check now reads the environment\'s own scope: none');
+    assert.deepEqual(alertsOf(checkNow), [1, 2, 0, 0], 'its rules compared (before: not read, outside another service\'s group)');
+    // A studio-written check whose file still carries a scope that is no longer the environment's own (as an older
+    // server left it): Check now reads the record's, and leaves the file as it is; one written by hand reads its own.
+    const stale = readFileSync(journeyFileOf('env-again.prod'), 'utf8').replace(/(\n {4}endpointId: [^\n]*)/, '$1\n    scope:\n      ruleGroups:\n        - shop-other');
+    assert.match(stale, /shop-other/, 'the stale scope written into the file');
+    writeFileSync(journeyFileOf('env-again.prod'), stale);
+    const fromRecord = await call('POST', '/api/journeys/env-again.prod/run');
+    assert.deepEqual([fromRecord.status, fromRecord.json.record.packB.liveScope, alertsOf(fromRecord)], [200, null, [1, 2, 0, 0]], fromRecord.text);
+    assert.equal(readFileSync(journeyFileOf('env-again.prod'), 'utf8'), stale, 'Check now never rewrites the check');
+    writeFileSync(journeyFileOf('env-again.prod'), stale.split('\n').filter((l) => !l.startsWith('#')).join('\n'));
+    const byHand = await call('POST', '/api/journeys/env-again.prod/run');
+    assert.deepEqual([byHand.status, byHand.json.record.packB.liveScope], [200, { ruleGroups: ['shop-other'] }], 'a check written by hand reads what its writer typed');
+    // A service deleted while its check kept a scope (as a start before this change left one), then made again under the slug.
+    const b = await estate.make('Made Again', { prod: { ruleGroups: ['shop-other'] } });
+    assert.equal((await call('POST', `/api/services/${b}/run`, { env: 'prod' })).status, 200);
+    const kept = readFileSync(journeyFileOf('made-again.prod'), 'utf8');
+    assert.equal((await call('DELETE', `/api/services/${b}`)).status, 200);
+    writeFileSync(journeyFileOf('made-again.prod'), kept);
+    assert.deepEqual((await loadDef('made-again.prod')).packB.mcp.scope, { ruleGroups: ['shop-other'] });
+    const again = await call('POST', '/api/services', { name: 'Made Again', repository: { kind: 'path', location: estate.repo } });
+    assert.equal(again.status, 201, again.text);
+    ids_.push(again.json.service.id);
+    assert.equal((await loadDef('made-again.prod')).packB.mcp.scope, undefined, 'made again, it takes the new service\'s scope: none');
+    assert.equal((await call('POST', `/api/services/${again.json.service.id}/environments`, { name: 'prod', mcpEndpointId: estate.endpoint })).status, 201);
+    const remade = await call('POST', '/api/journeys/made-again.prod/run');
+    assert.equal(remade.status, 200, remade.text);
+    assert.deepEqual([remade.json.record.packB.liveScope, alertsOf(remade)], [null, [1, 2, 0, 0]]);
+  } finally {
+    for (const id of ids_) await call('DELETE', `/api/services/${id}`);
+    forgetChecks(names);
+    await estate.close();
   }
 });

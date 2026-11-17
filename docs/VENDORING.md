@@ -33,7 +33,7 @@ prose contracts that follow.
 | --- | --- | --- |
 | [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs`, `live-fetch.mjs`, `identity-modes.mjs` — copy the three together | pack arithmetic — the diff buckets everything downstream consumes; `diffPacks(a, b, { scopeMode, service, identity })` (an identity mode or key function; behaviour the byte-identical default), a snapshot's `observogram.scope.<kind>` parked as *not checked*, and — only on a pair one side of which was shown a field in part — `unobserved: [{ field, side, keys }]` on the `inBoth` entry; on a burn-rate pair whose two packs both state the rules the entry was read from, each rule's differences join the pair's `deltas` as `{ field, a, b, rule, nth? }` and its note is `{ field, side, keys, rule, nth? }` — one field name may repeat in a pair's `deltas`, and `summary.partlyCompared` counts rules, not pairs |
 | [`tools/lib/identity-modes.mjs`](../tools/lib/identity-modes.mjs) | imports `artefact-model.mjs`, `artefact-classify.mjs`; no Node APIs | comparison identity modes (rebadge batch 3, R3) — `IDENTITY_MODES` (`behaviour` = `identityKeyOf`, `name`, `id`), `DEFAULT_IDENTITY_MODE`, `identityMode`, `nameOf`, `idOf`, `nameKeyOf` / `idKeyOf` (`(artefact, { side })`), `pairingOf`, `identityFamilies`; the studio's Compare loads the same file |
-| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope`, `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS`, `inStageOrder` (probe families in the order the stages read them) and `firstProbeError(record)` (a run record's first probe error in that order — the one rule the engine writes a lost run's `error` by and `run-basis.mjs` reads it by) |
+| [`tools/lib/live-fetch.mjs`](../tools/lib/live-fetch.mjs) | zero-import, no Node APIs | the live fetch's contract (rebadge batch 3) — `LIVE_STAGES` (the stage ids, docs/LIVE_FETCH.md §15.2), `stagesFor`, `stageNoun`, `fetchPlan`, `normalizeScope` (an exclude pattern's work bounded over a 256-character name), `scopeAnnotations`, `scopeOf`, `inScope`, `scopeReason`, `SCOPE_LIMITS`, `SNAPSHOT_LIMITS`, `EXCLUDE_NAME_MAX`, `excludeProblem`, `excludedBy` (the one rule a name is dropped by: a name past the bound never is), `excludeProbes` (the names the fetcher's timed half times a pattern on), `inStageOrder` (probe families in the order the stages read them) and `firstProbeError(record)` (a run record's first probe error in that order — the one rule the engine writes a lost run's `error` by and `run-basis.mjs` reads it by) |
 | [`tools/lib/mcp-server-settings.mjs`](../tools/lib/mcp-server-settings.mjs) | imports `artefact-classify.mjs`, `mcp-url-safety.mjs` — copy the three together; no Node APIs | the MCP server-settings contract (rebadge batch 4) — the descriptor v1 an MCP server serves at `<root>/admin/schema` (`SETTINGS_DESCRIPTOR_VERSION`, `SETTINGS_DESCRIPTOR_PATH`, `SETTINGS_LIMITS`, `FIELD_TYPES`, `parseSettingsDescriptor`), the root and path rule (`settingsRoot`, `resolveSettingsPath`, `normaliseUrlValue`), the generic form (`genericDescriptor`, `GENERIC_NAMES`), the request (`settingsRequest`), the outcome and its redaction (`outcomeOf`, `redactEchoes`, `redactSecretKeys`) and the settings policy (`compileSettingsPolicy`, `policyFindings`); an MCP server author vendors it to validate a descriptor or policy file, and the studio's Server settings modal loads the same file |
 | [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`); a field shown only in part — `PARTIAL_ANNOTATION_PREFIX` (`observogram.partial.`), `partialAnnotation`, `parsePartialAnnotation`, `unobservedOf`; `adapter.mjs` now imports the first and third, so the adapter's closure gains this file and `promql-canon.mjs`; the rules a burn-rate entry was read from — `SOURCE_RULES_ANNOTATION_PREFIX` (`observogram.source_rules.`), `sourceRulesAnnotationKey`, `parseSourceRulesAnnotation` (the adapter imports the last two and puts the list on the artefact as `sourceRules`), which `deltasOf` and `unobservedOf` read for a burn-rate pair |
 | [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import; no Node APIs but the id clocks' guarded `globalThis.process?.cpuUsage?.()` and `globalThis.process?.platform` (a browser reads `undefined`: the wall clock decides) | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileBoundedPattern` (the bounded-pattern rule the taxonomy and the settings policy share), `compileTaxonomy` / `configureTaxonomy` for the operator override (schema v1, v2 or v3 — `TAXONOMY_VERSIONS`, `TAXONOMY_VERSION_LATEST`; `TAXONOMY_VERSION` stays 1), the v3 tool labels `toolLabels` (`TOOL_LABEL_LIMITS`; `adapter.mjs` imports it to rename `tool`), and the v2 glossary's accessors `glossaryFor`, `glossaryByText`, `glossaryEntries` (`GLOSSARY_LIMITS`) |
@@ -640,11 +640,16 @@ default never applies to it; `defaultIgnored` is the row's sentence,
 `SCOPE_DEFAULT_IGNORED`, and `defaultSummary` the default in a few words, which
 `mxCellHtml` puts on hover). Pass the server's configured snapshot scope,
 compact, to the places that read it — none of them is required: `formOpened`
-pre-fills only a NEW environment with it (`form.scopePrefill`), an existing one
-opens on its own scope; `useServerDefaultScope(form)` is the form's **Use the
-server default**; `savePlan` takes `scopePrefill` (an older host that passes
-only `scopeDefaults` has it taken as the pre-fill) and keeps what
-`scopeSaveOf` keeps. The scope check is `scopeCheckOf(form)` → the host's
+pre-fills only a NEW environment with it (`form.scopePrefill`), and only a
+default that names metric prefixes (one that names none is
+`form.scopePrefillRefused: { unprefixed: true, … }`, offered by
+`scope.offerDefault`), an existing one opens on its own scope;
+`useServerDefaultScope(form)` is the form's **Use the server default**;
+`savePlan` takes `scopePrefill` (an older host that passes only
+`scopeDefaults` has it taken as the pre-fill) and keeps what `scopeSaveOf`
+keeps — `scope.dropped` and the hint say so before the save, a blank Add whose
+name keys a service you passed `formOpened` included; `formDraft` carries the
+pre-fill (`scopePrefill`, compact) and `formRestored` puts it back. The scope check is `scopeCheckOf(form)` → the host's
 `checkServiceScope(serviceId, { env, scope })` (overview-api.mjs) →
 `scopeChecked(form, answer, key)` / `scopeCheckFailed`, worded by
 `scopeCheckView(form)` and drawn by `scopeCheckBlockHtml` (overview-view.mjs),
@@ -956,6 +961,13 @@ OBSERVOGRAM_SNAPSHOT_RULE_GROUPS='Group One,Group Two'
 - `RULE_GROUPS` is a comma list, compared exactly, so a name may hold spaces.
 - These values describe one team, service and environment. Keep them in the deployment's
   variables or in `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`, not in code ([`LIVE_FETCH.md`](LIVE_FETCH.md) §15.2).
+- Without `METRIC_PREFIXES`, nothing shows which service they are for, so the studio
+  pre-fills no new environment with them. The service form offers **Use the server
+  default** instead. Typed prefixes then keep none of the default's folders, rule groups
+  or patterns. Set `METRIC_PREFIXES` to the service's own for the pre-fill.
+- A pattern whose quantifiers can split a 256-character name more than a million ways is
+  refused, `^.*_.*_.*_total$` among them, and so is a backreference. A name longer than 256
+  characters is never dropped by a pattern.
 - The two variables your patch read inside `fetchMcp` do not exist upstream.
 - After the first snapshot, read the gate log. It says whether the folder scope was pushed
   down or the rules were read whole.

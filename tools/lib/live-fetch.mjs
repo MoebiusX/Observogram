@@ -157,14 +157,207 @@ const checkUid = (what) => (value) => (value.length <= SCOPE_LIMITS.uidLength &&
 // compileBoundedPattern — anchored, short, no quantified group, compiles).
 // This module imports nothing, so the rule is restated here; the fetcher runs
 // the timed half against adversarial names before a pattern touches a list.
+// A pattern is matched against every metric name a scope reads, on the
+// server's own thread (the fetcher's filter, the diff's and the scope check's
+// inScope), so its work is bounded too, statically: no backreference, and at
+// most EXCLUDE_WORK_MAX ways to split a name of EXCLUDE_NAME_MAX characters
+// (excludeWork) — `^q*q*q*q*q*q*q*q*q*q*q*q*$`, which every timed id fails at
+// its first character, crawls for seconds over a 24-character name and is
+// refused here, in the timed half's words. A name longer than EXCLUDE_NAME_MAX
+// is never matched by an exclude pattern (excludedBy).
 const QUANTIFIED_GROUP = /\)[+*{]/;
+export const EXCLUDE_NAME_MAX = 256;
+const EXCLUDE_WORK_MAX = 1_000_000;
+const EXCLUDE_TOO_SLOW = `is too slow to match (it crawls over a ${EXCLUDE_NAME_MAX}-character name)`;
 const checkExclude = (value) => {
   if (value.length > SCOPE_LIMITS.excludeLength) return `is longer than ${SCOPE_LIMITS.excludeLength} characters`;
   if (!value.startsWith('^')) return 'is not anchored (an exclude pattern starts with ^)';
   if (QUANTIFIED_GROUP.test(value)) return 'has a quantified group (nested quantifier)';
   try { new RegExp(value); } catch (e) { return `is not a regular expression (${e.message})`; }
+  const terms = excludeTerms(value);
+  if (terms && hasBackreference(terms)) return 'refers back to a group (a backreference has no bound on its work)';
+  if (excludeWork(value) > EXCLUDE_WORK_MAX) return EXCLUDE_TOO_SLOW;
   return null;
 };
+// The static half as a sentence for a pattern (null when it passes): the same rule normalizeScope
+// applies, for a caller that checks one pattern (the fetcher's timed half, before it times).
+export const excludeProblem = (pattern) => (typeof pattern === 'string' && pattern !== '' ? checkExclude(pattern) : 'is not a pattern');
+
+// Whether an exclude pattern drops `name`: one of `matchers` (compiled patterns that passed the
+// rule above) matches it, and it is at most EXCLUDE_NAME_MAX characters long — a longer name is
+// never dropped, so no pattern works over more than the bound counts. The fetcher's filter and the
+// diff's inScope read names by this one rule.
+export function excludedBy(matchers, name) {
+  return typeof name === 'string' && name.length <= EXCLUDE_NAME_MAX && (Array.isArray(matchers) ? matchers : []).some((re) => re.test(name));
+}
+
+// ---------- an exclude pattern's work ----------
+//
+// The pattern read as terms (a source new RegExp accepted, no flags): an alternation of sequences,
+// each term { type: 'char', src, min, max } (a literal, an escape, a class or '.', with its
+// repetition), { type: 'group', look, alts, min, max }, { type: 'assert', src } (^, $, \b, \B) or
+// { type: 'backref' }. null when it does not read so.
+const HEX_DIGIT = /[0-9a-fA-F]/;
+function excludeTerms(pattern) {
+  let i = 0;
+  const quantify = (term) => {
+    let q = null;
+    if (pattern[i] === '*') q = [0, Infinity, 1];
+    else if (pattern[i] === '+') q = [1, Infinity, 1];
+    else if (pattern[i] === '?') q = [0, 1, 1];
+    else if (pattern[i] === '{') {
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(pattern.slice(i));
+      if (m) q = [Number(m[1]), m[2] === undefined ? Number(m[1]) : m[3] === '' ? Infinity : Number(m[3]), m[0].length];
+    }
+    if (!q) return;
+    i += q[2];
+    if (pattern[i] === '?') i += 1;   // lazy: the same splits, tried in another order
+    term.min = q[0];
+    term.max = q[1];
+  };
+  const atom = () => {
+    const start = i;
+    const c = pattern[i];
+    if (c === '(') {
+      i += 1;
+      let look = false;
+      if (pattern[i] === '?') {
+        if (pattern.startsWith('?:', i)) i += 2;
+        else if (pattern.startsWith('?=', i) || pattern.startsWith('?!', i)) { i += 2; look = true; }
+        else if (pattern.startsWith('?<=', i) || pattern.startsWith('?<!', i)) { i += 3; look = true; }
+        else if (pattern.startsWith('?<', i) && pattern.indexOf('>', i) > i) i = pattern.indexOf('>', i) + 1;
+        else throw new SyntaxError('group');
+      }
+      const alts = alternation(true);
+      if (pattern[i] !== ')') throw new SyntaxError('group');
+      i += 1;
+      return { type: 'group', look, alts, min: 1, max: 1 };
+    }
+    if (c === '[') {
+      let j = i + 1;
+      if (pattern[j] === '^') j += 1;
+      while (j < pattern.length && pattern[j] !== ']') j += pattern[j] === '\\' ? 2 : 1;
+      if (j >= pattern.length) throw new SyntaxError('class');
+      i = j + 1;
+      return { type: 'char', src: pattern.slice(start, i), min: 1, max: 1 };
+    }
+    if (c === '\\') {
+      const d = pattern[i + 1];
+      if (d === undefined) throw new SyntaxError('escape');
+      if (/[1-9k]/.test(d)) { i += 2; return { type: 'backref' }; }
+      if (d === 'b' || d === 'B') { i += 2; return { type: 'assert', src: pattern.slice(start, i) }; }
+      let len = 2;
+      if (d === 'x' && HEX_DIGIT.test(pattern[i + 2] ?? '') && HEX_DIGIT.test(pattern[i + 3] ?? '')) len = 4;
+      else if (d === 'u' && [2, 3, 4, 5].every((k) => HEX_DIGIT.test(pattern[i + k] ?? ''))) len = 6;
+      else if (d === 'c' && /[A-Za-z]/.test(pattern[i + 2] ?? '')) len = 3;
+      i += len;
+      return { type: 'char', src: pattern.slice(start, i), min: 1, max: 1 };
+    }
+    i += 1;
+    if (c === '^' || c === '$') return { type: 'assert', src: c };
+    return { type: 'char', src: c, min: 1, max: 1 };
+  };
+  const alternation = (inGroup) => {
+    const alts = [[]];
+    while (i < pattern.length && !(inGroup && pattern[i] === ')')) {
+      if (pattern[i] === '|') { alts.push([]); i += 1; continue; }
+      if (pattern[i] === ')') throw new SyntaxError('group');
+      const term = atom();
+      quantify(term);
+      alts[alts.length - 1].push(term);
+    }
+    return alts;
+  };
+  try {
+    const alts = alternation(false);
+    return i === pattern.length ? alts : null;
+  } catch { return null; }
+}
+const hasBackreference = (alts) => alts.some((seq) => seq.some((t) => t.type === 'backref' || (t.type === 'group' && hasBackreference(t.alts))));
+
+// The most work a backtracking matcher does to test `pattern` on a name of `n` characters: the ways
+// it can split the name among the quantified atoms and the alternatives, counted from the end — an
+// atom that can only stop before a character it cannot take, or at the end of the name (`$`, or the
+// end of the pattern, where the test succeeds), costs its own steps once (added); one whose next
+// term can take what it takes is tried once per way the rest can be split (multiplied). The same
+// characters are compared over every ASCII one and every one the pattern writes, so two sets that
+// share a character share one of those. Infinity for what does not read as terms, a backreference,
+// a repeated group, or more than EXCLUDE_WORK_MAX.
+function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
+  const alts = excludeTerms(pattern);
+  if (!alts) return Infinity;
+  const sample = new Set();
+  for (let c = 0; c < 128; c += 1) sample.add(String.fromCharCode(c));
+  for (const ch of pattern) sample.add(ch);
+  for (const m of pattern.matchAll(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g)) sample.add(String.fromCharCode(parseInt(m[1] ?? m[2], 16)));
+  for (const ch of '        　﻿') sample.add(ch);
+  const chars = [...sample];
+  const setOf = (t) => {
+    if (t.set === undefined) {
+      let re = null;
+      try { re = new RegExp(`^(?:${t.src})$`); } catch { /* not read alone: never disjoint */ }
+      t.set = re ? chars.filter((ch) => re.test(ch)) : null;
+    }
+    return t.set;
+  };
+  const disjoint = (a, b) => {
+    const sa = setOf(a);
+    const sb = setOf(b);
+    return !!sa && !!sb && !sa.some((ch) => sb.includes(ch));
+  };
+  const stops = (t, next, atEnd) => (!next ? atEnd
+    : next.type === 'assert' ? next.src === '$'
+      : next.type === 'char' && next.min >= 1 && disjoint(t, next));
+  const seqWork = (seq, atEnd) => {
+    let w = 1;
+    for (let k = seq.length - 1; k >= 0; k -= 1) {
+      const t = seq[k];
+      if (t.type === 'backref') return Infinity;
+      if (t.type === 'char') {
+        const reps = Math.min(t.max, n) - Math.min(t.min, n) + 1;
+        if (reps > 1) w = stops(t, seq[k + 1], atEnd) ? reps + w : reps * w;
+      } else if (t.type === 'group') {
+        if (t.max > 1) return Infinity;
+        let inner = 0;
+        for (const alt of t.alts) inner += seqWork(alt, false);
+        w = t.look ? inner + w : ((t.min === 0 ? 1 : 0) + inner) * w;
+      }
+      if (!(w <= EXCLUDE_WORK_MAX)) return Infinity;
+    }
+    return w;
+  };
+  let total = 0;
+  for (const seq of alts) total += seqWork(seq, true);
+  const anchored = alts.every((seq) => seq[0]?.type === 'assert' && seq[0].src === '^');
+  const work = anchored ? total : total * (n + 1);
+  return work <= EXCLUDE_WORK_MAX ? work : Infinity;
+}
+
+// Names to time an exclude pattern on (the fetcher's timed half), so the clock times the pattern's
+// own work: a name that opens with the literal text the pattern opens with, then one character
+// over and over, then a line break no pattern takes at the end — one name per character the
+// pattern writes (and a letter, a digit, `_`, `:`, `-`) — beside the four adversarial ids every
+// bounded pattern is timed on. A pattern that must open with `q` fails every one of those at its
+// first character, and was timed doing nothing.
+export function excludeProbes(pattern) {
+  const n = EXCLUDE_NAME_MAX;
+  const out = ['a'.repeat(n), 'ab'.repeat(n / 2), '-'.repeat(n), `${'x'.repeat(n - 1)}!`];
+  const alts = typeof pattern === 'string' ? excludeTerms(pattern) : null;
+  if (!alts) return out;
+  let prefix = '';
+  const first = alts[0] || [];
+  for (const t of first.slice(first[0]?.type === 'assert' && first[0].src === '^' ? 1 : 0)) {
+    if (t.type !== 'char' || t.min !== 1 || t.max !== 1) break;
+    const ch = t.src.length === 1 && t.src !== '.' ? t.src : t.src.length === 2 && t.src[0] === '\\' && !/[A-Za-z0-9]/.test(t.src[1]) ? t.src[1] : null;
+    if (ch === null) break;
+    prefix += ch;
+  }
+  prefix = prefix.slice(0, n - 2);
+  const fills = new Set(['a', '0', '_', ':', '-']);
+  for (const ch of pattern) if (!'\\^$|()[]{}*+?.'.includes(ch) && ch.trim()) fills.add(ch);
+  for (const c of [...fills].slice(0, 24)) out.push(`${prefix}${c.repeat(n - prefix.length - 1)}\n`);
+  return out;
+}
 // A rule group's name as the engine lists it (`ruleGroup` of a Grafana-managed
 // rule, `groups[].name` of a Prometheus or vmalert listing): any text without
 // a control character, up to the limit. Compared exactly, case and all.
@@ -420,9 +613,10 @@ export function inScope(kind, artefact, scopeEntry) {
     if (!names.length) return null;
     const excluded = excludeMatchers(scopeEntry);
     // A name is inside when it carries a prefix (any name, when no prefix was
-    // set) and no exclude pattern matches it: the fetcher kept exactly those.
+    // set) and no exclude pattern drops it (excludedBy: a name over the bound
+    // never is): the fetcher kept exactly those.
     return names.some((n) => (scopeEntry.values.length === 0 || scopeEntry.values.some((p) => n.startsWith(p)))
-      && !excluded.some((re) => re.test(n)));
+      && !excludedBy(excluded, n));
   }
   if (scopeEntry.by === 'folder') {
     const uid = folderUidOf(artefact);

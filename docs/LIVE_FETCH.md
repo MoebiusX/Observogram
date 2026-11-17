@@ -145,16 +145,27 @@ annotation: a hand-uploaded pack can make them.
 deployment's field by field; a request's `scope` replaces the configured one
 whole. Inert when unset; a plain draft, the refresh and a service's Run never
 read them: they are the Expert snapshot's default and pre-fill the form of a
-NEW service environment, each field said *from the server default* — a Run
-reads its environment's own scope, else none (README, *A live scope per
-environment*: a scoped draft — the families the scope narrows narrowed as
-here, the same annotations, the draft's signals kept). Metric
+NEW service environment, each field said *from the server default* (a default
+that names no metric prefixes cannot show it is a service's and is offered,
+never pre-filled) — a Run reads its environment's own scope, else none
+(README, *A live scope per environment*: a scoped draft — the families the
+scope narrows narrowed as here, the same annotations, the draft's signals
+kept). Metric
 prefixes filter the name list, then the exclude patterns drop names from what
 the prefixes kept (anchored, bounded regexes, white-space-separated in the
 variable — a backend's names that no declaration will ever match, an
 exporter's malformed mints; the count is in the gate log, the patterns ride in
 `observogram.scope.metric` as `exclude`, and the diff parks a repository
-metric they match as *not checked*), then a 20 000-name cap, named; folder
+metric they match as *not checked*), then a 20 000-name cap, named. A pattern
+is matched on the server's own thread, so its work is bounded where the scope
+is parsed (`tools/lib/live-fetch.mjs` `normalizeScope`): no backreference, and
+at most a million ways to split a 256-character name among its quantifiers and
+alternatives — adjacent quantifiers that take the same characters
+(`^q*q*q*q*q*q*q*q*q*q*q*q*$`, `^.*_.*_.*_total$`) and long chains of optional
+atoms are refused, in the timed half's words, before anything is timed; the
+timed half then times names the pattern itself opens (`excludeProbes`) beside
+the four adversarial ids; and a name longer than 256 characters is never
+dropped by a pattern, by the fetcher and the diff alike (`excludedBy`). Folder
 uids filter dashboards before the detail reads and alert rules when every
 rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,
 through its registry row's `runtimeArgs` slot — is asked once per folder and the

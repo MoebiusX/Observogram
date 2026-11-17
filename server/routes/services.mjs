@@ -89,10 +89,12 @@ function pathEnvironment(req, res, db) {
 const serviceSummary = (s) => ({ id: s.id, slug: s.slug, name: s.name, tier: s.tier });
 
 // `onGradeOffChanged(service)`: called after a PATCH changed a service's
-// grade criteria, its set-asides, its recorded chaos runs or its MTTD / MTTR
-// targets, and after a POST made one with targets, inside the request's org —
-// the server writes them into the service's saved checks there
-// (server/index.mjs).
+// grade criteria, its set-asides, its recorded chaos runs, its MTTD / MTTR
+// targets or its live scopes, after a POST made one (a check a service of that
+// name left takes its switches and scopes), and after one of its environments
+// was deleted (its scope leaves that environment's checks), inside the
+// request's org — the server writes them into the service's saved checks
+// there (server/index.mjs).
 // `onServiceDeleting(service)`: called before a DELETE, with the service as
 // it is; the function it returns runs once the delete went through (the
 // server takes the switches out of the checks that were the service's).
@@ -114,8 +116,9 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
   router.post('/api/services', authorize('POST /api/services'), handler((req, res, { db, actor }) => {
     const service = createServiceFromApi(db, actor, bodyOf(req), { caller: mcpCallerOf(req) });
     const view = serviceViewOf(db, service);
-    // Its targets go into any check already saved under its name (one a service of that name left).
-    if (service.targets) onGradeOffChanged?.(view);
+    // Any check already saved under its name (one a service of that name left) takes its targets and its
+    // environments' live scopes — none, until it has its own: never the scope the earlier service read with.
+    onGradeOffChanged?.(view);
     res.status(201).json({ ok: true, service: view });
   }));
 
@@ -302,7 +305,12 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
   router.delete('/api/environments/:id', authorize('DELETE /api/environments/:id'), handler((req, res, { db, actor }) => {
     const id = pathId(req, res, 'id', 'environment');
     if (id === null) return;
+    const serviceId = getEnvironment(db, id)?.serviceId ?? null;
     const { environment } = deleteEnvironmentFromApi(db, actor, id);
+    // Its live scope left the service with it: the service's checks are written again with the scopes it
+    // keeps, so one made again under the name reads with none until it has its own.
+    const service = serviceId === null ? null : getService(db, serviceId);
+    if (service) onGradeOffChanged?.(serviceViewOf(db, service));
     res.json({ ok: true, deleted: environment });
   }));
 

@@ -362,7 +362,11 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // readings, the service form's deployment surface and live scope with its check, the board's scan line
   // by kind, and the Grafana rule reading in sli-inference, crawler, artefact-model and diff; no
   // dependency), about 15 KB over.
-  assert.ok(built.bytes < 7_164_000, `the two-pack bundle is under 7,164,000 bytes (${built.bytes})`);
+  // 7,180,000 since the review's live-scope fixes (2026-11-17: the two-pack bundle measured 7,176,368 with
+  // the exclude patterns' work bound in tools/lib/live-fetch.mjs, the sidecar value and the per-container
+  // providers in tools/lib/crawler.mjs, and the form's scope sentences in studio/overview-model.mjs; no
+  // dependency).
+  assert.ok(built.bytes < 7_180_000, `the two-pack bundle is under 7,180,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

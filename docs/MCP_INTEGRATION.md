@@ -116,7 +116,9 @@ stage whose tools are missing is skipped with its gap and the fetch goes on);
 the stack self-metrics, the Alertmanager and Grafana observers and the ALERTS
 query are not read, while the recording-rule grep still runs over the whole
 metric-name list (it feeds the SLI and SLO inference); the scope narrows
-metric names (prefixes, then exclude patterns, then a 20 000-name cap),
+metric names (prefixes, then exclude patterns — each one's work bounded where
+the scope is parsed, and a name over 256 characters never dropped by one — then
+a 20 000-name cap),
 dashboards (folder uids, before the detail reads), alert rules (folder
 uids, when every rule names its folder; an engine whose tool takes a folder
 uid is asked once per folder) and alert and recording rules by rule group
@@ -137,8 +139,10 @@ in memory, so a restart loses them (docs/LIVE_FETCH.md §15.2 has the shapes
 and the stage table). The configured scope is
 `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID`,
 `_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org) — the Expert
-snapshot's default and a new service environment's pre-fill, never applied to a service environment that
-exists; a datasource uid is named in the gate log as not applied, since no advertised tool takes one.
+snapshot's default and a new service environment's pre-fill (only when it names metric prefixes: one that
+names none is offered, never pre-filled), never applied to a service environment that exists, and taken out
+of the saved checks that still carry it at the first start after that change; a datasource uid is named in
+the gate log as not applied, since no advertised tool takes one.
 
 ## Server settings (admin configuration)
 

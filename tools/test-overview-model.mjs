@@ -2855,7 +2855,7 @@ test('a new environment is pre-filled from the server default, each field said s
   assert.equal(blankAdd.values.scopePrefixes, 'shop_', 'a blank Add is pre-filled');
   assert.equal(savePlan({ ...blankAdd.values, location: 'https://github.com/acme/checkout' }, { services: [svc([env('prod', own)], { prod: own })], scopePrefill: blankAdd.scopePrefill, scopeKnown: false }).service.patch?.liveScopes, undefined,
     'the environment keeps its own scope');
-  assert.deepEqual(scopeSaveOf({ ...blankAdd.values }, { was: own, prefill: DEFAULTS, known: true }), null, 'over an environment\'s own scope, the untouched pre-fill is never kept');
+  assert.deepEqual(scopeSaveOf({ ...blankAdd.values }, { was: own, prefill: DEFAULTS, known: true }), own, 'over an environment\'s own scope, the untouched pre-fill is never kept: the environment keeps its own, never cleared by answers not saved');
   // An existing environment with none of its own: empty, offered the default; Use the server default makes it its own once saved.
   const bare = formOpened([svc([env('prod')])], { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS });
   assert.deepEqual([bare.values.scopePrefixes, formModel(bare, { endpoints: [EP] }).scope.offerDefault], ['', true]);
@@ -2865,6 +2865,110 @@ test('a new environment is pre-filled from the server default, each field said s
   assert.deepEqual(savePlan(used.values, { services: [svc([env('prod')])], serviceId: 1, scopePrefill: used.scopePrefill }).service.patch, { liveScopes: { prod: DEFAULTS } });
   const noDefault = { ...bare, scopeDefaults: null };
   assert.equal(useServerDefaultScope(noDefault), noDefault, 'no default: the form as it was');
+});
+
+test('a server default that names no metric prefixes (the folder, rule groups and exclude pattern docs/VENDORING.md sets) cannot show it is a service\'s: never pre-filled — a new service, Add environment — said why and offered; used, then typed prefixes keep none of its other answers, said before the save', () => {
+  const DEFAULTS = { folderUids: ['folder-a'], ruleGroups: ['Group One', 'Group Two'], metricExclude: ['^demo_event_(?:\\d+|blank)_total$'] };
+  const REFUSED = { defaultPrefixes: [], servicePrefixes: null, unprefixed: true };
+  assert.deepEqual(scopePrefillOf(null, DEFAULTS), { refused: REFUSED }, 'no prefixes: nothing shows it matches');
+  assert.deepEqual(scopePrefillOf(svcRow(), DEFAULTS), { refused: REFUSED });
+  // A new service: the scope opens empty, says why, offers the default.
+  const fresh = formInput(formOpened([], { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Second Shop');
+  const fm = formModel(fresh, { endpoints: [EP] }).scope;
+  assert.deepEqual([fresh.values.scopeFolders, fresh.values.scopeGroups, fresh.values.scopeExclude, fresh.scopePrefill, fresh.scopePrefillRefused], ['', '', '', null, REFUSED]);
+  assert.deepEqual([fm.from, fm.offerDefault, fm.fields.filter((x) => x.fromDefault).length, fm.dropped], [null, true, 0, null]);
+  assert.equal(fm.hint, "Empty: the server default (1 folder, 2 rule groups, 1 exclude pattern) names no metric prefixes, so nothing shows it is Second Shop's — it is not pre-filled. Use the server default to make it this environment's own.");
+  // Its owner types the service's own prefixes: only those are saved (before, the default's folder, groups and pattern rode along).
+  const typed = formInput(fresh, 'scopePrefixes', 'http_');
+  const tm = formModel(typed, { endpoints: [EP] }).scope;
+  assert.deepEqual([tm.dropped, tm.hint], [null, "This environment's own scope: each Run reads only 1 prefix of the estate, and the match counts only that."]);
+  assert.deepEqual(savePlan({ ...typed.values, location: 'acme/shop' }, { services: [], scopeDefaults: DEFAULTS, scopePrefill: typed.scopePrefill }).service.create.liveScopes, { prod: { metricPrefixes: ['http_'] } });
+  // Add environment on a service: the same.
+  const added = formOpened([svcRow()], { serviceId: 1, endpoints: [EP], addEnv: true, scopeDefaults: DEFAULTS });
+  assert.deepEqual([added.values.scopeGroups, added.scopePrefillRefused, formModel(added, { endpoints: [EP] }).scope.offerDefault], ['', REFUSED, true]);
+  // Used on purpose: the environment's own once saved, each field said so.
+  const used = useServerDefaultScope(fresh);
+  const um = formModel(used, { endpoints: [EP] }).scope;
+  assert.deepEqual([used.values.scopeGroups, um.from, um.offerDefault, um.fields.filter((x) => x.fromDefault).map((x) => x.value)], ['Group One, Group Two', 'server', false, ['scopeFolders', 'scopeExclude', 'scopeGroups']]);
+  assert.deepEqual(savePlan({ ...used.values, location: 'acme/shop' }, { services: [], scopePrefill: used.scopePrefill }).service.create.liveScopes, { prod: DEFAULTS });
+  // …then the service's own prefixes typed: they differ from the default's (none), so its other answers are not saved, and the form says so.
+  const own = formInput(used, 'scopePrefixes', 'http_');
+  const om = formModel(own, { endpoints: [EP] }).scope;
+  assert.equal(om.dropped, 'The server default names no metric prefixes, so nothing says it is for http_: its folder uids, exclude patterns and rule groups will not be saved for this environment — type them again to keep them.');
+  assert.equal(om.hint, "This environment's own scope: each Run reads only 1 prefix of the estate, and the match counts only that.", 'the hint says what a save keeps');
+  assert.deepEqual(savePlan({ ...own.values, location: 'acme/shop' }, { services: [], scopePrefill: own.scopePrefill }).service.create.liveScopes, { prod: { metricPrefixes: ['http_'] } });
+  assert.deepEqual(scopeSaveOf(formInput(own, 'scopeGroups', 'shop').values, { prefill: DEFAULTS }), { metricPrefixes: ['http_'], ruleGroups: ['shop'] }, 'a field typed again is the person\'s');
+  // A default WITH prefixes is still pre-filled: the rule above is for a default that cannot show it matches.
+  assert.equal(formOpened([], { endpoints: [EP], scopeDefaults: { ...DEFAULTS, metricPrefixes: ['shop_'] } }).values.scopePrefixes, 'shop_');
+});
+
+test('a blank Add whose name keys a service already listed says before the save that the server default\'s pre-filled answers will not be saved onto it, as savePlan does; the hint never says "saved" then', () => {
+  const DEFAULTS = { metricPrefixes: ['shop_'], ruleGroups: ['shop-slo'] };
+  const services = [svcRow()];
+  const blank = formInput(formInput(formOpened(services, { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Checkout'), 'env', 'staging');
+  assert.equal(blank.values.scopePrefixes, 'shop_', 'a blank form is pre-filled');
+  const m = formModel(blank, { endpoints: [EP] }).scope;
+  assert.equal(m.dropped, "Checkout is a service already listed, and this form was not opened on it: the server default's metric prefixes and rule groups will not be saved for staging — type your own, or use Change on its row.");
+  assert.equal(m.hint, "None of these answers is saved as staging's live scope.");
+  const plan = savePlan({ ...blank.values, location: 'https://github.com/acme/checkout' }, { services, serviceId: blank.serviceId, scopePrefill: blank.scopePrefill, scopeKnown: !!blank.record });
+  assert.deepEqual([plan.service.id, plan.service.patch?.liveScopes, plan.env], [1, undefined, { create: { name: 'staging' } }], 'and the save keeps none of them, as the form said');
+  // A typed answer of the person's own is saved onto it, and the hint says what is.
+  const groups = formInput(blank, 'scopeGroups', 'checkout-slo');
+  assert.equal(formModel(groups, { endpoints: [EP] }).scope.hint, "This environment's own scope: each Run reads only 1 rule group of the estate, and the match counts only that.");
+  assert.deepEqual(savePlan({ ...groups.values, location: 'https://github.com/acme/checkout' }, { services, scopePrefill: groups.scopePrefill, scopeKnown: false }).service.patch.liveScopes, { staging: { ruleGroups: ['checkout-slo'] } });
+  // A name no service has: a new service, the pre-fill saved as it says.
+  const other = formInput(formOpened(services, { endpoints: [EP], scopeDefaults: DEFAULTS }), 'name', 'Basket');
+  assert.deepEqual([formModel(other, { endpoints: [EP] }).scope.dropped, formModel(other, { endpoints: [EP] }).scope.from], [null, 'server']);
+});
+
+test('the sign-in round trip (formDraft → formRestored) keeps the server default the form was pre-filled with: Use the server default on an environment that exists, then the service\'s own prefixes — the restored form drops and saves what it said before', () => {
+  const DEFAULTS = { metricPrefixes: ['shopa_'], ruleGroups: ['shop-a-slo'], metricExclude: ['^go_'] };
+  const services = [svcRow({ environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: null }] })];
+  const form = formInput(useServerDefaultScope(formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS })), 'scopePrefixes', 'shopb_');
+  const DROPPED = 'The server default is for the metric prefixes shopa_: its exclude patterns and rule groups will not be saved for this environment — type them again to keep them.';
+  const save = (f) => savePlan(f.values, { services, serviceId: 1, scopePrefill: f.scopePrefill ?? null, scopeKnown: !!f.record }).service.patch?.liveScopes ?? null;
+  assert.deepEqual([formModel(form, { endpoints: [EP] }).scope.dropped, save(form)], [DROPPED, { prod: { metricPrefixes: ['shopb_'] } }]);
+  const draft = formDraft(form, { now: NOW });
+  assert.deepEqual(draft.scopePrefill, DEFAULTS, 'the draft carries the pre-fill, compact');
+  const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW });
+  assert.deepEqual([back.values.scopePrefixes, back.values.scopeGroups, back.scopePrefill], ['shopb_', 'shop-a-slo', DEFAULTS]);
+  assert.deepEqual([formModel(back, { endpoints: [EP] }).scope.dropped, save(back)], [DROPPED, { prod: { metricPrefixes: ['shopb_'] } }], 'before: no sentence, and the default\'s rule group and pattern saved as the environment\'s own');
+  // A default with no prefixes, used on a new environment (never pre-filled): the round trip keeps that too.
+  const UNPREFIXED = { ruleGroups: ['shop-a-slo'] };
+  const fresh = useServerDefaultScope(formInput(formOpened([], { endpoints: [EP], scopeDefaults: UNPREFIXED }), 'name', 'Shop'));
+  const freshBack = formRestored([], formDraft(fresh, { now: NOW }), { endpoints: [EP], scopeDefaults: UNPREFIXED, now: NOW });
+  assert.deepEqual([freshBack.values.scopeGroups, freshBack.scopePrefill, formModel(freshBack, { endpoints: [EP] }).scope.from], ['shop-a-slo', UNPREFIXED, 'server']);
+  // A draft without one (older, or none was used) opens as before; one whose pre-fill is no scope is ignored.
+  assert.equal(formRestored(services, { ...draft, scopePrefill: undefined }, { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW }).scopePrefill, null);
+  assert.equal(formRestored(services, { ...draft, scopePrefill: ['x'] }, { endpoints: [EP], scopeDefaults: DEFAULTS, now: NOW }).scopePrefill, null);
+  assert.equal(formDraft(formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP], scopeDefaults: DEFAULTS }), { now: NOW }).scopePrefill, undefined, 'no pre-fill: none in the draft');
+});
+
+test('the scope check words what it cannot know: declared rules filed by a folder title the live read gave no uid of (a note — never "they do not say which folder"), and a rule group past the ones the live read kept (never "Not in the last live read")', () => {
+  const env = { id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: null };
+  const services = [svcRow({ environments: [env] })];
+  const viewOf = (values, answer) => {
+    let form = formOpened(services, { serviceId: 1, env: 'prod', endpoints: [EP] });
+    for (const [k, v] of Object.entries(values)) form = formInput(form, k, v);
+    const ask = scopeCheckOf(form);
+    return scopeCheckView(scopeChecked(scopeChecking(form, ask.key), answer, ask.key, { now: NOW }));
+  };
+  const readAt = new Date(NOW - 2 * 3600_000).toISOString();
+  const live = { packId: 'l', label: 'live', readAt, folders: null, ruleGroups: ['shop'], ruleGroupsKept: null, foldersNotRead: [], missingGroups: [] };
+  // Every declared rule filed under the title "Shop", the live read titled none of the scope's folders.
+  const titled = viewOf({ scopeFolders: 'shop-alerts' }, { declared: { families: [{ family: 'alert_rule', declared: 3, inside: 0, outside: 0, unknown: 3, byTitle: 3, titles: ['Shop'], untitledFolders: ['shop-alerts'] }] }, live });
+  assert.deepEqual(titled.warnings, [], 'no warning against a scope that may well be right');
+  assert.deepEqual(titled.notes, ['None of the 3 declared alert rules is known to be inside this scope: they name their folder by its title only ("Shop"), and the last live read of prod (2 hours ago) did not give the title of the folder shop-alerts. A Run with it compares those it finds in these folders; one it does not find reads not checked.']);
+  // Some by title, some saying nothing, one outside: a warning that says each.
+  const mixed = viewOf({ scopeFolders: 'f1', scopeGroups: 'shop' }, { declared: { families: [{ family: 'alert_rule', declared: 4, inside: 0, outside: 1, unknown: 3, byTitle: 2, titles: ['Shop'], untitledFolders: ['f1'] }] }, live });
+  assert.deepEqual(mixed.warnings, ['None of the 4 declared alert rules is known to be inside this scope: 2 of them name their folder by its title only ("Shop"), and the last live read of prod (2 hours ago) did not give the title of the folder f1; 1 of them do not say which folder or group they are in; 1 are outside.']);
+  // An answer from an older server (no byTitle): as before.
+  assert.deepEqual(viewOf({ scopeFolders: 'f1' }, { declared: { families: [{ family: 'alert_rule', declared: 3, inside: 0, outside: 0, unknown: 3 }] }, live }).warnings,
+    ['None of the 3 declared alert rules is known to be inside this scope: 3 of them do not say which folder they are in.']);
+  // The live read listed more rule groups than it kept: a group not among them is not known missing.
+  const many = viewOf({ scopeGroups: 'zz-shop' }, { declared: { families: [] }, live: { ...live, ruleGroups: ['group-000', 'group-001'], ruleGroupsKept: { kept: 500, of: 601 }, missingGroups: null } });
+  assert.deepEqual([many.warnings, many.notes], [[], ['The last live read of prod (2 hours ago) listed 601 rule groups and kept the first 500: "zz-shop" is not among them, so whether it is there is not known.']]);
+  assert.deepEqual(viewOf({ scopeGroups: 'group-001' }, { declared: { families: [] }, live: { ...live, ruleGroups: ['group-000', 'group-001'], ruleGroupsKept: { kept: 500, of: 601 }, missingGroups: null } }).notes, [], 'a group among those kept: nothing to say');
 });
 
 test('the form keeps both settings an environment has of its own, the deployment surface and the live scope, every way it opens and saves: its own of each; another environment chosen, its own of each (no scope: empty, never the default); Add environment, every file and the default pre-filled; a draft, both answers back; one save, both maps; a blank Add that keys an environment writes neither over', () => {
