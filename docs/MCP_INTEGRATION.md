@@ -1398,8 +1398,9 @@ The run reads its history *before* it is written (so the diff is against
 history, never against itself) and picks two records from it: the
 **previous run** — the newest record whatever it holds — and the
 **baseline** — the newest record that CARRIES chains (`BASELINE_SCAN_LIMIT`
-= 25 records back; a vantage-lost record or one written before chains were
-recorded cannot be diffed). The chain diff, the versions and the deploy
+= 25 records back, a Run stopped on a partial scan not counted among them,
+however many there are; a vantage-lost record or one written before chains
+were recorded cannot be diffed). The chain diff, the versions and the deploy
 window are compared against the baseline; the vantage against the previous
 run. `transition` is `diffRunBranches(baseline, { branches })` plus what
 the run knows about the choice, and is never `null` on a new record:

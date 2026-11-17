@@ -571,10 +571,12 @@ test('the read\'s files share one budget: when it runs out, every file not read 
   ended('mixed', mix, Object.fromEntries([...fast].sort().map((p) => [p, `# ${p}`])), allSkipped.filter((s) => !fast.has(s.path)));
   assert.deepEqual(calls, ['a'], 'b and c were reached after the budget was up: stored without a call');
   assert.deepEqual([...texts], ['a', 'b', 'c'].map((path) => [path, { error: 'the read\'s 1 s for its files ran out' }]));
-  // The reads have ended, their budgets spent: a signal under a budget would be aborted by now. The
-  // calls before the files are not under one — through fetchFn they carried no init at all, so
-  // nothing of the read's budget; through fetch and fetchImpl the fetcher's own deadline, still running.
-  assert.deepEqual(seamInits, [undefined, undefined, undefined], 'GitHub through fetchFn: the tree call (raw) and the repository and tree calls (api) carry no init — nothing of the read\'s budget is handed to them');
+  // The reads have ended, their budgets spent: a signal under the files' budget would be aborted by
+  // now. The calls before the files are not under it — through fetchFn each carries the signal of its
+  // own read's budget (retryRead's), done with and never aborted; through fetch and fetchImpl the
+  // fetcher's own deadline, still running.
+  assert.ok(seamInits.length === 3 && seamInits.every((init) => init?.signal instanceof AbortSignal && !init.signal.aborted),
+    'GitHub through fetchFn: the tree call (raw) and the repository and tree calls (api) carry their own read\'s signal, nothing of the files\' budget');
   assert.ok(ghSignals.length === 2 && ghSignals.every((s) => s instanceof AbortSignal && !s.aborted), 'GitHub through ghFetch: the repository and tree calls\' signals are AbortSignals of their own, not aborted after the budget ran out — a deadline, not the budget');
   assert.ok(adoSignals.length === 1 && adoSignals[0] instanceof AbortSignal && !adoSignals[0].aborted, 'Azure DevOps: the tree call\'s signal is an AbortSignal of its own, not aborted after the budget ran out — a deadline, not the budget');
   const budgetOut = outOfTime(HOST_READ_FILES_BUDGET_MS);
@@ -2348,7 +2350,7 @@ test('SR1 GET /api/journeys lists what the last run rests on — compared, the f
 // no header, served on the next try), and undici's two drop shapes.
 
 const { hostWaitMs, retryKind, hostMessage } = await import('./fetch-failure.mjs');
-const { HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS, retryRead } = await import('./github-crawl.mjs');
+const { HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS, HOST_READ_CALL_BUDGET_MS, retryRead } = await import('./github-crawl.mjs');
 
 // Virtual time for a read: `now` advances only when the read sleeps, so its waits cost nothing here.
 const virtualClock = () => {
@@ -2365,7 +2367,7 @@ const hostError = (status, message, retryAfterMs) => Object.assign(new Error(mes
 const dropped = (code = 'UND_ERR_SOCKET') => unreachable('GitHub', 'https://raw.githubusercontent.com/acme/shop/main/a.yaml', new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code }) }), { answered: true });
 
 test('hostWaitMs and retryKind: the wait a host asks for, from its headers alone; what may be tried again, from the status or a cause\'s code, never the words — through the real readers, which keep the status and the wait and quote a host\'s JSON message (its first sentence), never an HTML body', async () => {
-  assert.deepEqual([HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS], [4, 1000, 60_000]);
+  assert.deepEqual([HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS, HOST_READ_CALL_BUDGET_MS], [4, 1000, 60_000, 90_000]);
   const NOW = Date.parse('2026-11-17T10:00:00Z');
   assert.equal(hostWaitMs(new Headers({ 'retry-after': '7' }), NOW), 7000);
   assert.equal(hostWaitMs(new Headers({ 'retry-after': 'Tue, 17 Nov 2026 10:00:30 GMT' }), NOW), 30_000, 'an HTTP date');
@@ -2376,7 +2378,7 @@ test('hostWaitMs and retryKind: the wait a host asks for, from its headers alone
   assert.deepEqual([hostWaitMs({ 'Retry-After': '2' }, NOW), hostWaitMs(null, NOW), hostWaitMs(new Headers(), NOW)], [2000, null, null], 'a plain object in any case; no headers');
   // The message: a JSON body's first sentence, never more, never an HTML page.
   assert.equal(hostMessage(JSON.stringify({ message: "TF401027: You need the Git 'GenericRead' permission to perform this action. Details: identity 'Build\\\\x', scope 'repository'." })), "TF401027: You need the Git 'GenericRead' permission to perform this action.");
-  assert.equal(hostMessage(JSON.stringify({ message: 'API rate limit exceeded for 203.0.113.9. (But here is the good news: authenticated requests get a higher rate limit.)' })), 'API rate limit exceeded for 203.0.113.9.');
+  assert.equal(hostMessage(JSON.stringify({ message: 'API rate limit exceeded for 203.0.113.9. (But here is the good news: authenticated requests get a higher rate limit.)' })), 'API rate limit exceeded.');
   assert.deepEqual([hostMessage('<html><body>Throttled</body></html>'), hostMessage(''), hostMessage(JSON.stringify({ message: 'Not Found' })), hostMessage(JSON.stringify({ message: 'x'.repeat(300) })).length], ['', '', 'Not Found', 200]);
 
   // Through the readers over stubbed answers: the status and the wait kept, the kind from the status.
@@ -2394,6 +2396,7 @@ test('hostWaitMs and retryKind: the wait a host asks for, from its headers alone
     for (const [status, kind] of [[429, 'refused'], [503, 'refused'], [500, 'failed'], [504, 'failed'], [404, null], [401, null], [422, null]]) {
       assert.equal(retryKind(await gh(status, '')), kind, String(status));
     }
+    assert.equal(spent.message, 'GitHub 403 on /repos/acme/shop: API rate limit exceeded.', 'the account GitHub\'s limit sentence names never leaves the reader');
     globalThis.fetch = answer(429);
     const raw429 = await rawFetch('acme', 'shop', 'main', 'alerts/a.yml').catch((e) => e);
     assert.deepEqual([raw429.message, raw429.status, retryKind(raw429), 'retryAfterMs' in raw429], ['GitHub 429 on alerts/a.yml', 429, 'refused', false], 'raw: a 429 with no header — a backoff');
@@ -2450,11 +2453,11 @@ test('downloadFiles tries a refused or dropped file again — after the host\'s 
     const c = virtualClock();
     const files = Array.from({ length: 40 }, (_, i) => ({ path: `f${String(i).padStart(2, '0')}.yaml` }));
     let asked = 0;
-    const texts = await downloadFiles(files, async () => { asked++; await new Promise((ok) => setImmediate(ok)); throw hostError(403, 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded for user ID 1.', 3_600_000); }, { now: c.now, sleep: c.sleep });
+    const texts = await downloadFiles(files, async () => { asked++; await new Promise((ok) => setImmediate(ok)); throw hostError(403, 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded.', 3_600_000); }, { now: c.now, sleep: c.sleep });
     assert.equal(asked, HOST_READ_PARALLEL, 'the first eight, in flight together; none after');
     const says = [...texts.values()];
-    assert.equal(says.filter((v) => v.error === 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded for user ID 1. — the host asked to wait 3600 s, more than the read had left').length, 8);
-    assert.equal(says.filter((v) => v.error === 'not tried: the host refused f00.yaml (403) and asked to wait 3600 s, more than the read had left' && v.status === 403).length, 32, 'the rest not tried, said why');
+    assert.equal(says.filter((v) => v.error === 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded. — the host asked to wait 3600 s, more than the 60 s a read waits').length, 8);
+    assert.equal(says.filter((v) => v.error === 'not tried: the host refused f00.yaml (403) and asked to wait 3600 s, more than the 60 s a read waits' && v.status === 403).length, 32, 'the rest not tried, said why');
     assert.deepEqual(c.slept, [], 'no wait at all');
   }
   // retryRead: one read (a tree) tried again as a file is; still failing, it throws, said tried; a long wait is not waited.
@@ -2466,8 +2469,113 @@ test('downloadFiles tries a refused or dropped file again — after the host\'s 
     n = 0;
     await assert.rejects(retryRead(async () => { n++; throw dropped(); }, { sleep: c.sleep, backoffMs: 0 }), (e) => e.message === `${dropped().message} — tried 4 times` && n === 4);
     n = 0;
-    await assert.rejects(retryRead(async () => { n++; throw hostError(403, 'GitHub 403 on /repos/a/b: API rate limit exceeded for user ID 1.', 3_600_000); }, { sleep: c.sleep }), (e) => e.status === 403 && n === 1 && !/tried/.test(e.message), 'an hour away: not waited, not tried again');
+    await assert.rejects(retryRead(async () => { n++; throw hostError(403, 'GitHub 403 on /repos/a/b: API rate limit exceeded.', 3_600_000); }, { sleep: c.sleep }), (e) => e.status === 403 && n === 1 && !/tried/.test(e.message), 'an hour away: not waited, not tried again');
   }
+});
+
+test('a host\'s sentence names no one: GitHub\'s rate-limit sentence loses its subject — the account, the app\'s installation, the address of a caller with no token — and any other address, e-mail address or quoted user is written <redacted>; a time or a TF code is no address', () => {
+  const said = (message, opts) => hostMessage(JSON.stringify({ message, documentation_url: 'https://docs.github.com/rest' }), opts);
+  assert.equal(said('API rate limit exceeded for user ID 4242424. If you reach out to GitHub Support for help, please include the request ID ABCD:1234 and timestamp 2026-11-17 05:00:00 UTC.'), 'API rate limit exceeded.');
+  assert.equal(said('API rate limit exceeded for installation ID 987654. If you reach out to GitHub Support for help, please include the request ID ABCD:1234.'), 'API rate limit exceeded.');
+  assert.equal(said("API rate limit exceeded for 203.0.113.5. (But here's the good news: Authenticated requests get a higher rate limit.)"), 'API rate limit exceeded.');
+  assert.equal(said('API rate limit exceeded for 2001:db8::1. (But here is the good news.)'), 'API rate limit exceeded.');
+  assert.equal(said('You have exceeded a secondary rate limit. Please wait a few minutes before you try again.'), 'You have exceeded a secondary rate limit.');
+  assert.equal(said('Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and 203.0.113.5 is not permitted to access this resource.'),
+    'Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and <redacted> is not permitted to access this resource.');
+  assert.equal(said("TF400813: The user 'someone@example.com' is not authorized to access this resource."), "TF400813: The user '<redacted>' is not authorized to access this resource.");
+  assert.equal(said('Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.'), 'Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.', 'a time, a code and a build number stay');
+  // The remedy a reader asks for keeps the next sentence too, masked the same way.
+  assert.equal(said('Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization. More.', { sentences: 2 }),
+    'Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization.');
+});
+
+test('a GitHub 403 that refuses the token rather than the pace is final — asked once, never four times: SAML single sign-on (by its X-GitHub-SSO header, or its sentence where a proxy dropped it) keeps the sentence that says what to do; a token without access too; a limit says it is one — a retry-after, a spent quota or its own sentence — and only that is tried again', async () => {
+  const realFetch = globalThis.fetch;
+  const SAML = JSON.stringify({ message: 'Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization.', documentation_url: 'https://docs.github.com/articles/authenticating-to-a-github-organization-with-saml-single-sign-on/' });
+  const REMEDY = 'GitHub 403 on /repos/acme/shop: Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization.';
+  let calls = 0;
+  const answering = (status, body, headers = {}) => { calls = 0; globalThis.fetch = async () => { calls++; return new Response(body, { status, headers: { 'content-type': 'application/json', ...headers } }); }; };
+  try {
+    // Through the repository read itself: one call, the remedy kept, the header's value never read out.
+    answering(403, SAML, { 'x-github-sso': 'required; url=https://github.com/orgs/acme/sso?authorization_request=EXAMPLE', 'x-ratelimit-remaining': '4990' });
+    const viaHeader = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: null }, { token: 'ghp_NotARealTokenForThisCheck0000', limits: { sleep: async () => {} } }).catch((e) => e);
+    assert.deepEqual([calls, viaHeader.status, viaHeader.message, retryKind(viaHeader)], [1, 403, REMEDY, null]);
+    assert.ok(!viaHeader.message.includes('EXAMPLE'));
+    answering(403, SAML, { 'x-ratelimit-remaining': '4990' });
+    const viaSentence = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: null }, { token: 'ghp_NotARealTokenForThisCheck0000', limits: { sleep: async () => {} } }).catch((e) => e);
+    assert.deepEqual([calls, viaSentence.message, retryKind(viaSentence)], [1, REMEDY, null], 'the sentence says it where a proxy dropped the header');
+    // Other refusals of the token, and a proxy's page: final.
+    for (const body of [JSON.stringify({ message: 'Resource not accessible by personal access token' }), '<html><body>Forbidden by proxy policy</body></html>']) {
+      answering(403, body, { 'x-ratelimit-remaining': '4990' });
+      const e = await ghFetch('/repos/acme/shop').catch((x) => x);
+      assert.deepEqual([e.status, e.retryable, retryKind(e)], [403, false, null], body.slice(0, 40));
+    }
+    // A limit: a retry-after, a spent quota, or a secondary limit's own sentence with no header — tried again.
+    for (const [body, headers] of [
+      [JSON.stringify({ message: 'You have exceeded a secondary rate limit.' }), { 'retry-after': '30' }],
+      [JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }), { 'x-ratelimit-remaining': '0' }],
+      [JSON.stringify({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }), { 'x-ratelimit-remaining': '4990' }],
+      [JSON.stringify({ message: 'You have triggered an abuse detection mechanism. Please wait a few minutes before you try again.' }), {}],
+    ]) {
+      answering(403, body, headers);
+      const e = await ghFetch('/repos/acme/shop').catch((x) => x);
+      assert.deepEqual([e.status, 'retryable' in e, retryKind(e)], [403, false, 'refused'], body.slice(0, 60));
+    }
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('a host\'s own wait, one rule whatever it answered — a server error that asks for more than the 60 s a read waits is not waited, as a refusal is not, and nothing more is asked of that host; the sentence names the bound it asked past: the 60 s a read waits, or what the read had left', async () => {
+  const one = async (fetchText, opts = {}) => { const c = virtualClock(); let calls = 0; const texts = await downloadFiles([{ path: 'a.yaml' }, { path: 'b.yaml' }], async (node, signal) => { calls++; return fetchText(node, signal); }, { now: c.now, sleep: c.sleep, random: () => 1, parallel: 1, ...opts }); return { a: texts.get('a.yaml'), b: texts.get('b.yaml'), slept: c.slept, calls }; };
+  // 90 s asked with the whole read left: the cap refused the wait, whatever the status.
+  for (const [status, kind] of [[502, 'could not serve'], [500, 'could not serve'], [503, 'refused'], [429, 'refused']]) {
+    const r = await one(async () => { throw hostError(status, `GitHub ${status} on a.yaml`, 90_000); });
+    assert.deepEqual([r.calls, r.slept, r.a, r.b], [1, [], { error: `GitHub ${status} on a.yaml — the host asked to wait 90 s, more than the 60 s a read waits`, status },
+      { error: `not tried: the host ${kind} a.yaml (${status}) and asked to wait 90 s, more than the 60 s a read waits`, status }], String(status));
+  }
+  // 30 s asked with 20 s of the read left: past its end — said so.
+  const late = await one(async () => { throw hostError(500, 'GitHub 500 on a.yaml', 30_000); }, { budgetMs: 20_000 });
+  assert.deepEqual([late.calls, late.a.error], [1, 'GitHub 500 on a.yaml — the host asked to wait 30 s, more than the read had left']);
+  // Within both bounds a server error's wait is waited, alone, and the file read.
+  let first = true;
+  const waited = await one(async (node) => { if (node.path === 'a.yaml' && first) { first = false; throw hostError(502, 'GitHub 502 on a.yaml', 45_000); } return `# ${node.path}`; });
+  assert.deepEqual([waited.a, waited.b, waited.slept], [{ text: '# a.yaml' }, { text: '# b.yaml' }, [45_000]]);
+});
+
+test('retryRead: one budget for a repository or tree read\'s tries and waits together (90 s) — a try again only when it and its wait fit in what is left, judged by the last try, so a host or a proxy that fails slowly is asked once, a quick failure four times; every try gets the budget\'s signal, and a try the budget cuts ends the read with the host\'s last answer', async () => {
+  let t = 0;
+  const clock = { now: () => t, sleep: async (ms) => { t += ms; }, random: () => 1 };
+  let n = 0;
+  const failing = (tookMs, status) => async (signal) => {
+    n++;
+    assert.ok(signal instanceof AbortSignal && !signal.aborted, 'each try gets the read\'s own signal');
+    t += tookMs;
+    throw hostError(status, `GitHub ${status} on /repos/a/b`);
+  };
+  // A proxy whose upstream is down answers 504 just before its own timeout: asked once, as before retries.
+  await assert.rejects(retryRead(failing(55_000, 504), clock), (e) => e.message === 'GitHub 504 on /repos/a/b' && e.status === 504);
+  assert.deepEqual([n, t], [1, 55_000], 'a 504 after 55 s: another try would end past the 90 s');
+  // A quick failure: four tries and the backoff between them.
+  [n, t] = [0, 0];
+  await assert.rejects(retryRead(failing(300, 502), clock), (e) => e.message === 'GitHub 502 on /repos/a/b — tried 4 times');
+  assert.deepEqual([n, t], [4, 4 * 300 + 1000 + 2000 + 4000]);
+  // Tries of 30 s: two fit, never past the budget.
+  [n, t] = [0, 0];
+  await assert.rejects(retryRead(failing(30_000, 503), clock), (e) => e.message === 'GitHub 503 on /repos/a/b — tried 2 times');
+  assert.ok(n === 2 && t <= HOST_READ_CALL_BUDGET_MS, `tries of 30 s: two, in ${t} ms`);
+  // A host's 60 s wait between two quick tries fits: the read waits it.
+  [n, t] = [0, 0];
+  assert.equal(await retryRead(async () => { n++; if (n === 1) throw hostError(429, 'GitHub 429 on /repos/a/b', 60_000); return 'tree'; }, clock), 'tree');
+  assert.deepEqual([n, t], [2, 60_000]);
+  // In real time, scaled down: a try that hangs is cut by the budget, and the read says the host's last answer.
+  n = 0;
+  const t0 = Date.now();
+  await assert.rejects(retryRead(async (signal) => {
+    n++;
+    if (n === 1) throw hostError(502, 'GitHub 502 on /repos/a/b');
+    if (!(signal instanceof AbortSignal)) throw new Error('no signal for the try');
+    return untilAborted(signal);
+  }, { callBudgetMs: 200, backoffMs: 1 }), (e) => e.message === 'GitHub 502 on /repos/a/b — tried 2 times; the read\'s 1 s ran out' && e.status === 502);
+  assert.ok(n === 2 && Date.now() - t0 < 5000, `the hung try ended with the budget (${Date.now() - t0} ms)`);
 });
 
 test('a host that refuses bursts: the read slows down for every file — the pool halved once for a burst, grown back by one, never past eight — and every file is read; read once each, as before, the same host costs files', async () => {
@@ -2611,7 +2719,14 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const stopped = await run();
     assert.equal(stopped.status, 409, stopped.text);
     assert.equal(stopped.json.outcome, 'scan-partial');
-    assert.match(stopped.json.error, /^49 of 220 files could not be read: alerts\/151\.rules\.yaml — it could not be downloaded \(GitHub 403 on \/repos\/acme\/partial-shop\/contents\/alerts\/151\.rules\.yaml\?ref=main: API rate limit exceeded for user ID 1\. — the host asked to wait 3600 s, more than the read had left\) \(20 more not read: 20 past the file cap\) — the Run stopped: the service keeps its last complete scan of this repository; run it again \(an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check\)$/);
+    assert.match(stopped.json.error, /^49 of 220 files could not be read: alerts\/151\.rules\.yaml — it could not be downloaded \(GitHub 403 on \/repos\/acme\/partial-shop\/contents\/alerts\/151\.rules\.yaml\?ref=main: API rate limit exceeded\. — the host asked to wait 3600 s, more than the 60 s a read waits\) \(20 more not read: 20 past the file cap\) — the Run stopped: the service keeps its last complete scan of this repository; run it again \(an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check\)$/);
+    // GitHub's limit sentence names the account that spent the quota ("… for user ID 1."): it reaches no answer, no
+    // record and no notification — the reason and the counts do.
+    assert.ok(!/user ID/i.test(stopped.text), 'the 409 and the record it carries name no account');
+    const { buildNotifyPayload, renderNotifyText } = await import('../tools/lib/journey-notify.mjs');
+    const payload = buildNotifyPayload({ record: stopped.json.record, decision: { reason: 'partial scan', triggers: ['scan-partial'] }, text: `${NAME}: scan-partial` });
+    assert.ok(!/user ID/i.test(JSON.stringify(payload)) && !/user ID/i.test(renderNotifyText(payload)) && /API rate limit exceeded\./.test(renderNotifyText(payload)),
+      'the notification says the limit, never whose');
     assert.deepEqual(stopped.json.kept, { id: keptId, label: 'Partial Shop · prod · repository' });
     assert.deepEqual([stopped.json.scan.partial, stopped.json.scan.lost, stopped.json.scan.notRead], [true, 49, 69]);
     assert.ok(!stopped.text.includes(MINE_PARTIAL), 'the token is in no answer');
@@ -2636,6 +2751,7 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const { startedAt: stopAt, notRead: stopNotRead, candidates: stopOf, firstReason, kept: stopKept } = listedStop.stoppedRun;
     assert.deepEqual([stopAt, stopNotRead, stopOf, stopKept], [rec.startedAt, 69, 220, true]);
     assert.ok(firstReason.startsWith('alerts/151.rules.yaml — it could not be downloaded (GitHub 403 on /repos/acme/partial-shop/contents/alerts/151.rules.yaml') && firstReason.length <= 200, firstReason);
+    assert.ok(!/user ID/i.test(JSON.stringify(listedStop)), 'the listing every member reads names no account');
     // The studio over the real 409 and the refreshed listing: the error carries the outcome, the scan and the kept pack; the toast
     // and the row's note say the stop and the pack kept.
     const { servicesRefusal } = await import('../studio/services-api.mjs');
@@ -2757,6 +2873,113 @@ test('a Run that could read no file of its repository stops with no complete sca
     const again409 = servicesRefusal(409, again.text);
     assert.deepEqual(runRecordedToast({ name: 'Unread Shop', env: 'prod', before: listedBefore, after: listed, outcome: again409.outcome, error: again409.message, scan: again409.scan, kept: again409.kept }),
       { text: 'Unread Shop · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error' });
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});
+
+test('the complete scan a partial Run keeps is of the same repository — its host and organisation as well as its names: an Azure DevOps repository moved to another organisation under the same project and repository names has no scan kept, so its partial scan is checked, marked partial; the same repository under another address of its organisation still stops', async () => {
+  const { repositoryKey } = await import('./repo-sources.mjs');
+  // One repository however its address is written; another organisation, collection or host is another repository.
+  const key = (kind, location) => repositoryKey({ kind, location });
+  assert.equal(key('ado', 'https://dev.azure.com/OrgA/Shop/_git/shop'), key('ado', 'https://orga.visualstudio.com/DefaultCollection/shop/_git/Shop'), 'dev.azure.com/{org} and {org}.visualstudio.com are one organisation; names without case');
+  assert.notEqual(key('ado', 'https://dev.azure.com/orgA/Shop/_git/shop'), key('ado', 'https://dev.azure.com/orgB/Shop/_git/shop'), 'another organisation');
+  assert.notEqual(key('ado', 'https://tfs.example.com/tfs/DefaultCollection/Shop/_git/shop'), key('ado', 'https://dev.azure.com/DefaultCollection/Shop/_git/shop'), 'a Server\'s collection is no Services organisation');
+  assert.equal(key('github', 'https://github.com/Acme/Shop'), key('github', 'acme/shop'));
+  assert.deepEqual([key('github', 'not a repository'), repositoryKey(null), key('svn', 'x'), key('path', '/srv/shop')], [null, null, null, 'path:/srv/shop']);
+
+  const created = await call('POST', '/api/services', { name: 'Moved Ado', repository: { kind: 'ado', location: 'https://dev.azure.com/orgA/Shop/_git/shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'moved-ado.prod';
+  const FILES = RULE_FILES.slice(0, 12);
+  let lose = null;   // the organisation whose read of FILES[3] answers 404
+  const realFetch = globalThis.fetch;
+  // Azure DevOps, both address forms of an organisation: the tree, then each file — but FILES[3] for `lose`.
+  globalThis.fetch = async (url, init = {}) => {
+    const org = (/^https:\/\/dev\.azure\.com\/([^/]+)\//.exec(String(url)) || /^https:\/\/([a-z0-9-]+)\.visualstudio\.com\//i.exec(String(url)))?.[1];
+    if (!org) return realFetch(url, init);
+    if (isAdoTreeCall(String(url))) return adoTreeOf(FILES.map((path) => ({ path })));
+    const path = itemsPathOf(String(url));
+    if (lose && lose === org.toLowerCase() && path === FILES[3]) return new Response(JSON.stringify({ message: 'TF401174: The item could not be found.' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    return answerJson({ content: RULE(RULE_FILES.indexOf(path)) });
+  };
+  try {
+    const run = () => call('POST', `${P}/run`, {});
+    const whole = await run();
+    assert.equal(whole.status, 200, whole.text);
+    assert.equal(whole.json.scan.source, 'Shop/shop on Azure DevOps');
+    // Moved to orgB: the same project and repository names, the same words for where it came from.
+    assert.equal((await call('PATCH', P, { repository: { kind: 'ado', location: 'https://dev.azure.com/orgB/Shop/_git/shop' } })).status, 200);
+    lose = 'orgb';
+    const moved = await run();
+    assert.equal(moved.status, 200, `checked, never stopped on orgA's pack: ${moved.text.slice(0, 300)}`);
+    assert.equal(moved.json.scan.source, 'Shop/shop on Azure DevOps', 'the words are the same: they cannot tell the two apart');
+    assert.ok(moved.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'), JSON.stringify(moved.json.record.gate.breaches));
+    assert.deepEqual(moved.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 1 of 12 files' });
+    const primary = async () => (await call('GET', P)).json.service.packs.filter((p) => p.role === 'primary').map((p) => p.id);
+    assert.deepEqual(await primary(), [moved.json.pack.id], 'the scan of orgB\'s repository is the service\'s pack, orgA\'s is not kept as it');
+    // orgB's repository read whole, then partly: its own complete scan is kept — under its other address too.
+    lose = null;
+    const wholeB = await run();
+    assert.equal(wholeB.status, 200, wholeB.text);
+    assert.equal((await call('PATCH', P, { repository: { kind: 'ado', location: 'https://orgb.visualstudio.com/Shop/_git/shop' } })).status, 200);
+    lose = 'orgb';
+    const stopped = await run();
+    assert.equal(stopped.status, 409, stopped.text);
+    assert.deepEqual([stopped.json.outcome, stopped.json.kept?.id], ['scan-partial', wholeB.json.pack.id], 'the same repository: its complete scan kept');
+    assert.deepEqual(await primary(), [wholeB.json.pack.id]);
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});
+
+test('stops in a row never push the last check out of the history: after more Runs stopped on a partial scan than the history window, the listing still names the check and the stop beside it, the board\'s loader still reads the check (the runs route\'s checked=1), and the next partial Run still stops with the service\'s complete scan kept', async () => {
+  const { BASELINE_SCAN_LIMIT, readJourneyRuns } = await import('../tools/lib/journey.mjs');
+  const created = await call('POST', '/api/services', { name: 'Stuck Shop', repository: { kind: 'github', location: 'acme/stuck-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'stuck-shop.prod';
+  const FILES = RULE_FILES.slice(0, 3);
+  // A file the host never serves while it is refused: every Run after the complete one stops.
+  const repo = { paths: FILES, refuse: () => null };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = githubRepos(realFetch, { 'acme/stuck-shop': repo });
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const run = () => call('POST', `${P}/run`, { repoAuth: MINE_PARTIAL });
+    const whole = await run();
+    assert.equal(whole.status, 200, whole.text);
+    const keptId = whole.json.pack.id;
+    repo.refuse = (path) => (path === FILES[1] ? quotaSpent() : null);
+    for (let i = 1; i <= BASELINE_SCAN_LIMIT + 1; i++) {
+      const r = await run();
+      assert.deepEqual([r.status, r.json.kept?.id], [409, keptId], `stop ${i}: the complete scan kept`);
+    }
+    const listed = (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === NAME);
+    assert.deepEqual([listed.lastRun?.startedAt, listed.lastRun?.outcome, listed.stoppedRun?.kept, listed.packARef?.id], [whole.json.record.startedAt, whole.json.record.outcome, true, keptId],
+      'the listing\'s last check is the complete Run, however many stops are newer');
+    // The history read past the stops; read as before, the window holds stops alone.
+    const newest = runWithOrg('default', () => readJourneyRuns(NAME, { limit: BASELINE_SCAN_LIMIT }));
+    assert.ok(newest.length === BASELINE_SCAN_LIMIT && newest.every((r) => r.outcome === 'scan-partial'));
+    const past = runWithOrg('default', () => readJourneyRuns(NAME, { limit: 1, pastStops: true }));
+    assert.deepEqual([past.length, past.at(-1).startedAt, past.slice(0, -1).every((r) => r.outcome === 'scan-partial')], [BASELINE_SCAN_LIMIT + 2, whole.json.record.startedAt, true]);
+    const checked = (await call('GET', `/api/journeys/${NAME}/runs?limit=1&checked=1`)).json.runs;
+    assert.deepEqual(checked.map((r) => r.startedAt), [whole.json.record.startedAt], 'checked=1: the newest run that checked something');
+    // The board over the server's own answers: the check it grades, the stop beside it.
+    const { loadOverviewFacts } = await import('../studio/overview-api.mjs');
+    const facts = await loadOverviewFacts({ journeyFor: (list) => list.find((j) => j?.name === NAME) || null, fetchFn: async (path) => { const r = await call('GET', path); if (r.status !== 200) throw new Error(`${r.status}: ${r.text}`); return r.json; } });
+    assert.deepEqual([facts.run?.startedAt, facts.stopped?.outcome, facts.runError], [whole.json.record.startedAt, 'scan-partial', null]);
+    // And the next partial Run still stops: the pack the check stands on is never replaced by a partial one.
+    const next = await run();
+    assert.deepEqual([next.status, next.json.kept?.id], [409, keptId]);
+    assert.deepEqual((await call('GET', P)).json.service.packs.filter((p) => p.role === 'primary').map((p) => p.id), [keptId]);
   } finally {
     globalThis.fetch = realFetch;
     await call('DELETE', P);

@@ -1488,8 +1488,15 @@ a `Chart.yaml` — the repository's root included — is a chart: its
 `templates/`, `files/`, `dashboards/`, `crds/` and `charts/` and its
 `values.schema.json` are the Kubernetes surface. With every file read, the
 Helm `enabled:` switches are read from the base `values.yaml` alone — an
-overlay's (`values-eks.yaml`) is one environment's — and an overlay that
-would switch a component off is named in one warning. In *Add a service* and
+overlay's (`values-eks.yaml`) is one environment's — and every overlay
+switch the base values override is named in one warning: one that would
+switch a component off (it stays declared), and one that switches on a
+component the base values switch off (it is not declared; the environment
+that deploys with that overlay reads it through its deployment surface). A
+dashboard export kept under a top-level `docs/`, `examples/` or `samples/`
+folder that repeats the uid of a dashboard the repository holds elsewhere
+is a copy: it is not declared, and the warning names it (a dashboard kept
+only there is declared). In *Add a service* and
 **Change**, step 3 asks *Read only this deployment surface* under the
 repository. The command line, Expert's crawl panel, `POST /api/crawl`, `POST
 /api/crawl-github` and a journey's `crawl:` source keep the filter the
@@ -1531,7 +1538,8 @@ endpoint (step 1: the export is Pack B, read with no MCP call):
    surface is set — above), so the scan is the service's own pack
    (`primary`), registered under the label `<name> · <env> · repository`:
    the next Run's scan replaces it. A GitHub or Azure DevOps read resolves
-   the branch and lists the tree first (each call under its own 60 s), then
+   the branch and lists the tree first (each call 60 s a try at most, its
+   tries and waits together within 90 s, `HOST_READ_CALL_BUDGET_MS`), then
    fetches the files the crawler's rule takes (at most 200, 5 MB each, 16 MB
    in all) at most 8 at a time (`HOST_READ_PARALLEL`), each within 60 s and all of
    them within 120 s (`HOST_READ_FILES_BUDGET_MS`, both in
@@ -1542,9 +1550,19 @@ endpoint (step 1: the export is Pack B, read with no MCP call):
    asked for (`Retry-After`, a spent quota's `x-ratelimit-reset`; at most 60 s,
    never past the read's end), else a backoff of 1, 2, 4 s; a refusal also
    slows the whole read — the pool halves once for a burst and grows back by
-   one after a round of answers — and a host that asks for longer than the
-   read has left is asked nothing more in it. The repository and tree reads are
-   tried again the same way. A file that still fails, or the time ran out
+   one after a round of answers — and a host that asks for a longer wait
+   than 60 s, or than the read has left, a refusal and a server error alike,
+   is asked nothing more in it (*… — the host asked to wait 90 s, more than
+   the 60 s a read waits*). The repository and tree reads are tried again the
+   same way, a try again only when it fits in what their 90 s have left, so a
+   host or a proxy that fails slowly is asked once. A GitHub 403 that refuses
+   the token rather than the pace — SAML single sign-on (its sentence saying
+   what to do is kept), a token or an app without access — is never tried
+   again; a limit says it is one (a `retry-after`, a spent quota, its own
+   sentence) and only that is. A host's sentence names no one: GitHub's
+   *API rate limit exceeded for user ID …* reads *API rate limit exceeded.*,
+   and an address, an e-mail address or a quoted user name reads
+   `<redacted>`. A file that still fails, or the time ran out
    for, is listed among the files not read with its reason (*… — tried 4
    times*, *the read's 120 s for its files ran out*). **A scan that lost
    files is no scan** (`scan.partial`, `scan.lost`; `scan.notRead` counts
@@ -4062,7 +4080,7 @@ unsupported charset or content encoding. The body is not logged.
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL; `problem`, the run's refusal, when a server run would refuse it), `notifyUnavailable` (only for an org whose every notify hook name another org's id takes: the `GET /api/journeys/notify-hooks` `none`) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`, `repositoryAccess` `{ by, kind, location }` — how the scan behind it read a GitHub or Azure DevOps repository, `null` otherwise) |
 | `GET` | `/api/journeys/notify-hooks` | The org's notify hooks (`OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL`, with its `_TOKEN` when set): names and whether each is usable — never a value or origin |
-| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series); `&checked=1`: only the runs that checked something — never a Run stopped on a partial scan — the newest `limit` of them however many stops are newer; a run writes its `notify.error` with any part of the hook's URL, the address its host resolved to and its token as `<redacted>`, and every record's — an older one's too — is served with the host or address Node's failed lookup or connection quoted (`getaddrinfo ENOTFOUND <redacted>`, `connect ECONNREFUSED <redacted>`), the address undici's connect timeout quoted, the certificate check's altnames, and any value undici quoted (a bearer token, a URL with credentials) as `<redacted>` |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule); a notify name the server refuses is never bound — it is listed in `refusedEnvNames`, and each snippet says so where its binding would have been |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now (a live Pack B through its `endpointId`, or a raw `url`: the admin role); a journey that notifies is refused before it runs unless its hook is the org's, set and allowed; without sign-in it runs only from this machine; an audit row: `journey.run`, on a failed run too |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file (a live Pack B as the org's registered endpoint, `mcp: { url, endpointId }`; an unregistered URL kept for an admin, else a file); a `notify` names one of the org's notify hooks (`GET /api/journeys/notify-hooks`); an audit row: `journey.capture` |

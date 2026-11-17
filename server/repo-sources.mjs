@@ -21,8 +21,8 @@
 // refused or dropped is tried again — after the wait it asks for, else a
 // backoff — and the read slows down for every file after a refusal; a file
 // still failing, or one the time ran out for, is skipped and named, never
-// fatal); the repository and tree reads are tried again the same way
-// (retryRead); a secrets file is never read.
+// fatal); the repository and tree reads are tried again the same way, each
+// under a 90 s budget of its own (retryRead); a secrets file is never read.
 // → { files, ref, candidates, capped, cappedFiles, fileCap, truncated, skipped, source } —
 // `files` the map crawlFiles() takes, in path order; `candidates` how many
 // files the rule takes (a host's tree; a folder or an upload: those read and
@@ -39,6 +39,9 @@
 // read on each Run: `stop` (the default) keeps the service's last complete
 // scan of the same repository and stops, `check` checks the partial scan,
 // marked partial.
+//
+// repositoryKey(repository): which repository a { kind, location } names,
+// whatever way its address was written — what "the same repository" means.
 
 import { statSync } from 'node:fs';
 import { scanRepoFolder } from '../tools/lib/journey.mjs';
@@ -63,21 +66,51 @@ export function partialScanPolicy(raw = brandEnv('PARTIAL_SCAN')) {
   return 'stop';
 }
 
+// The one name of the repository a { kind, location } names (a service's repository, a scan's
+// `access`), for "is this the same repository": the host and the organisation as well as the
+// names — GitHub's owner and repository; Azure DevOps' organisation (dev.azure.com/{org} and
+// {org}.visualstudio.com are one) or a Server's origin and collection, then the project and the
+// repository — each without case, as both hosts compare them; a folder's or an upload's location
+// as written. null for anything that names none.
+export function repositoryKey(repository) {
+  const kind = repository?.kind;
+  const location = typeof repository?.location === 'string' ? repository.location.trim() : '';
+  if (!location) return null;
+  if (kind === 'github') {
+    const gh = parseGithubUrl(location);
+    return gh ? `github:${gh.owner}/${gh.repo}`.toLowerCase() : null;
+  }
+  if (kind === 'ado') {
+    const ado = parseAdoUrl(location);
+    if (!ado) return null;
+    // parseAdoUrl's base is the origin and then the segments before the project: the organisation on
+    // dev.azure.com, none or a collection on {org}.visualstudio.com, the collection on a Server.
+    const { origin, hostname } = new URL(ado.base);
+    const segments = ado.base.slice(origin.length).split('/').filter(Boolean);
+    const org = /^dev\.azure\.com$/i.test(hostname) ? segments[0]
+      : /\.visualstudio\.com$/i.test(hostname) ? hostname.split('.')[0] : null;
+    const where = org ? `services/${org}` : [origin, ...segments].join('/');
+    return `ado:${where}/${ado.project}/${ado.repo}`.toLowerCase();
+  }
+  if (kind === 'path' || kind === 'upload') return `${kind}:${location}`;
+  return null;
+}
+
 // A folder's or an upload's count of the files the rule takes: those read, and those not read
 // but for the ones left out on purpose (a secrets file, one git ignores).
 const takenCount = (files, skipped) => Object.keys(files).length + skipped.filter((s) => scanSkipKind(s?.why) !== 'on-purpose').length;
 
-// Azure DevOps: the tree (under its own deadline, tried again as a file is),
-// the crawler's files (planCrawlerFetch, as GitHub), downloaded as a GitHub
-// read's are (downloadFiles: at most 8 at a time, 60 s each, 120 s together,
-// a refused or dropped file tried again, one still failing skipped and named)
-// and settled in the plan's order (its tree carries no sizes, so the caps
-// apply to the texts). `limits` is the test seam.
+// Azure DevOps: the tree (under a budget of its own, tried again as a file is:
+// retryRead), the crawler's files (planCrawlerFetch, as GitHub), downloaded as
+// a GitHub read's are (downloadFiles: at most 8 at a time, 60 s each, 120 s
+// together, a refused or dropped file tried again, one still failing skipped
+// and named) and settled in the plan's order (its tree carries no sizes, so
+// the caps apply to the texts). `limits` is the test seam.
 async function fetchAdoFiles(location, ref, opts = {}, limits = {}) {
   const parsed = parseAdoUrl(location);
   if (!parsed) { const err = new Error(`${location} is not an Azure DevOps repository URL`); err.status = 400; throw err; }
   const repo = { ...parsed, ref: ref ?? parsed.ref ?? null };
-  const tree = await retryRead(() => adoTree(repo, opts), limits);
+  const tree = await retryRead((signal) => adoTree(repo, { ...opts, signal }), limits);
   const plan = planCrawlerFetch(tree, HOST_READ_CAPS);
   const texts = await downloadFiles(plan.selected, (node, signal) => adoFileText(repo, node.path, { ...opts, signal }), limits);
   const { files, skipped } = settleFetched(plan.selected, texts, { ...HOST_READ_CAPS, planned: plan.skipped });

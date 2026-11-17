@@ -906,19 +906,36 @@ export function crawlFiles(filesInput, opts = {}) {
   // when a deployment profile chose the files. With none (every file read, as a
   // service environment reads by default), an overlay is some environment's,
   // never every environment's: only the base values decide, and each overlay
-  // that would switch a component off is named in one warning.
+  // switch they override is named in one warning — one that would switch a
+  // component off (it stays declared), and one that switches on a component
+  // the base values switch off (it is not declared: what it deploys is that
+  // environment's, read through its deployment surface), never left unsaid.
   const valuesFiles = classified.filter((f) => f.kind === 'helm-values');
   const disabledComponents = collectDisabledComponents(envScope.profile ? valuesFiles : valuesFiles.filter((f) => isBaseValuesPath(f.relPath)));
   if (!envScope.profile) {
-    const overlaid = overlaySwitchesOff(valuesFiles, disabledComponents);
+    const overlaid = overlaySwitches(valuesFiles, disabledComponents);
     if (overlaid.length) {
-      const shown = overlaid.slice(0, 8).map((o) => `${o.relPath} switches ${o.components.join(', ')} off`).join('; ') + (overlaid.length > 8 ? `; … (${overlaid.length - 8} more)` : '');
+      const said = (o) => (o.switches === 'off' ? `${o.relPath} switches ${o.components.join(', ')} off`
+        : `${o.relPath} switches ${o.components.join(', ')} on, which ${o.components.length === 1 ? 'is' : 'are'} not declared`);
+      const shown = overlaid.slice(0, 8).map(said).join('; ') + (overlaid.length > 8 ? `; … (${overlaid.length - 8} more)` : '');
       summary.warnings.push(`Every file is read, so only the base Helm values decide what is deployed: ${shown}. An environment that deploys with one of these overlays reads it alone through its deployment surface.`);
     }
   }
   if (disabledComponents.size) {
     summary.discovered.disabledComponents = [...disabledComponents];
   }
+
+  // A dashboard export kept under a documentation folder (docs/, examples/, samples/) that repeats
+  // the uid of a dashboard file the repository holds elsewhere is a copy, not a second dashboard:
+  // set aside before the walk, so it neither takes the deployed dashboard's uid (pushing that one to
+  // a -2 id no Grafana holds) nor declares the metrics its panels query, and named. A documentation
+  // dashboard that is the only holder of its uid is declared as before.
+  const docCopies = documentationDashboardCopies(classified);
+  if (docCopies.length) {
+    const shown = docCopies.slice(0, 8).map((c) => `${c.relPath} repeats ${c.holder} (uid ${c.id})`).join('; ') + (docCopies.length > 8 ? `; … (${docCopies.length - 8} more)` : '');
+    summary.warnings.push(`${docCopies.length} dashboard file(s) under a documentation folder repeat a dashboard the repository holds elsewhere and are not declared: ${shown}.`);
+  }
+  const setAside = new Set(docCopies.map((c) => c.relPath));
 
   // ----- pass 2: walk per kind -----
   // One alias budget for every file the walk reads: it keeps what it reads,
@@ -927,6 +944,7 @@ export function crawlFiles(filesInput, opts = {}) {
   // are bounded each on its own.
   withAliasBudget(() => walkClassified());
   function walkClassified() { for (const f of classified) {
+    if (setAside.has(f.relPath)) continue;
     try {
       switch (f.kind) {
         case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary, composeMounts); break;
@@ -2639,15 +2657,39 @@ function enabledTogglesOf(f) {
   return out;
 }
 
-// The overlays that would switch a component off the base values leave on:
-// [{ relPath, components }] in path order — said, never applied, when every file is read.
-function overlaySwitchesOff(valuesFiles, baseDisabled) {
+// The overlay switches the base values override when every file is read —
+// said, never applied: an overlay that would switch off a component the base
+// values leave on (`switches: 'off'`), and one that switches on a component
+// the base values switch off (`switches: 'on'`). [{ relPath, switches,
+// components }] in path order, an overlay's switches off before its
+// switches on.
+function overlaySwitches(valuesFiles, baseDisabled) {
   const out = [];
   for (const f of [...valuesFiles].filter((x) => !isBaseValuesPath(x.relPath)).sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0))) {
-    const components = [...new Set(enabledTogglesOf(f).filter(([key, on]) => on === false && !baseDisabled.has(key)).map(([key]) => key))];
-    if (components.length) out.push({ relPath: f.relPath, components });
+    const toggles = enabledTogglesOf(f);
+    const off = [...new Set(toggles.filter(([key, on]) => on === false && !baseDisabled.has(key)).map(([key]) => key))];
+    const on = [...new Set(toggles.filter(([key, enabled]) => enabled === true && baseDisabled.has(key)).map(([key]) => key))];
+    if (off.length) out.push({ relPath: f.relPath, switches: 'off', components: off });
+    if (on.length) out.push({ relPath: f.relPath, switches: 'on', components: on });
   }
   return out;
+}
+
+// The top-level folders a repository keeps documentation and samples in (the
+// host reader's own list orders by the same names: server/github-crawl.mjs).
+const DOCUMENTATION_FOLDERS = new Set(['docs', 'doc', 'examples', 'example', 'samples', 'sample']);
+const isDocumentationPath = (relPath) => DOCUMENTATION_FOLDERS.has(normalizeRepoPath(relPath).split('/')[0].toLowerCase());
+
+// The dashboard files under a documentation folder whose dashboard id (its
+// uid, else its title: dashboardSpecId) a dashboard file outside those folders
+// also holds: [{ relPath, id, holder }] in path order, `holder` the first such
+// file in path order.
+function documentationDashboardCopies(classified) {
+  const idOf = (f) => { try { return dashboardSpecId(JSON.parse(f.content)); } catch { return null; } };
+  const dashboards = classified.filter((f) => f.kind === 'grafana-dashboard').map((f) => ({ relPath: f.relPath, id: idOf(f), doc: isDocumentationPath(f.relPath) }));
+  const holders = new Map();
+  for (const d of dashboards) if (d.id && !d.doc && !holders.has(d.id)) holders.set(d.id, d.relPath);
+  return dashboards.filter((d) => d.doc && d.id && holders.has(d.id)).map((d) => ({ relPath: d.relPath, id: d.id, holder: holders.get(d.id) }));
 }
 
 function walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents = new Set(), { scrapeJobs = [], collectorState = newCollectorState() } = {}) {
