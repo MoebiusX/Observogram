@@ -1555,12 +1555,15 @@ endpoint (step 1: the export is Pack B, read with no MCP call):
    the next Run's scan replaces it. A GitHub or Azure DevOps read resolves
    the branch and lists the tree first (each call 60 s a try at most, its
    tries and waits together within 90 s, `HOST_READ_CALL_BUDGET_MS`), then
-   fetches the files the crawler's rule takes (at most 200, 5 MB each, 16 MB
-   in all) at most 8 at a time (`HOST_READ_PARALLEL`), each within 60 s and all of
-   them within 120 s (`HOST_READ_FILES_BUDGET_MS`, both in
+   fetches the files the crawler's rule takes (at most 500 by default,
+   `OBSERVOGRAM_SCAN_MAX_FILES` on the server, a whole number from 1 to 5000 —
+   any other value is said at start and 500 used; 5 MB each, and 16 MB per 200
+   files in all, 40 MB for 500) at most 8 at a time (`HOST_READ_PARALLEL`), each
+   within 60 s and all of them within 120 s per 200 files of the cap, never
+   less (`HOST_READ_FILES_BUDGET_MS`, 300 s for 500; both in
    `server/github-crawl.mjs`): 25 rounds of 8 for 200 files, so a host that
-   answers a file in under about 5 s fits, and a slower one loses the tail of
-   the plan. A file the host refused (403, 429, 503) or dropped is tried
+   answers a file in under about 5 s fits whatever the cap, and a slower one
+   loses the tail of the plan. A file the host refused (403, 429, 503) or dropped is tried
    again, four tries in all (`HOST_READ_ATTEMPTS`), after the wait the host
    asked for (`Retry-After`, a spent quota's `x-ratelimit-reset`; at most 60 s,
    never past the read's end), else a backoff of 1, 2, 4 s; a refusal also
@@ -1595,7 +1598,7 @@ endpoint (step 1: the export is Pack B, read with no MCP call):
    figures are not comparable with the run before (`comparable: {
    withPrevious: false, reason }`), as does the run after it. A read that
    lost every file stops whatever the policy. When
-   the rule takes more than 200 files, the cap reaches the likely artefacts
+   the rule takes more files than the cap, the cap reaches the likely artefacts
    last: rule files, collector configs, charts and dashboards first (and
    source whose path says telemetry), then the files that may describe an
    exporter (`config.yaml`, a saved `/metrics`), then the service's own YAML

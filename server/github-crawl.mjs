@@ -228,20 +228,48 @@ export function settleFetched(selected, texts, { fileCapBytes = SCAN_MAX_FILE_BY
   return { files: Object.fromEntries(kept.map(k => [k.path, k.text])), skipped: skipped.sort(byPath) };
 }
 
-// A host read's caps: at most 200 files of the scan's 5 MB each, 16 MB in all.
-export const HOST_READ_CAPS = Object.freeze({ maxFiles: 200, fileCapBytes: SCAN_MAX_FILE_BYTES, totalCapBytes: 16 * 1024 * 1024 });
+// A host read's file cap: OBSERVOGRAM_SCAN_MAX_FILES, 500 by default (it was 200 before 0.8.43; a
+// 545-file repository then lost 345 to the cap), a whole number from 1 to 5000 — any other value is
+// said once on stderr and the default used, as OBSERVOGRAM_PARTIAL_SCAN does. The bytes in all and the
+// time for the files scale with it from what 200 files had: 16 MB and 120 s per 200 files (40 MB and
+// 300 s for 500), never less; each file stays within the scan's 5 MB.
+export const SCAN_MAX_FILES_DEFAULT = 500;
+export const SCAN_MAX_FILES_LIMIT = 5000;
+const PER_200_BYTES = 16 * 1024 * 1024;
+const PER_200_MS = 120_000;
+export function scanCapsFrom(env = process.env) {
+  const raw = env?.OBSERVOGRAM_SCAN_MAX_FILES;
+  const said = typeof raw === 'string' ? raw.trim() : raw == null ? '' : String(raw);
+  const n = said === '' ? SCAN_MAX_FILES_DEFAULT : Number(said);
+  const ok = Number.isInteger(n) && n >= 1 && n <= SCAN_MAX_FILES_LIMIT;
+  const maxFiles = ok ? n : SCAN_MAX_FILES_DEFAULT;
+  const scale = Math.max(1, maxFiles / 200);
+  return {
+    maxFiles,
+    fileCapBytes: SCAN_MAX_FILE_BYTES,
+    totalCapBytes: Math.round(PER_200_BYTES * scale),
+    budgetMs: Math.round(PER_200_MS * scale),
+    warning: ok ? null : `OBSERVOGRAM_SCAN_MAX_FILES=${JSON.stringify(said).slice(1, -1).slice(0, 40)} is not a whole number from 1 to ${SCAN_MAX_FILES_LIMIT}: ${SCAN_MAX_FILES_DEFAULT} is used`,
+  };
+}
+const SCAN_CAPS = scanCapsFrom();
+if (SCAN_CAPS.warning) process.stderr.write(`[scan] ${SCAN_CAPS.warning}\n`);
+// A host read's caps: at most SCAN_CAPS.maxFiles files of the scan's 5 MB each, and their bytes in all.
+export const HOST_READ_CAPS = Object.freeze({ maxFiles: SCAN_CAPS.maxFiles, fileCapBytes: SCAN_CAPS.fileCapBytes, totalCapBytes: SCAN_CAPS.totalCapBytes });
 // How many of a read's files are fetched at once, GitHub and Azure DevOps
 // alike: a pool, the next file taken as a slot frees.
 export const HOST_READ_PARALLEL = 8;
 // How long all the files of one read may take together, after the tree:
-// 120 s, twice READ_TIMEOUT_MS (server/fetch-failure.mjs). A 200-file read
-// is 25 rounds of 8, so a host that answers a file in under about 5 s fits;
-// a slower one loses the tail of the plan, each file skipped and named — the
-// trade for never sending 200 requests at once, and for an Azure DevOps
-// worst case of 120 s instead of 25 × 60 s. Each file keeps its own 60 s
+// 120 s per 200 files of the cap (300 s for 500), never less than 120 s,
+// twice READ_TIMEOUT_MS (server/fetch-failure.mjs). A 200-file read is 25
+// rounds of 8, so a host that answers a file in under about 5 s fits, and
+// the budget grows with the cap so that stays true; a slower one loses the
+// tail of the plan, each file skipped and named — the trade for never
+// sending every request at once, and for an Azure DevOps worst case of
+// 120 s instead of 25 × 60 s per 200 files. Each file keeps its own 60 s
 // deadline inside it; the repository and tree reads keep theirs apart, not
 // under this budget (HOST_READ_CALL_BUDGET_MS).
-export const HOST_READ_FILES_BUDGET_MS = 120_000;
+export const HOST_READ_FILES_BUDGET_MS = SCAN_CAPS.budgetMs;
 
 // How long one read that is no file of a read's — a repository's metadata,
 // its tree — may take, its tries and the waits between them together: 90 s,

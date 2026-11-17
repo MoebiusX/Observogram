@@ -54,7 +54,7 @@ const REPO = join(ROOT, 'tools', 'fixtures', 'crawl', 'operational-alerts');
 
 const { parseRepository, folderRefusal, repositoryRoots, WAYS } = await import('./service-admin.mjs');
 const { parseAdoUrl, adoHostRefusal, adoFetch, listedAdoOrigins, tenantMismatch } = await import('./ado-crawl.mjs');
-const { fetchGithubFiles, ghFetch, rawFetch, downloadFiles, outOfTime, planCrawlerFetch, HOST_READ_CAPS, HOST_READ_PARALLEL, HOST_READ_FILES_BUDGET_MS } = await import('./github-crawl.mjs');
+const { fetchGithubFiles, ghFetch, rawFetch, downloadFiles, outOfTime, planCrawlerFetch, HOST_READ_CAPS, HOST_READ_PARALLEL, HOST_READ_FILES_BUDGET_MS, scanCapsFrom } = await import('./github-crawl.mjs');
 const { unreachable, readSignal } = await import('./fetch-failure.mjs');
 const { fetchRepositoryFiles } = await import('./repo-sources.mjs');
 
@@ -439,9 +439,25 @@ const untilAborted = (signal) => new Promise((_, reject) => {
 const ADO_REPO = { kind: 'ado', location: 'https://dev.azure.com/acme/Shop/_git/checkout', ref: null };
 const GH_REPO = { owner: 'acme', repo: 'shop', ref: 'main' };
 
+test('the scan\x27s file cap is a setting: OBSERVOGRAM_SCAN_MAX_FILES, 500 by default, a whole number from 1 to 5000; the bytes in all and the files\x27 time grow with it from 16 MB and 120 s per 200 files, never less; any other value is said and the default used', () => {
+  const caps = (value) => { const c = scanCapsFrom(value === undefined ? {} : { OBSERVOGRAM_SCAN_MAX_FILES: value }); return [c.maxFiles, c.totalCapBytes, c.budgetMs, c.warning]; };
+  const MB = 1024 * 1024;
+  assert.deepEqual(caps(undefined), [500, 40 * MB, 300_000, null], '500 by default: a 545-file repository loses 45 files to the cap, not 345');
+  assert.deepEqual(HOST_READ_CAPS, { maxFiles: 500, fileCapBytes: HOST_READ_CAPS.fileCapBytes, totalCapBytes: 40 * MB }, 'the server reads it at start');
+  assert.deepEqual(caps(' '), [500, 40 * MB, 300_000, null], 'blank: the default');
+  assert.deepEqual(caps('200'), [200, 16 * MB, 120_000, null], '200: as before 0.8.43');
+  assert.deepEqual(caps('1000'), [1000, 80 * MB, 600_000, null]);
+  assert.deepEqual(caps('50'), [50, 16 * MB, 120_000, null], 'a smaller cap keeps 16 MB and 120 s');
+  for (const bad of ['0', '5001', '1.5', 'lots', '-3']) {
+    const [n, , , warning] = caps(bad);
+    assert.equal(n, 500, bad);
+    assert.equal(warning, `OBSERVOGRAM_SCAN_MAX_FILES=${bad} is not a whole number from 1 to 5000: 500 is used`, bad);
+  }
+});
+
 test('a host read fetches at most 8 files at once — a pool, the next file taken as a slot frees, never a batch waiting on its slowest — and every file reaches the crawler in path order; each download carries the read\'s signal, which the fetchers combine with their own deadline', async () => {
   assert.equal(HOST_READ_PARALLEL, 8);
-  assert.equal(HOST_READ_FILES_BUDGET_MS, 120_000);
+  assert.equal(HOST_READ_FILES_BUDGET_MS, 300_000, "120 s per 200 files of the cap: 300 s for the default 500");
   const order = planCrawlerFetch(TWENTY_TREE, HOST_READ_CAPS).selected.map((n) => n.path);
   assert.equal(order.length, 20);
   // A gauge over the downloads: how many are in flight, the peak, the order they started in, their
@@ -580,7 +596,7 @@ test('the read\'s files share one budget: when it runs out, every file not read 
   assert.ok(ghSignals.length === 2 && ghSignals.every((s) => s instanceof AbortSignal && !s.aborted), 'GitHub through ghFetch: the repository and tree calls\' signals are AbortSignals of their own, not aborted after the budget ran out — a deadline, not the budget');
   assert.ok(adoSignals.length === 1 && adoSignals[0] instanceof AbortSignal && !adoSignals[0].aborted, 'Azure DevOps: the tree call\'s signal is an AbortSignal of its own, not aborted after the budget ran out — a deadline, not the budget');
   const budgetOut = outOfTime(HOST_READ_FILES_BUDGET_MS);
-  assert.deepEqual([budgetOut.name, budgetOut.message], ['ReadBudgetError', 'the read\'s 120 s for its files ran out']);
+  assert.deepEqual([budgetOut.name, budgetOut.message], ['ReadBudgetError', 'the read\'s 300 s for its files ran out']);
   // No budget: each fetch still gets a deadline signal of its own (readSignal's AbortSignal.timeout;
   // its 60 s delay is nothing a test can see), not the caller's and not yet aborted.
   const deadline = readSignal();
@@ -2615,7 +2631,7 @@ test('a host that refuses bursts: the read slows down for every file — the poo
 });
 
 test('fetchRepositoryFiles reads a whole repository from a host that refuses on first sight — Azure DevOps\' 403 burst (49 of the files) and its 429 with Retry-After, the tree itself throttled once; GitHub raw\'s 429 with no header — where one try each lost those files', async () => {
-  const names = Array.from({ length: 220 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
+  const names = Array.from({ length: 520 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
   const tree = names.map((path) => ({ type: 'blob', path }));
   const selected = planCrawlerFetch(tree, HOST_READ_CAPS).selected.map((n) => n.path);
   const refuseOnce = new Set(selected.slice(0, 49));
@@ -2639,7 +2655,7 @@ test('fetchRepositoryFiles reads a whole repository from a host that refuses on 
   };
   const c = virtualClock();
   const ado = await fetchRepositoryFiles(ADO_REPO, { fetchImpl: adoHost(), limits: { now: c.now, sleep: c.sleep } });
-  assert.deepEqual([Object.keys(ado.files).length, ado.skipped, ado.candidates, ado.capped, ado.cappedFiles.length, ado.fileCap], [200, [], 220, 20, 20, 200], 'every file under the cap read; the cap\'s files named');
+  assert.deepEqual([Object.keys(ado.files).length, ado.skipped, ado.candidates, ado.capped, ado.cappedFiles.length, ado.fileCap], [500, [], 520, 20, 20, 500], 'every file under the cap read; the cap\'s files named');
   assert.ok(c.slept.includes(5000) && c.slept.includes(30_000), `the tree waited the host's 5 s, the file its 30 s: ${c.slept.filter((x) => x >= 5000)}`);
   const once = await fetchRepositoryFiles(ADO_REPO, { fetchImpl: adoHost({ treeThrottled: false }), limits: { attempts: 1 } });
   assert.equal(once.skipped.length, 50, 'one try each: the 49 refused and the throttled one lost, as the downstream saw');
@@ -2654,7 +2670,7 @@ test('fetchRepositoryFiles reads a whole repository from a host that refuses on 
   };
   const c2 = virtualClock();
   const gh = await fetchGithubFiles(GH_REPO, { fetchFn: async () => ghTreeOf(tree), rawFn, limits: { now: c2.now, sleep: c2.sleep } });
-  assert.deepEqual([Object.keys(gh.files).length, gh.skipped, gh.capped], [200, [], 20], 'raw\'s 429s waited out with a backoff');
+  assert.deepEqual([Object.keys(gh.files).length, gh.skipped, gh.capped], [500, [], 20], 'raw\'s 429s waited out with a backoff');
 });
 
 // ---------- a scan that lost files is no scan: the Run stops, the service keeps its last complete one ----------
@@ -2662,7 +2678,7 @@ test('fetchRepositoryFiles reads a whole repository from a host that refuses on 
 // GitHub, stubbed in this process: each repository's default branch, its tree and its files through the contents
 // API (the person's own token) — `refuse(path)` answers a file in its place, or null.
 const RULE = (i) => `groups:\n  - name: g${i}\n    rules:\n      - alert: Rule${i}Down\n        expr: up{job="r${i}"} == 0\n`;
-const RULE_FILES = Array.from({ length: 220 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
+const RULE_FILES = Array.from({ length: 520 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
 // The quota spent, as GitHub's REST API answers it: 403, x-ratelimit-remaining 0, the reset an hour away.
 const quotaSpent = () => new Response(JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }), {
   status: 403, headers: { 'content-type': 'application/json', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3600) },
@@ -2680,8 +2696,8 @@ function githubRepos(passThrough, repos) {
     return new Response('', { status: 404 });
   };
 }
-// The last 49 of the 200 files a read takes, in its order: refused, after 151 files read whole.
-const LAST_49 = new Set(planCrawlerFetch(RULE_FILES.map((path) => ({ type: 'blob', path })), HOST_READ_CAPS).selected.slice(151).map((n) => n.path));
+// The last 49 of the files a read takes, in its order: refused, after the rest were read whole.
+const LAST_49 = new Set(planCrawlerFetch(RULE_FILES.map((path) => ({ type: 'blob', path })), HOST_READ_CAPS).selected.slice(-49).map((n) => n.path));
 const MINE_PARTIAL = 'ghp_MadeUpTokenForThePartialReads01';
 
 test('a Run whose scan lost files while the service keeps a complete scan of the same repository stops: 409 with the sentence and the way out, the pack and the check as they were, no live call, a scan-partial record and its row; Check now grades the kept pack on its complete scan; OBSERVOGRAM_PARTIAL_SCAN=check checks the partial scan instead, failed and not comparable, and the next whole scan is not comparable with it', async () => {
@@ -2699,7 +2715,7 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const run = () => call('POST', `${P}/run`, { repoAuth: MINE_PARTIAL });
     const whole = await run();
     assert.equal(whole.status, 200, whole.text);
-    assert.deepEqual([whole.json.scan.partial, whole.json.scan.lost, whole.json.scan.notRead, whole.json.scan.capped, whole.json.scan.candidates], [false, 0, 20, 20, 220], 'a whole read: 20 past the file cap are not read, none lost');
+    assert.deepEqual([whole.json.scan.partial, whole.json.scan.lost, whole.json.scan.notRead, whole.json.scan.capped, whole.json.scan.candidates], [false, 0, 20, 20, 520], 'a whole read: 20 past the file cap are not read, none lost');
     assert.equal(whole.json.scan.cappedFiles.length, 20);
     assert.equal(whole.json.record.outcome === 'pass' || whole.json.record.outcome === 'gate-failed', true);
     assert.ok(!whole.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'), 'a capped scan is no partial one: no scanComplete breach');
@@ -2722,7 +2738,7 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const stopped = await run();
     assert.equal(stopped.status, 409, stopped.text);
     assert.equal(stopped.json.outcome, 'scan-partial');
-    assert.match(stopped.json.error, /^49 of 220 files could not be read: alerts\/151\.rules\.yaml — it could not be downloaded \(GitHub 403 on \/repos\/acme\/partial-shop\/contents\/alerts\/151\.rules\.yaml\?ref=main: API rate limit exceeded\. — the host asked to wait 3600 s, more than the 60 s a read waits\) \(20 more not read: 20 past the file cap\) — the Run stopped: the service keeps its last complete scan of this repository; run it again \(an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check\)$/);
+    assert.match(stopped.json.error, /^49 of 520 files could not be read: alerts\/451\.rules\.yaml — it could not be downloaded \(GitHub 403 on \/repos\/acme\/partial-shop\/contents\/alerts\/451\.rules\.yaml\?ref=main: API rate limit exceeded\. — the host asked to wait 3600 s, more than the 60 s a read waits\) \(20 more not read: 20 past the file cap\) — the Run stopped: the service keeps its last complete scan of this repository; run it again \(an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check\)$/);
     // GitHub's limit sentence names the account that spent the quota ("… for user ID 1."): it reaches no answer, no
     // record and no notification — the reason and the counts do.
     assert.ok(!/user ID/i.test(stopped.text), 'the 409 and the record it carries name no account');
@@ -2752,8 +2768,8 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const listedStop = await listedOf();
     assert.deepEqual([listedStop.lastRun.startedAt, listedStop.lastRun.outcome, listedStop.lastRun.scan.partial], [whole.json.record.startedAt, whole.json.record.outcome, false], 'the last check, never the stop');
     const { startedAt: stopAt, notRead: stopNotRead, candidates: stopOf, firstReason, kept: stopKept } = listedStop.stoppedRun;
-    assert.deepEqual([stopAt, stopNotRead, stopOf, stopKept], [rec.startedAt, 69, 220, true]);
-    assert.ok(firstReason.startsWith('alerts/151.rules.yaml — it could not be downloaded (GitHub 403 on /repos/acme/partial-shop/contents/alerts/151.rules.yaml') && firstReason.length <= 200, firstReason);
+    assert.deepEqual([stopAt, stopNotRead, stopOf, stopKept], [rec.startedAt, 69, 520, true]);
+    assert.ok(firstReason.startsWith('alerts/451.rules.yaml — it could not be downloaded (GitHub 403 on /repos/acme/partial-shop/contents/alerts/451.rules.yaml') && firstReason.length <= 200, firstReason);
     assert.ok(!/user ID/i.test(JSON.stringify(listedStop)), 'the listing every member reads names no account');
     // The studio over the real 409 and the refreshed listing: the error carries the outcome, the scan and the kept pack; the toast
     // and the row's note say the stop and the pack kept.
@@ -2762,8 +2778,8 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     const refusal = servicesRefusal(409, stopped.text);
     assert.deepEqual([refusal.outcome, refusal.kept, refusal.scan.notRead, refusal.scan.lost], ['scan-partial', { id: keptId, label: 'Partial Shop · prod · repository' }, 69, 49]);
     assert.deepEqual(runRecordedToast({ name: 'Partial Shop', env: 'prod', before: listedBefore, after: listedStop, outcome: refusal.outcome, error: refusal.message, scan: refusal.scan, kept: refusal.kept }),
-      { text: 'Partial Shop · prod: Partial scan — 69 of 220 files not read; the previous pack is kept.', tone: 'error' });
-    assert.equal(stoppedNote(listedStop.stoppedRun), 'Last Run stopped: partial scan — 69 of 220 files not read; the previous pack is kept.');
+      { text: 'Partial Shop · prod: Partial scan — 69 of 520 files not read; the previous pack is kept.', tone: 'error' });
+    assert.equal(stoppedNote(listedStop.stoppedRun), 'Last Run stopped: partial scan — 69 of 520 files not read; the previous pack is kept.');
     // The board's loader over the server's own answers: the run it grades is the complete Run's, the stop beside it.
     const facts = await loadOverviewFacts({ journeyFor: (list) => list.find((j) => j?.name === NAME) || null, fetchFn: async (path) => { const r = await call('GET', path); if (r.status !== 200) throw new Error(`${r.status}: ${r.text}`); return r.json; } });
     assert.deepEqual([facts.run?.startedAt, facts.stopped?.startedAt, facts.runError], [whole.json.record.startedAt, rec.startedAt, null]);
@@ -2780,14 +2796,14 @@ test('a Run whose scan lost files while the service keeps a complete scan of the
     assert.equal(checked.status, 200, checked.text);
     assert.notEqual(checked.json.pack.id, keptId, 'the partial scan registered');
     assert.equal(checked.json.record.outcome, 'gate-failed');
-    assert.ok(checked.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete' && /^49 of 220 files could not be read: .* — a check on part of the repository cannot pass$/.test(b.detail)), JSON.stringify(checked.json.record.gate.breaches));
-    assert.deepEqual(checked.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 220 files' });
+    assert.ok(checked.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete' && /^49 of 520 files could not be read: .* — a check on part of the repository cannot pass$/.test(b.detail)), JSON.stringify(checked.json.record.gate.breaches));
+    assert.deepEqual(checked.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 520 files' });
     assert.equal(checked.json.record.packA.scan.partial, true);
     // The next whole scan: its figures are not set beside the partial one's.
     repo.refuse = () => null;
     const after = await run();
     assert.equal(after.status, 200, after.text);
-    assert.deepEqual(after.json.record.comparable, { withPrevious: false, reason: "the previous run's scan could not read 49 of 220 files" });
+    assert.deepEqual(after.json.record.comparable, { withPrevious: false, reason: "the previous run's scan could not read 49 of 520 files" });
   } finally {
     globalThis.fetch = realFetch;
     await call('DELETE', P);
@@ -2813,7 +2829,7 @@ test('a partial scan with no complete scan of this repository to keep is checked
     assert.equal(first.status, 200, first.text);
     assert.equal(first.json.record.outcome, 'gate-failed');
     assert.ok(first.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'));
-    assert.deepEqual(first.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 220 files' });
+    assert.deepEqual(first.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 520 files' });
     // Another repository: a whole scan of it, then one that loses files — the pack of the repository before is no scan of this one.
     fresh.refuse = () => null;
     assert.equal((await run()).status, 200, 'a whole scan of acme/fresh-shop');

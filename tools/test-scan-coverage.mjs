@@ -179,11 +179,13 @@ const TREE = [
 ];
 
 test('planCrawlerFetch: the crawler\'s rule decides what is read; the keywords only order it under the cap, whose loss is counted', () => {
-  const plan = planCrawlerFetch(TREE, HOST_READ_CAPS);
+  // A cap the tree passes (the 200 of releases before 0.8.43; the server's own is OBSERVOGRAM_SCAN_MAX_FILES, 500 by default).
+  const CAPPED = { ...HOST_READ_CAPS, maxFiles: 200 };
+  const plan = planCrawlerFetch(TREE, CAPPED);
   // 250 + chaos.ts + chaos-scenarios.js + metrics.ts + alertmanager + config + fixture + lock + huge
   assert.equal(plan.candidates, 258, 'every blob the rule reads counts, the secrets file and the dot-folder never');
-  assert.equal(plan.selected.length, HOST_READ_CAPS.maxFiles);
-  assert.equal(plan.capped, 258 - HOST_READ_CAPS.maxFiles - 1, 'the cap\'s loss is counted (the oversized file is named instead)');
+  assert.equal(plan.selected.length, CAPPED.maxFiles);
+  assert.equal(plan.capped, 258 - CAPPED.maxFiles - 1, 'the cap\'s loss is counted (the oversized file is named instead)');
   assert.deepEqual(plan.selected.slice(0, 5).map((n) => n.path), ['server/middleware/chaos.ts', 'scripts/chaos-scenarios.js', 'server/metrics.ts', 'monitoring/alertmanager.yml', 'config.yaml'],
     'the keyword names first — a chaos source among them, so the cap never reaches it — then the exporter candidates');
   assert.deepEqual(plan.skipped, [
@@ -194,7 +196,8 @@ test('planCrawlerFetch: the crawler\'s rule decides what is read; the keywords o
   assert.ok(all.includes('server/middleware/chaos.ts') && all.includes('scripts/chaos-scenarios.js'), 'with room, a file no keyword names is read — the audit\'s chaos files');
   assert.deepEqual(all.slice(-2), ['test/fixtures/a.json', 'package-lock.json'], 'tests, fixtures and lock files last');
   assert.ok(!all.includes('README.md') && !all.includes('.github/workflows/ci.yml'));
-  assert.deepEqual(selectCrawlerFiles(TREE, HOST_READ_CAPS), plan.selected, 'selectCrawlerFiles is the plan\'s blobs');
+  assert.deepEqual(selectCrawlerFiles(TREE, CAPPED), plan.selected, 'selectCrawlerFiles is the plan\'s blobs');
+  assert.equal(planCrawlerFetch(TREE, HOST_READ_CAPS).capped, 0, 'under the server\'s default cap of 500 the whole tree is read');
   const budget = planCrawlerFetch([{ type: 'blob', path: 'a.rules.yaml', size: 60 }, { type: 'blob', path: 'b.rules.yaml', size: 60 }, { type: 'blob', path: 'c.rules.yaml', size: 30 }], { totalCapBytes: 100 });
   assert.deepEqual([budget.selected.map((n) => n.path), budget.skipped], [['a.rules.yaml', 'c.rules.yaml'], [{ path: 'b.rules.yaml', why: SCAN_WHY.totalCap(100) }]], 'the total cap by the tree\'s sizes, in plan order, named');
 });
