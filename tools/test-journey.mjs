@@ -1158,9 +1158,10 @@ try {
   let fakeRules = false;
   // The scrape-targets family answers with data (one job Pack A does not
   // declare): a live read that returned no data at all is a lost run (C3/C4),
-  // so every run here that is not about a lost vantage keeps one family
-  // answering. Flipped off once, for the run that is.
-  let fakeTargets = true;
+  // so every run against this fake keeps one family answering. It is never
+  // turned off here: the run whose every family answers empty is the notify
+  // fake's empty twin, below.
+  const fakeTargets = true;
   // Inventory coverage: when set, the fake advertises the metrics query tool and answers the
   // journey's per-kind queries — QM1 up, QM2 down, QMX not inventoried; host h1 only; 3 queues on QM1.
   let fakeInventory = false;

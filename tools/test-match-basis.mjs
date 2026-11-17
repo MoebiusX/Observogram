@@ -57,6 +57,8 @@ const { probeCandidates, candidateTool, capabilityTool } = await import('./lib/c
 const {
   runJourney, loadJourneyDef, readJourneyRuns, evaluateGate, notifyTargetOf, probeMemoryOf, firstProbeError, NO_PROBE_DATA,
 } = await import('./lib/journey.mjs');
+// How every reader reads a record (the row, the listing, the report): the replays end where a person looks.
+const { runBasis } = await import('./lib/run-basis.mjs');
 
 const AT = '2026-11-16T10:00:00.000Z';
 const PACK_A_FILE = resolve(__dirname, '..', SPEC_DIR, 'examples/payment-service.pack.yaml');
@@ -314,6 +316,9 @@ test('a live read whose every probe family was refused is a lost run: one record
     assert.deepEqual(lost.gate.breaches, [{ criterion: 'vantage', detail: 'vantage lost: no probe family returned data (failed: metric_names, recording_rules, alert_rules, dashboards, scrape_configs; not exposed: alerting_routes) — nothing was compared' }]);
     assert.ok(!('grade' in lost) && !('drift' in lost), 'no grade, no match');
     assert.deepEqual(firstProbeError(lost), { family: 'metric_names', error: lost.probeErrors.metric_names });
+    // Where a person looks: Live did not answer with the first probe error — never "100% match" (defect 1).
+    const read = runBasis(lost);
+    assert.deepEqual([read.state, read.text, read.alignmentPct, read.reading], ['unreachable', `Live did not answer — ${err.message}`, null, 'vantage-lost']);
 
     // The command line: exit 2, the error on stderr, one more record.
     const child = spawn(process.execPath, [resolve(__dirname, 'cli.mjs'), 'journey', 'run', join(TMP, 'journeys', 'mb-refused.journey.yaml')], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP } });
@@ -336,6 +341,11 @@ test('no family returned data — one failed beside the empty ones — is lost, 
     const [lost] = readJourneyRuns('mb-failed-empty');
     assert.deepEqual([lost.outcome, lost.vantage, lost.error], ['vantage-lost', 'lost', `${T.names}: HTTP 503 Service Unavailable`]);
     assert.deepEqual([...lost.probes.empty].sort(), ['alert_rules', 'dashboards', 'recording_rules']);
+    // Its gate failed on the vantage, and a person reads Live did not answer — never "14%" or "0% match" (defect 2).
+    assert.deepEqual(lost.gate.breaches.map((b) => b.criterion), ['vantage']);
+    assert.ok(!('grade' in lost) && !('drift' in lost), 'no grade, no match');
+    const read = runBasis(lost);
+    assert.deepEqual([read.state, read.text, read.alignmentPct], ['unreachable', `Live did not answer — ${T.names}: HTTP 503 Service Unavailable`, null]);
   } finally {
     await fake.close();
   }
@@ -395,6 +405,33 @@ test('scrape targets the store does not keep: unsupported on the first answer, r
     answer = { __isError: 'Error: HTTP 503: Service Unavailable' };
     const r4 = await runJourney(loadJourneyDef('mb-targets'));
     assert.deepEqual([r4.vantage, r4.probes.failed.includes('scrape_configs')], ['partial', true], 'without the memory a 503 is a failure');
+  } finally {
+    await fake.close();
+  }
+});
+
+test('defect 7 replayed: scrape targets the store cannot serve beside a metric-names tool that needs a metric — every run full, the targets unsupported, metrics_metadata never called', async () => {
+  // The backend of the request's defect 7: a federated store behind a datasource proxy (its targets
+  // API answers 404) and an MCP whose only metric-names tool is metrics_metadata, which requires a
+  // metric (called without one it answered -32602). Both read as failures before, so every run said
+  // vantage partial, for ever. The rules answer, so the read is no lost one.
+  const RULES = { groups: [{ name: 'shop', rules: [{ name: 'CheckoutDown', type: 'alerting', query: 'up{job="checkout"} == 0', labels: { severity: 'critical' } }] }] };
+  const fake = await fakeMcp({
+    metrics_metadata: (args) => (args?.metric ? { data: {} } : { __isError: 'MCP error -32602: Input validation error: metric is required' }),
+    [T.targets]: { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' },
+    [T.rules]: RULES,
+  });
+  try {
+    journeyFile('mb-defect7', [`packB: { mcp: { url: ${fake.url} } }`]);
+    for (const run of [1, 2]) {
+      const rec = await runJourney(loadJourneyDef('mb-defect7'));
+      assert.deepEqual([rec.vantage, rec.probes.failed], ['full', []], `run ${run}: the vantage is full, no family failed`);
+      assert.ok(rec.probes.unsupported.includes('scrape_configs') && rec.probes.unsupported.includes('metric_names'), `run ${run}: the targets not served here, the metric names not offered`);
+      assert.equal(rec.probeUnsupported.scrape_configs.reason, `${T.targets}: HTTP 404 Not Found`, `run ${run}: the tool and the status, the reason`);
+      assert.ok(rec.drift.compared > 0 && Number.isFinite(rec.drift.alignmentPct) && typeof rec.grade.score === 'number', `run ${run}: graded, a figure over what was compared`);
+      assert.equal(runBasis(rec).state, 'checked', `run ${run}: a person reads Checked, never Checked (partial)`);
+    }
+    assert.ok(!fake.calls.some((c) => c.name === 'metrics_metadata'), 'metrics_metadata is never called without its metric');
   } finally {
     await fake.close();
   }

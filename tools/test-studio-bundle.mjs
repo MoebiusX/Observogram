@@ -355,20 +355,12 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 6,950,000 since the Services matrix (2026-11-12: the studio's own code reached 6,809,288 with the list
   // drawn as a row per service and a column per environment, a branch per environment and the shared
   // clause fixes; no dependency).
-  // 6,990,000 since every reader of a run's figure reads what it rests on (2026-11-17: the studio's own
-  // code reached 6,980,493 with the board unit's copy of tools/lib/run-basis.mjs, the row's five states,
-  // nothing compared on the board, the Run's toast in the board unit and the Journeys and Neuron
-  // readings; no dependency).
-  // 7,012,000 since the live engine and its readers merged (2026-11-17: the two-pack bundle measured
-  // 6,996,709 with both — the engine's null figures and probe outcomes in the studio's modules, the
-  // readers' copy of the rule, the Run's toast reading a 502's outcome; no dependency), about 15 KB over.
-  // 7,049,000 since the repository scan merged with them (2026-11-17: the two-pack bundle measured
-  // 7,033,697 — the service form's deployment surface, the board's scan line by kind, a stopped Run's
-  // 409 read by the toast and the board's loader; no dependency), about 15 KB over.
-  // 7,121,000 since Grafana-managed rules pair with live and the live scope is the environment's own,
-  // merged with them (2026-11-17: the two-pack bundle measured 7,105,884 — the Grafana rule reading in
-  // sli-inference, crawler, artefact-model and diff, the crawled dashboards' provisioned folders, the
-  // scope form's server-default pre-fill and check, the cell's unscoped sentence; no dependency), about 15 KB over.
+  // 7,121,000 since a match figure rests on what was read (2026-11-17: the two-pack bundle measured
+  // 7,105,884 — the engine's null figures and probe outcomes in the studio's modules, the board unit's
+  // copy of tools/lib/run-basis.mjs with the row's five states, nothing compared on the board, the Run's
+  // toast over a 502 and a 409, the Journeys and Neuron readings, the service form's deployment surface
+  // and live scope with its check, the board's scan line by kind, and the Grafana rule reading in
+  // sli-inference, crawler, artefact-model and diff; no dependency), about 15 KB over.
   assert.ok(built.bytes < 7_121_000, `the two-pack bundle is under 7,121,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');

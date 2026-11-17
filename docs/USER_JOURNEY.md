@@ -372,25 +372,29 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    on the board and no others — *Never checked · Unchanged · Changed ·
    Unreachable · Nothing compared*: what the last check found. A service
    row's last check is in one of five states, which say what that check
-   rests on: *Never checked* (no run), *Unreachable* (the live side gave
-   nothing: *Live did not answer* with its first probe error beneath, or
-   *Live returned no data*), *Nothing compared* (with the first reason that
-   holds — *7 declared things not read live*, *Live answered in part:
-   dashboards not read*, *49 of 220 files not read*, *The live read was
-   scoped to part of the estate*, *Every difference was set aside*, else
-   *Neither side had anything this check could compare*), *Checked
-   (partial)* (a match, with what was not read beside it: *Live answered in
-   part: dashboards not read*, *49 of 220 files not read*) and *Checked*
-   (*92% match*); *Not known* when the checks could not be read. The
-   board's Unchanged and Changed are a row's Checked or Checked (partial).
-   No percentage without a comparison anywhere — a record written before
-   this rule that claims 100 over an empty comparison reads *Nothing
-   compared*, and one whose every probe failed reads *Unreachable* — and a
-   gate never reads as passed over nothing. A Run that stopped on a partial
-   scan leaves the last check as it was and says so beside it (*Last Run
-   stopped: partial scan — 49 of 220 files not read; the previous pack is
-   kept.*; a Run that could read no file of a repository it keeps no
-   complete scan of says *no complete scan of this repository is kept*). No sentence the model returns carries a percentage, a layer code,
+   rests on: *Never checked* (no run), *Unreachable* (a lost read — the live
+   side gave nothing: *Live did not answer* with its first probe error
+   beneath, or *Live returned no data*; *Tried 2 hours ago*, no letter, the
+   gate failed), *Nothing compared* (with the first reason that holds — *7
+   declared things not read live*, *Live answered in part: dashboards not
+   read*, *49 of 220 files not read*, *The live read was scoped to part of
+   the estate*, *Every difference was set aside*, else *Neither side had
+   anything this check could compare*), *Checked (partial)* (a match, with
+   what was not read beside it: *Live answered in part: dashboards not
+   read*, *49 of 220 files not read*) and *Checked* (*92% match*); *Not
+   known* when the checks could not be read. The board's Unchanged and
+   Changed are a row's Checked or Checked (partial). No percentage without a
+   comparison anywhere — a record written before this rule that claims 100
+   over an empty comparison reads *Nothing compared*, and one whose every
+   probe failed reads *Unreachable* — and a gate never reads as passed over
+   nothing. A Run that stopped on a partial scan leaves the last check as it
+   was and says so beside it (*Last Run stopped: partial scan — 49 of 220
+   files not read; the previous pack is kept.*; a Run that could read no
+   file of a repository it keeps no complete scan of says *no complete scan
+   of this repository is kept*). A deployment-surface filter is a note
+   beside the check, never a partial state (*12 files excluded by the
+   Kubernetes and Helm filter*, a warning past half of the files the scan
+   recognised). No sentence the model returns carries a percentage, a layer code,
    an artefact id or an engine state word (declared only, scaffold,
    candidate, recorded live); a number is drawn as a picture — the ring, the
    bars — and the renderer puts the sign on it. At most one primary button

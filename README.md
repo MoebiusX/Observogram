@@ -64,10 +64,17 @@ its repository (GitHub, Azure DevOps, a folder or an upload), and a column
 per environment in the order a release travels — dev, test, acceptance,
 staging, production, then any other by name. Each cell is that environment:
 its live endpoint (its name; the host beneath, whole on hover), the branch
-its Run reads, the grade letter with how much matches live (only where
-something was compared: else *Live did not answer* with its first probe error,
-*Live returned no data* or *Nothing compared* with why), when it was last
-checked, **Run** (scans the repository and checks it against live),
+its Run reads, its last check — one of five states: *Never checked*,
+*Unreachable* (*Live did not answer* with its first probe error, or *Live
+returned no data*), *Nothing compared* (with why), *Checked (partial)* (the
+figure, with what was not read beside it: *49 of 220 files not read*) or
+*Checked* (the grade letter with how much matches live, *92% match*; a
+figure only where something was compared) — with its notes beneath (a Run
+stopped on a partial scan since: *Last Run stopped: partial scan — 49 of
+220 files not read; the previous pack is kept.*; the files a
+deployment-surface filter excluded; a check not comparable with the one
+before), when it was last checked, **Run** (scans the repository and
+checks it against live),
 **Open** (the service's board) and **Change** (that environment's endpoint
 and branch, and the service's repository and targets); an environment the
 service does not declare reads *Not declared*, with **Add**. On the row,
