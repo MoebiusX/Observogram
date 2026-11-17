@@ -911,6 +911,13 @@ function stillTrueCore({ journey = null, run = null, now = Date.now(), running =
       sentence: `Checked ${ago} ${against} — nothing the repository declares was compared: ${extra} ${extra === 1 ? 'thing runs' : 'things run'} live that it does not declare.${asideIs}${since}`,
       canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
   }
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one:
+  // the union is the four counts): never "it matches" over it.
+  if (k === 0 && compared !== null && !declaredSideCompared(run)) {
+    return { ...base, status: 'nothing', pill: OVERVIEW_STATUS.nothing, tone: 'warn', stale,
+      sentence: `Checked ${ago} ${against} — nothing was compared. ${nothingReason(basisFactsOf(run))}.${asideIs}`,
+      canCheck: live && !stale, checkLabel: 'Check again', checkPrimary: false };
+  }
   if (k === 0 && cw) {
     const said = cw.unread
       ? `${cw.matched ? `its ${cw.matched} match live; ` : ''}not read live, so not compared: ${cw.unread}.`
@@ -951,6 +958,8 @@ function statusOf(run) {
   if (run.outcome === 'vantage-lost' || vantageOf(run) === 'lost') return 'unreachable';
   if (run.outcome === 'scan-partial' || comparedOf(run.drift) === 0) return 'nothing';
   if (liveOnlyAlone(run)) return 'changed';
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one).
+  if (differenceCount(run) === 0 && comparedOf(run.drift) !== null && !declaredSideCompared(run)) return 'nothing';
   return differenceCount(run) === 0 ? 'unchanged' : 'changed';
 }
 

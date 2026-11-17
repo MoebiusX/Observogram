@@ -2151,6 +2151,13 @@ test('OM8 live-only things alone (every declared difference set aside): one reco
   // The Run's toast.
   const toast = runToastModel({ name: 'Checkout', env: 'prod' }, { record: liveOnly, scan: null });
   assert.deepEqual([toast.pct, toast.nothing], [0, false]);
+  // Counts that hold nothing over a comparison the record says held something (no writer produces one):
+  // never "it matches" over it.
+  const hollow = { ...liveOnly, drift: { alignmentPct: 100, compared: 3, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } };
+  const h = stillTrueModel({ journey, run: hollow, now: NOW });
+  assert.deepEqual([h.status, h.pill], ['nothing', 'Nothing compared']);
+  assert.ok(!/matches/.test(h.sentence), h.sentence);
+  assert.equal(stillTrueModel({ journey, run: hollow, now: NOW, running: true }).status, 'nothing');
 });
 
 test('Record a chaos run…: the experiments a run can be recorded for, the form it opens (now, Passed, every expected alert ticked), what Save sends and what it refuses, Forget, the tile\'s and the control room\'s button, a studio run said as the studio\'s', () => {

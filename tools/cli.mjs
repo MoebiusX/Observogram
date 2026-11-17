@@ -147,14 +147,16 @@ Run a command with no/invalid args to see its own usage.`);
 //
 // A run's exit code, read as every reader reads the run (tools/lib/run-basis.mjs readingOutcome): a run
 // that compared nothing cannot pass a gate, so under a gate it exits 1 even where the gate's own keys
-// held (a freshness-only gate, say); a journey with no gate configured has no gate verdict, so such a
-// run exits 0 there, as any of its runs does — its report and `journey list` say nothing compared.
+// held (a freshness-only gate, say); a journey with no gate configured (none, or one that asks for
+// nothing: every key false or null — renderJourneyMarkdown's rule) has no gate verdict, so such a run
+// exits 0 there, as any of its runs does — its report and `journey list` say nothing compared.
 function runExitCode(record, basis) {
   if (record?.outcome !== 'pass') return 1;
   const reading = basis.readingOutcome(record);
   if (reading === 'pass') return 0;
   const gate = record.gate?.thresholds;
-  return reading === 'nothing-compared' && !(gate && typeof gate === 'object' && Object.keys(gate).length) ? 0 : 1;
+  const gated = !!gate && typeof gate === 'object' && Object.values(gate).some((v) => v !== false && v !== null && v !== undefined);
+  return reading === 'nothing-compared' && !gated ? 0 : 1;
 }
 
 async function runJourneyCommand([sub, ...args]) {

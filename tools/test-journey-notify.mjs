@@ -242,9 +242,11 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   // An older record over an empty union (its four counts, alignment 100) reads the same.
   const { compared: _c, ...olderNothing } = NOTHING;
   assert(notifyDecision({ policy: 'breach', record: pass('t2', { drift: { ...olderNothing, alignmentPct: 100 } }) }).reason === 'nothing compared', 'an older record over an empty union is no pass either');
-  // transitions: pass → nothing compared is a transition; a repeat is skipped, as a repeated outage is.
+  // transitions: pass → nothing compared is a transition; a repeat changes no outcome, and its other triggers stand.
   assert(notifyDecision({ record: passNothing('t2'), previousRun: compared('t1') }).triggers.join() === 'outcome changed pass → nothing-compared', 'transitions: a check that stops comparing anything is news');
-  assert(JSON.stringify(notifyDecision({ record: passNothing('t3'), previousRun: passNothing('t2') })) === JSON.stringify({ send: false, reason: 'still nothing-compared since t2', triggers: [] }), 'transitions: nothing compared after nothing compared is skipped');
+  assert(JSON.stringify(notifyDecision({ record: passNothing('t3'), previousRun: passNothing('t2') })) === JSON.stringify({ send: false, reason: 'no transition since t2', triggers: [] }), 'transitions: nothing compared after nothing compared changes no outcome');
+  const nothingMoved = pass('t3', { gate: { thresholds: {}, breaches: [] }, drift: NOTHING, causes: { causes: [], vantage: { changed: true, from: 'full', to: 'partial', detail: 'probe family dashboards newly failed' }, note: 'n' } });
+  assert(notifyDecision({ record: nothingMoved, previousRun: passNothing('t2') }).triggers.join() === 'vantage changed', 'transitions: over a repeat, the vantage that changed is still news');
   assert(notifyDecision({ record: compared('t3'), previousRun: passNothing('t2') }).triggers.join() === 'outcome changed nothing-compared → pass', 'transitions: comparing again is news');
   // The payload: the record's outcome as it is, beside `reading`; the one-line text never leads with pass.
   const p = buildNotifyPayload({ record: passNothing('t2'), decision: notifyDecision({ policy: 'breach', record: passNothing('t2') }), text: 'j: pass · nothing compared · chains 0/6 intact' });

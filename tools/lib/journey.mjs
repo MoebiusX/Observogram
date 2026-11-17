@@ -2189,7 +2189,8 @@ export function renderJourneyMarkdown(r) {
   // Nothing compared is never a pass: no gate passes on it (one configured reads GATE NOT PASSED, or GATE
   // FAILED with its breaches), and a journey with no gate has no gate verdict to give — NOTHING COMPARED alone.
   const nothing = reading === 'nothing-compared';
-  const gated = !!r.gate?.thresholds && typeof r.gate.thresholds === 'object' && Object.keys(r.gate.thresholds).length > 0;
+  // A gate is configured when it asks for something: a key whose value is not false or null.
+  const gated = !!r.gate?.thresholds && typeof r.gate.thresholds === 'object' && Object.values(r.gate.thresholds).some((v) => v !== false && v !== null && v !== undefined);
   const icon = nothing ? '⚠️' : r.outcome === 'pass' ? '✅' : '❌';
   const verdict = nothing ? `NOTHING COMPARED${r.outcome === 'pass' ? (gated ? ' · GATE NOT PASSED' : '') : ' · GATE FAILED'}`
     : r.outcome === 'pass' ? 'PASS' : 'GATE FAILED';

@@ -120,8 +120,8 @@ export function newCandidateCauses(record, previousRun) {
 //                 snapshot). A vantage-lost run after a vantage-lost run is
 //                 skipped: nobody is paged every 15 min for an outage they
 //                 already know about; so is a stopped Run after a stopped
-//                 Run, and a run that compared nothing after another that
-//                 compared nothing.
+//                 Run. A run that compared nothing after another changes no
+//                 outcome (its other triggers stand).
 // A stopped Run (outcome scan-partial) is no observation of the artefacts: a
 // run after one changed no outcome since it, its vantage did not "change"
 // from it, and no breach "cleared". A run the record marks not comparable
@@ -151,7 +151,7 @@ export function notifyDecision({ policy = NOTIFY_DEFAULT_POLICY, record, previou
   }
   // transitions
   if (!prev) return { send: false, reason: 'first run: no previous run to compare against', triggers: [] };
-  if ((outcome === 'vantage-lost' || outcome === 'scan-partial' || outcome === 'nothing-compared') && prevOutcome === outcome) {
+  if ((outcome === 'vantage-lost' || outcome === 'scan-partial') && prevOutcome === outcome) {
     return { send: false, reason: `still ${outcome} since ${prev.startedAt || '?'}`, triggers: [] };
   }
   const notComparable = isObj(record?.comparable) && record.comparable.withPrevious === false;

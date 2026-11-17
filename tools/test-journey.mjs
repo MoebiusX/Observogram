@@ -1094,6 +1094,8 @@ try {
       const open = { ...gatedPass, gate: { thresholds: {}, breaches: [] } };
       assert(head(open) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED` && /; with no gate configured, it has no gate verdict\._\n/.test(renderJourneyMarkdown(open)),
              'no gate configured: no gate verdict, and still nothing compared', head(open));
+      // A gate that asks for nothing (every key false or null) is no gate either.
+      assert(head({ ...gatedPass, gate: { thresholds: { failOnPartialEvidence: false, requireGradePass: null }, breaches: [] } }) === head(open), 'a gate that asks for nothing is no gate');
       const failedGate = { ...gatedPass, outcome: 'gate-failed', gate: { thresholds: { minAlignmentPct: 85 }, breaches: [{ criterion: 'minAlignmentPct', detail: 'nothing was compared — no alignment figure to hold against the required 85%' }] } };
       assert(head(failedGate) === `## ⚠️ Journey \`${base.journey}\` — NOTHING COMPARED · GATE FAILED` && /### Gate breaches\n\n- \*\*minAlignmentPct\*\* — nothing was compared/.test(renderJourneyMarkdown(failedGate)),
              'a failed gate over nothing compared: both, the breaches listed', head(failedGate));
@@ -2150,6 +2152,8 @@ try {
           writeFileSync(liveFile, JSON.stringify(live));
           writeFileSync(join(TMP4, 'journeys', 'nothing-gated.journey.yaml'), ['name: nothing-gated', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`, 'gate: { maxLiveAgeHours: 48 }'].join('\n'));
           writeFileSync(join(TMP4, 'journeys', 'nothing-open.journey.yaml'), ['name: nothing-open', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`].join('\n'));
+          // A gate that asks for nothing is no gate: no gate verdict, exit 0.
+          writeFileSync(join(TMP4, 'journeys', 'nothing-asks-nothing.journey.yaml'), ['name: nothing-asks-nothing', `packA: { file: ${A} }`, `packB: { file: ${liveFile} }`, 'gate: { failOnPartialEvidence: false }'].join('\n'));
           const gated = packc(['journey', 'run', 'nothing-gated'], TMP4);
           const gatedRec = readJourneyRunsIn(TMP4, 'nothing-gated')[0];
           assert(gatedRec?.outcome === 'pass' && gatedRec.drift?.compared === 0 && gatedRec.gate.breaches.length === 0, 'fixture: the freshness-only gate held, and nothing was compared', gatedRec && { outcome: gatedRec.outcome, drift: gatedRec.drift, breaches: gatedRec.gate.breaches });
@@ -2160,9 +2164,9 @@ try {
                  'no gate configured: no gate verdict (exit 0), and the report still says nothing compared', { status: open.status, head: open.stdout.split('\n')[0], err: open.stderr });
           const allNothing = packc(['journey', 'run', '--all', '--json'], TMP4);
           const arrNothing = JSON.parse(allNothing.stdout);
-          assert(allNothing.status === 1 && arrNothing.map((r) => `${r.name}:${r.exitCode}`).join() === 'nothing-gated:1,nothing-open:0', 'run --all: each by the same rule, the worst is the exit code', arrNothing.map((r) => [r.name, r.exitCode]));
+          assert(allNothing.status === 1 && arrNothing.map((r) => `${r.name}:${r.exitCode}`).join() === 'nothing-asks-nothing:0,nothing-gated:1,nothing-open:0', 'run --all: each by the same rule (a gate that asks for nothing is no gate), the worst is the exit code', arrNothing.map((r) => [r.name, r.exitCode]));
           const listNothing = packc(['journey', 'list'], TMP4);
-          assert(/^nothing-gated\tnothing-compared · /m.test(listNothing.stdout) && /^nothing-open\tnothing-compared · /m.test(listNothing.stdout), 'journey list reads both nothing compared', listNothing.stdout.split('\n'));
+          assert(['nothing-asks-nothing', 'nothing-gated', 'nothing-open'].every((n) => new RegExp(`^${n}\\tnothing-compared · `, 'm').test(listNothing.stdout)), 'journey list reads each nothing compared', listNothing.stdout.split('\n'));
         } finally {
           rmSync(TMP4, { recursive: true, force: true });
         }

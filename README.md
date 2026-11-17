@@ -3220,8 +3220,9 @@ nothing records no match figure (`drift.alignmentPct: null`, `drift.compared:
 nothing: its report reads `⚠️ … — NOTHING COMPARED` (`· GATE FAILED` with its
 breaches, `· GATE NOT PASSED` under a gate whose own keys held, a
 freshness-only gate say, which then exits `1`), never `✅ PASS`; a journey
-with no gate configured has no gate verdict and exits `0`, its report and
-`journey list` saying nothing compared. The CLI grades on the
+with no gate configured (none, or one whose every key is `false` or `null`)
+has no gate verdict and exits `0`, its report and `journey list` saying
+nothing compared. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name. The example's
@@ -3298,7 +3299,8 @@ vantage changed; `breach`; `always`) — the outcome lands on the record as
 `notify` and never changes the exit code. Both read a run as every reader
 does: one that compared nothing is no pass (`breach` posts it as *nothing
 compared*; under `transitions` a check that stops comparing anything is news,
-a repeat is not), and the payload's `reading` and one-line text say so. Each record of a live run also keeps the stack
+a repeat changes no outcome), and the payload's `reading` and one-line text
+say so. Each record of a live run also keeps the stack
 self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
 and Grafana status the MCP answered) — point-in-time signals kept per run so
 the history is the time series, never a verdict.

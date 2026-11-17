@@ -1664,8 +1664,8 @@ previous run) or the vantage changed — a first run is a baseline, not a
 transition (skipped; deliberately unlike `keepLivePack`, which snapshots
 the first run), and a vantage-lost run after a vantage-lost run is skipped
 (nobody is paged every 15 minutes for one outage), as is a stopped Run after
-a stopped Run, and a run that compared nothing after another that compared
-nothing. A stopped Run before a run observed nothing: no outcome
+a stopped Run; a run that compared nothing after another changes no outcome
+(its other triggers stand). A stopped Run before a run observed nothing: no outcome
 changed since it, no vantage changed from it (its record has no vantage), no
 breach cleared. A run whose record says it is not comparable with the one
 before (`comparable.withPrevious: false`: its scan read other files, or its
@@ -1692,8 +1692,9 @@ Order on disk: the record is written FIRST, then posted, then rewritten with
 `notify` (same stem) — a record on disk before anything touches the wire.
 The outcome never changes the exit code (a failed delivery on a passing run
 still exits 0; a run that compared nothing exits 1 under a gate, whose own
-keys may have held, and 0 with no gate configured — the report heads
-`NOTHING COMPARED` either way, never `✅ PASS`). `renderJourneyMarkdown` ends with `notify: sent (202) —
+keys may have held, and 0 with no gate configured — none, or one whose every
+key is false or null — the report heads `NOTHING COMPARED` either way, never
+`✅ PASS`). `renderJourneyMarkdown` ends with `notify: sent (202) —
 <reason>` / `notify: skipped — …` / `notify: failed after N attempts —
 <error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
 carries `notify` as names (`{ urlEnv, authEnv, on, format }`, plus
