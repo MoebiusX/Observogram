@@ -1488,8 +1488,15 @@ a `Chart.yaml` — the repository's root included — is a chart: its
 `templates/`, `files/`, `dashboards/`, `crds/` and `charts/` and its
 `values.schema.json` are the Kubernetes surface. With every file read, the
 Helm `enabled:` switches are read from the base `values.yaml` alone — an
-overlay's (`values-eks.yaml`) is one environment's — and an overlay that
-would switch a component off is named in one warning. In *Add a service* and
+overlay's (`values-eks.yaml`) is one environment's — and every overlay
+switch the base values override is named in one warning: one that would
+switch a component off (it stays declared), and one that switches on a
+component the base values switch off (it is not declared; the environment
+that deploys with that overlay reads it through its deployment surface). A
+dashboard export kept under a top-level `docs/`, `examples/` or `samples/`
+folder that repeats the uid of a dashboard the repository holds elsewhere
+is a copy: it is not declared, and the warning names it (a dashboard kept
+only there is declared). In *Add a service* and
 **Change**, step 3 asks *Read only this deployment surface* under the
 repository. The command line, Expert's crawl panel, `POST /api/crawl`, `POST
 /api/crawl-github` and a journey's `crawl:` source keep the filter the

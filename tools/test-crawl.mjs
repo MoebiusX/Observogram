@@ -936,6 +936,71 @@ process.stdout.write('\n--- deployment surfaces and the chart root ---\n');
   assert(products(staging).has('prometheus'), 'a name that maps to no profile reads every file, so the base values decide there too');
 }
 
+// The mirror: an overlay that switches ON a component the base values switch off. With every file read the base
+// values still decide, so the component is not declared — and that is said, with the overlay, never left silent; the
+// environment that deploys with the overlay reads it through its deployment surface. One warning names both directions.
+{
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const ON_IN_OVERLAY = {
+    'charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'charts/shop/values.yaml': 'grafana:\n  image:\n    repository: grafana/grafana\n    tag: 11.1.0\nprometheus:\n  enabled: false\n  image:\n    repository: prom/prometheus\n    tag: v2.53.0\n',
+    'charts/shop/values-prod.yaml': 'prometheus:\n  enabled: true\n',
+  };
+  for (const environment of ['prod', 'staging']) {
+    const every = crawlFiles(ON_IN_OVERLAY, { repoName: 'shop', environment, surface: null, now: NOW });
+    assert(!products(every).has('prometheus') && JSON.stringify(every.summary.discovered.disabledComponents) === JSON.stringify(['prometheus']),
+      `${environment}, every file read: the base values switch prometheus off, so it is not declared`, every.summary.discovered.disabledComponents);
+    assert(every.summary.warnings.includes('Every file is read, so only the base Helm values decide what is deployed: charts/shop/values-prod.yaml switches prometheus on, which is not declared. An environment that deploys with one of these overlays reads it alone through its deployment surface.'),
+      `${environment}: the overlay that switches it on is named, and what that leaves out`, every.summary.warnings);
+  }
+  const k8s = crawlFiles(ON_IN_OVERLAY, { repoName: 'shop', environment: 'prod', surface: 'kubernetes', now: NOW });
+  assert(products(k8s).has('prometheus') && !(k8s.summary.discovered.disabledComponents || []).length && !k8s.summary.warnings.some((w) => w.startsWith('Every file is read')),
+    'the Kubernetes surface merges the overlay: prometheus declared, nothing to say', k8s.summary.discovered.disabledComponents);
+  const BOTH = { ...ON_IN_OVERLAY, 'charts/shop/values-eks.yaml': 'grafana:\n  enabled: false\nprometheus:\n  enabled: true\n' };
+  const both = crawlFiles(BOTH, { repoName: 'shop', environment: 'prod', surface: null, now: NOW });
+  assert(products(both).has('grafana') && !products(both).has('prometheus'), 'the base values decide both components', [...products(both)]);
+  assert(both.summary.warnings.includes('Every file is read, so only the base Helm values decide what is deployed: charts/shop/values-eks.yaml switches grafana off; charts/shop/values-eks.yaml switches prometheus on, which is not declared; charts/shop/values-prod.yaml switches prometheus on, which is not declared. An environment that deploys with one of these overlays reads it alone through its deployment surface.'),
+    'one warning, every overlay switch in path order, both directions', both.summary.warnings);
+}
+
+// ---------- every file read: a documentation copy of a dashboard is no second dashboard ----------
+// A dashboard export kept under docs/ that repeats the uid of the chart's own dashboard sorted first and took that
+// uid, pushing the dashboard the chart provisions to a -2 id no Grafana holds (a false "declared, not live"), and
+// declared the metrics only its stale panels query. It is set aside and named; a dashboard kept only under docs/ is
+// declared as before; prod and staging declare the same.
+{
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const panel = (title, expr) => ({ title, type: 'timeseries', targets: [{ expr }] });
+  const CHART = JSON.stringify({ title: 'Shop', uid: 'shop-main', schemaVersion: 41, panels: [panel('Up', 'up{job="shop"}'), panel('Orders', 'rate(shop_orders_total[5m])')] });
+  const ARCHIVED = JSON.stringify({ title: 'Shop (archived)', uid: 'shop-main', schemaVersion: 39, panels: [panel('Up', 'up{job="shop"}'), panel('Memory', 'process_resident_memory_bytes{job="shop"}')] });
+  const ONLY_IN_DOCS = JSON.stringify({ title: 'Runbook board', uid: 'runbook-board', schemaVersion: 41, panels: [panel('Errors', 'rate(shop_errors_total[5m])')] });
+  const DOC_COPIES = {
+    'docs/archive/Shop export 2026.json': ARCHIVED,
+    'docs/runbook-board.json': ONLY_IN_DOCS,
+    'k8s/charts/shop/Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'k8s/charts/shop/dashboards/shop.json': CHART,
+  };
+  const specs = [];
+  for (const environment of ['prod', 'staging']) {
+    const out = crawlFiles(DOC_COPIES, { repoName: 'shop', environment, surface: null, now: NOW });
+    const dashes = out.canonical.spec.dashboards.map((d) => `${d.id} <- ${d.source}`).sort();
+    assert(JSON.stringify(dashes) === JSON.stringify(['runbook-board <- file://docs/runbook-board.json', 'shop-main <- file://k8s/charts/shop/dashboards/shop.json']),
+      `${environment}: the chart's dashboard keeps its uid, no -2; the documentation-only one is declared`, dashes);
+    const origins = JSON.parse(out.canonical.metadata.annotations['crawler.discovered.metric_origins'] || '{}');
+    assert(!('process_resident_memory_bytes' in origins) && 'shop_orders_total' in origins && 'shop_errors_total' in origins,
+      `${environment}: the metric only the copy's panels query is not declared`, Object.keys(origins));
+    assert(out.summary.warnings.includes('1 dashboard file(s) under a documentation folder repeat a dashboard the repository holds elsewhere and are not declared: docs/archive/Shop export 2026.json repeats k8s/charts/shop/dashboards/shop.json (uid shop-main).')
+      && !out.summary.warnings.some((w) => /appears in 2 files/.test(w)), `${environment}: the copy is named`, out.summary.warnings);
+    assert(out.summary.files.byKind['grafana-dashboard'] === 3, 'the copy was read and recognised: it is counted, not declared', out.summary.files.byKind);
+    specs.push(JSON.stringify(out.canonical.spec));
+  }
+  assert(specs[0] === specs[1], 'prod and staging declare the same spec');
+  // Two copies outside documentation folders are two files of the repository's own: the second suffixed, as before.
+  const twice = crawlFiles({ ...DOC_COPIES, 'grafana/shop.json': CHART }, { repoName: 'shop', surface: null, now: NOW });
+  assert(JSON.stringify(twice.canonical.spec.dashboards.map((d) => d.id).sort()) === JSON.stringify(['runbook-board', 'shop-main', 'shop-main-2']),
+    'a uid in two files outside documentation folders keeps today\'s -2', twice.canonical.spec.dashboards.map((d) => d.id));
+}
+
 // ---------- unresolved ${VAR} placeholders in alerting channels ----------
 //
 // Regression for the 2026-06-10 finding: a webhook whose entire value is a
