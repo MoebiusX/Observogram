@@ -1266,10 +1266,13 @@ function probeTableParts(live) {
 //                data or an honest empty — and the newest such answer's
 //                start: { family: { tools, at, anyTool? } } (`anyTool` when a
 //                record that answered does not say which tool — one written
-//                before the tools were recorded; only a family whose answer
-//                can read "not served" records them, and the read asks the
-//                memory for those alone). Such a tool's not-served answer is
-//                a failure, never "not served": the store served the family.
+//                before the tools were recorded, which counts only where it
+//                answered with data: an error envelope, or a refused read
+//                beside an empty fallback, could read as an honest empty
+//                then; only a family whose answer can read "not served"
+//                records its tools, and the read asks the memory for those
+//                alone). Such a tool's not-served answer is a failure, never
+//                "not served": the store served the family.
 //                The records read are the run's (readJourneyRuns'
 //                BASELINE_SCAN_LIMIT newest), so a store that stopped serving
 //                a family for good reads "not served" again once its last
@@ -1293,10 +1296,12 @@ export function probeMemoryOf(records, packBSource) {
   const familyNames = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
   for (const r of mine) {
     const by = isPlainObject(r.probeAnsweredBy) ? r.probeAnsweredBy : {};
-    for (const family of new Set([...familyNames(r.probes.succeeded), ...familyNames(r.probes.empty)])) {
+    const withData = new Set(familyNames(r.probes.succeeded));
+    for (const family of new Set([...withData, ...familyNames(r.probes.empty)])) {
+      const tools = familyNames(by[family]);
+      if (!tools.length && !withData.has(family)) continue;   // an older record's empty: no evidence
       const entry = answered[family] || (answered[family] = { tools: [], at: null });
       if (!entry.at && typeof r.startedAt === 'string' && r.startedAt) entry.at = r.startedAt;
-      const tools = familyNames(by[family]);
       if (!tools.length) entry.anyTool = true;
       for (const t of tools) if (!entry.tools.includes(t)) entry.tools.push(t);
     }

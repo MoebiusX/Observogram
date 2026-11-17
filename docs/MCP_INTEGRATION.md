@@ -1159,7 +1159,9 @@ remember (`probeMemoryOf`, fetchMcp's `probeMemory`): the instant a not-served
 answer was first given (`since`, from the newest record that carries a probe
 table), and the tools each record saw answer a family with data or an honest
 empty (`probeAnsweredBy`; an older record that did not say which tool counts
-for every tool). A not-served answer from such a tool is a failure whose probe
+for every tool, and only where it answered with data — its empty answers may
+have been an error envelope or a refused read beside an empty fallback). A
+not-served answer from such a tool is a failure whose probe
 error says when it answered (`<tool>: it answered on <day>; now <the answer>`)
 — the store served the family, so the answer is a lost route or a changed
 datasource, not a store that keeps none. The records read are the run's own

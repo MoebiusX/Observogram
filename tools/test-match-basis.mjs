@@ -508,6 +508,8 @@ test('probeMemoryOf: every record read names the tools that answered a family â€
     'the newest answer\'s start, every tool that answered; another source is not this one');
   assert.deepEqual(probeMemoryOf([rec('mcp:a', '2026-11-16T08:00:00.000Z', { succeeded: ['scrape_configs'] })], 'mcp:a'),
     { answered: { scrape_configs: { tools: [], at: '2026-11-16T08:00:00.000Z', anyTool: true } } }, 'a record written before the tool was recorded');
+  assert.equal(probeMemoryOf([rec('mcp:a', '2026-11-16T08:00:00.000Z', { empty: ['scrape_configs'] })], 'mcp:a'), null,
+    'such a record\'s empty is no evidence: an error envelope or a refused read beside an empty fallback read as one then');
   const entry = { reason: 'x: HTTP 404 Not Found', since: AT, tools: ['x'] };
   assert.deepEqual(probeMemoryOf([rec('mcp:a', AT, {}, { probeUnsupported: { scrape_configs: entry } }), records[3]], 'mcp:a'),
     { unsupported: { scrape_configs: entry }, answered: { scrape_configs: { tools: ['t1'], at: '2026-11-16T08:00:00.000Z' } } }, 'both memories, side by side');
