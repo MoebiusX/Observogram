@@ -804,8 +804,8 @@ function adaptDashboardPanels(ctx) {
 
 // L2 EXPAND: metric inventory projected from
 // metadata.annotations.mcp.discovered.metric_names. When the MCP returns the
-// metric inventory (via metrics_metadata / metrics_label_values or any
-// compatible tool), the fetcher writes the full list into an annotation and a
+// metric inventory (the metric_names probe family, whichever tool answered
+// it), the fetcher writes the full list into an annotation and a
 // compact sample for previews; here we prefer the full list and fall back to
 // the sample for older live packs.
 function adaptMetricInventory(ctx) {
@@ -828,7 +828,7 @@ function adaptMetricInventory(ctx) {
     expand: true,    // hidden behind L2 Expand toggle
     parent: 'telemetry.metric_inventory',
     spec: { name, source: 'mcp.discovered' },
-    mcp: { tool: 'metrics_metadata', when: ann['mcp.refreshedAt'] },
+    mcp: { tool: 'metric_names', when: ann['mcp.refreshedAt'] },
     _meta: i === 0 ? { totalCount } : undefined,
   }));
 }

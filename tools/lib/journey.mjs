@@ -44,6 +44,10 @@
 //                               #   Calibrated counts them where the repository states no
 //                               #   spec.baselines of its own. Written by the server, like gradeOff.
 //   gate:                  # all optional; omitted criteria don't gate
+//     A key whose figure is absent breaches, never passes: nothing compared
+//     (minAlignmentPct and the counts), no grade, no live age, no on-wire
+//     health read. (failOnPartialEvidence alone passes a Pack B that is no
+//     live read: nothing there can be partial.)
 //     requireGradePass: true
 //     minAlignmentPct: 85
 //     maxDeclaredNotLive: 0
@@ -90,11 +94,14 @@
 //   and the outcome lands on the record as `notify` — written AFTER the
 //   record itself is on disk (write → post → rewrite).
 //
-// Vantage: when Pack B is a live MCP source and the fetch itself fails
-// (endpoint down, core tools unavailable), the run still leaves a record
-// with outcome 'vantage-lost' before the error propagates (exit 2) — a
-// total loss of the observation point is a point in the drift history,
-// not a hole in it.
+// Vantage: when Pack B's read lost its vantage — a live fetch that threw
+// (endpoint down, core tools unavailable), or a read whose probe table says
+// no probe family returned data (C3; a live MCP read, or a file holding a
+// live export with a probe table) — the run writes ONE record with outcome
+// 'vantage-lost' (vantage 'lost', the probe table when the read answered,
+// one `vantage` gate breach; no grade, no match) and the error propagates
+// (exit 2): a total loss of the observation point is a point in the drift
+// history, not a hole in it, and never a match figure.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, fstatSync, realpathSync } from 'node:fs';
 import { resolve, join, dirname, extname, basename, sep } from 'node:path';
@@ -111,7 +118,7 @@ import { readRepoFolder } from './repo-folder.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
 import { safeMcpUrl } from './mcp-url-safety.mjs';
-import { compactScope, normalizeScope, scopeAnnotations } from './live-fetch.mjs';
+import { compactScope, normalizeScope, scopeAnnotations, firstProbeError, inStageOrder } from './live-fetch.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
@@ -487,11 +494,16 @@ export async function postNotification({ url, headers = {}, body = '', timeoutMs
 }
 
 // The one-line summary a notification leads with:
-// `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`.
+// `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>` —
+// `nothing compared` before the chain line for a run whose comparison held
+// nothing (drift.compared 0: no match figure).
 function notifyTextLine(record) {
   const bits = [`${record.journey}: ${record.outcome}`];
   if (record.outcome === 'vantage-lost') bits.push(redactUrlCredentials(record.error || 'live source unreachable'));
-  else bits.push(chainStatusLine(record));
+  else {
+    if (record.drift?.compared === 0) bits.push('nothing compared');
+    bits.push(chainStatusLine(record));
+  }
   if (transitionGotWorse(record)) bits.push(causeLine(record));
   const v = vantageLine(record);
   if (v) bits.push(v);
@@ -798,7 +810,9 @@ async function liveTargetOf(def, resolveMcp, { lenient = false } = {}) {
   return { mcpUrl: m.url, mcpAuth, safeUrl: packBSourceUrl(m.url) };
 }
 
-async function resolvePackB(def, crawlScope = null, live = null) {
+// `probeMemory`: what the journey's records remember about the live source
+// (probeMemoryOf), handed to the fetch (P6).
+async function resolvePackB(def, crawlScope = null, live = null, { probeMemory = null } = {}) {
   if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   // Imported lazily: fetch-live-pack is the heaviest module and only the
   // live path needs it. Composition mirrors the server's draft route.
@@ -809,7 +823,7 @@ async function resolvePackB(def, crawlScope = null, live = null) {
     // observogram.scope.* annotations, which park a declared artefact outside
     // the scope as not observed rather than missing (tools/lib/diff.mjs).
     const scope = packBScopeOf(def);
-    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth, ...(scope ? { scope } : {}) });
+    const fetched = await fetchMcp({ mcpUrl: live.mcpUrl, mcpAuth: live.mcpAuth, ...(scope ? { scope } : {}), ...(probeMemory ? { probeMemory } : {}) });
     const refreshedAt = new Date().toISOString();
     const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: live.safeUrl, ...fetched });
     if (fetched.liveScope) {
@@ -895,61 +909,111 @@ function hoursSince(iso) {
   return Number.isFinite(t) ? (Date.now() - t) / 3.6e6 : null;
 }
 
+// The probe families whose answers the on-wire health counts are read from
+// (maxUnhealthy): scrape targets (jobs down) and the two rule families
+// (rules failing to evaluate).
+const HEALTH_FAMILIES = Object.freeze(['scrape_configs', 'recording_rules', 'alert_rules']);
+
+// C5: every key whose figure is absent breaches — the gate never passes on
+// an absent figure. A run's own facts carry `compared` (the union its counts
+// are over, after set-asides): 0 is "nothing was compared", and the counts
+// over it are no figure. Facts without it (a host's own) are read as given.
+// failOnPartialEvidence passes a Pack B that is no live read (vantage none):
+// nothing there can be partial.
 export function evaluateGate(gate, facts) {
   const breaches = [];
   if (!gate || typeof gate !== 'object') return breaches;
+  const f = facts && typeof facts === 'object' ? facts : {};
   const add = (criterion, detail) => breaches.push({ criterion, detail });
-  if (gate.requireGradePass && !facts.gradePass) {
-    add('requireGradePass', `diagnostic grade ${facts.gradeScore}% is below the ${DIAGNOSTIC_PASS_SCORE_THRESHOLD}% pass bar`);
+  const nothingCompared = f.compared === 0;
+  const setAsideN = Number.isFinite(f.setAsideCount) ? f.setAsideCount : 0;
+  // Set-asides that emptied the comparison leave a true zero for the counts:
+  // a person's decision, evaluated as given; the figure itself is still none.
+  const countsAbsent = nothingCompared && !(setAsideN > 0);
+  if (gate.requireGradePass) {
+    if (typeof f.gradePass !== 'boolean' || !Number.isFinite(f.gradeScore)) {
+      add('requireGradePass', `no diagnostic grade to hold against the ${DIAGNOSTIC_PASS_SCORE_THRESHOLD}% pass bar — the gate cannot pass on an absent grade`);
+    } else if (!f.gradePass) {
+      add('requireGradePass', `diagnostic grade ${f.gradeScore}% is below the ${DIAGNOSTIC_PASS_SCORE_THRESHOLD}% pass bar`);
+    }
   }
-  if (Number.isFinite(gate.minAlignmentPct) && facts.alignmentPct < gate.minAlignmentPct) {
-    add('minAlignmentPct', `alignment ${facts.alignmentPct}% < required ${gate.minAlignmentPct}%`);
+  if (Number.isFinite(gate.minAlignmentPct)) {
+    const min = gate.minAlignmentPct;
+    if (nothingCompared && setAsideN > 0) {
+      add('minAlignmentPct', `nothing is left to compare once ${setAsideN === 1 ? 'the one set-aside difference is' : `the ${setAsideN} set-aside differences are`} left out — no alignment figure to hold against the required ${min}%`);
+    } else if (nothingCompared || f.alignmentPct === null) {
+      add('minAlignmentPct', `nothing was compared — no alignment figure to hold against the required ${min}%`);
+    } else if (!Number.isFinite(f.alignmentPct)) {
+      add('minAlignmentPct', `no alignment figure was given — the gate cannot pass on an absent figure (required ${min}%)`);
+    } else if (f.alignmentPct < min) {
+      add('minAlignmentPct', `alignment ${f.alignmentPct}% < required ${min}%`);
+    }
   }
-  if (Number.isFinite(gate.maxDeclaredNotLive) && facts.declaredNotLive > gate.maxDeclaredNotLive) {
-    add('maxDeclaredNotLive', `${facts.declaredNotLive} declared artefact(s) not confirmed live (max ${gate.maxDeclaredNotLive})`);
+  if (Number.isFinite(gate.maxDeclaredNotLive)) {
+    const max = gate.maxDeclaredNotLive;
+    if (countsAbsent) add('maxDeclaredNotLive', `nothing was compared — no declared artefact was checked against live (max ${max})`);
+    else if (!Number.isFinite(f.declaredNotLive)) add('maxDeclaredNotLive', `no declared-not-live count was given — the gate cannot pass on an absent count (max ${max})`);
+    else if (f.declaredNotLive > max) add('maxDeclaredNotLive', `${f.declaredNotLive} declared artefact(s) not confirmed live (max ${max})`);
   }
-  if (Number.isFinite(gate.maxDeclaredAhead) && (facts.declaredAhead ?? 0) > gate.maxDeclaredAhead) {
-    add('maxDeclaredAhead', `${facts.declaredAhead} declared artefact(s) stated as not deployed yet (max ${gate.maxDeclaredAhead})`);
+  if (Number.isFinite(gate.maxDeclaredAhead) && (f.declaredAhead ?? 0) > gate.maxDeclaredAhead) {
+    add('maxDeclaredAhead', `${f.declaredAhead} declared artefact(s) stated as not deployed yet (max ${gate.maxDeclaredAhead})`);
   }
-  if (Number.isFinite(gate.maxDrifted) && facts.drifted > gate.maxDrifted) {
-    add('maxDrifted', `${facts.drifted} drifted artefact(s) (max ${gate.maxDrifted})`);
+  if (Number.isFinite(gate.maxDrifted)) {
+    const max = gate.maxDrifted;
+    if (countsAbsent) add('maxDrifted', `nothing was compared — no drift could be counted (max ${max})`);
+    else if (!Number.isFinite(f.drifted)) add('maxDrifted', `no drifted count was given — the gate cannot pass on an absent count (max ${max})`);
+    else if (f.drifted > max) add('maxDrifted', `${f.drifted} drifted artefact(s) (max ${max})`);
   }
   if (Number.isFinite(gate.maxLiveAgeHours)) {
-    if (facts.liveAgeHours === null) {
+    if (!Number.isFinite(f.liveAgeHours)) {
       add('maxLiveAgeHours', 'live evidence carries no refresh timestamp — staleness cannot be proven fresh');
-    } else if (facts.liveAgeHours > gate.maxLiveAgeHours) {
-      add('maxLiveAgeHours', `live evidence is ${facts.liveAgeHours.toFixed(1)}h old (max ${gate.maxLiveAgeHours}h)`);
+    } else if (f.liveAgeHours > gate.maxLiveAgeHours) {
+      add('maxLiveAgeHours', `live evidence is ${f.liveAgeHours.toFixed(1)}h old (max ${gate.maxLiveAgeHours}h)`);
     }
   }
   // Vantage-aware criteria. A failed probe family is a hole of unknown
   // size in the live evidence: whatever the diff says about that family
   // is unverifiable, so a verdict built on it must not pass a gate that
   // asked for whole evidence. (An EMPTY probe is an honest zero and an
-  // UNSUPPORTED one a restricted tier — neither breaches on its own; the
-  // one exception is a vantage that is entirely lost.)
+  // UNSUPPORTED one a family this MCP does not offer or serve — neither
+  // breaches on its own; the one exception is a vantage that is entirely
+  // lost.) A family answered only in part is a hole too.
   if (gate.failOnPartialEvidence) {
-    const failed = facts.probes?.failed || [];
-    if (failed.length) {
-      add('failOnPartialEvidence', `live evidence is partial: probes failed: ${failed.join(', ')} — verdict not trustworthy`);
-    } else if (facts.vantage === 'lost') {
-      const unsupported = facts.probes?.unsupported || [];
-      add('failOnPartialEvidence', `live evidence is lost: no probe family answered (not exposed: ${unsupported.join(', ') || '-'}) — verdict not trustworthy`);
+    const failed = f.probes?.failed || [];
+    const inPart = f.probes?.partial || [];
+    if (failed.length || inPart.length) {
+      const holes = [failed.length ? `probes failed: ${failed.join(', ')}` : '', inPart.length ? `answered in part: ${inPart.join(', ')}` : ''].filter(Boolean);
+      add('failOnPartialEvidence', `live evidence is partial: ${holes.join('; ')} — verdict not trustworthy`);
+    } else if (f.vantage === 'lost') {
+      add('failOnPartialEvidence', `live evidence is lost: no probe family returned data (${probeTableParts(f).join('; ') || '-'}) — verdict not trustworthy`);
     }
   }
   if (Number.isFinite(gate.maxUnhealthy)) {
-    const down = facts.scrapeJobsDown ?? 0;
-    const unhealthy = facts.unhealthyRules ?? 0;
-    if (down + unhealthy > gate.maxUnhealthy) {
-      const names = [
-        ...(facts.scrapeJobsDownNames || []).map(n => `job ${n} down`),
-        ...(facts.unhealthyRuleNames || []).map(n => `rule ${n} unhealthy`),
-      ];
-      add('maxUnhealthy', `${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) observed on the wire (max ${gate.maxUnhealthy})`
-        + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
+    const probes = f.probes && typeof f.probes === 'object' ? f.probes : null;
+    const answered = probes ? new Set([...(probes.succeeded || []), ...(probes.empty || [])]) : null;
+    const read = probes
+      ? HEALTH_FAMILIES.some((family) => answered.has(family))
+      : Number.isFinite(f.scrapeJobsDown) || Number.isFinite(f.unhealthyRules);
+    if (!read) {
+      const why = f.vantage === 'none' ? 'Pack B is not a live read'
+        : probes ? 'scrape targets, recording rules and alert rules were not read'
+          : 'no scrape-job or rule-health count was given';
+      add('maxUnhealthy', `no on-wire health was read — ${why} — the gate cannot pass on an absent count (max ${gate.maxUnhealthy})`);
+    } else {
+      const down = f.scrapeJobsDown ?? 0;
+      const unhealthy = f.unhealthyRules ?? 0;
+      if (down + unhealthy > gate.maxUnhealthy) {
+        const names = [
+          ...(f.scrapeJobsDownNames || []).map(n => `job ${n} down`),
+          ...(f.unhealthyRuleNames || []).map(n => `rule ${n} unhealthy`),
+        ];
+        add('maxUnhealthy', `${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) observed on the wire (max ${gate.maxUnhealthy})`
+          + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
+      }
     }
   }
-  if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
-  if (gate.inventory && typeof gate.inventory === 'object') evaluateInventoryGate(gate.inventory, facts.inventory ?? null, add);
+  if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, f.stackEvidence, add);
+  if (gate.inventory && typeof gate.inventory === 'object') evaluateInventoryGate(gate.inventory, f.inventory ?? null, add);
   return breaches;
 }
 
@@ -1103,6 +1167,75 @@ function stackEvidenceFromAnnotations(ann) {
   };
 }
 
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// The `error` of a lost run whose read answered and whose probe table names
+// no failed family with a message (every family empty or not offered).
+export const NO_PROBE_DATA = 'no probe family returned data';
+
+// One not-served entry (the fetcher's mcp.probeUnsupported.<family> JSON, or
+// a record's probeUnsupported.<family>), validated: { reason, since, tools,
+// remembered? } — reasons and tool names only — or null.
+function notServedEntry(e) {
+  if (!isPlainObject(e) || typeof e.reason !== 'string' || !e.reason) return null;
+  return {
+    reason: e.reason,
+    since: typeof e.since === 'string' && e.since ? e.since : null,
+    tools: Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [],
+    ...(e.remembered === true ? { remembered: true } : {}),
+  };
+}
+
+// P6: the unsupported families whose store answered it keeps no such thing,
+// from Pack B's mcp.probeUnsupported.<family> annotations:
+// { family: { reason, since, tools, remembered? } }; {} when none.
+function probeUnsupportedOf(ann, unsupported) {
+  const prefix = 'mcp.probeUnsupported.';
+  const out = {};
+  for (const key of Object.keys(ann).sort()) {
+    if (!key.startsWith(prefix) || key.length <= prefix.length) continue;
+    const family = key.slice(prefix.length);
+    if (!unsupported.includes(family)) continue;
+    const entry = notServedEntry(parseJsonAnnotation(ann[key]));
+    if (entry) out[family] = entry;
+  }
+  return out;
+}
+
+// The probe table in a sentence's parts, each list in stage order: failed ·
+// empty · not exposed (no tool offered) · not served (the store answered it
+// keeps none). [] when every list is empty.
+function probeTableParts(live) {
+  const p = live?.probes || {};
+  const notServed = new Set(Object.keys(isPlainObject(live?.probeUnsupported) ? live.probeUnsupported : {}));
+  const unsupported = Array.isArray(p.unsupported) ? p.unsupported : [];
+  return [
+    ['failed', p.failed],
+    ['empty', p.empty],
+    ['not exposed', unsupported.filter((x) => !notServed.has(x))],
+    ['not served', unsupported.filter((x) => notServed.has(x))],
+  ].filter(([, xs]) => Array.isArray(xs) && xs.length).map(([word, xs]) => `${word}: ${inStageOrder(xs).join(', ')}`);
+}
+
+// P6: what this journey's records remember about its live source — the
+// probe families the endpoint answered it does not serve (C6). The newest
+// record of the same Pack B source that carries a probe table decides (a
+// read that threw carries none and is passed over; a family that answered
+// since is no longer in it). → { unsupported: { family: { reason, since,
+// tools } } } | null. Pure; per journey and live source — two journeys on
+// one endpoint each learn it from their own first answer.
+export function probeMemoryOf(records, packBSource) {
+  if (typeof packBSource !== 'string' || !packBSource) return null;
+  const newest = (Array.isArray(records) ? records : []).find((r) => isPlainObject(r) && r.packB?.source === packBSource && isPlainObject(r.probes));
+  if (!newest || !isPlainObject(newest.probeUnsupported)) return null;
+  const unsupported = {};
+  for (const [family, raw] of Object.entries(newest.probeUnsupported)) {
+    const entry = notServedEntry(raw);
+    if (entry && entry.tools.length) unsupported[family] = { reason: entry.reason, since: entry.since, tools: entry.tools };
+  }
+  return Object.keys(unsupported).length ? { unsupported } : null;
+}
+
 // On-wire liveness facts read from Pack B's fetcher annotations
 // (docs/MCP_INTEGRATION.md). A file-sourced Pack B carries none: every
 // list is empty, counts are 0, toolsExposedCount is null — absence of
@@ -1128,12 +1261,20 @@ export function liveEvidenceFacts(canonicalB) {
   return {
     probes: {
       attempted: ev.attempted,
-      succeeded: list('mcp.probesSucceeded'),
+      succeeded: ev.succeeded,
       empty: ev.empty,
       failed: ev.failed,
       unsupported: ev.unsupported,
+      // Only when a family answered from some of its sources while another
+      // failed (mcp.probesPartial): a hole the vantage reads as partial.
+      ...(ev.inPart.length ? { partial: ev.inPart } : {}),
     },
     probeErrors: ev.errors,
+    // P6: the unsupported families whose store answered it keeps no such
+    // thing (mcp.probeUnsupported.<family>): { family: { reason, since,
+    // tools, remembered? } }; {} when none. The record keeps it (when not
+    // empty) and the next run remembers it (probeMemoryOf).
+    probeUnsupported: probeUnsupportedOf(ann, ev.unsupported),
     vantage: ev.vantage,
     toolsExposedCount: ann['mcp.toolsExposedCount'] != null && String(ann['mcp.toolsExposedCount']) !== '' && Number.isFinite(exposed) ? exposed : null,
     scrapeJobsDown: scrapeJobsDownNames.length,
@@ -1255,6 +1396,60 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 
 // ---------- the run ----------
 
+// The first probe error a record carries (tools/lib/live-fetch.mjs, the one
+// browser-safe rule), re-exported for the server and the command line.
+export { firstProbeError };
+
+// The breach a lost run carries — the existing breach shape, `{ criterion:
+// 'vantage', detail }`: what the read answered, or that it did not answer.
+function lostVantageDetail(live) {
+  if (!live) return 'vantage lost: the live side did not answer — nothing was compared';
+  const parts = probeTableParts(live);
+  return `vantage lost: ${NO_PROBE_DATA}${parts.length ? ` (${parts.join('; ')})` : ''} — nothing was compared`;
+}
+
+// Pack A as a lost run records it: one expression, so the scan's fields are
+// added in one place.
+const lostPackA = (a, scan) => ({ source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(a.scan || scan ? { scan: a.scan || scan } : {}) });
+
+// C4: one record for every lost vantage — the fetch that threw before
+// anything was read (`live` null) and a read whose probe table says no
+// family returned data (`live`: liveEvidenceFacts of Pack B). Vantage
+// 'lost', the probe table when there is one, one `vantage` breach; no grade,
+// no drift: nothing was compared. Write → post → rewrite, as the main path;
+// the delivery is left on `err` for a caller that rows it (the server's 502).
+// Key order: journey, startedAt, tookMs, outcome, error, packA, packB, scope,
+// vantage, [probes, probeErrors, probeUnsupported?, toolsExposedCount], gate,
+// notify.
+async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource, liveTarget, live, error, err, notifyTarget, notifier }) {
+  const lost = {
+    journey: def.name,
+    startedAt,
+    tookMs: Date.now() - t0,
+    outcome: 'vantage-lost',
+    error,
+    packA: lostPackA(a, scan),
+    packB: { source: packBSource, ...(liveTarget ? { liveScope: packBScopeOf(def) } : {}) },
+    scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
+    vantage: 'lost',
+    ...(live ? {
+      probes: live.probes,
+      probeErrors: live.probeErrors,
+      ...(Object.keys(live.probeUnsupported || {}).length ? { probeUnsupported: live.probeUnsupported } : {}),
+      toolsExposedCount: live.toolsExposedCount,
+    } : {}),
+    gate: { thresholds: def.gate || {}, breaches: [{ criterion: 'vantage', detail: lostVantageDetail(live) }] },
+  };
+  if (!notifyTarget) lost.notify = null;
+  writeRunRecord(def.name, startedAt, lost);
+  if (notifyTarget) {
+    lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
+    writeRunRecord(def.name, startedAt, lost);
+  }
+  if (err && typeof err === 'object') err.notify = lost.notify;
+  return lost;
+}
+
 // crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
 // source and an inventory site read only the org's own part of the
 // workspace, or outside it); null for the CLI.
@@ -1285,39 +1480,45 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const notifyTarget = def.notify ? (resolveNotify ? await resolveNotify(def.notify) : resolveNotifyTarget(def)) : null;
 
   const a = await resolvePackA(def, def.__baseDir, crawlScope);
+  // The journey's history, newest first, read once before this run writes
+  // anything (so every comparison is against history, never against itself):
+  // the probe memory reads it before the live read, a lost run and the main
+  // path after it.
+  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
+  // The run this one is compared against — transitions, causes, notify and
+  // the snapshot decision: the newest that checked something (a Run stopped
+  // on a partial scan checked nothing).
+  const previousRun = recent.find((r) => r?.outcome !== 'scan-partial') || null;
   let b;
   let liveTarget = null;   // a live Pack B's target (liveTargetOf), never persisted
   try {
     if (def.packB?.mcp && !def.packB.file) liveTarget = await liveTargetOf(def, resolveMcp);
-    b = await resolvePackB(def, crawlScope, liveTarget);
+    // P6: the families this live source answered it does not serve, as the
+    // journey's records remember them.
+    const probeMemory = liveTarget ? probeMemoryOf(recent, `mcp:${liveTarget.safeUrl}`) : null;
+    b = await resolvePackB(def, crawlScope, liveTarget, { probeMemory });
   } catch (e) {
     // Only a LIVE source that reached the wire can lose its vantage; a
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
-    if (liveTarget && e?.vantageLost) {
-      const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
-      const lost = {
-        journey: def.name,
-        startedAt,
-        tookMs: Date.now() - t0,
-        outcome: 'vantage-lost',
-        error: String(e.message || e),
-        packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(a.scan || scan ? { scan: a.scan || scan } : {}) },
-        packB: { source: `mcp:${liveTarget.safeUrl}`, liveScope: packBScopeOf(def) },
-        scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
-        gate: { thresholds: def.gate || {}, breaches: [] },
-      };
-      // Same write → post → rewrite order as the main path (see below).
-      if (!notifyTarget) lost.notify = null;
-      writeRunRecord(def.name, startedAt, lost);
-      if (notifyTarget) {
-        lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
-        writeRunRecord(def.name, startedAt, lost);
-      }
-      // The record's delivery, for a caller that rows it (the server's 502).
-      if (e && typeof e === 'object') e.notify = lost.notify;
+    if (liveTarget && e?.vantageLost && !e.vantageRecorded) {
+      await recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource: `mcp:${liveTarget.safeUrl}`, liveTarget, live: null, error: String(e.message || e), err: e, notifyTarget, notifier });
+      if (e && typeof e === 'object') e.vantageRecorded = true;
     }
     throw e;
+  }
+
+  // C4: the vantage decides before anything is compared. A read whose probe
+  // table says no family returned data is no read — whatever tools/list
+  // advertised — and is written as the same lost run, then thrown on as the
+  // fetch's own loss is (exit 2; the server's 502).
+  const live = liveEvidenceFacts(b.canonical);
+  if (live.vantage === 'lost') {
+    const err = new Error(firstProbeError(live)?.error || NO_PROBE_DATA);
+    err.vantageLost = true;
+    await recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource: b.source, liveTarget, live, error: err.message, err, notifyTarget, notifier });
+    err.vantageRecorded = true;
+    throw err;
   }
 
   for (const [label, pack] of [['packA', a.canonical], ['packB', b.canonical]]) {
@@ -1370,21 +1571,25 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const targetsUsed = calibrated?.applies !== false ? (calibrated?.baselines?.studio ?? null) : null;
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
-  const live = liveEvidenceFacts(b.canonical);
   // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
   const inventoryLive = def.inventory && def.packB?.mcp ? liveTarget ?? await liveTargetOf(def, resolveMcp, { lenient: true }) : null;
   const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope, inventoryLive) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
+  const summary = diff.summary || {};
   const facts = {
     gradeScore: Math.round(audit.scorePctExact ?? 0),
     gradePass: !!audit.passes,
-    alignmentPct: Math.round((diff.summary?.alignment ?? 0) * 100),
-    declaredNotLive: diff.summary?.onlyInA ?? 0,
-    declaredAhead: diff.summary?.declaredAhead ?? 0,
-    liveNotDeclared: diff.summary?.onlyInB ?? 0,
-    drifted: diff.summary?.drifted ?? 0,
-    aligned: diff.summary?.aligned ?? 0,
+    // C2: no figure when nothing was compared (an empty union's alignment is null).
+    alignmentPct: typeof summary.alignment === 'number' && Number.isFinite(summary.alignment) ? Math.round(summary.alignment * 100) : null,
+    // What the figure and the counts are over: the union after set-asides.
+    compared: Number.isFinite(summary.union) ? summary.union : null,
+    setAsideCount: aside ? (aside.declared || 0) + (aside.live || 0) : 0,
+    declaredNotLive: summary.onlyInA ?? 0,
+    declaredAhead: summary.declaredAhead ?? 0,
+    liveNotDeclared: summary.onlyInB ?? 0,
+    drifted: summary.drifted ?? 0,
+    aligned: summary.aligned ?? 0,
     liveAgeHours: hoursSince(liveRefreshedAt),
     ...live,
     inventory,
@@ -1394,19 +1599,17 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const outcome = breaches.length ? 'gate-failed' : 'pass';
 
   // Step 4: the per-chain verdicts this run saw, the records they are
-  // compared against (read BEFORE this run is written, so the diff is
-  // against history, never against itself) and the snapshot decision.
-  // `previousRun` is the newest record whatever it holds — the vantage is
-  // compared against it; `baseline` is the newest record that carries
-  // chains (a vantage-lost or pre-chain record in between cannot be
-  // diffed) — the chain diff, the deploy window and the versions are
-  // compared against it. The records between them are named on the
-  // transition as `skipped`, so a run after an outage never claims "no
+  // compared against (`recent`, read before anything was written above, so
+  // the diff is against history, never against itself) and the snapshot
+  // decision. `previousRun` is the newest record that checked something
+  // (above) — the vantage is compared against it; `baseline` is the newest
+  // record that carries chains (a vantage-lost or pre-chain record in
+  // between cannot be diffed) — the chain diff, the deploy window and the
+  // versions are compared against it. The records between them are named on
+  // the transition as `skipped`, so a run after an outage never claims "no
   // previous run" nor compares against nothing.
   const branches = branchRecordsFromGraph(engineDiff.traceabilityGraph);
   const chains = chainSummary({ branches });
-  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
-  const previousRun = recent[0] || null;
   const packAScan = a.scan || scan
     || recent.find((r) => r?.packA?.source === a.source && r.packA.scan && typeof r.packA.scan === 'object')?.packA.scan
     || null;
@@ -1498,7 +1701,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     livePack,
     conformance: { scorePercent: conformance.scorePercent, mustPercent: conformance.mustPercent, conformant: conformance.conformant, declaredTier: conformance.declaredTier },
     drift: {
+      // C2: null when nothing was compared — `compared` (the union the
+      // figure and the counts are over, after set-asides) is then 0.
       alignmentPct: facts.alignmentPct,
+      compared: facts.compared,
       aligned: facts.aligned,
       drifted: facts.drifted,
       declaredNotLive: facts.declaredNotLive,
@@ -1523,6 +1729,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // probes.* are family NAMES so a breach can say which hole it saw.
     probes: live.probes,
     probeErrors: live.probeErrors,
+    // P6: only when a family was not served here — what was answered, since when, by which tools.
+    ...(Object.keys(live.probeUnsupported).length ? { probeUnsupported: live.probeUnsupported } : {}),
     vantage: live.vantage,
     toolsExposedCount: live.toolsExposedCount,
     scrapeJobsDown: live.scrapeJobsDown,

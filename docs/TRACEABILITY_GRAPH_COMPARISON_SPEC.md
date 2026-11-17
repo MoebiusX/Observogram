@@ -227,10 +227,11 @@ export function graphShape(graph) -> {          // the artefact-free projection 
 //   ladder: { rung, status, detail }                                                       (§5b)
 // on every BranchVerdict, beside verdict / integrity / integrityPct:
 //   ladderVerdict: 'healthy' | 'degraded' | 'broken' | 'unobserved' | 'undeclared'
-//   ladderIntegrity, ladderIntegrityPct
+//   ladderIntegrity, ladderIntegrityPct    // null when nothing on the branch was observable
 // on rollup, appended last:
 //   ladder: { healthy, degraded, broken, unobserved, integrityMean, integrityPct }
 ```
+No figure over nothing (2026-11-16): `rollup.integrityMean` / `integrityPct` are `null` with no declared branch, and so is the ladder's mean; the ladder averages only the branches that have a figure (`null` when none has). A declared branch always counts its root, so its scored `integrity` never rests on an empty denominator.
 `tools/lib/blast-radius.mjs` (zero-import) exports `CONSUMER_SIDE`, `PROTECTION_SIDE`, `KIND_ORDER`, `DEFAULT_WEIGHTS`, `BLINDED_NODES_CAP`, `normalizeGraphShape(input)`, `blastRadiusOf(shape, key, { weights })` and `blastRadiusIndex(shape, { weights })` → `Map key → summary` (non-scaffold nodes, sorted key order). The scored quantities are pinned byte-identical with and without these fields (`tools/test-traceability-graph.mjs`).
 
 ---

@@ -1,0 +1,447 @@
+#!/usr/bin/env node
+/**
+ * tools/test-match-basis.mjs
+ *
+ * No figure without its basis (the downstream's defects 1, 2 and 7): a match,
+ * a health or an integrity figure exists only for what both sides were read
+ * for, and a gate never passes on an absent figure.
+ *
+ *   - an empty union has no alignment / jaccard (null), and so have the
+ *     set-asides' summary, the chain rollups with nothing declared, a chain
+ *     whose every link was unobservable (its ladder) and the weighted health;
+ *   - Drift-free earns nothing where nothing backs it;
+ *   - the vantage is lost whenever no probe family returned data, partial when
+ *     one failed (or answered in part), else full; a live export that
+ *     recorded no probe table has none;
+ *   - a lost vantage is a lost run: one record, no grade, no match, thrown on
+ *     (exit 2 on the command line);
+ *   - a family the endpoint answered it does not serve is remembered by the
+ *     journey and does not read as a new failure;
+ *   - the gate fails closed on every absent figure.
+ *
+ * Pack A is the vendored spec example (payment-service), never a crawl: what
+ * a scan reads is another track's business. Live sides are built with the
+ * fetcher's own buildCanonicalPack or read from a fake MCP.
+ *
+ *   node --test tools/test-match-basis.mjs
+ */
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TMP = mkdtempSync(join(tmpdir(), 'observogram-match-basis-'));
+process.env.OBSERVOGRAM_WORKSPACE = TMP;
+delete process.env.OBSERVOGRAM_TRANSPORT_HOOK;
+delete process.env.TOMOGRAPH_TRANSPORT_HOOK;
+test.after(() => rmSync(TMP, { recursive: true, force: true }));
+
+const { parse: parseYaml } = await import('./lib/mini-yaml.mjs');
+const { SPEC_DIR } = await import('./lib/validator.mjs');
+const { adapt } = await import('./lib/adapter.mjs');
+const { diffPacks } = await import('./lib/diff.mjs');
+const { comparePackBranches, compareBranches, buildDependencyGraph } = await import('./lib/traceability-graph.mjs');
+const { branchRecordsFromGraph, chainSummary, rankCauses } = await import('./lib/chain-history.mjs');
+const { evaluateInventoryGate } = await import('./lib/inventory-coverage.mjs');
+const { firstProbeError: firstProbeErrorLib, inStageOrder } = await import('./lib/live-fetch.mjs');
+const { applySetAsides } = await import('../studio/set-asides.mjs');
+const { computeWeightedDeltaRisk, computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence } = await import('../studio/diagnostic-grade.mjs');
+const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+const { startFakeMcp } = await import('../server/fixtures/fake-mcp.mjs');
+const { probeCandidates, candidateTool, capabilityTool } = await import('./lib/contracts/mcp-capabilities.mjs');
+const {
+  runJourney, loadJourneyDef, readJourneyRuns, evaluateGate, notifyTargetOf, probeMemoryOf, firstProbeError, NO_PROBE_DATA,
+} = await import('./lib/journey.mjs');
+
+const AT = '2026-11-16T10:00:00.000Z';
+const PACK_A_FILE = resolve(__dirname, '..', SPEC_DIR, 'examples/payment-service.pack.yaml');
+const repoPack = () => parseYaml(readFileSync(PACK_A_FILE, 'utf8'));
+const slash = (p) => p.replaceAll('\\', '/');
+const nameOf = (c) => (typeof c === 'string' ? c : c.name);
+const T = {
+  health: capabilityTool('system_health'),
+  topology: capabilityTool('system_topology'),
+  names: nameOf(probeCandidates('metric_names')[0]),
+  search: candidateTool('dashboards', 'search'),
+  rules: nameOf(probeCandidates('alert_rules')[0]),   // serves recording and alert rules
+  targets: nameOf(probeCandidates('scrape_configs')[0]),
+};
+
+// The fetcher's own pack from pre-populated probe outcomes (an "export of live").
+const FAMILIES = ['metric_names', 'recording_rules', 'alert_rules', 'dashboards', 'scrape_configs', 'alerting_routes'];
+const outcome = (o, extra = {}) => ({ tool: o === 'data' || o === 'empty' ? 'x' : null, attempted: ['x'], adapted: o === 'empty' ? [] : null, outcome: o, ...extra });
+function liveExport(results, { probeFailures = {} } = {}) {
+  const probeResults = {};
+  for (const f of FAMILIES) probeResults[f] = results[f] ?? outcome('unsupported');
+  return buildCanonicalPack({ refreshedAt: AT, mcpUrl: 'https://mcp.example.com/mcp', health: { services: [] }, topology: { dependencies: [] }, probeResults, probeFailures });
+}
+// Scrape targets answered with data — one job whose every target is down, which Pack A declares
+// nothing of — and every other family not offered: the read is whole (vantage full) and holds
+// nothing both sides could compare.
+const DOWN_JOB = { tool: T.targets, attempted: [T.targets], adapted: [{ job: 'shop-api', targets: [{ instance: 'shop-api:9100', health: 'down', lastScrape: null, lastError: 'connection refused' }] }], outcome: 'data' };
+const nothingInCommon = () => liveExport({ scrape_configs: DOWN_JOB });
+
+function journeyFile(name, lines) {
+  mkdirSync(join(TMP, 'journeys'), { recursive: true });
+  writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${slash(PACK_A_FILE)} }`, ...lines].join('\n'));
+  return join(TMP, 'journeys', `${name}.journey.yaml`);
+}
+function packFile(name, canonical) {
+  const p = join(TMP, `${name}.pack.json`);
+  writeFileSync(p, JSON.stringify(canonical, null, 2));
+  return slash(p);
+}
+
+// A fake MCP whose tools answer through `answers` (name → answer, or a function).
+async function fakeMcp(answers) {
+  const tools = [T.health, T.topology, ...Object.keys(answers)];
+  return startFakeMcp(tools, (name, args) => {
+    if (name === T.health) return { services: [] };
+    if (name === T.topology) return { dependencies: [] };
+    const a = answers[name];
+    return typeof a === 'function' ? a(args) : (a ?? {});
+  });
+}
+const REFUSED = { __isError: 'Error: HTTP 401: Unauthorized — https://grafana.example.com/api' };
+
+// ---------------------------------------------------------------------------
+// Ratios over nothing are no figure (C1)
+// ---------------------------------------------------------------------------
+
+test('nothing in common to compare: alignment and jaccard are null, the union 0; a comparison with something in it keeps its ratio', () => {
+  const d = diffPacks(adapt(repoPack()), adapt(nothingInCommon()));
+  assert.deepEqual([d.summary.union, d.summary.alignment, d.summary.jaccard], [0, null, null]);
+  assert.ok(d.summary.notObserved > 0, 'what Pack A declares sits in notObserved, out of the union');
+  const self = diffPacks(adapt(repoPack()), adapt(repoPack()));
+  assert.ok(self.summary.union > 0 && self.summary.alignment === 1 && self.summary.jaccard === 1, 'a comparison with something in it keeps aligned / union');
+  assert.doesNotMatch(readFileSync(resolve(__dirname, 'lib', 'diff.mjs'), 'utf8'), /=== 0\s*\?\s*1\b/, 'acceptance grep: no `=== 0 ? 1` ratio in diff.mjs');
+});
+
+test('set-asides that leave nothing to count: the summary ratios and the chain rollup are null', () => {
+  const key = 'metric::{"name":"shop_orders_total"}';
+  const diff = {
+    layers: { L2: { onlyInA: [{ key, artefact: { id: 'METRIC-01' } }], onlyInB: [], inBoth: [] } },
+    summary: { onlyInA: 1, onlyInB: 0, inBoth: 0, aligned: 0, drifted: 0, union: 1, aTotal: 1, bTotal: 0, jaccard: 0, alignment: 0 },
+    traceabilityGraph: {
+      branches: [{ rootKey: 'slo::{"id":"shop"}', title: 'shop', hasA: true, hasB: false, verdict: 'broken', integrity: 0.2, integrityPct: 20, nodes: [{ key: 'slo::{"id":"shop"}', kind: 'slo', status: 'declared_only', weight: 3 }] }],
+      rollup: { intact: 0, partial: 0, broken: 1, undeclared: 0, declaredTotal: 1, total: 1, integrityMean: 0.2, integrityPct: 20 },
+    },
+  };
+  const out = applySetAsides(diff, [
+    { key, side: 'declared', kind: 'in-development', until: null },
+    { key: 'slo::{"id":"shop"}', side: 'declared', kind: 'in-development', until: null },
+  ], { now: AT });
+  assert.deepEqual([out.summary.union, out.summary.alignment, out.summary.jaccard], [0, null, null]);
+  assert.deepEqual([out.traceabilityGraph.rollup.declaredTotal, out.traceabilityGraph.rollup.integrityMean, out.traceabilityGraph.rollup.integrityPct], [0, null, null]);
+});
+
+test('no declared commitment: the chain rollup and its ladder have no integrity figure', () => {
+  const g = compareBranches(buildDependencyGraph({ layers: {} }), buildDependencyGraph(adapt(repoPack())));
+  assert.ok(g.rollup.total > 0 && g.rollup.declaredTotal === 0, 'live-only chains, none declared');
+  assert.deepEqual([g.rollup.integrityMean, g.rollup.integrityPct], [null, null]);
+  assert.deepEqual([g.rollup.ladder.integrityMean, g.rollup.ladder.integrityPct], [null, null]);
+});
+
+test('a chain whose every link the vantage could not look at has no ladder figure; the rollups and the chain history average what has one (A6)', () => {
+  const repo = repoPack();
+  repo.spec.telemetry.backends = [];   // a backend has no probe family: its ladder reads absent, not unobserved
+  const failed = (f) => outcome('failed', { attempted: [f] });
+  const blindLive = liveExport(Object.fromEntries(FAMILIES.map((f) => [f, failed(f)])), { probeFailures: Object.fromEntries(FAMILIES.map((f) => [f, 'HTTP 503 Service Unavailable'])) });
+  const g = comparePackBranches(adapt(repo), adapt(blindLive));
+  const blind = g.branches.filter((b) => b.ladderVerdict === 'unobserved');
+  const measured = g.branches.filter((b) => b.ladderIntegrity !== null);
+  assert.ok(blind.length > 0 && blind.every((b) => b.ladderIntegrity === null && b.ladderIntegrityPct === null), 'every unobserved chain: null, never 100');
+  assert.ok(measured.length > 0, 'fixture: one chain still has a figure (a role it misses counts)');
+  const mean = Math.round((measured.reduce((s, b) => s + b.ladderIntegrity, 0) / measured.length) * 1e4) / 1e4;
+  assert.equal(g.rollup.ladder.integrityMean, mean, 'the ladder rollup averages the chains that have a figure');
+  const records = branchRecordsFromGraph(g);
+  assert.ok(records.filter((r) => r.ladderVerdict === 'unobserved').every((r) => r.ladderIntegrityPct === null), 'the run record keeps null');
+  assert.equal(chainSummary({ branches: records }).ladderIntegrityPct, Math.round(measured.reduce((s, b) => s + b.ladderIntegrityPct, 0) / measured.length));
+  assert.equal(chainSummary({ branches: records.filter((r) => r.ladderIntegrityPct === null) }).ladderIntegrityPct, null, 'no chain with a figure: null');
+  repo.spec.slos = repo.spec.slos.filter((s) => !measured.some((b) => b.title === s.id));
+  const allBlind = comparePackBranches(adapt(repo), adapt(blindLive));
+  assert.ok(allBlind.rollup.declaredTotal > 0);
+  assert.deepEqual([allBlind.rollup.ladder.integrityMean, allBlind.rollup.ladder.integrityPct], [null, null], 'every declared chain unobserved: the ladder rollup is null');
+});
+
+test('the weighted health of nothing is null; of something, aligned over aligned and badness', () => {
+  const none = computeWeightedDeltaRisk({ mode: 'drift', aligned: 0, onlyInA: 0, onlyInB: 0 });
+  assert.deepEqual([none.health, none.healthPct], [null, null]);
+  const some = computeWeightedDeltaRisk({ mode: 'drift', aligned: 3, onlyInA: 1, onlyInB: 0 });
+  assert.deepEqual([some.health, some.healthPct], [0.75, 75]);
+});
+
+// ---------------------------------------------------------------------------
+// The grade: Drift-free earns nothing where nothing backs it
+// ---------------------------------------------------------------------------
+
+test('Drift-free earns nothing when nothing was compared — on the chains and on the buckets — and its detail never prints null%', () => {
+  const layeredA = adapt(repoPack());
+  const layeredB = adapt(nothingInCommon());
+  const posture = computePostureMatrix(layeredA, layeredB);
+  const bare = diffPacks(layeredA, layeredB);
+  for (const diff of [{ ...bare, traceabilityGraph: comparePackBranches(layeredA, layeredB) }, bare]) {
+    const grade = computeDiagnosticGrade(layeredA, layeredB, posture, 'production-live', diff, { nowMs: Date.parse(AT) });
+    const drift = grade.trust.criteria.find((c) => c.key === 'drift-free');
+    assert.deepEqual([drift.pass, drift.score], [false, 0]);
+    assert.match(drift.detail, /^nothing compared - no artefact was found in a family both sides read, so drift cannot be scored/);
+    assert.doesNotMatch(drift.detail, /null%|NaN/);
+  }
+});
+
+test('Drift-free without a diff earns nothing from a live source that recorded no probe table, or whose families returned no data', () => {
+  const layeredA = adapt(repoPack());
+  const noTable = liveExport({ scrape_configs: DOWN_JOB });
+  for (const k of ['mcp.probesAttempted', 'mcp.probesSucceeded', 'mcp.probesEmpty', 'mcp.probesFailed', 'mcp.probesUnsupported']) delete noTable.metadata.annotations[k];
+  const allUnsupported = liveExport({});
+  for (const [pack, detail] of [[noTable, /^live source connected, but no probe family was asked or recorded/], [allUnsupported, /^no probe family returned data \(6 attempted\)/]]) {
+    const layeredB = adapt(pack);
+    const grade = computeDiagnosticGrade(layeredA, layeredB, computePostureMatrix(layeredA, layeredB), 'production-live', null, { nowMs: Date.parse(AT) });
+    const drift = grade.trust.criteria.find((c) => c.key === 'drift-free');
+    assert.deepEqual([drift.pass, drift.score], [false, 0]);
+    assert.match(drift.detail, detail);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The vantage (C3, A1, A2)
+// ---------------------------------------------------------------------------
+
+test('the vantage table: lost whenever no family returned data, partial on a hole, full otherwise; none without a probe record', () => {
+  const v = (ann) => partialLiveEvidence({ meta: { annotations: { 'mcp.url': 'https://mcp.example.com/mcp', 'mcp.probesAttempted': 'a,b', 'mcp.probesSucceeded': '', 'mcp.probesEmpty': '', 'mcp.probesFailed': '', 'mcp.probesUnsupported': '', ...ann } } });
+  assert.equal(v({ 'mcp.probesUnsupported': 'a,b' }).vantage, 'lost', 'all unsupported');
+  assert.equal(v({ 'mcp.probesEmpty': 'a,b' }).vantage, 'lost', 'all empty: a read that brought back nothing');
+  assert.equal(v({ 'mcp.probesFailed': 'a', 'mcp.probesEmpty': 'b' }).vantage, 'lost', 'failed beside empty: no data at all (defect 2)');
+  assert.equal(v({ 'mcp.probesAttempted': '' }).vantage, 'lost', 'a probe table with nothing attempted');
+  assert.equal(v({ 'mcp.probesSucceeded': 'a', 'mcp.probesFailed': 'b' }).vantage, 'partial');
+  assert.equal(v({ 'mcp.probesSucceeded': 'a', 'mcp.probesUnsupported': 'b' }).vantage, 'full', 'a family not offered never degrades the vantage');
+  assert.equal(v({ 'mcp.probesSucceeded': 'a', 'mcp.probesEmpty': 'b' }).vantage, 'full');
+  const inPart = v({ 'mcp.probesSucceeded': 'a,b', 'mcp.probesPartial': 'b' });
+  assert.deepEqual([inPart.vantage, inPart.partial, inPart.inPart], ['partial', true, ['b']], 'a family answered in part (mcp.probesPartial) is a hole (A2)');
+  assert.deepEqual(v({ 'mcp.probesSucceeded': 'a' }).succeeded, ['a'], 'succeeded is returned');
+  const noTable = partialLiveEvidence({ meta: { annotations: { 'mcp.url': 'https://mcp.example.com/mcp', 'mcp.refreshedAt': AT } } });
+  assert.deepEqual([noTable.vantage, noTable.probeTable, noTable.isLiveDraft], ['none', false, true], 'no probe table: no probe record (A1)');
+  assert.equal(partialLiveEvidence({ meta: { annotations: { 'mcp.probesSucceeded': '' } } }).vantage, 'none', 'no mcp.url: not a live draft');
+  const served = v({ 'mcp.probesSucceeded': 'a', 'mcp.probesUnsupported': 'b', 'mcp.probeUnsupported.b': JSON.stringify({ reason: 'x: HTTP 404 Not Found', since: AT, tools: ['x'] }) });
+  assert.deepEqual(served.notServed, { b: 'x: HTTP 404 Not Found' }, 'a family not served here names what was answered');
+});
+
+// ---------------------------------------------------------------------------
+// The gate fails closed (C5, A5)
+// ---------------------------------------------------------------------------
+
+test('the gate fails closed on every absent figure', () => {
+  const nothing = { gradeScore: 40, gradePass: false, alignmentPct: null, compared: 0, setAsideCount: 0, declaredNotLive: 0, drifted: 0, aligned: 0, liveAgeHours: 1 };
+  const detail = (gate, facts) => evaluateGate(gate, facts).map((b) => `${b.criterion}: ${b.detail}`);
+  assert.deepEqual(detail({ minAlignmentPct: 85, maxDeclaredNotLive: 0, maxDrifted: 0 }, nothing), [
+    'minAlignmentPct: nothing was compared — no alignment figure to hold against the required 85%',
+    'maxDeclaredNotLive: nothing was compared — no declared artefact was checked against live (max 0)',
+    'maxDrifted: nothing was compared — no drift could be counted (max 0)',
+  ]);
+  assert.deepEqual(detail({ minAlignmentPct: 85, maxDeclaredNotLive: 0 }, { ...nothing, setAsideCount: 2 }), [
+    'minAlignmentPct: nothing is left to compare once the 2 set-aside differences are left out — no alignment figure to hold against the required 85%',
+  ], 'set-asides that emptied the comparison: the figure is none, the counts are a person\'s true zero');
+  assert.deepEqual(detail({ minAlignmentPct: 85 }, { ...nothing, compared: 5, alignmentPct: undefined }), ['minAlignmentPct: no alignment figure was given — the gate cannot pass on an absent figure (required 85%)']);
+  assert.deepEqual(detail({ requireGradePass: true }, { alignmentPct: 90 }), ['requireGradePass: no diagnostic grade to hold against the 85% pass bar — the gate cannot pass on an absent grade']);
+  assert.deepEqual(detail({ maxDeclaredNotLive: 0, maxDrifted: 1 }, { compared: 4 }), [
+    'maxDeclaredNotLive: no declared-not-live count was given — the gate cannot pass on an absent count (max 0)',
+    'maxDrifted: no drifted count was given — the gate cannot pass on an absent count (max 1)',
+  ]);
+  assert.deepEqual(detail({ maxLiveAgeHours: 24 }, {}), ['maxLiveAgeHours: live evidence carries no refresh timestamp — staleness cannot be proven fresh']);
+  const fileB = { probes: { attempted: [], succeeded: [], empty: [], failed: [], unsupported: [] }, vantage: 'none', scrapeJobsDown: 0, unhealthyRules: 0 };
+  assert.deepEqual(detail({ maxUnhealthy: 0 }, fileB), ['maxUnhealthy: no on-wire health was read — Pack B is not a live read — the gate cannot pass on an absent count (max 0)']);
+  assert.deepEqual(detail({ maxUnhealthy: 0 }, { ...fileB, vantage: 'full', probes: { ...fileB.probes, succeeded: ['dashboards'] } }), ['maxUnhealthy: no on-wire health was read — scrape targets, recording rules and alert rules were not read — the gate cannot pass on an absent count (max 0)']);
+  assert.deepEqual(detail({ maxUnhealthy: 0 }, { ...fileB, vantage: 'full', probes: { ...fileB.probes, empty: ['scrape_configs'] } }), [], 'an honest zero from a health family is a read');
+  assert.deepEqual(detail({ failOnPartialEvidence: true }, fileB), [], 'failOnPartialEvidence passes a Pack B that is no live read (A5)');
+  assert.deepEqual(detail({ failOnPartialEvidence: true }, { ...fileB, vantage: 'partial', probes: { ...fileB.probes, succeeded: ['a'], partial: ['alert_rules'] } }), ['failOnPartialEvidence: live evidence is partial: answered in part: alert_rules — verdict not trustworthy']);
+  assert.deepEqual(detail({ minAlignmentPct: 50, maxDeclaredNotLive: 3 }, { alignmentPct: 60, declaredNotLive: 2 }), [], 'a host\'s facts without `compared` are read as given');
+});
+
+test('inventory coverage over a kind the site expects none of: a kind the gate names cannot pass; an unnamed one is left out', () => {
+  const inventory = { status: 'checked', kinds: { host: { mode: 'enumerated', title: 'host', status: 'checked', expected: 0, up: 0, down: [], silent: [], unexpected: [], coveragePct: null } } };
+  const run = (gate) => { const out = []; evaluateInventoryGate(gate, inventory, (criterion, detail) => out.push(`${criterion}: ${detail}`)); return out; };
+  assert.deepEqual(run({ minCoveragePct: 90, kinds: ['host'] }), ['inventory.host.coverage: no host is expected by the site, so there is no coverage figure (min 90%)']);
+  assert.deepEqual(run({ minCoveragePct: 90 }), []);
+});
+
+// ---------------------------------------------------------------------------
+// Runs
+// ---------------------------------------------------------------------------
+
+test('a run that compared nothing has no match figure, fails its gate, and its notification says so', async () => {
+  journeyFile('mb-nothing', [
+    `packB: { file: ${packFile('mb-nothing-b', nothingInCommon())} }`,
+    'gate: { minAlignmentPct: 85, maxDeclaredNotLive: 0, maxDrifted: 0 }',
+    'notify: { urlEnv: MB_HOOK_URL, on: always, format: text }',
+  ]);
+  const posted = [];
+  const rec = await runJourney(loadJourneyDef('mb-nothing'), {
+    resolveNotify: (n) => notifyTargetOf(n, { url: 'https://hooks.example.com/journey' }),
+    notifier: async ({ body }) => { posted.push(body); return { sent: true, httpStatus: 200, attempts: 1, tookMs: 1 }; },
+  });
+  assert.deepEqual([rec.drift.alignmentPct, rec.drift.compared, rec.vantage, rec.outcome], [null, 0, 'full', 'gate-failed']);
+  assert.deepEqual(rec.gate.breaches, [
+    { criterion: 'minAlignmentPct', detail: 'nothing was compared — no alignment figure to hold against the required 85%' },
+    { criterion: 'maxDeclaredNotLive', detail: 'nothing was compared — no declared artefact was checked against live (max 0)' },
+    { criterion: 'maxDrifted', detail: 'nothing was compared — no drift could be counted (max 0)' },
+  ]);
+  assert.equal(posted.length, 1);
+  assert.ok(posted[0].startsWith('mb-nothing: gate-failed · nothing compared · '), posted[0].split('\n')[0]);
+  journeyFile('mb-self', [`packB: { file: ${slash(PACK_A_FILE)} }`, 'gate: { minAlignmentPct: 85 }']);
+  const selfRec = await runJourney(loadJourneyDef('mb-self'));
+  assert.ok(selfRec.drift.compared > 0 && selfRec.drift.alignmentPct === 100 && selfRec.outcome === 'pass', 'a comparison with something in it records its union and its figure');
+});
+
+test('a live read whose every probe family was refused is a lost run: one record, the vantage breach, no grade, no match (defect 1)', async () => {
+  const fake = await fakeMcp({ [T.names]: REFUSED, [T.search]: REFUSED, [T.rules]: REFUSED, [T.targets]: REFUSED });
+  try {
+    journeyFile('mb-refused', [`packB: { mcp: { url: ${fake.url} } }`, 'gate: { minAlignmentPct: 85 }']);
+    let err = null;
+    try { await runJourney(loadJourneyDef('mb-refused')); } catch (e) { err = e; }
+    assert.ok(err && err.vantageLost === true && err.vantageRecorded === true, 'thrown on as a lost vantage, already recorded');
+    assert.equal(err.message, `${T.names}: Error: HTTP 401: Unauthorized — https://grafana.example.com/api`, 'the first probe error, in stage order');
+    const runs = readJourneyRuns('mb-refused');
+    assert.equal(runs.length, 1, 'exactly one record');
+    const lost = runs[0];
+    assert.deepEqual(Object.keys(lost), ['journey', 'startedAt', 'tookMs', 'outcome', 'error', 'packA', 'packB', 'scope', 'vantage', 'probes', 'probeErrors', 'toolsExposedCount', 'gate', 'notify']);
+    assert.deepEqual([lost.outcome, lost.vantage, lost.packB.liveScope], ['vantage-lost', 'lost', null]);
+    assert.deepEqual([...lost.probes.failed].sort(), ['alert_rules', 'dashboards', 'metric_names', 'recording_rules', 'scrape_configs']);
+    assert.deepEqual(lost.gate.breaches, [{ criterion: 'vantage', detail: 'vantage lost: no probe family returned data (failed: metric_names, recording_rules, alert_rules, dashboards, scrape_configs; not exposed: alerting_routes) — nothing was compared' }]);
+    assert.ok(!('grade' in lost) && !('drift' in lost), 'no grade, no match');
+    assert.deepEqual(firstProbeError(lost), { family: 'metric_names', error: lost.probeErrors.metric_names });
+
+    // The command line: exit 2, the error on stderr, one more record.
+    const child = spawn(process.execPath, [resolve(__dirname, 'cli.mjs'), 'journey', 'run', join(TMP, 'journeys', 'mb-refused.journey.yaml')], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP } });
+    let stderr = '';
+    child.stderr.on('data', (c) => { stderr += c; });
+    const status = await new Promise((done) => child.on('close', done));
+    assert.equal(status, 2, stderr);
+    assert.match(stderr, new RegExp(`packc journey: ${T.names}: Error: HTTP 401`));
+    assert.equal(readJourneyRuns('mb-refused').length, 2);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('no family returned data — one failed beside the empty ones — is lost, never partial (defect 2)', async () => {
+  const fake = await fakeMcp({ [T.names]: { __isError: 'HTTP 503 Service Unavailable' }, [T.rules]: { groups: [] }, [T.search]: { count: 0, results: [] } });
+  try {
+    journeyFile('mb-failed-empty', [`packB: { mcp: { url: ${fake.url} } }`]);
+    await assert.rejects(runJourney(loadJourneyDef('mb-failed-empty')), (e) => e.vantageLost === true && e.message === `${T.names}: HTTP 503 Service Unavailable`);
+    const [lost] = readJourneyRuns('mb-failed-empty');
+    assert.deepEqual([lost.outcome, lost.vantage, lost.error], ['vantage-lost', 'lost', `${T.names}: HTTP 503 Service Unavailable`]);
+    assert.deepEqual([...lost.probes.empty].sort(), ['alert_rules', 'dashboards', 'recording_rules']);
+  } finally {
+    await fake.close();
+  }
+});
+
+test('a file holding a live export whose probe table says no family returned data is a lost run too; one with no probe table is graded (A1)', async () => {
+  const empty = liveExport(Object.fromEntries(FAMILIES.map((f) => [f, outcome('empty')])));
+  const path = packFile('mb-empty-export', empty);
+  journeyFile('mb-empty-export', [`packB: { file: ${path} }`]);
+  await assert.rejects(runJourney(loadJourneyDef('mb-empty-export')), (e) => e.vantageLost === true && e.message === NO_PROBE_DATA);
+  const [lost] = readJourneyRuns('mb-empty-export');
+  assert.deepEqual([lost.outcome, lost.error, lost.vantage, lost.packB.source], ['vantage-lost', NO_PROBE_DATA, 'lost', resolve(path)]);
+  assert.ok(!('liveScope' in lost.packB), 'a file has no live scope');
+  assert.equal(lost.gate.breaches[0].detail, 'vantage lost: no probe family returned data (empty: metric_names, recording_rules, alert_rules, dashboards, scrape_configs, alerting_routes) — nothing was compared');
+  const legacy = repoPack();
+  legacy.metadata.name = 'payment-service-live';
+  legacy.metadata.annotations = { ...(legacy.metadata.annotations || {}), 'mcp.url': 'https://mcp.example.com/mcp', 'mcp.refreshedAt': AT };
+  journeyFile('mb-legacy-export', [`packB: { file: ${packFile('mb-legacy-export', legacy)} }`]);
+  const graded = await runJourney(loadJourneyDef('mb-legacy-export'));
+  assert.deepEqual([graded.vantage, typeof graded.grade.score, graded.outcome], ['none', 'number', 'pass'], 'no probe record: graded on its comparison as before');
+});
+
+test('the run a run compares against is the newest that checked something: a stopped Run on a partial scan is passed over (A10)', async () => {
+  journeyFile('mb-stopped', [`packB: { file: ${slash(PACK_A_FILE)} }`, 'notify: { urlEnv: MB_HOOK_URL, on: transitions, format: json }']);
+  const opts = { resolveNotify: (n) => notifyTargetOf(n, { url: 'https://hooks.example.com/journey' }), notifier: async () => ({ sent: true, httpStatus: 200, attempts: 1, tookMs: 1 }) };
+  const first = await runJourney(loadJourneyDef('mb-stopped'), opts);
+  await new Promise((r) => setTimeout(r, 5));
+  const stoppedAt = new Date().toISOString();
+  writeFileSync(join(TMP, 'runs', 'mb-stopped', `${stoppedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'mb-stopped', startedAt: stoppedAt, outcome: 'scan-partial', error: '1 of 2 files not read: HTTP 403',
+    packA: { source: first.packA.source }, packB: { source: first.packB.source }, scope: first.scope, gate: { thresholds: {}, breaches: [] }, notify: null,
+  }));
+  await new Promise((r) => setTimeout(r, 5));
+  const second = await runJourney(loadJourneyDef('mb-stopped'), opts);
+  assert.deepEqual([second.notify.status, second.notify.reason], ['skipped', `no transition since ${first.startedAt}`], 'compared against the run before the stopped one, never "outcome changed scan-partial → pass"');
+});
+
+test('scrape targets the store does not keep: unsupported on the first answer, remembered by the journey, asked again every run (P6)', async () => {
+  let answer = { __isError: 'Error: HTTP 404: Not Found — http://grafana.example.com/api/datasources/proxy/uid/x/api/v1/targets' };
+  const fake = await fakeMcp({ [T.names]: { label: '__name__', values: ['up'] }, [T.targets]: () => answer });
+  try {
+    journeyFile('mb-targets', [`packB: { mcp: { url: ${fake.url} } }`]);
+    const targetCalls = () => fake.calls.filter((c) => c.name === T.targets).length;
+    const r1 = await runJourney(loadJourneyDef('mb-targets'));
+    assert.deepEqual([r1.vantage, r1.probes.unsupported.includes('scrape_configs'), r1.probes.failed.includes('scrape_configs')], ['full', true, false], 'unsupported after the first answer, the vantage full');
+    const first = r1.probeUnsupported.scrape_configs;
+    assert.deepEqual([first.reason, first.tools, first.remembered], [`${T.targets}: HTTP 404 Not Found`, [T.targets], undefined]);
+    answer = { __isError: 'Error: HTTP 503: Service Unavailable' };
+    const before = targetCalls();
+    const r2 = await runJourney(loadJourneyDef('mb-targets'));
+    assert.ok(targetCalls() > before, 'asked again');
+    assert.deepEqual([r2.vantage, r2.probes.failed.includes('scrape_configs'), r2.probeUnsupported.scrape_configs.remembered, r2.probeUnsupported.scrape_configs.since],
+      ['full', false, true, first.since], 'a 503 next time is no new failure: remembered, since the first answer');
+    answer = { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] };
+    const r3 = await runJourney(loadJourneyDef('mb-targets'));
+    assert.ok(r3.probes.succeeded.includes('scrape_configs') && !('probeUnsupported' in r3), 'data wins, and the memory is gone');
+    answer = { __isError: 'Error: HTTP 503: Service Unavailable' };
+    const r4 = await runJourney(loadJourneyDef('mb-targets'));
+    assert.deepEqual([r4.vantage, r4.probes.failed.includes('scrape_configs')], ['partial', true], 'without the memory a 503 is a failure');
+  } finally {
+    await fake.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The helpers
+// ---------------------------------------------------------------------------
+
+test('probeMemoryOf: the newest record of the same live source that carries a probe table decides', () => {
+  const entry = { reason: 'x: HTTP 404 Not Found', since: AT, tools: ['x'] };
+  const rec = (source, extra) => ({ packB: { source }, probes: { attempted: [] }, ...extra });
+  assert.deepEqual(probeMemoryOf([rec('mcp:a', { probeUnsupported: { scrape_configs: entry } })], 'mcp:a'), { unsupported: { scrape_configs: entry } });
+  assert.equal(probeMemoryOf([rec('mcp:b', { probeUnsupported: { scrape_configs: entry } })], 'mcp:a'), null, 'another source');
+  assert.deepEqual(probeMemoryOf([{ packB: { source: 'mcp:a' }, outcome: 'vantage-lost' }, rec('mcp:a', { probeUnsupported: { scrape_configs: entry } })], 'mcp:a'),
+    { unsupported: { scrape_configs: entry } }, 'a read that threw carries no probe table: passed over');
+  assert.equal(probeMemoryOf([rec('mcp:a', {}), rec('mcp:a', { probeUnsupported: { scrape_configs: entry } })], 'mcp:a'), null, 'the newest answered: nothing remembered');
+  assert.equal(probeMemoryOf([rec('mcp:a', { probeUnsupported: { scrape_configs: { reason: '', tools: ['x'] }, alerting_routes: { reason: 'y', tools: [] } } })], 'mcp:a'), null, 'a malformed entry is passed over');
+  assert.equal(probeMemoryOf(null, 'mcp:a'), null);
+});
+
+test('firstProbeError: the first failed family in stage order, a lost run\'s own error, or null; one rule for the studio and the server', () => {
+  const rec = { probes: { failed: ['dashboards', 'metric_names'] }, probeErrors: { dashboards: 'd: HTTP 502', metric_names: 'm: HTTP 503' } };
+  assert.deepEqual(firstProbeError(rec), { family: 'metric_names', error: 'm: HTTP 503' });
+  assert.equal(firstProbeErrorLib, firstProbeError, 'the server and the command line read the browser-safe rule');
+  assert.deepEqual(firstProbeError({ outcome: 'vantage-lost', error: 'connect ECONNREFUSED' }), { family: null, error: 'connect ECONNREFUSED' });
+  assert.deepEqual(firstProbeError({ probes: { failed: ['alert_rules'] }, probeErrors: {} }), { family: 'alert_rules', error: null });
+  assert.equal(firstProbeError({ probes: { failed: [] } }), null);
+  assert.deepEqual(inStageOrder(['alerting_routes', 'zz', 'metric_names', 'dashboards']), ['metric_names', 'dashboards', 'alerting_routes', 'zz']);
+});
+
+test('an old record that says restricted reads full: no vantage change after the upgrade; a family newly not served says what was answered (S3)', () => {
+  const probes = { attempted: ['a', 'b'], succeeded: ['a'], empty: [], failed: [], unsupported: ['b'] };
+  const before = { outcome: 'pass', vantage: 'restricted', probes, toolsExposedCount: 5, branches: [] };
+  const after = { outcome: 'pass', vantage: 'full', probes, toolsExposedCount: 5, branches: [] };
+  assert.equal(rankCauses({ previous: before, current: after }).vantage.changed, false);
+  const failedTargets = { outcome: 'pass', vantage: 'partial', probes: { attempted: ['a', 'scrape_configs'], succeeded: ['a'], empty: [], failed: ['scrape_configs'], unsupported: [] }, toolsExposedCount: 5, branches: [] };
+  const notServed = { outcome: 'pass', vantage: 'full', probes: { attempted: ['a', 'scrape_configs'], succeeded: ['a'], empty: [], failed: [], unsupported: ['scrape_configs'] }, probeUnsupported: { scrape_configs: { reason: 'metrics_targets: HTTP 404 Not Found', since: AT, tools: ['metrics_targets'] } }, toolsExposedCount: 5, branches: [] };
+  assert.equal(rankCauses({ previous: failedTargets, current: notServed }).vantage.detail, 'vantage partial → full · probe family scrape_configs not served here (metrics_targets: HTTP 404 Not Found) — not counted as a failure');
+});
+
+test('the requirement-chain ladder says a family not served here, not "not exposed" (S3)', () => {
+  const live = liveExport({
+    scrape_configs: DOWN_JOB,
+    metric_names: outcome('unsupported', { notServed: { reason: 'm: HTTP 404 Not Found', since: AT, tools: ['m'] } }),
+  });
+  const g = comparePackBranches(adapt(repoPack()), adapt(live));
+  const metric = g.branches.flatMap((b) => b.nodes).find((n) => n.kind === 'metric' && n.status === 'declared_only');
+  assert.equal(metric.ladder.detail, 'probe family metric_names not served here (m: HTTP 404 Not Found) — not counted as a failure');
+});

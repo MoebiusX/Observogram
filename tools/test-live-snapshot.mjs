@@ -475,11 +475,13 @@ async function snapshotOf(tools, { scope = null, fakeOpts = {}, mcpAuth = null, 
   return { fake, records, fetched, pack };
 }
 
-// A pack with every clock masked (the fetcher's own instants).
+// A pack with every clock masked (the fetcher's own instants, the first time
+// a not-served family was seen included).
 function masked(pack) {
   const out = JSON.parse(JSON.stringify(pack));
   for (const k of Object.keys(out.metadata.annotations)) {
     if (k === 'mcp.fetchStartedAt' || k.startsWith('mcp.observedAt.')) out.metadata.annotations[k] = '<time>';
+    if (k.startsWith('mcp.probeUnsupported.')) out.metadata.annotations[k] = JSON.stringify({ ...JSON.parse(out.metadata.annotations[k]), since: '<time>' });
   }
   return out;
 }
@@ -536,9 +538,13 @@ test('the mock-MCP golden: the snapshot pack is byte-identical to snapshot.pack.
   assert.deepEqual(JSON.parse(ann['observogram.live.scope']), { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, appliesTo: { metricPrefixes: ['metric'], folderUids: [] } });
   assert.deepEqual(JSON.parse(ann['observogram.scope.metric']), { by: 'prefix', values: ['alertmanager_', 'up'] });
   // The recorded Alertmanager status is scrubbed of its configuration: the
-  // routes stage is a gap, named and parked.
+  // routes are not served on that tier (A16) — a gap, named and parked, and
+  // the family unsupported, never failed.
   assert.deepEqual(JSON.parse(ann['observogram.live.gaps']).map((g) => g.stage), ['alerting_routes']);
-  assert.match(ann['observogram.unobserved.alert_route'], /^the alerting routes tool got no answer/);
+  assert.equal(ann['observogram.unobserved.alert_route'], 'alertmanager_status: the Alertmanager status carries no configuration — the alerting routes are not served here; not counted as a failure');
+  assert.equal(ann['mcp.probesUnsupported'], 'alerting_routes');
+  assert.equal(ann['mcp.probesFailed'], '');
+  assert.equal(ann['mcp.probeErrors.alerting_routes'], undefined, 'an unsupported family carries no probe error');
   assert.ok(!JSON.stringify(pack).includes(TOKEN), 'no token in the pack');
   // Real identities: the crawler's dashboard ids.
   assert.deepEqual(pack.spec.dashboards.map((d) => d.id).sort(), ['a--b', 'd-3b5d5c3712955042212316173ccf37be', 'd-9xyz-abc', 'node-exporter-full', 'orders-main']);

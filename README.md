@@ -1878,7 +1878,7 @@ written the same way, after the answer is known.
 | `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
 | `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
 | `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds; with a `notify`, also `notify: { urlEnv, authEnv }` — the names of the org's notify hook variables it chose (`authEnv` `null` without a token), never a value |
-| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404** (and past a refused Pack B MCP target, which writes none): a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when Pack B lost its vantage — the live read threw, or no probe family returned data (the engine wrote a run record and may have notified; the 502 body says `outcome: "vantage-lost"` too), the four record fields `null`; never the error's message. A journey with `notify` adds `notify: { urlEnv, status, attempts }` — the hook's variable name, `sent` \| `skipped` \| `failed` (`null` when no record exists) and how many requests left the server (0 when none) — never any part of the hook's URL. A notify refused before the run (400) or by the posture (403) writes no row |
 | `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
 | `POST /api/mcp/ping` | `live.ping` | the MCP origin | `{ verdict, typed: true }` — only when the caller typed the URL (an admin's privilege); a ping by `mcpEndpointId` writes no row |
 | `POST /api/mcp-settings/submit` | `live.mcp-settings` | the MCP origin | `{ op: configure \| action:<name>, path, endpointId, typed, status, fields: [names], acks: [rule indexes] }` — the opt-in pass-through only (`OBSERVOGRAM_MCP_ADMIN_PROXY=1`), once a request left for the MCP server (`status` null when no answer came); never a value. A settings request the browser sends straight to the MCP server leaves no studio row: the MCP server audits its own |
@@ -3096,7 +3096,7 @@ gate:
   minAlignmentPct: 85
   requireGradePass: true
   maxLiveAgeHours: 24
-  failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
+  failOnPartialEvidence: true   # a probe family FAILED (a refused read included) → the verdict is not trustworthy
   maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
   stack:                        # thresholds on the stack's own self-metric samples (early warning)
     requireSampled: true        # breach unless the MCP tier let the run sample them
@@ -3133,9 +3133,12 @@ Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
 scheduled task, or a CI gate. Every run appends a JSON record under
 `.observogram/runs/<journey>/` (the drift-over-time series), including the
 vantage of the live source itself (`probes`, `vantage`, `toolsExposedCount`,
-`scrapeJobsDown`, `unhealthyRules`). When the live MCP does not answer at
-all, the run still writes an `outcome: vantage-lost` record before exiting
-`2` — the loss is a point in the history, not a gap. The CLI grades on the
+`scrapeJobsDown`, `unhealthyRules`). When the live side answers no probe
+family with data — or does not answer at all — the run writes an `outcome:
+vantage-lost` record (no grade, no match) before exiting `2` — the loss is a
+point in the history, not a gap, and never a figure. A run that compared
+nothing records no match figure (`drift.alignmentPct: null`, `drift.compared:
+0`), and a gate never passes on an absent figure. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name. The example's

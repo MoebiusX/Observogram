@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "668aacd1b82b911c64c9b95709379d5a2e2e7fb8da214505e1460aae7f2579cd",
-      "bytes": 40751,
+      "sha256": "15e50404c234986d23b799fda471599a688a1e98b846b3a4653ebf238af36b4c",
+      "bytes": 40738,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -281,8 +281,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/chain-history.mjs": {
-      "sha256": "72e069fa92092b2ec9d56a8a34cdc8296e9f562f72a9b02bafcb7f914d5d58b3",
-      "bytes": 43022,
+      "sha256": "b001f63207c6eb176c99601e522dd0b1807f4b4aefe52df35b6a0eb644510aa0",
+      "bytes": 44212,
       "exports": [
         "BRANCH_RECORD_CAPS",
         "CAUSE_KINDS",
@@ -421,8 +421,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/contracts/mcp-capabilities.mjs": {
-      "sha256": "e29e596381db9a6b07fce60957ef6be132e8c39382e5145ca866f5e4fffdf22a",
-      "bytes": 19386,
+      "sha256": "0ab2fafb87da8fdb0b1a7b51e7663c34cbc2b150ab9ed34161f0a2f9b987cbb7",
+      "bytes": 20200,
       "exports": [
         "BUILD_INFO_PROBES",
         "CAPABILITIES",
@@ -635,8 +635,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "54309c563c25d2ba3e1a56429816512389c001e0289f8ca3ee3806ba1776b7db",
-      "bytes": 46255,
+      "sha256": "0fbf236333271281767483ab651302c07e50008208f1c38ea572a0bcfd5cfa47",
+      "bytes": 46374,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -742,8 +742,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/inventory-coverage.mjs": {
-      "sha256": "075cf2a9c79e98432a043c94596179c52882926ebbf828a5ffb584d07054f476",
-      "bytes": 16614,
+      "sha256": "b624a4d8682a1ae0a6069f411faf81e573503edc01681269382784a659e915b9",
+      "bytes": 17096,
       "exports": [
         "INVENTORY_BLOCK_KEYS",
         "INVENTORY_GATE_KEYS",
@@ -876,9 +876,36 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "014ab85021962f39dbc91d3cf385f8658cbe6a9ebfb0d1de8131ee4faddc6f09",
-      "bytes": 26600,
+      "sha256": "bac7b38ca637e28487b080a3611e140ddb58d3a953029db51e9b6a37d58326fe",
+      "bytes": 28485,
       "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "compactScope",
+        "fetchPlan",
+        "firstProbeError",
+        "folderUidOf",
+        "inScope",
+        "inStageOrder",
+        "normalizeScope",
+        "ruleGroupOf",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "LIVE_KINDS",
         "LIVE_SCOPE_ANNOTATION",
         "LIVE_STAGES",
@@ -899,10 +926,7 @@
         "scopeReason",
         "stageNoun",
         "stagesFor"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/mcp-client.mjs": {
       "sha256": "d35ededb657169dfbb7980c6710b9407538ba3b09ee3c2154ada4741bf9f1b48",
@@ -1441,8 +1465,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/traceability-graph.mjs": {
-      "sha256": "3d881bdeb2334b00ed52c64276a6a7f780981b1a7d97a262fc15fb173ec2c110",
-      "bytes": 62399,
+      "sha256": "631f1ebe78a85e83aad1b55a6eeac3527b426d86b73c5137ffe562ab8d2549da",
+      "bytes": 63731,
       "exports": [
         "buildBranch",
         "buildDependencyGraph",

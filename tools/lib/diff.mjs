@@ -46,6 +46,8 @@
 //                  not say what the scope needs — a crawled dashboard names no
 //                  folder uid — with a reason that states only that. An
 //                  artefact inside the scope is compared as usual.
+//   summary.jaccard and summary.alignment are null when the union is empty:
+//   nothing compared is no match (never 1).
 //
 // PARTLY OBSERVED FIELDS
 //   The same distinction one level down: a producer may have been shown a
@@ -321,6 +323,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   }
 
   const dynamicFamilies = familySummary([...familyLedger.values()], { a: aBlind, b: bBlind }, { a: aScoped, b: bScoped });
+  const union = onlyInA + onlyInB + inBoth;
 
   return {
     a: packMeta(aLayered),
@@ -361,17 +364,15 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // Only when a pack states a lifecycle: what was parked as authored ahead
       // of the environment it was compared for. Never paired, never counted.
       ...(hasLifecycle ? { declaredAhead, lifecycleEnvironments } : {}),
-      union: onlyInA + onlyInB + inBoth,
+      union,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
-      jaccard: (onlyInA + onlyInB + inBoth) === 0
-        ? 1
-        : Math.round((inBoth / (onlyInA + onlyInB + inBoth)) * 100) / 100,
+      // Nothing compared is no match: both ratios are null over an empty
+      // union, never 1.
+      jaccard: union === 0 ? null : Math.round((inBoth / union) * 100) / 100,
       // True alignment ratio: only structurally-equal matches count, over
       // the full union. Identity-only matches that drifted are excluded.
-      alignment: (onlyInA + onlyInB + inBoth) === 0
-        ? 1
-        : Math.round((aligned / (onlyInA + onlyInB + inBoth)) * 100) / 100,
+      alignment: union === 0 ? null : Math.round((aligned / union) * 100) / 100,
     },
     layers,
   };

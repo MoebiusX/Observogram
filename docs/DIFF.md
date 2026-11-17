@@ -514,6 +514,11 @@ reported separately.
 - `jaccard = inBoth / union`: identity overlap.
 - `alignment = aligned / union`: true agreement ratio.
 
+With nothing in the union (`union` 0 — every declared artefact not checked,
+parked or out of scope) both are `null`, never 1: nothing compared is no match.
+A journey then records `drift.alignmentPct: null` beside `drift.compared: 0`,
+and a gate on the figure fails ("nothing was compared").
+
 The strongest diagnostic signal is the gap between them: high Jaccard and low
 alignment means Observogram found the same controls, but their definitions drift.
 
@@ -562,6 +567,10 @@ high-cost false reassurance per six confirmed controls. That maps to about
 85% fidelity. The drift-free criterion contributes fractional credit equal to
 the measured weighted fidelity; crossing the threshold decides whether the row
 is safe to trust.
+
+With nothing compared (an empty union, or nothing but placeholders to weigh)
+the fidelity is `null` (`computeWeightedDeltaRisk` → `health` / `healthPct`
+null), and Drift-free earns nothing: its detail begins `nothing compared`.
 
 ## Public API
 

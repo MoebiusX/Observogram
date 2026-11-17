@@ -261,8 +261,10 @@ export function computeWeightedDeltaRisk({ mode, aligned, driftedEntries = [], d
   const onlyInBUnits = onlyInB * bWeight;
   const totalBadness = driftedUnits + onlyInAUnits + onlyInBUnits;
   const denominator = aligned + totalBadness;
-  const health = denominator === 0 ? 1 : aligned / denominator;
-  const healthPct = Math.round(health * 100);
+  // Nothing compared: no health figure (tools/lib/diff.mjs's rule for its
+  // ratios) — null, never a perfect 1.
+  const health = denominator === 0 ? null : aligned / denominator;
+  const healthPct = health === null ? null : Math.round(health * 100);
   return {
     aWeight,
     bWeight,
@@ -348,16 +350,49 @@ export function instrumentGradeFor(scorePctExact) {
 //
 // Additive keys (vendored downstream — never remove or rename, see
 // docs/VENDORING.md):
-//   unsupported — probe families the MCP does not expose at all
-//                 (mcp.probesUnsupported): a restricted tier, not an outage.
+//   unsupported — probe families this read could not ask: none of their
+//                 tools is offered (mcp.probesUnsupported: a restricted
+//                 tier, not an outage), or the store behind the tool
+//                 answered it keeps no such thing (notServed below).
 //   errors      — { family: last error message } from mcp.probeErrors.<family>.
-//   vantage     — how much of the live surface this draft could see:
-//                 'full' (nothing failed, nothing unsupported),
-//                 'partial' (some probes failed — a hole of unknown size),
-//                 'restricted' (nothing failed, but some families are not
-//                 exposed by this MCP tier), 'lost' (every attempted family
-//                 failed or is unsupported), 'none' (not a live draft).
-// `partial` keeps its meaning: outright failures only.
+//   vantage     — how much of the live surface this draft read (C3, 2026-11-16):
+//                 'lost'    the pack carries a probe table and no family
+//                           returned data (mcp.probesSucceeded is empty) —
+//                           whatever tools/list advertised, an endpoint whose
+//                           every family answered empty included: a read that
+//                           brought back nothing is no read;
+//                 'partial' a family returned data and another failed, or
+//                           answered only in part (mcp.probesPartial) — a
+//                           hole of unknown size;
+//                 'full'    a family returned data and every other answered
+//                           (data or an honest empty); a family this MCP does
+//                           not offer or serve (unsupported) never degrades it;
+//                 'none'    not a live draft (no mcp.url), or a live export
+//                           that recorded no probe table at all (a legacy or
+//                           hand-made export: no probe record, graded on its
+//                           comparison as before).
+//                 'restricted' is no longer produced: a record or a host
+//                 that still holds it reads it as 'full' (nothing failed, a
+//                 family not offered).
+//   succeeded   — the families that returned data (mcp.probesSucceeded).
+//   inPart      — the families that answered from some of their sources while
+//                 another source failed (mcp.probesPartial); [] when none.
+//   notServed   — { family: reason } for the unsupported families whose store
+//                 answered it keeps no such thing (mcp.probeUnsupported.<family>,
+//                 tools/fetch-live-pack.mjs); {} when none.
+//   probeTable  — whether the pack recorded a probe table at all.
+// `partial` keeps its meaning: a family failed (or answered only in part).
+const PROBE_TABLE_KEYS = Object.freeze(['mcp.probesAttempted', 'mcp.probesSucceeded', 'mcp.probesEmpty', 'mcp.probesFailed', 'mcp.probesUnsupported']);
+const PROBE_UNSUPPORTED_PREFIX = 'mcp.probeUnsupported.';
+// The reason a not-served family's JSON annotation states, or null.
+function notServedReasonOf(value) {
+  try {
+    const parsed = JSON.parse(String(value));
+    return typeof parsed?.reason === 'string' && parsed.reason ? parsed.reason : null;
+  } catch {
+    return null;
+  }
+}
 export function partialLiveEvidence(packB) {
   const ann = packB?.meta?.annotations || packB?.metadata?.annotations || {};
   const list = (k) => String(ann[k] || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -365,19 +400,28 @@ export function partialLiveEvidence(packB) {
   const empty = list('mcp.probesEmpty');
   const attempted = list('mcp.probesAttempted');
   const unsupported = list('mcp.probesUnsupported');
+  const succeeded = list('mcp.probesSucceeded');
+  // Written by the alert-rule union when one engine answered beside one that
+  // failed; absent on packs that predate it.
+  const inPart = list('mcp.probesPartial').filter((f) => !failed.includes(f));
   const errors = {};
+  const notServed = {};
   for (const [k, v] of Object.entries(ann)) {
     if (k.startsWith('mcp.probeErrors.') && v != null && String(v) !== '') {
       errors[k.slice('mcp.probeErrors.'.length)] = String(v);
     }
+    if (k.startsWith(PROBE_UNSUPPORTED_PREFIX) && k.length > PROBE_UNSUPPORTED_PREFIX.length) {
+      const reason = notServedReasonOf(v);
+      const family = k.slice(PROBE_UNSUPPORTED_PREFIX.length);
+      if (reason && unsupported.includes(family)) notServed[family] = reason;
+    }
   }
   const isLiveDraft = !!ann['mcp.url'];
-  const noAnswer = new Set([...failed, ...unsupported]);
+  const probeTable = PROBE_TABLE_KEYS.some((k) => ann[k] !== undefined && ann[k] !== null);
   let vantage = 'none';
-  if (isLiveDraft) {
-    if (attempted.length > 0 && attempted.every(p => noAnswer.has(p))) vantage = 'lost';
-    else if (failed.length > 0) vantage = 'partial';
-    else if (unsupported.length > 0) vantage = 'restricted';
+  if (isLiveDraft && probeTable) {
+    if (succeeded.length === 0) vantage = 'lost';
+    else if (failed.length > 0 || inPart.length > 0) vantage = 'partial';
     else vantage = 'full';
   }
   return {
@@ -388,9 +432,14 @@ export function partialLiveEvidence(packB) {
     unsupported,
     errors,
     vantage,
-    // Only outright failures make the evidence PARTIAL — an empty probe is
-    // an honest zero, a failed probe is a hole of unknown size.
-    partial: isLiveDraft && failed.length > 0,
+    // A failed probe (or one answered only in part) makes the evidence
+    // PARTIAL — an empty probe is an honest zero, a failed probe is a hole
+    // of unknown size.
+    partial: isLiveDraft && (failed.length > 0 || inPart.length > 0),
+    succeeded,
+    inPart,
+    notServed,
+    probeTable,
   };
 }
 
@@ -609,7 +658,15 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     const asideN = aside ? (aside.declared || 0) + (aside.live || 0) : 0;
     const asideNote = asideN || aside?.chains ? `; ${asideN} set aside${aside.chains ? ` (${aside.chains} requirement${aside.chains === 1 ? '' : 's'} with them)` : ''}` : '';
     const branchRollup = diff.traceabilityGraph?.rollup;
-    if (branchRollup && branchRollup.declaredTotal > 0) {
+    // Nothing in the comparison at all (an empty union): no figure backs
+    // Drift-free — neither the chains (whose declared links would read
+    // broken for want of anything compared) nor the buckets.
+    const notObservedAll = Object.values(diff.layers || {}).reduce((n, bucket) => n + (bucket.notObserved || []).length, 0);
+    if (diff.summary && diff.summary.union === 0) {
+      driftScore = 0;
+      driftFree = false;
+      driftDetail = `nothing compared - no artefact was found in a family both sides read, so drift cannot be scored${notObservedAll ? `; ${notObservedAll} not checked (the live side could not observe them)` : ''}${aheadNote}${asideNote}`;
+    } else if (branchRollup && branchRollup.declaredTotal > 0) {
       driftScore = Math.max(0, Math.min(1, branchRollup.integrityMean ?? 0));
       driftFree = driftScore >= DRIFT_FIDELITY_TRUST_THRESHOLD;
       const confidence = (diff.traceabilityGraph?.branches || []).some(b => b.confidence === 'inferred')
@@ -655,25 +712,38 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         onlyInA: declaredMissing,
         onlyInB: liveShadow,
       });
-      driftScore = Math.max(0, Math.min(1, weighted.health));
-      driftFree = weighted.health >= DRIFT_FIDELITY_TRUST_THRESHOLD;
-      const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
-      const driftBreakdown = `${weighted.driftedBreakdown.decision} decision-bearing, ${weighted.driftedBreakdown.default} default, ${weighted.driftedBreakdown.cosmetic} cosmetic`;
       const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
         + (notObserved ? `; ${notObserved} not checked (the live side could not observe them)` : '')
         + aheadNote + asideNote;
-      driftDetail = driftFree
-        ? `weighted live-fidelity ${weighted.healthPct}% - declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`
-        : `weighted live-fidelity ${weighted.healthPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold); declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`;
+      if (weighted.health === null) {
+        // Only placeholders were left to weigh: nothing concrete was compared.
+        driftScore = 0;
+        driftFree = false;
+        driftDetail = `nothing compared - no artefact was found in a family both sides read, so drift cannot be scored${scaffoldNote}`;
+      } else {
+        driftScore = Math.max(0, Math.min(1, weighted.health));
+        driftFree = weighted.health >= DRIFT_FIDELITY_TRUST_THRESHOLD;
+        const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
+        const driftBreakdown = `${weighted.driftedBreakdown.decision} decision-bearing, ${weighted.driftedBreakdown.default} default, ${weighted.driftedBreakdown.cosmetic} cosmetic`;
+        driftDetail = driftFree
+          ? `weighted live-fidelity ${weighted.healthPct}% - declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`
+          : `weighted live-fidelity ${weighted.healthPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold); declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`;
+      }
     }
   } else if (!hasMcpSource) {
     driftFree = false;
     driftScore = 0;
     driftDetail = `declared-only - no live signal to verify against (${noLiveHint})`;
   } else if (probesAttempted.length === 0) {
-    driftFree = true;
-    driftScore = 1;
-    driftDetail = 'live source connected - probe table not recorded';
+    // A live source that recorded no probe table, or asked no family: nothing
+    // it read can back a drift figure.
+    driftFree = false;
+    driftScore = 0;
+    driftDetail = 'live source connected, but no probe family was asked or recorded - nothing to verify drift against';
+  } else if (probesSucceeded.length === 0) {
+    driftFree = false;
+    driftScore = 0;
+    driftDetail = `no probe family returned data (${probesAttempted.length} attempted) - nothing to verify drift against`;
   } else {
     const driftCount = probesEmpty.length + probesFailed.length;
     const driftRatio = driftCount / probesAttempted.length;
@@ -707,11 +777,21 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       // detail says what the vantage actually delivered.
       const vantage = partialLiveEvidence({ meta: { annotations: liveAnn } });
       if (vantage.vantage === 'lost') {
-        const failed = vantage.failed.length ? `failed: ${vantage.failed.join(', ')}` : '';
-        const unsupported = vantage.unsupported.length ? `not exposed: ${vantage.unsupported.join(', ')}` : '';
-        freshDetail += ` - but vantage lost: no probe family answered (${[failed, unsupported].filter(Boolean).join('; ')})`;
+        const notServed = vantage.unsupported.filter((f) => f in vantage.notServed);
+        const notExposed = vantage.unsupported.filter((f) => !(f in vantage.notServed));
+        const parts = [
+          vantage.failed.length ? `failed: ${vantage.failed.join(', ')}` : '',
+          vantage.empty.length ? `empty: ${vantage.empty.join(', ')}` : '',
+          notExposed.length ? `not exposed: ${notExposed.join(', ')}` : '',
+          notServed.length ? `not served: ${notServed.join(', ')}` : '',
+        ].filter(Boolean);
+        freshDetail += ` - but vantage lost: no probe family returned data${parts.length ? ` (${parts.join('; ')})` : ''}`;
       } else if (vantage.vantage === 'partial') {
-        freshDetail += ` - vantage partial: failed ${vantage.failed.join(', ')}`;
+        const parts = [
+          vantage.failed.length ? `failed ${vantage.failed.join(', ')}` : '',
+          vantage.inPart.length ? `answered in part ${vantage.inPart.join(', ')}` : '',
+        ].filter(Boolean);
+        freshDetail += ` - vantage partial: ${parts.join('; ')}`;
       }
     }
   }
@@ -791,6 +871,16 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // and are still met at their bars (3 of 4, 50 in 100). Same 7 criteria;
     // a pack below a bar gains, one above it short of four kinds or of every
     // mechanism observed loses.
+    // Still 5 (2026-11-16), by decision, against the rule above: Drift-free
+    // earns nothing where nothing backs it — a comparison with nothing in it,
+    // a live source that asked or recorded no probe family, one whose
+    // families returned no data (each read 1 before). Every record this
+    // scores differently compared nothing, and its drift.compared (0) or its
+    // zero counts say so; a run whose vantage was lost carries no grade at
+    // all (tools/lib/journey.mjs). A bump would take every letter off the
+    // board until each service runs again, and 6 is reserved for the
+    // ladder-integrity proposal (docs/VENDORING.md). The owner may still
+    // choose the bump.
     gradeSchema: GRADE_SCHEMA,
     coverage: {
       criteria: coverageListed,

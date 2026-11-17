@@ -62,7 +62,7 @@ import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
-import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { capability, probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
 import { promqlForKind } from './lib/inventory-coverage.mjs';
 import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
 import {
@@ -405,6 +405,57 @@ function probeFailureText(attempted, probeFailures) {
     entries.push(trimError(named));
   }
   return entries.length ? entries.join(PROBE_FAILURE_SEPARATOR) : null;
+}
+
+// C6: a refusal — the MCP gateway's own 401/403 (tools/lib/mcp-client.mjs
+// `MCP HTTP 401 on tools/call: …`), a JSON-RPC error saying so, or a tool
+// whose backend refused the MCP's own credentials (its isError text: `HTTP
+// 403: Forbidden`, `Unauthorized`, `status code 401`). A bare 401 in other
+// words (`returned 401 series`) is not one. The one rule for the probe
+// cascade and the ping's backendAuthRefused.
+const REFUSAL_TEXT = /\bHTTP\s+(?:status\s+)?40[13]\b|\bstatus(?:\s+code)?\s*[:=]?\s*40[13]\b|\b40[13]\s+(?:unauthori[sz]ed|forbidden)\b|\bunauthori[sz]ed\b|\bforbidden\b/i;
+export function isProbeRefusal(message) {
+  return typeof message === 'string' && REFUSAL_TEXT.test(message);
+}
+
+// P6: the statuses a store answers when it has no such API (a datasource
+// proxy in front of a federated or remote-write store answering
+// /api/v1/targets), as the capability row declares them
+// (tools/lib/contracts/mcp-capabilities.mjs unsupportedOnHttpStatus), and
+// their reason phrases — the reason a not-served family records is the tool
+// and the status, never the answer's text (it may name an internal URL).
+const HTTP_REASON_PHRASES = Object.freeze({ 400: 'Bad Request', 404: 'Not Found', 405: 'Method Not Allowed' });
+// The Prometheus HTTP API's error types and the statuses it answers them with.
+const PROMETHEUS_ERROR_TYPE_STATUS = Object.freeze({ bad_data: 400, not_found: 404 });
+const notServedStatusesOf = (family) => {
+  const statuses = capability(family).unsupportedOnHttpStatus;
+  return Array.isArray(statuses) ? statuses.filter((n) => Number.isInteger(n) && n >= 400 && n < 500 && n !== 401 && n !== 403) : [];
+};
+
+// The status (one of `statuses`) a failed call's message says the tool's
+// backend answered, or null: the tool's own answer or the call's JSON-RPC
+// error — never the MCP endpoint's own HTTP status (`MCP HTTP 404 on
+// tools/call` is the MCP itself), never a refusal.
+export function notServedStatus(message, statuses) {
+  if (typeof message !== 'string' || /^MCP HTTP \d{3} on /.test(message) || isProbeRefusal(message)) return null;
+  for (const code of Array.isArray(statuses) ? statuses : []) {
+    if (!Number.isInteger(code) || code < 400 || code > 499 || code === 401 || code === 403) continue;
+    const phrase = HTTP_REASON_PHRASES[code];
+    const re = new RegExp(`\\bHTTP\\s+(?:status\\s+)?${code}\\b|\\bstatus(?:\\s+code)?\\s*[:=]?\\s*${code}\\b${phrase ? `|\\b${code}\\s+${phrase}\\b` : ''}`, 'i');
+    if (re.test(message)) return code;
+  }
+  return null;
+}
+
+// A Prometheus-shaped error envelope answered as a tool's content.
+const isErrorEnvelope = (response) => !!response && typeof response === 'object' && !Array.isArray(response) && response.status === 'error';
+
+// A not-served family's line wherever a reason is said (the gate log, the
+// pack's unobserved annotation): what was answered, then what it means.
+function notServedText(noun, notServed) {
+  const since = notServed.remembered && typeof notServed.since === 'string'
+    ? ` (answered so since ${notServed.since.slice(0, 10)}; this read got no other answer)` : '';
+  return `${notServed.reason}${since} — the ${noun} are not served here; not counted as a failure`;
 }
 
 // Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
@@ -1220,7 +1271,9 @@ export function buildCanonicalPack({
   // Classify each probe by outcome:
   //   data    — MCP responded with non-empty content (a real answer)
   //   empty   — MCP responded but the payload was empty (an honest zero)
-  //   failed  — every candidate errored / 503'd (no response at all)
+  //   failed  — every candidate errored / 503'd (no response at all), or
+  //             one was refused (401/403) and none answered with data — an
+  //             honest zero needs a read that was allowed (C6)
   // The probe loop now stamps `outcome` directly. For callers that
   // pre-populate probeResults (the offline fetcher tests do), classify
   // from the legacy fields: `tool` set means SOMETHING answered, and
@@ -1244,7 +1297,10 @@ export function buildCanonicalPack({
   // unsupported — tools/list answered and NO candidate for the family is
   // exposed: a restricted MCP tier, not an outage. Distinct from `failed`
   // (we asked, nothing answered) so the studio never blames a deploy for
-  // a surface the server simply doesn't offer.
+  // a surface the server simply doesn't offer. Also a family whose every
+  // candidate answered that the store behind it keeps no such thing (P6:
+  // scrape targets answered 400 / 404 / 405, a status with no Alertmanager
+  // configuration) — its `notServed` says what was answered.
   const probesUnsupported = probesByOutcome('unsupported');
   // Why each probe family got no answer: fetchMcp keys probeFailures by
   // candidate tool NAME; map the names back to their family through the
@@ -1297,6 +1353,21 @@ export function buildCanonicalPack({
   // when nothing errored.
   for (const [family, msg] of Object.entries(probeErrors)) {
     annotations[`mcp.probeErrors.${family}`] = msg;
+  }
+  // P6: why a family is unsupported when the store behind the MCP answered
+  // that it keeps no such thing (or a journey remembered it did): JSON
+  // { reason, since, tools, remembered? } — the reason is the tool and the
+  // status it answered, never the answer's text. A journey's memory reads it
+  // back from the run record (tools/lib/journey.mjs probeMemoryOf).
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    const n = v?.notServed;
+    if (classify(v) !== 'unsupported' || !n || typeof n !== 'object') continue;
+    annotations[`mcp.probeUnsupported.${family}`] = JSON.stringify({
+      reason: trimError(n.reason) || 'no reason recorded',
+      since: typeof n.since === 'string' ? n.since : null,
+      tools: Array.isArray(n.tools) ? n.tools.filter((t) => typeof t === 'string') : [],
+      ...(n.remembered === true ? { remembered: true } : {}),
+    });
   }
   // The fetcher's own clock. mcp.refreshedAt is whatever the caller
   // stamped (server and journey stamp it after the fetch returns), so
@@ -2157,8 +2228,15 @@ export function buildCanonicalPack({
   };
   const noTool = (what) => `no MCP tool exposes ${what}`;
   // Why a probe family is blind, or null when it answered (data or empty).
+  // An unsupported family whose store answered it keeps no such thing says
+  // what was answered (P6), not that no tool is offered.
   const blind = (family) => {
     const outcome = classify(probeResults?.[family]);
+    const notServed = probeResults?.[family]?.notServed;
+    if (outcome === 'unsupported' && notServed && typeof notServed === 'object' && typeof notServed.reason === 'string') {
+      const stage = stagesFor('draft').find((s) => s.id === STAGE_OF_PROBE[family]);
+      return notServedText(stage ? stageNoun(stage) : family.replace(/_/g, ' '), { ...notServed, reason: trimError(notServed.reason) });
+    }
     if (outcome === 'unsupported') return `this MCP offers no ${family.replace(/_/g, ' ')} tool`;
     if (outcome === 'failed') return `the ${family.replace(/_/g, ' ')} probe got no answer${probeErrors[family] ? `: ${probeErrors[family]}` : ''}`;
     return null;
@@ -2196,7 +2274,7 @@ export function buildCanonicalPack({
   unobserved('imports', noTool('pack imports'));
   unobserved('forecast', 'forecast rules are not read back from the ruler');
   if (blind('dashboards')) unobserved(['dashboard', 'panel'], blind('dashboards'));
-  if (blind('alert_rules')) unobserved('burn_rate', blind('alert_rules'));
+  if (blind('alert_rules')) unobserved(['alert_rule', 'burn_rate'], blind('alert_rules'));
   if (blind('metric_names')) unobserved('metric', blind('metric_names'));
   if (blind('scrape_configs')) unobserved('scrape_job', blind('scrape_configs'));
   if (recordedRules.length === 0 && blind('recording_rules')) {
@@ -2456,6 +2534,17 @@ export const PROBES = [
     // registry (tools/lib/contracts/mcp-capabilities.mjs).
     candidates: probeCandidates('scrape_configs'),
     target: 'spec.telemetry.scrape_evidence',   // annotation-only; no schema field
+    // A Prometheus error envelope ({ status: 'error', errorType, error })
+    // answered as the tool's content is no answer — it would adapt to [] and
+    // read as an honest zero. Its errorType is the Prometheus API's own answer
+    // for a status: one the capability row says means "not served"
+    // (unsupportedOnHttpStatus) makes the family unsupported, like the status.
+    answers: (response) => !isErrorEnvelope(response),
+    unanswered: (response) => `the targets answer is an error envelope (errorType ${typeof response?.errorType === 'string' && response.errorType ? response.errorType : 'unknown'})`,
+    notServedAnswer: (response, statuses) => {
+      const code = PROMETHEUS_ERROR_TYPE_STATUS[response?.errorType];
+      return code && statuses.includes(code) ? `errorType ${response.errorType} (HTTP ${code} ${HTTP_REASON_PHRASES[code]})` : null;
+    },
     adapt: (response) => {
       // otel-mcp-server's metrics_targets returns:
       //   { activeTargets: <number>, targets: [{ job, instance, health, lastScrape, lastError }] }
@@ -2501,6 +2590,11 @@ export const PROBES = [
     // as an answer for this family.
     answers: (response) => alertmanagerConfigText(response) !== null,
     unanswered: 'the Alertmanager status carries no configuration',
+    // A status that answers and carries no configuration is a tier that
+    // trims it, every time: the routes are not served here — the family is
+    // unsupported, never failed, and the journey remembers it like scrape
+    // targets the store does not keep.
+    notServedAnswer: () => 'the Alertmanager status carries no configuration',
     adapt: (response) => routesFromLiveAlertmanager(alertmanagerConfigText(response)),
   },
   {
@@ -2587,8 +2681,17 @@ export function timedExcludeErrors(patterns) {
 // changes nothing. `signal` aborts requests in flight and is checked at stage
 // boundaries and in the dashboard loop: an aborted fetch rejects with the
 // signal's reason (an AbortError).
+// `probeMemory` — `{ unsupported: { <family>: { reason, since, tools } } }`,
+// the caller's memory of the families this endpoint answered it does not
+// serve (P6; tools/lib/journey.mjs probeMemoryOf reads it from the journey's
+// run records). Every family is still asked on every read and its answer
+// decides — data, an honest empty, a refusal, or the not-served answer again;
+// only when every remembered tool asked answers an error that says nothing
+// of the kind (a 503, a timeout) does the family stay unsupported, as
+// remembered (`remembered: true`), instead of reading as a new failure. The
+// library keeps nothing between reads.
 export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport(),
-  mode = 'draft', scope = null, onStage = null, signal = null } = {}) {
+  mode = 'draft', scope = null, onStage = null, signal = null, probeMemory = null } = {}) {
   // The hook is resolved before anything touches the wire — a load failure
   // is a hard failure here, never inside a swallowing wrapper below.
   const t = await transport;
@@ -2659,6 +2762,15 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // succeed (input validation, network, etc.) — distinct from the
   // top-level `errors` map which is for the core tools.
   const probeFailures = {};
+  // The caller's memory of a family this endpoint answered it does not serve
+  // (see the header), validated: { reason, since, tools } or null.
+  const memoryOf = (family) => {
+    const e = probeMemory?.unsupported?.[family];
+    if (!e || typeof e !== 'object' || typeof e.reason !== 'string' || !e.reason) return null;
+    const tools = Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [];
+    if (!tools.length) return null;
+    return { reason: e.reason, since: typeof e.since === 'string' && e.since ? e.since : null, tools };
+  };
 
   // Single retry on transient 5xx — upstream observability backends
   // (VictoriaMetrics, Grafana, Jaeger, …) occasionally drop a request
@@ -2873,6 +2985,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const probeGap = (name) => {
     const stage = STAGE_OF_PROBE[name];
     const r = probeResults[name];
+    if (r?.outcome === 'unsupported' && r.notServed) {
+      return { state: 'skipped', gap: gapOf(stage, name, notServedText(stageNoun(stageLabel.get(stage)), { ...r.notServed, reason: trimError(r.notServed.reason) })) };
+    }
     if (r?.outcome === 'unsupported') return { state: 'skipped', gap: gapOf(stage, name, offersNo(stage)) };
     if (r?.outcome === 'failed') {
       const why = probeFailureText(r.attempted, probeFailures);
@@ -3096,6 +3211,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       return;
     }
     const attempted = [];
+    // Why candidates gave no answer (C6, P6): refused (401/403 — the read
+    // was not allowed), or answered that the store behind the tool keeps
+    // no such thing (the capability row's unsupportedOnHttpStatus, or the
+    // probe's own reading of an answer: notServedAnswer).
+    const refused = [];
+    const notServed = [];   // [{ tool, reason }]
+    const notServedCodes = notServedStatusesOf(probe.name);
+    const canNotServe = notServedCodes.length > 0 || typeof probe.notServedAnswer === 'function';
     // Remember the first candidate that responded with a non-null
     // result, even if that result was empty. If all candidates either
     // fail outright OR return empty, we fall back to reporting the
@@ -3107,11 +3230,22 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       const args = candArgs(candidate);
       attempted.push(name);
       const response = await cachedCall(name, args);
-      if (response == null) continue;          // tool errored or returned nothing
+      if (response == null) {                  // tool errored or returned nothing
+        const why = probeFailures[name];
+        if (isProbeRefusal(why)) refused.push(name);
+        else if (notServedCodes.length) {
+          const code = notServedStatus(why, notServedCodes);
+          if (code !== null) notServed.push({ tool: name, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
+        }
+        continue;
+      }
       // A probe may say an answer does not speak to its question at all
       // (probe.answers): that is no answer, not an empty one.
       if (typeof probe.answers === 'function' && !probe.answers(response)) {
-        if (!probeFailures[name]) probeFailures[name] = probe.unanswered || 'the answer does not carry what this probe reads';
+        const unanswered = typeof probe.unanswered === 'function' ? probe.unanswered(response) : probe.unanswered;
+        if (!probeFailures[name]) probeFailures[name] = unanswered || 'the answer does not carry what this probe reads';
+        const served = typeof probe.notServedAnswer === 'function' ? probe.notServedAnswer(response, notServedCodes) : null;
+        if (served) notServed.push({ tool: name, reason: `${name}: ${served}` });
         continue;
       }
       let adapted;
@@ -3135,6 +3269,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         firstEmpty = { tool: name, adapted, rawSize: JSON.stringify(response).length };
       }
     }
+    // C6: a refused read leaves a hole nobody can size — no candidate
+    // answered with data, so the family FAILED, whatever an empty fallback
+    // said (an honest zero needs a read that was allowed); the refusal stays
+    // the probe error. Data from another candidate wins (returned above).
+    if (refused.length) {
+      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed', refused: [...new Set(refused)] };
+      return;
+    }
     if (firstEmpty) {
       probeResults[probe.name] = {
         tool: firstEmpty.tool,
@@ -3145,6 +3287,29 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       };
       // An honest zero is still an observation made at this instant.
       observedAt[probe.name] = new Date().toISOString();
+      return;
+    }
+    const asked = [...new Set(attempted)];
+    const memo = canNotServe ? memoryOf(probe.name) : null;
+    // P6: every candidate asked answered that the store behind it keeps no
+    // such thing — unsupported here, never failed; `since` carries the first
+    // time the journey saw it, `tools` what answered it.
+    if (canNotServe && notServed.length && asked.every((tool) => notServed.some((n) => n.tool === tool))) {
+      probeResults[probe.name] = {
+        tool: null, attempted, adapted: null, outcome: 'unsupported',
+        notServed: { reason: notServed[0].reason, since: memo?.since ?? new Date().toISOString(), tools: asked },
+      };
+      return;
+    }
+    // P6: remembered — every tool asked is one that answered "not served"
+    // before, and this time each errored without saying anything of the
+    // kind (no refusal: returned above): the family stays unsupported as
+    // remembered, never a new failure.
+    if (memo && asked.length && asked.every((tool) => memo.tools.includes(tool))) {
+      probeResults[probe.name] = {
+        tool: null, attempted, adapted: null, outcome: 'unsupported',
+        notServed: { reason: memo.reason, since: memo.since, tools: asked, remembered: true },
+      };
       return;
     }
     probeResults[probe.name] = {
@@ -3470,9 +3635,12 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const ruleEvidence = { firingAlerts: [], recordingRuleNames: [] };
 
   // Fallback for alert_rules: only run when the primary probe returned
-  // an empty array AND the MCP exposes metrics_query.
+  // an empty array AND the MCP exposes metrics_query. A ruler that refused
+  // the read (the family failed: C6) is no answer about rules either, so the
+  // firing alerts are gathered for it as they were when it read as empty.
   const alertProbe = probeResults?.alert_rules;
-  const alertPrimaryEmpty = alertProbe && (alertProbe.outcome === 'empty'
+  const refusedRead = (p) => p?.outcome === 'failed' && Array.isArray(p.refused) && p.refused.length > 0;
+  const alertPrimaryEmpty = alertProbe && (alertProbe.outcome === 'empty' || refusedRead(alertProbe)
     || (Array.isArray(alertProbe.adapted) && (snapScope && alertRulesListed !== null ? alertRulesListed : alertProbe.adapted.length) === 0));
   if (!snapshot && alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
     const r = await quiet(`${TOOL.metricsQuery}.ALERTS`,
@@ -3500,7 +3668,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // shorthand (e.g. `up:rate1m`) is captured too.
   const recordingProbe = probeResults?.recording_rules;
   const recordingPrimaryEmpty = recordingProbe &&
-    (recordingProbe.outcome === 'empty' || (Array.isArray(recordingProbe.adapted) && recordingProbe.adapted.length === 0));
+    (recordingProbe.outcome === 'empty' || refusedRead(recordingProbe) || (Array.isArray(recordingProbe.adapted) && recordingProbe.adapted.length === 0));
   const metricNames = unscopedMetricNames;
   if (recordingPrimaryEmpty && Array.isArray(metricNames) && metricNames.length) {
     const RECORDING_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*){1,}$/i;
@@ -3532,6 +3700,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     Object.values(probeResults)
       .flatMap(r => String(r?.tool || '').split('+'))
       .filter(Boolean)
+      // A tool whose store answered "not served" is probed all the same.
+      .concat(Object.values(probeResults).flatMap(r => (Array.isArray(r?.notServed?.tools) ? r.notServed.tools : [])))
       .concat([TOOL.systemHealth, TOOL.systemTopology, TOOL.anomaliesActive, TOOL.anomaliesBaselines])
   );
   // Version probes count as "wired" too — surface them so they don't
@@ -3692,8 +3862,9 @@ export function buildSnapshotPack(fetched, { refreshedAt = null, origin, endpoin
 // surfaced:
 //   connected      initialize and tools/list answered (a read that failed
 //                  is the read's outcome; a tool whose isError text says
-//                  401/403/unauthorized/forbidden is read.backendAuthRefused
-//                  — the MCP's own credentials to its backend)
+//                  HTTP 401/403, unauthorized or forbidden (isProbeRefusal)
+//                  is read.backendAuthRefused — the MCP's own credentials to
+//                  its backend)
 //   auth-refused   HTTP 401/403 on initialize, tools/list or tools/call (the
 //                  gateway refused the token sent, or its absence)
 //   unreachable    no HTTP answer (ECONNREFUSED, ENOTFOUND, TLS) or a 5xx
@@ -3718,7 +3889,8 @@ export const PING_READS = Object.freeze([
 ]);
 export const PING_DETAIL_LENGTH = 100;
 const PING_ERROR_LENGTH = 300;
-const BACKEND_AUTH_TEXT = /\b(401|403)\b|unauthori[sz]ed|forbidden/i;
+// The read's backend refused the MCP's own credentials: the probe cascade's
+// refusal rule (isProbeRefusal), one rule for both.
 
 class PingDeadline extends Error {
   constructor() { super('the ping deadline passed'); this.name = 'PingDeadline'; }
@@ -3894,7 +4066,7 @@ export async function pingMcp({ mcpUrl, mcpAuth = null, transport = mcpTransport
         read.outcome = 'failed';
         // The tool answered isError (the client's `<tool>: <text>`): its
         // backend refused the MCP's own credentials when the text says so.
-        if (message.startsWith(`${pick.tool}: `) && BACKEND_AUTH_TEXT.test(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
+        if (message.startsWith(`${pick.tool}: `) && isProbeRefusal(message.slice(pick.tool.length + 2))) read.backendAuthRefused = true;
       }
     } finally { out.timings.readMs = ms(at); }
     return out;

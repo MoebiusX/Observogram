@@ -316,8 +316,8 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(partialLiveEvidence(null).vantage === 'none', 'null pack has vantage none');
 
   const restricted = partialLiveEvidence(liveDraft({ 'mcp.probesUnsupported': 'metrics,routes' }));
-  assert(restricted.vantage === 'restricted' && restricted.partial === false,
-         'unsupported families without failures give vantage restricted and do NOT mark the evidence partial', restricted);
+  assert(restricted.vantage === 'full' && restricted.partial === false,
+         'unsupported families never degrade the vantage (C3: restricted is no longer produced) and do NOT mark the evidence partial', restricted);
   assert(restricted.unsupported.join(',') === 'metrics,routes', 'unsupported families parse from mcp.probesUnsupported', restricted.unsupported);
 
   const mixed = partialLiveEvidence(liveDraft({
@@ -330,8 +330,10 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(mixed.errors.metrics === 'HTTP 503 Service Unavailable' && Object.keys(mixed.errors).length === 1,
          'per-family errors are read from mcp.probeErrors.<family>', mixed.errors);
 
+  // The base above says two families returned data; a lost read says none did.
   const lost = partialLiveEvidence(liveDraft({
     'mcp.probesAttempted': 'metrics,routes,dashboards',
+    'mcp.probesSucceeded': '',
     'mcp.probesFailed': 'metrics,routes',
     'mcp.probesUnsupported': 'dashboards',
   }));
@@ -340,13 +342,15 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   const allUnsupported = partialLiveEvidence(liveDraft({
     'mcp.probesAttempted': 'metrics,routes',
+    'mcp.probesSucceeded': '',
     'mcp.probesUnsupported': 'metrics,routes',
   }));
   assert(allUnsupported.vantage === 'lost' && allUnsupported.partial === false,
          'an MCP that exposes none of the probed families is lost, yet not partial (nothing failed)', allUnsupported);
 
   const nothingAttempted = partialLiveEvidence({ meta: { annotations: { 'mcp.url': 'https://example.test/mcp' } } });
-  assert(nothingAttempted.vantage === 'full', 'a live draft without probe annotations (older pack) reads full, not lost', nothingAttempted);
+  assert(nothingAttempted.vantage === 'none' && nothingAttempted.probeTable === false && nothingAttempted.partial === false,
+         'a live export that recorded no probe table at all (an older or hand-made pack) has no probe record: vantage none, never lost (A1)', nothingAttempted);
 }
 
 // Fresh names the vantage: a refresh whose every probe family failed is

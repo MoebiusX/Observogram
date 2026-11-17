@@ -152,7 +152,8 @@ export function branchRecordsFromGraph(traceabilityGraph, { maxBranches = BRANCH
       verdict: str(branch.verdict, 'unknown'),
       ladderVerdict: str(branch.ladderVerdict, 'unknown'),
       integrityPct: num(branch.integrityPct, 0),
-      ladderIntegrityPct: num(branch.ladderIntegrityPct, 0),
+      // null when nothing on the chain was observable (no ladder figure), never 0 or 100.
+      ladderIntegrityPct: num(branch.ladderIntegrityPct, null),
       confidence: str(branch.confidence, 'declared'),
       missingRoles: missingRoleNames(branch.missingRoles),
       degraded: degraded.slice(0, nodeCap),
@@ -174,15 +175,19 @@ const degradedOf = (branch) => (Array.isArray(branch.degraded) ? branch.degraded
 // would blind an SLO or an alert). The nodes of undeclared chains are
 // live-only inventory, not degraded assurance: they are counted apart as
 // `undeclaredNodes` and never rank as the top exposure. Integrities are
-// means of the recorded per-branch percentages (null with no declared
-// chain: an empty set is not 100 % healthy). null when the record carries
-// no `branches`.
+// means of the recorded per-branch percentages that are figures (null with
+// no declared chain, or none with a figure — a chain nothing on which was
+// observable has no ladder figure: an empty set is not 100 % healthy). null
+// when the record carries no `branches`.
 export function chainSummary(record) {
   const branches = branchesOf(record);
   if (!branches) return null;
   const declared = branches.filter((b) => b.verdict !== 'undeclared');
   const count = (list, field, value) => list.filter((b) => b[field] === value).length;
-  const mean = (field) => (declared.length ? Math.round(declared.reduce((s, b) => s + num(b[field], 0), 0) / declared.length) : null);
+  const mean = (field) => {
+    const values = declared.map((b) => num(b[field])).filter((v) => v !== null);
+    return values.length ? Math.round(values.reduce((s, v) => s + v, 0) / values.length) : null;
+  };
   let degradedNodes = 0;
   let undeclaredNodes = 0;
   let top = null;
@@ -433,8 +438,13 @@ export function deploysInWindow(deploys, sinceIso, untilIso) {
 
 // The vantage facts a run record carries — null when it carries none (a
 // file-sourced Pack B attempts no probe, reads vantage none and counts no
-// tools). A vantage-lost record (written before any probe ran) reads
-// vantage 'lost' with nothing attempted.
+// tools). A vantage-lost record reads vantage 'lost' — with nothing
+// attempted when the read threw before any probe ran, with its probe table
+// when the read answered and no family returned data. 'restricted' (records
+// before 2026-11-16) is a vantage nothing failed in: it reads as 'full', so
+// the first run after the upgrade does not say "vantage restricted → full".
+// `notServed` names the unsupported families whose store answered it keeps
+// no such thing (the record's probeUnsupported), with the reason.
 function vantageFacts(record) {
   if (!isRecord(record)) return null;
   const lost = record.outcome === 'vantage-lost';
@@ -443,13 +453,19 @@ function vantageFacts(record) {
   const failed = probeList(probes?.failed);
   const unsupported = probeList(probes?.unsupported);
   const tools = num(record.toolsExposedCount);
-  const declared = typeof record.vantage === 'string' && record.vantage ? record.vantage : null;
+  const stated = typeof record.vantage === 'string' && record.vantage ? record.vantage : null;
+  const declared = stated === 'restricted' ? 'full' : stated;
   if (!lost && !attempted.length && tools === null && (declared === null || declared === 'none')) return null;
+  const notServed = {};
+  for (const [family, entry] of Object.entries(isRecord(record.probeUnsupported) ? record.probeUnsupported : {})) {
+    if (isRecord(entry) && typeof entry.reason === 'string' && entry.reason) notServed[family] = ws(entry.reason);
+  }
   return {
     vantage: lost ? 'lost' : (declared || 'none'),
     attempted, failed, unsupported,
     toolsExposedCount: tools,
     errors: isRecord(record.probeErrors) ? record.probeErrors : {},
+    notServed,
   };
 }
 
@@ -479,6 +495,7 @@ function vantageChange(previous, current) {
       const to = probeState(c, family);
       if (from === to) continue;
       if (to === 'failed') bits.push(`probe family ${family} newly failed${c.errors[family] != null && str(c.errors[family]) ? ` (${str(c.errors[family])})` : ''}`);
+      else if (to === 'unsupported' && c.notServed[family]) bits.push(`probe family ${family} not served here (${c.notServed[family]}) — not counted as a failure`);
       else if (to === 'unsupported') bits.push(`probe family ${family} no longer exposed`);
       else if (to === 'not probed') bits.push(`probe family ${family} no longer probed`);
       else bits.push(from === 'failed' ? `probe family ${family} answers again` : `probe family ${family} now exposed`);

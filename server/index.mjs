@@ -1196,9 +1196,11 @@ app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/sched
 // The audit (STORE_PLAN slice 5): one journey.run row for every attempt
 // past the 404, the Pack B target refusal and the notify refusals, written after the engine returned or threw — on the 200
 // path the record's seven scalars; on the 502 path the same keys from the
-// route's own clock, the outcome `vantage-lost` when a live source lost its
-// vantage (the engine wrote a run record and may have notified) else
-// `error` (no record exists). Never the error's message: it may carry a URL
+// route's own clock, the outcome `vantage-lost` when Pack B lost its
+// vantage — the live read threw, or no probe family returned data (the
+// engine wrote a run record and may have notified; the 502 body says
+// `outcome: 'vantage-lost'` too) — else `error` (no record exists). Never
+// the error's message: it may carry a URL
 // or a credential. A journey with `notify` adds `notify: { urlEnv, status,
 // attempts }` — the hook's variable name, sent | skipped | failed (null when
 // no record exists) and how many requests left the server — never any part
@@ -1468,13 +1470,17 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       ...(auditError ? { auditError } : {}),
     });
   } catch (e) {
+    // runJourney marks an error vantageLost only when it wrote the lost run's
+    // record — the live fetch threw, or Pack B's probe table says no family
+    // returned data (a file holding a live export included).
+    const lost = !!e?.vantageLost;
     const auditError = auditAfter(req, runRow({
-      startedAt: t0.toISOString(), outcome: def.packB?.mcp && e?.vantageLost ? 'vantage-lost' : 'error',
+      startedAt: t0.toISOString(), outcome: lost ? 'vantage-lost' : 'error',
       alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: Date.now() - t0.getTime(),
       // The vantage-lost path posted from the record it kept (runJourney sets e.notify).
       ...notifyOf(e?.notify),
     }), { tag: 'journey' });
-    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...extra, ...(auditError ? { auditError } : {}) });
+    res.status(502).json({ ok: false, error: redactTarget(String(e.message), mcpTarget), ...(lost ? { outcome: 'vantage-lost' } : {}), ...extra, ...(auditError ? { auditError } : {}) });
   }
 }
 
@@ -2162,9 +2168,20 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
   }
   // A family the MCP doesn't expose at all is a tier restriction, not an
   // empty answer — one honest line, never the per-family "returned empty"
-  // narrative below.
-  if (probesUnsupported.length) {
-    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+  // narrative below. A family whose store answered it keeps no such thing
+  // (mcp.probeUnsupported.<family>: scrape targets a federated store does
+  // not list) is said as what was answered.
+  const notServed = {};
+  const reasonOf = (v) => { try { const r = JSON.parse(String(v))?.reason; return typeof r === 'string' && r ? r : null; } catch { return null; } };
+  for (const [k, v] of Object.entries(ann)) {
+    if (k.startsWith('mcp.probeUnsupported.')) notServed[k.slice('mcp.probeUnsupported.'.length)] = reasonOf(v);
+  }
+  const notOffered = probesUnsupported.filter((family) => !(family in notServed));
+  if (notOffered.length) {
+    summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${notOffered.join(', ')}.`);
+  }
+  for (const family of probesUnsupported.filter((f) => f in notServed)) {
+    summary.warnings.push(`Not served here — ${family.replace(/_/g, ' ')}${notServed[family] ? `: ${notServed[family]}` : ''}. Not counted as a failure; a comparison reports the family as not checked.`);
   }
   // The stack panel is gated on metrics_query alone; a restricted tier
   // reads "not attempted", never "healthy" and never "absent".
@@ -2180,11 +2197,13 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
     summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
   }
   const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
+  // A family that FAILED got no answer (an outage, or a read that was refused) — never "returned empty".
+  const gotNothing = (k) => (probesFailed.includes(k) ? `got no answer${probeErrors[k] ? ` (${probeErrors[k]})` : ''}` : 'returned empty');
   if (attemptedNothing('recording_rules')) {
-    summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
+    summary.warnings.push(`Recording-rule probes ${gotNothing('recording_rules')}. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn't exposing them yet.`);
   }
   if (attemptedNothing('alert_rules')) {
-    summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
+    summary.warnings.push(`Alert-rule probes ${gotNothing('alert_rules')}. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn't be surfaced.`);
   }
   if (attemptedNothing('dashboards')) {
     summary.warnings.push(probesFailed.includes('dashboards')
@@ -2195,10 +2214,10 @@ async function draftFromMcp(target, { packName: rawName = null, label = null, on
     summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
   }
   if (attemptedNothing('scrape_configs')) {
-    summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');
+    summary.warnings.push(`Scrape-config probes ${gotNothing('scrape_configs')}. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.`);
   }
   if (attemptedNothing('metric_names')) {
-    summary.warnings.push('Metric-inventory probes returned empty. The metrics actually exported by the platform couldn\'t be enumerated.');
+    summary.warnings.push(`Metric-inventory probes ${gotNothing('metric_names')}. The metrics actually exported by the platform couldn't be enumerated.`);
   }
   // Hard guards regardless of probes (the live state has to satisfy SOMETHING).
   if ((pack.spec?.slis || []).length === 0) {

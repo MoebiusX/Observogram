@@ -116,14 +116,31 @@ applied. Keys are only ever added here, never renamed or removed.
 
 **Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
 original shape (`isLiveDraft`, `failed`, `empty`, `attempted`, `partial` —
-`partial` still means *outright probe failures only*) and gains optional keys
+`partial` means a probe family failed, or answered only in part) and gains optional keys
 a downstream host may ignore: `unsupported` (probe families the MCP tier does
-not expose, from `mcp.probesUnsupported`), `errors` (`{ family: message }`
-from `mcp.probeErrors.<family>`), and `vantage` — `'full'` (nothing failed,
-nothing unsupported), `'partial'` (some probes failed), `'restricted'` (nothing
-failed, some families not exposed), `'lost'` (every attempted family failed or
-is unsupported), `'none'` (not a live draft). Keys are only ever added here,
-never renamed or removed.
+not expose, from `mcp.probesUnsupported`, or whose store answered it keeps no
+such thing), `errors` (`{ family: message }`
+from `mcp.probeErrors.<family>`), `succeeded` (the families that returned
+data), `inPart` (families answered in part, `mcp.probesPartial`), `notServed`
+(`{ family: reason }` from `mcp.probeUnsupported.<family>`), `probeTable`
+(whether the pack recorded one) and `vantage` (2026-11-16): `'lost'` when the
+probe table says no family returned data — whatever tools/list advertised,
+every family empty included; `'partial'` when a family failed or answered in
+part; `'full'` otherwise (a family not offered or not served never degrades
+it); `'none'` without `mcp.url`, or for a live export that recorded no probe
+table at all. `'restricted'` is no longer produced — a host that stored it
+reads it as `'full'`. Keys are only ever added here, never renamed or removed.
+
+**Figures over nothing are null (2026-11-16).** `diffPacks`' `summary.alignment`
+and `summary.jaccard`, `applySetAsides`' recomputed summary and chain rollup,
+`compareBranches`' `rollup.integrityMean` / `integrityPct` and
+`rollup.ladder.integrityMean` / `integrityPct` with no declared chain (the
+ladder averages only the chains that have a figure), a branch's
+`ladderIntegrity` / `ladderIntegrityPct` when nothing on it was observable,
+and `computeWeightedDeltaRisk`'s `health` / `healthPct` with nothing to weigh
+are `null`, never 1 / 100. `branchRecordsFromGraph` keeps a null ladder figure
+and `chainSummary` averages the finite ones. A host that formats these as a
+percentage must say "not measured" for null.
 
 **Optional inputs `computeDiagnosticGrade` reads.** The diff-bucket path
 counts a layer bucket's optional `scaffold` array (placeholders `diffPacks`
@@ -133,7 +150,12 @@ optional `notObserved` array the same way (`N not checked`): artefacts one
 pack holds in a family the other could not observe move no weight. The Fresh criterion
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
-and every score are unchanged, and no import was added.
+and every score are unchanged, and no import was added. Drift-free earns
+nothing where nothing backs it (2026-11-16, grade schema still 5): a diff
+whose union is empty (`nothing compared - …`, on the chain construct too), a
+bucket path with only placeholders to weigh, a live source with no diff that
+asked or recorded no probe family, or whose families returned no data — each
+scored 1 before.
 
 **Grade schema 5 (0.8.33): Multi-modal and Comprehensive earn by how far
 they get.** `computeDiagnosticGrade` returns `gradeSchema: 5` (the new export

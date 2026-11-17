@@ -211,7 +211,12 @@ try {
   assert(/1 scrape job\(s\) down \+ 2 unhealthy rule\(s\)/.test(breaches[0].detail) && /job alertmanager down/.test(breaches[0].detail) && /rule rr_bad unhealthy/.test(breaches[0].detail),
          'maxUnhealthy breach names both counts and the offenders', breaches[0].detail);
   assert(evaluateGate({ maxUnhealthy: 3 }, unhealthyFacts).length === 0, 'maxUnhealthy at the exact sum passes (> not >=)');
-  assert(evaluateGate({ maxUnhealthy: 0 }, facts).length === 0, 'maxUnhealthy: 0 passes when nothing is down or unhealthy');
+  // C5: no count and no probe table is no health read at all — the gate cannot pass on it.
+  breaches = evaluateGate({ maxUnhealthy: 0 }, facts);
+  assert(breaches.length === 1 && breaches[0].criterion === 'maxUnhealthy'
+         && breaches[0].detail === 'no on-wire health was read — no scrape-job or rule-health count was given — the gate cannot pass on an absent count (max 0)',
+         'maxUnhealthy fails closed when no on-wire health was read (no counts, no probe table)', breaches);
+  assert(evaluateGate({ maxUnhealthy: 0 }, { ...facts, scrapeJobsDown: 0, unhealthyRules: 0 }).length === 0, 'maxUnhealthy: 0 passes when nothing is down or unhealthy');
 
   // --- a strict gate fails the run with outcome gate-failed ---
   writeFileSync(join(TMP, 'journeys', 'strict.journey.yaml'), [
@@ -1009,7 +1014,10 @@ try {
   assert(lostRec.packB.source === `mcp:${lostUrl}` && lostRec.packA.name === 'payment-service', 'vantage-lost record names both sources', { a: lostRec.packA, b: lostRec.packB });
   const lostRaw = readFileSync(join(TMP, 'runs', 'lost', `${lostRec.startedAt.replace(/[:.]/g, '-')}.json`), 'utf8');
   assert(!lostRaw.includes('URLTOKSECRET'), 'the vantage-lost record on disk carries no credential parameter from packB.mcp.url', lostRaw.match(/"source": "[^"]*"/g));
-  assert(typeof lostRec.startedAt === 'string' && typeof lostRec.tookMs === 'number' && lostRec.gate.breaches.length === 0, 'vantage-lost record has the timing fields and no fabricated breaches');
+  assert(typeof lostRec.startedAt === 'string' && typeof lostRec.tookMs === 'number'
+         && JSON.stringify(lostRec.gate.breaches) === JSON.stringify([{ criterion: 'vantage', detail: 'vantage lost: the live side did not answer — nothing was compared' }])
+         && lostRec.vantage === 'lost' && !('probes' in lostRec),
+         'vantage-lost record has the timing fields, vantage lost, and the one breach it carries is the vantage\'s (C4) — no probe table: the read threw first', lostRec);
   assert(lostRec.grade === undefined && lostRec.drift === undefined, 'vantage-lost record carries no grade or drift — nothing was verified');
   const lostMd = renderJourneyMarkdown(lostRec);
   assert(/VANTAGE LOST/.test(lostMd) && /unreachable/.test(lostMd) && /No verdict/.test(lostMd), 'markdown reports a vantage loss as no verdict', lostMd.split('\n')[0]);
@@ -1099,6 +1107,11 @@ try {
   // identical run to run unless `fakeRules` is set, so a chain transition
   // is under the test's control.
   let fakeRules = false;
+  // The scrape-targets family answers with data (one job Pack A does not
+  // declare): a live read that returned no data at all is a lost run (C3/C4),
+  // so every run here that is not about a lost vantage keeps one family
+  // answering. Flipped off once, for the run that is.
+  let fakeTargets = true;
   // Inventory coverage: when set, the fake advertises the metrics query tool and answers the
   // journey's per-kind queries — QM1 up, QM2 down, QMX not inventoried; host h1 only; 3 queues on QM1.
   let fakeInventory = false;
@@ -1122,13 +1135,14 @@ try {
     if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp' } });
     if (msg.method === 'notifications/initialized') return send({});
     if (msg.method === 'tools/list') {
-      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeRules ? ['list_recording_rules'] : []), ...(fakeInventory ? ['metrics_query'] : [])].map(name => ({ name })) });
+      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeTargets ? ['metrics_targets'] : []), ...(fakeRules ? ['list_recording_rules'] : []), ...(fakeInventory ? ['metrics_query'] : [])].map(name => ({ name })) });
     }
     if (msg.method === 'tools/call') {
       const name = msg.params?.name;
       const result = name === 'system_health' ? { services: [] }
         : name === 'system_topology' ? { dependencies: [] }
         : name === 'anomalies_baselines' ? { baselines: [] }
+        : name === 'metrics_targets' ? { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] }
         : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
         : name === 'metrics_query' ? fakeMetrics(msg.params?.arguments?.query)
         : {};
@@ -1299,9 +1313,10 @@ try {
     const availChain = t3.branches.find(b => b.title === 'api_availability_99_9');
     assert(c3.causes[0].chains.join() === availChain.title && c3.causes[0].rootKeys.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
            'the cause names the chain by title (its identity key apart) and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, rootKeys: c3.causes[0].rootKeys, nodes: c3.causes[0].nodes });
-    assert(c3.vantage && c3.vantage.changed === true && /vantage lost → restricted/.test(c3.vantage.detail) && /probe family recording_rules now exposed/.test(c3.vantage.detail) && /4 → 5 MCP tools exposed/.test(c3.vantage.detail),
+    // The vantage word stays full (scrape targets answered on both runs; a family not offered never degrades it, C3).
+    assert(c3.vantage && c3.vantage.changed === true && c3.vantage.detail === 'probe family recording_rules now exposed · 5 → 6 MCP tools exposed',
            'the vantage block reports the family that now answers and the tool count — beside the causes, never among them', c3.vantage);
-    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
+    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: probe family recording_rules now exposed · 5 → 6 MCP tools exposed`).test(md3),
            'markdown lists the ranked causes with their chains by title, then the vantage change', md3.split('### Candidate causes')[1]);
     assert(JSON.stringify(t3json.causes) === JSON.stringify(c3), 'causes round-trip through the history file');
     assert(causeLine(t3) === `top cause: [observogram-deploy] ${c3.causes[0].evidence}` && causeLine(t2) === 'no candidate causes' && causeLine(t1) === 'no candidate causes' && causeLine({ outcome: 'vantage-lost' }) === 'no candidate causes',
@@ -1334,10 +1349,10 @@ try {
     }
     // `journey list` while t3 is the newest run: the top candidate cause
     // rides on the line of the journey whose chains got worse — and, since
-    // the vantage moved too (lost → restricted), that change beside it.
+    // the vantage moved too (a family now exposed), that change beside it.
     {
       const cliT3 = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
-      assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending · vantage changed: vantage lost → restricted · probe family recording_rules now exposed · 4 → 5 MCP tools exposed$/m.test(cliT3.stdout),
+      assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending · vantage changed: probe family recording_rules now exposed · 5 → 6 MCP tools exposed$/m.test(cliT3.stdout),
              'journey list appends the top candidate cause to the journey whose chains got worse, then the vantage change beside it', cliT3.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     }
     // Review B-M6: a hand-dropped notes.json in the run directory is not a
@@ -1362,12 +1377,12 @@ try {
     assert(t4.transition.since === t3.startedAt && t4.transition.reason === null && t4.transition.any === false && t4.transition.skipped.length === 1 && t4.transition.skipped[0].startedAt === lostAt && t4.transition.skipped[0].outcome === 'vantage-lost',
            'after a vantage-lost run the transition is against the newest record with chains (since = t3) and names the skipped record', t4.transition);
     assert(t4.livePack.kept === true && t4.livePack.reason === `previous run ${lostAt} lost its vantage`, 'the run after a vantage loss keeps its snapshot for that reason', t4.livePack);
-    assert(t4.causes.causes.length === 0 && t4.causes.vantage.changed === true && /^vantage lost → restricted/.test(t4.causes.vantage.detail) && !('transitions' in t4.causes),
-           'the vantage is compared against the lost run (lost → restricted); nothing got worse against t3; the ranker\'s copy of the diff is not persisted', t4.causes);
+    assert(t4.causes.causes.length === 0 && t4.causes.vantage.changed === true && /^vantage lost → full/.test(t4.causes.vantage.detail) && !('transitions' in t4.causes),
+           'the vantage is compared against the lost run (lost → full); nothing got worse against t3; the ranker\'s copy of the diff is not persisted', t4.causes);
     const md4 = renderJourneyMarkdown(t4);
     assert(new RegExp(`### Transitions since previous run\\n\\n_previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}_\\n\\n_no chain changed since ${escapeRe(t3.startedAt)}_`).test(md4),
            'the transitions section says the previous run lost its vantage and which run it compared against', md4.split('### Transitions since previous run')[1]?.slice(0, 300));
-    assert(new RegExp(`_no chain got worse since ${escapeRe(t3.startedAt)} \\(previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}\\)_\\n\\nvantage changed: vantage lost → restricted`).test(md4),
+    assert(new RegExp(`_no chain got worse since ${escapeRe(t3.startedAt)} \\(previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}\\)_\\n\\nvantage changed: vantage lost → full`).test(md4),
            'the causes section words the baseline the same way, then the vantage change', md4.split('### Candidate causes')[1]?.slice(0, 400));
     assert(!/no previous run/.test(md4), 'a run after an outage never claims there was no previous run', md4);
     const lostFirst = readJourneyRuns('fake-live').find(r => r.outcome === 'vantage-lost');
@@ -1446,7 +1461,7 @@ try {
       const cliV = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
       assert(/^vantage-worse\tpass · .* · no candidate causes · vantage changed: vantage full → partial · probe family recording_rules newly failed \(HTTP 502\)$/m.test(cliV.stdout),
              'a vantage-only worse transition lists no candidate causes AND the vantage change — the change is named, never blamed', cliV.stdout.split('\n').filter(l => l.startsWith('vantage-worse')));
-      assert(/^fake-live\tpass · .* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliV.stdout) && !/^fake-live\t.*top cause/m.test(cliV.stdout),
+      assert(/^fake-live\tpass · .* · ladder [^\n]* · vantage changed: vantage lost → full[^\n]*$/m.test(cliV.stdout) && !/^fake-live\t.*top cause/m.test(cliV.stdout),
              'the run after the outage (no cause) still lists the vantage change', cliV.stdout.split('\n').filter(l => l.startsWith('fake-live')));
       assert(!/^fake-always\t.*vantage changed/m.test(cliV.stdout), 'a run whose vantage did not change gets no vantage segment');
     }
@@ -1518,7 +1533,7 @@ try {
     // The CLI line shows the chains segment for a live journey too.
     const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
     assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
-    assert(/^fake-live\t.* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliLive.stdout) && !/^fake-live\t.*top cause/m.test(cliLive.stdout),
+    assert(/^fake-live\t.* · ladder [^\n]* · vantage changed: vantage lost → full[^\n]*$/m.test(cliLive.stdout) && !/^fake-live\t.*top cause/m.test(cliLive.stdout),
            'once the run after the outage is the newest, the line carries the vantage change and no cause segment (nothing got worse against t3)', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
@@ -1620,10 +1635,12 @@ try {
       const send = (result) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'notify-test-session' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result })); };
       if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp-notify' } });
       if (msg.method === 'notifications/initialized') return send({});
-      if (msg.method === 'tools/list') return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(rulesExposed ? ['list_recording_rules'] : [])].map(name => ({ name })) });
+      // Scrape targets answer with data on every run (a read that returned no data is a lost run, C4).
+      if (msg.method === 'tools/list') return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', 'metrics_targets', ...(rulesExposed ? ['list_recording_rules'] : [])].map(name => ({ name })) });
       if (msg.method === 'tools/call') {
         const name = msg.params?.name;
         const result = name === 'system_health' ? { services: [] } : name === 'system_topology' ? { dependencies: [] } : name === 'anomalies_baselines' ? { baselines: [] }
+          : name === 'metrics_targets' ? { targets: [{ job: 'shop-api', instance: 'shop-api:9100', health: 'up' }] }
           : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
           : {};
         return send({ content: [{ type: 'text', text: JSON.stringify(result) }] });

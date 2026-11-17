@@ -55,6 +55,37 @@ export function stageNoun(stage) {
   return String(stage.label).replace(/\s*\(.*\)\s*$/, '').toLowerCase();
 }
 
+// The capability ids in the order the stages read them — the probe families'
+// order wherever a record names "the first" of them.
+const STAGE_CAPABILITY_ORDER = Object.freeze(LIVE_STAGES.flatMap((stage) => stage.capabilities));
+const familyRank = (family) => {
+  const i = STAGE_CAPABILITY_ORDER.indexOf(family);
+  return i === -1 ? STAGE_CAPABILITY_ORDER.length : i;
+};
+// `families` in stage order (an unknown family last, by name); a copy.
+export function inStageOrder(families) {
+  return [...(Array.isArray(families) ? families : [])]
+    .sort((x, y) => familyRank(x) - familyRank(y) || String(x).localeCompare(String(y), 'en'));
+}
+
+const isPlainRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// The first probe error a run record carries (or the live facts a journey
+// derives from Pack B: { probes, probeErrors }), in stage order:
+// { family, error } for the first failed family that names one; a lost run's
+// own `error` when no failed family does (the read failed before any probe,
+// or no family failed and none returned data); { family, error: null } when
+// a family failed without a message; null when nothing failed and the run
+// was not lost. A reader shows it as the reason a row reads "did not answer".
+export function firstProbeError(record) {
+  const failed = inStageOrder((Array.isArray(record?.probes?.failed) ? record.probes.failed : []).filter((f) => typeof f === 'string' && f));
+  const errors = isPlainRecord(record?.probeErrors) ? record.probeErrors : {};
+  for (const family of failed) {
+    if (typeof errors[family] === 'string' && errors[family]) return { family, error: errors[family] };
+  }
+  if (record?.outcome === 'vantage-lost' && typeof record.error === 'string' && record.error) return { family: failed[0] ?? null, error: record.error };
+  return failed.length ? { family: failed[0], error: null } : null;
+}
+
 // What a fetch of `kind` will do, from an MCP's mapped inventory
 // (capabilityInventory(names).capabilities: { <capabilityId>: [advertised
 // names] }). `complete` is false when tools/list was not read whole (a cursor

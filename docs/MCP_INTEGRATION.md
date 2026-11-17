@@ -678,10 +678,15 @@ metadata:
     mcp.toolsUnmatched: "logs_search"                # advertised, no probe pattern yet
     mcp.probesAttempted: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
     mcp.probesSucceeded: "recording_rules,alert_rules,metric_names,scrape_configs"
-    mcp.probesEmpty: ""                              # a probe answered with an empty list
-    mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
-    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
+    mcp.probesEmpty: ""                              # a probe answered with an empty list — from a read that was allowed
+    mcp.probesFailed: "dashboards"                   # every candidate errored, or one was refused (401/403) and none answered with data — a hole of unknown size
+    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage; or a family whose store answered it keeps none (below)
     mcp.probeErrors.dashboards: "grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503"   # every failed candidate of a FAILED family, first first, each trimmed to 200 chars
+    # mcp.probeUnsupported.scrape_configs: '{"reason":"metrics_targets: HTTP 404 Not Found","since":"…","tools":["metrics_targets"]}'
+    #   only for a family whose every candidate's store answered it keeps no such thing — scrape targets
+    #   answered 400 / 404 / 405 (a federated or remote-write store), an Alertmanager status that carries no
+    #   configuration — the reason is the tool and the status, never the answer's text; `remembered: true`
+    #   when a journey's memory kept it unsupported through an answer that said nothing of the kind (a 503)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
@@ -851,7 +856,7 @@ all. Which annotation feeds which rung:
 | `mcp.observed.alert_rules` + `mcp.discovered.alert_rules_unhealthy` | `burn_rate` | linked by the observation's `labels` (`slo`, `burn_rate`, `window_short`, `window_long`) first, then by the compiler's `<slo>_burn_<factor>x_<short>_<long>` name convention on the SLO id (fractional factors accepted: `_burn_14_4x_` ↔ 14.4), narrowed to the declared windows — the `alert_rules_unhealthy` list is narrowed the same way and the detail names the matched / failing rule(s); judged stale against the longest linked `interval` when the entries carry one |
 | `mcp.discovered.slis_unhealthy` | `sli` | `present_unhealthy`; otherwise `exists` ("liveness rides on its recording rules") |
 | `mcp.versions.<product>` | `backend` | `alive` when the product answered its version probe |
-| `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed or is not exposed (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent" |
+| `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`, `mcp.probeUnsupported.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed, is not exposed, or is not served here (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent"; a not-served family's detail says what was answered (`probe family scrape_configs not served here (metrics_targets: HTTP 404 Not Found) — not counted as a failure`) |
 | `mcp.observedAt.<family>`, else `mcp.fetchStartedAt`, else `mcp.refreshedAt` | all | "now" for the staleness judgement — the instant the family answered, the fetch's own clock, or (older packs) the caller's refresh stamp, named in the detail only on that last fallback. No interval means `healthy` / `alive` only within a 1 h ceiling ("interval unknown; 1 h ceiling applied"), older reads `present_stale`; a timestamp more than 1 s past "now" reads `alive` with "timestamp <n>s in the future (clock skew); freshness not judged", never `healthy`; no clock at all means staleness is not judged ("no fetch timestamp on the wire (mcp.refreshedAt missing)" when the observation has a timestamp and the pack has none) |
 
 A pack without any `mcp.` annotation reads `exists` for every present node
@@ -1081,9 +1086,10 @@ an `mcp:` source reads the annotations above into its run record:
 
 | Record field | Source annotations |
 |---|---|
-| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names) |
+| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names); `probes.partial` only when a family answered in part (`mcp.probesPartial`) |
 | `probeErrors.<family>` | `mcp.probeErrors.<family>` |
-| `vantage` | derived — `full` / `partial` / `restricted` / `lost` / `none` (same rule as `partialLiveEvidence`) |
+| `probeUnsupported.<family>` | `mcp.probeUnsupported.<family>` — `{ reason, since, tools, remembered? }`, only when a family was not served here |
+| `vantage` | derived (`partialLiveEvidence`): `lost` when the probe table says no family returned data — whatever tools/list advertised, an endpoint whose every family answered empty included; `partial` when a family failed or answered in part; else `full` (a family not offered or not served never degrades it); `none` without a live read, or for a live export that recorded no probe table at all (no probe record). `restricted` is no longer produced; an older record that says it reads as `full` |
 | `toolsExposedCount` | `mcp.toolsExposedCount` (`null` when absent) |
 | `scrapeJobsDown` | count of `mcp.discovered.scrape_jobs_down` |
 | `unhealthyRules` | count of `mcp.discovered.recording_rules_unhealthy` + `mcp.discovered.alert_rules_unhealthy` |
@@ -1095,18 +1101,46 @@ Two gate keys act on them:
 
 ```yaml
 gate:
-  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size),
-                                # or when the vantage is entirely lost; EMPTY and UNSUPPORTED
-                                # families never breach on their own
-  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N
+  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size — a
+                                # refusal with nothing else included) or answered in part, or when
+                                # the vantage is entirely lost; EMPTY and UNSUPPORTED families never
+                                # breach on their own, and a Pack B that is no live read passes
+  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N — and when
+                                # no health family (scrape targets, recording rules, alert rules)
+                                # was read at all, a Pack B that is no live read included
 ```
 
-When the fetch itself fails (endpoint unreachable, core tools unavailable) the
-journey writes a run record with `outcome: vantage-lost` and the error before
-rethrowing — the CLI still exits `2`, the studio still answers 502 — so a total
-loss of the observation point shows in the drift history instead of leaving a
-gap. Configuration errors (missing pack file, unset `authEnv`) never reach the
-wire and leave no record.
+Every gate key fails closed on an absent figure: `minAlignmentPct` breaches
+on a run that compared nothing ("nothing was compared — no alignment figure
+to hold against the required 85%"), and so do `maxDeclaredNotLive` and
+`maxDrifted`; `requireGradePass` breaches without a grade and
+`maxLiveAgeHours` without a refresh time. Set-asides that empty the
+comparison leave the counts a true zero (a person's decision) and the figure
+none.
+
+A lost vantage is a lost run. When the fetch itself fails (endpoint
+unreachable, core tools unavailable) — or when the read answered and its probe
+table says no family returned data (a file holding such a live export
+included) — the journey writes ONE run record with `outcome: vantage-lost`:
+the error (the first probe error in stage order, or `no probe family returned
+data`), `vantage: lost`, the probe table when the read answered, and one gate
+breach `{ criterion: 'vantage', detail }` — no grade, no match. It then
+rethrows: the CLI still exits `2`, the server answers 502 (with `outcome:
+'vantage-lost'` in the body) and rows the attempt as `vantage-lost`, and a
+notification goes out as for any loss — so a total loss of the observation
+point shows in the drift history instead of leaving a gap, and never as a
+figure. Configuration errors (missing pack file, unset `authEnv`) never reach
+the wire and leave no record.
+
+A family the endpoint answered it does not serve (`probeUnsupported`) is
+remembered by the journey for its live source: the newest record of the same
+Pack B source that carries a probe table is handed to the next read
+(`probeMemoryOf`, fetchMcp's `probeMemory`). The family is still asked every
+run, and its answer decides — data, an honest empty, a refusal or the
+not-served answer again; only an answer that says nothing of the kind (a 503,
+a timeout) from the same tools keeps it unsupported, `remembered: true`,
+instead of a new failure. The memory is per journey and live source: two
+journeys on one endpoint each learn it from their own first answer.
 
 The journey grades on the same construct as the studio: the requirement-chain
 comparison (`comparePackBranches`) is attached to the diff as
@@ -1413,9 +1447,11 @@ is score, then kind order, then evidence text — deterministic; every
 evidence string collapses whitespace (labels, actor, deploy id, artifact
 and product came off the wire or the request). `vantage` names what
 changed about the vantage itself since the PREVIOUS run — `vantage lost →
-restricted`, `probe family recording_rules newly failed (HTTP 502)` / `no
-longer exposed` / `no longer probed` / `answers again` / `now exposed`,
-`4 → 5 MCP tools exposed`, the `live` flips — and rides beside the causes,
+full`, `probe family recording_rules newly failed (HTTP 502)` / `no
+longer exposed` / `not served here (<reason>) — not counted as a failure` /
+`no longer probed` / `answers again` / `now exposed`,
+`4 → 5 MCP tools exposed`, the `live` flips (an older record's `restricted`
+reads as `full`) — and rides beside the causes,
 never among them; `null` when neither record carries vantage facts (two
 file-sourced runs) and no version flipped.
 
