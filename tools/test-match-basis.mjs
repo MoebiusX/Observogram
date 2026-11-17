@@ -445,3 +445,111 @@ test('the requirement-chain ladder says a family not served here, not "not expos
   const metric = g.branches.flatMap((b) => b.nodes).find((n) => n.kind === 'metric' && n.status === 'declared_only');
   assert.equal(metric.ladder.detail, 'probe family metric_names not served here (m: HTTP 404 Not Found) — not counted as a failure');
 });
+
+// ---------------------------------------------------------------------------
+// The record gains nothing secret (P7): a URL in a probe error keeps no query,
+// no fragment and no userinfo — masked where the fetcher writes it
+// ---------------------------------------------------------------------------
+
+test('a probe error keeps no query string, userinfo or token of a URL — in the pack, the lost run\'s record and its notification (P7)', async () => {
+  const { fetchMcp, maskProbeErrorUrls } = await import('./fetch-live-pack.mjs');
+  const leakyNames = { __isError: 'Error: HTTP 401: Unauthorized — https://viewer:pw-mb-1@grafana.example.com/api/datasources/proxy/uid/x/api/v1/labels?match[]=up&api_key=KEY-MB-2&token=TOK-MB-3#frag' };
+  const leakySearch = { __isError: 'HTTP 403: Forbidden — https://grafana.example.com/api/search?limit=100&sessionid=SID-MB-4' };
+  const hidden = ['pw-mb-1', 'viewer', 'KEY-MB-2', 'TOK-MB-3', 'SID-MB-4', 'api_key', 'sessionid', 'match[]', 'limit=100', '#frag'];
+  const leaks = (v) => hidden.filter((s) => (typeof v === 'string' ? v : JSON.stringify(v)).includes(s));
+  const fake = await fakeMcp({ [T.names]: leakyNames, [T.search]: leakySearch, [T.rules]: REFUSED, [T.targets]: REFUSED });
+  try {
+    // The pack: the probe errors and the reasons a declared artefact is not checked.
+    const fetched = await fetchMcp({ mcpUrl: fake.url, refreshedAt: AT });
+    const ann = buildCanonicalPack({ refreshedAt: AT, mcpUrl: fake.url, ...fetched }).metadata.annotations;
+    assert.equal(ann['mcp.probeErrors.metric_names'], `${T.names}: Error: HTTP 401: Unauthorized — https://grafana.example.com/api/datasources/proxy/uid/x/api/v1/labels`, 'the reason stays: the tool, the status, where the read went');
+    assert.equal(ann['mcp.probeErrors.dashboards'].split(' · ')[0], `${T.search}: HTTP 403: Forbidden — https://grafana.example.com/api/search`);
+    assert.deepEqual(leaks(ann), [], 'no query, fragment or userinfo of a URL reaches the pack');
+    // The lost run the read makes (every family refused): its record and its notification.
+    journeyFile('mb-leaky', [`packB: { mcp: { url: ${fake.url} } }`, 'notify: { urlEnv: MB_HOOK_URL, on: always, format: json }']);
+    const posted = [];
+    let err = null;
+    try {
+      await runJourney(loadJourneyDef('mb-leaky'), {
+        resolveNotify: (n) => notifyTargetOf(n, { url: 'https://hooks.example.com/journey' }),
+        notifier: async ({ body }) => { posted.push(body); return { sent: true, httpStatus: 200, attempts: 1, tookMs: 1 }; },
+      });
+    } catch (e) { err = e; }
+    assert.ok(err?.vantageLost === true && leaks(err.message).length === 0, 'a lost run, its thrown error masked too');
+    const [lost] = readJourneyRuns('mb-leaky');
+    assert.equal(lost.error, ann['mcp.probeErrors.metric_names'], 'the lost run names the masked first probe error');
+    assert.deepEqual(leaks(lost), [], 'nothing of a query, a fragment or userinfo in the run record');
+    assert.equal(posted.length, 1, 'the loss was posted');
+    assert.deepEqual(leaks(posted[0]), [], 'nor in the notification');
+  } finally {
+    await fake.close();
+  }
+  // The rule's edges: a URL with nothing to drop is left as written (no normalising); one that does
+  // not parse keeps what precedes its query, its userinfo masked.
+  assert.equal(maskProbeErrorUrls('see https://grafana.example.com and http://h.example.test:9090/api/v1/targets'), 'see https://grafana.example.com and http://h.example.test:9090/api/v1/targets');
+  assert.equal(maskProbeErrorUrls('dial http://u:p@[bad/x?token=1 failed'), 'dial http://***@[bad/x failed');
+});
+
+// ---------------------------------------------------------------------------
+// The readers read the lost run the engine writes (tools/lib/run-basis.mjs,
+// its studio copy, the notification, the Neuron model, the Run's toast)
+// ---------------------------------------------------------------------------
+
+test('the readers read the lost run the engine writes: the breach by its criterion, the first probe error by live-fetch\'s rule, no data said as no data, the 502\'s outcome', async () => {
+  const rb = await import('./lib/run-basis.mjs');
+  const om = await import('../studio/overview-model.mjs');
+  const { buildNotifyPayload, renderNotifyText } = await import('./lib/journey-notify.mjs');
+  const { buildJourneyDetail } = await import('./lib/neuron-model.mjs');
+  const { servicesRefusal } = await import('../studio/services-api.mjs');
+  // A read whose every family failed (an error to name) and an export whose every family answered
+  // empty (none to name).
+  const fake = await fakeMcp({ [T.names]: { __isError: 'HTTP 502 Bad Gateway' }, [T.search]: REFUSED, [T.rules]: REFUSED, [T.targets]: REFUSED });
+  let refused;
+  try {
+    journeyFile('mb-read-refused', [`packB: { mcp: { url: ${fake.url} } }`]);
+    await assert.rejects(runJourney(loadJourneyDef('mb-read-refused')), (e) => e.vantageLost === true);
+    [refused] = readJourneyRuns('mb-read-refused');
+  } finally {
+    await fake.close();
+  }
+  journeyFile('mb-read-empty', [`packB: { file: ${packFile('mb-read-empty', liveExport(Object.fromEntries(FAMILIES.map((f) => [f, outcome('empty')]))))} }`]);
+  await assert.rejects(runJourney(loadJourneyDef('mb-read-empty')), (e) => e.vantageLost === true && e.message === NO_PROBE_DATA);
+  const [empty] = readJourneyRuns('mb-read-empty');
+
+  // The first probe error: the family live-fetch's rule names (the one the engine wrote the lost
+  // run's error by), its first entry, on one line — the same in run-basis and in the studio's copy.
+  const first = firstProbeErrorLib(refused);
+  assert.deepEqual([first.family, refused.error], ['metric_names', first.error]);
+  for (const read of [rb.firstProbeErrorOf, om.firstProbeErrorOf]) assert.equal(read(refused), rb.safeErrorText(first.error.split(' · ')[0]));
+  assert.deepEqual([rb.runBasis(refused).state, rb.runBasis(refused).text], ['unreachable', `Live did not answer — ${T.names}: HTTP 502 Bad Gateway`]);
+  // In the stage order whatever order a record lists its families in (every probe family and one unknown).
+  const reversed = [...FAMILIES, 'zz_unknown'].reverse();
+  assert.deepEqual(rb.basisFactsOf({ probes: { failed: reversed } }).probesFailed, inStageOrder(reversed).slice(0, 8));
+  assert.deepEqual(om.basisFactsOf({ probes: { failed: reversed } }).probesFailed, inStageOrder(reversed).slice(0, 8));
+  // No data: the lost run's own error (no probe family returned data) is no probe error to show.
+  assert.equal(empty.error, NO_PROBE_DATA);
+  assert.equal(firstProbeErrorLib(empty)?.error, NO_PROBE_DATA, 'the engine\'s rule falls back to the lost run\'s own error');
+  for (const read of [rb.firstProbeErrorOf, om.firstProbeErrorOf]) assert.equal(read(empty), null);
+  assert.deepEqual([rb.runBasis(empty).state, rb.runBasis(empty).text, rb.basisSummary(empty).liveLoss], ['unreachable', 'Live returned no data', 'no-data']);
+
+  // The one breach a lost run carries, read by its criterion.
+  for (const rec of [refused, empty]) {
+    assert.deepEqual(rec.gate.breaches.map((b) => b.criterion), ['vantage']);
+    const text = renderNotifyText(buildNotifyPayload({ record: rec, decision: { reason: 'vantage lost', triggers: ['vantage-lost'] } }));
+    assert.match(text, /\n- vantage — vantage lost: no probe family returned data/, 'the notification names the breach by its criterion');
+    const detail = buildJourneyDetail({ name: rec.journey }, [rec]);
+    assert.deepEqual(detail.breachFrequency, [{ key: 'vantage', count: 1 }], 'the Neuron model counts it by its criterion');
+  }
+  assert.deepEqual([buildJourneyDetail({ name: 'e' }, [empty]).latest.noData, buildJourneyDetail({ name: 'r' }, [refused]).latest.firstProbeError], [true, rb.firstProbeErrorOf(refused)]);
+
+  // The 502's outcome: the studio's error carries it, and the Run's toast says the run was recorded —
+  // from the refreshed listing when it shows the record, from the 502 when it does not yet.
+  const e = servicesRefusal(502, JSON.stringify({ ok: false, outcome: 'vantage-lost', error: NO_PROBE_DATA }));
+  assert.deepEqual([e.status, e.outcome, e.message], [502, 'vantage-lost', `502: ${NO_PROBE_DATA}`]);
+  assert.equal(servicesRefusal(502, { ok: false, error: 'x' }).outcome, undefined, 'a 502 that recorded nothing names no outcome');
+  const listedEmpty = { name: 'shop.prod', lastRun: { startedAt: empty.startedAt, outcome: empty.outcome, ...rb.basisSummary(empty) } };
+  assert.deepEqual(om.runRecordedToast({ name: 'Shop', env: 'prod', before: null, after: listedEmpty, outcome: e.outcome, error: e.message }), { text: 'Shop · prod: Live returned no data.', tone: 'error' });
+  assert.deepEqual(om.runRecordedToast({ name: 'Shop', env: 'prod', before: null, after: null, outcome: e.outcome, error: e.message }),
+    { text: `Shop · prod: Unreachable — ${NO_PROBE_DATA}.`, tone: 'error', unlisted: true }, 'recorded, though the listing does not show it yet');
+  assert.equal(om.runRecordedToast({ name: 'Shop', env: 'prod', before: null, after: null, outcome: null, error: '502: fetch failed' }), null, 'nothing says it was recorded: the run did not finish');
+});

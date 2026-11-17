@@ -88,7 +88,7 @@ test('buildJourneyDetail: latest record blocks, notify null vs absent, vantage-l
   const noNotify = run(2); delete noNotify.notify;
   const d = buildJourneyDetail({ name: 'j', gate: { a: 1 } }, [run(0), noNotify, lost(3)]);
   assert.equal(d.runs, 3);
-  assert.deepEqual(d.outcomes, { pass: 2, 'gate-failed': 0, 'vantage-lost': 1 });
+  assert.deepEqual(d.outcomes, { pass: 2, 'gate-failed': 0, 'nothing-compared': 0, 'vantage-lost': 1, 'scan-partial': 0 });
   assert.equal(d.latest.outcome, 'vantage-lost');
   assert.equal(d.latest.error, 'ECONNREFUSED');
   assert.equal(d.latest.drift, null);
@@ -136,7 +136,7 @@ test('buildNeuronModel: fleet counts, paired deltas, chains, exposure, delivery,
   assert.equal(m.fleet.scheduled, 1);
   assert.equal(m.fleet.notifying, 1);
   assert.equal(m.fleet.stackGated, 1);
-  assert.deepEqual(m.fleet.outcomes, { pass: 1, 'gate-failed': 1, 'vantage-lost': 1, 'never-run': 1 });
+  assert.deepEqual(m.fleet.outcomes, { pass: 1, 'gate-failed': 1, 'nothing-compared': 0, 'vantage-lost': 1, 'scan-partial': 0, 'never-run': 1 });
   // latest alignment: a 88, b gap, c 90 → mean 89 over n=2; paired delta: a (88-89)=-1, b (gap → skipped), c (no previous) → -1
   assert.deepEqual(m.fleet.alignment, { mean: 89, delta: -1, n: 2 });
   assert.deepEqual(m.fleet.grade, { mean: 79, delta: -1, n: 2 });
@@ -288,8 +288,8 @@ test('inventory coverage: per-journey series from the records, fleet sums from t
   assert.deepEqual(buildNeuronModel({ journeys: [entry('c', C)], runsByName: { c: C } }).fleet.inventory, { journeys: 0, unchecked: [], kinds: {}, counted: {} });
 });
 
-test('OUTCOMES is the record vocabulary', () => {
-  assert.deepEqual([...OUTCOMES], ['pass', 'gate-failed', 'vantage-lost']);
+test('OUTCOMES is the record vocabulary, read as a reader says it (a pass over nothing compared is nothing-compared; a stopped Run is scan-partial)', () => {
+  assert.deepEqual([...OUTCOMES], ['pass', 'gate-failed', 'nothing-compared', 'vantage-lost', 'scan-partial']);
 });
 
 test('deliveryState: sent / skipped / failed from the record; null → not configured; absent → unknown only where notify is declared', () => {
@@ -491,4 +491,87 @@ test("the fleet's grade delta pairs a run only with one scored under the same gr
   // A record naming no schema is schema 1.
   assert.deepEqual(fleetOf([scored(0, 60), scored(1, 64, 1)]).grade.delta, 4);
   assert.equal(fleetOf([scored(0, 60), scored(1, 64, 5)]).grade.delta, null);
+});
+
+// ---------- no figure without its basis (tools/lib/run-basis.mjs) ----------
+
+const emptyOld = (i) => run(i, { drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } });
+const allFailed = (i) => run(i, { probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session' } });
+const noData = (i) => ({ journey: 'j', startedAt: at(i), tookMs: 5, outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost',
+  probes: { attempted: ['alert_rules'], succeeded: [], empty: ['alert_rules'], failed: [], unsupported: [] }, probeErrors: {}, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } });
+const stoppedRec = (i) => ({ journey: 'j', startedAt: at(i), tookMs: 7, outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)',
+  packA: { source: 'file: a', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, gate: { thresholds: {}, breaches: [] } });
+// The listing's last run as GET /api/journeys gives it now: its reading and what it rests on.
+const listed = async (rec) => ({ startedAt: rec.startedAt, outcome: rec.outcome, ...(await import('./lib/run-basis.mjs')).basisSummary(rec), gradeScore: rec.grade?.score ?? null, breaches: rec.gate?.breaches?.length ?? 0 });
+
+test('NM1 nothing compared and a live side that gave nothing are gaps, never points: metricPoints, the heat cell\'s reading, the fleet mean and the paired delta skip them; an older record\'s 100 over an empty union included; a run not comparable with the one before pairs with nothing', () => {
+  const runs = [run(0), emptyOld(1), allFailed(2), noData(3)];
+  assert.deepEqual(metricPoints(runs, 'alignment').map((p) => p.v), [90, null, null, null], 'never [.., 100, ..]');
+  assert.deepEqual(metricPoints(runs, 'grade').map((p) => p.v), [80, 79, null, null], 'the grade where the live side gave data');
+  assert.deepEqual(metricPoints(runs).map((p) => p.outcome), ['pass', 'nothing-compared', 'vantage-lost', 'vantage-lost']);
+  const m = buildNeuronModel({ journeys: [entry('j', runs)], runsByName: { j: runs } });
+  assert.deepEqual(m.heatmap.rows[0].cells.map((c) => [c.outcome, c.alignment]), [['pass', 90], ['nothing-compared', null], ['vantage-lost', null], ['vantage-lost', null]]);
+  assert.deepEqual([m.fleet.alignment.mean, m.fleet.alignment.n], [null, 0], 'the latest compared nothing: no mean');
+  assert.equal(m.perJourney.j.latest.alignment, null);
+  assert.deepEqual(trendReadiness(m.perJourney.j).observed, 1, 'one run observed');
+  // Not comparable with the run before: no delta across the pair.
+  const nc = [run(0), run(1, { comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' } })];
+  const mn = buildNeuronModel({ journeys: [entry('j', nc)], runsByName: { j: nc } });
+  assert.deepEqual([mn.fleet.alignment.delta, mn.fleet.grade.delta, mn.perJourney.j.latest.comparable], [null, null, false]);
+  const ok = [run(0), run(1)];
+  assert.equal(buildNeuronModel({ journeys: [entry('j', ok)], runsByName: { j: ok } }).fleet.alignment.delta, -1, 'a comparable pair keeps its delta');
+});
+
+test('NM2 a stopped Run is an outcome of its own: the record\'s reading, the per-journey and fleet counts, its delivery, the attention reasons (stopped on a partial scan before nothing compared); latestCheck carries the first probe error and whether live gave no data', async () => {
+  const runs = [run(0), stoppedRec(1)];
+  const d = buildJourneyDetail(entry('j', runs), runs);
+  assert.deepEqual([d.outcomes['scan-partial'], d.latest.outcome], [1, 'scan-partial']);
+  const c = latestCheck(d, { now: T0 + 3600e3 });
+  assert.deepEqual([c.outcome, c.scan?.notRead, c.scan?.candidates, c.delivery], ['scan-partial', 49, 220, 'not-configured']);
+  assert.equal(deliveryState(buildJourneyDetail(entry('j', runs, { notify: { urlEnv: 'X_URL' } }), runs)), 'skipped', 'a stopped Run without a delivery posted nothing — never "Delivery unknown"');
+  // The listing's readings, counted.
+  const journeys = [
+    { ...entry('a', [emptyOld(0)]), lastRun: await listed(emptyOld(0)) },
+    { ...entry('b', [allFailed(0)]), lastRun: await listed(allFailed(0)) },
+    { ...entry('c', [run(0)]), lastRun: await listed(run(0)) },
+    entry('d', []),
+  ];
+  const m = buildNeuronModel({ journeys, runsByName: { a: [emptyOld(0)], b: [allFailed(0)], c: [run(0)], d: [] } });
+  assert.deepEqual(m.fleet.outcomes, { pass: 1, 'gate-failed': 0, 'nothing-compared': 1, 'vantage-lost': 1, 'scan-partial': 0, 'never-run': 1 }, 'a pass over nothing, and over a live side that gave nothing, is not counted passed');
+  // The attention list, in its order.
+  const at2 = buildNeuronModel({ journeys: [entry('s', runs), entry('n', [emptyOld(0)]), entry('l', [noData(0)])], runsByName: { s: runs, n: [emptyOld(0)], l: [noData(0)] } });
+  assert.deepEqual(attentionList(at2, { now: T0 + 3600e3 }).map((a) => [a.name, a.reason]), [['l', 'vantage-lost'], ['s', 'scan-partial'], ['n', 'nothing-compared']]);
+  const cl = latestCheck(at2.perJourney.l, { now: T0 + 3600e3 });
+  assert.deepEqual([cl.outcome, cl.noData, cl.firstProbeError], ['vantage-lost', true, null]);
+  const cf = latestCheck(buildJourneyDetail(entry('f', [allFailed(0)]), [allFailed(0)]), { now: T0 + 3600e3 });
+  assert.deepEqual([cf.outcome, cf.noData, cf.firstProbeError], ['vantage-lost', false, 'alert_rules_list: HTTP 500: no backend session']);
+  assert.deepEqual(buildJourneyDetail(entry('k', [run(0, { gate: { breaches: [{ key: 'vantage', detail: 'x' }] } })]), [run(0, { gate: { breaches: [{ key: 'vantage', detail: 'x' }] } })]).breachFrequency, [{ key: 'vantage', count: 1 }], 'a breach written { key } is counted by it');
+});
+
+test('NM3 the Journeys and Neuron views\' words: alignment only over a comparison, unable to observe with the first probe error, Partial scan with its counts, Nothing compared never with a pass mark — alignmentWords, runResultText, outcomeLabel, renderRunsTable, CHECK_OUTCOMES, evidenceLine', async () => {
+  const jv = await import('../studio/journeys-view.mjs');
+  const nv = await import('../studio/neuron-view.mjs');
+  assert.deepEqual([jv.alignmentWords(emptyOld(0)), jv.alignmentWords(run(0)), jv.alignmentWords({ drift: { alignmentPct: null, aligned: 1 } })], ['nothing compared', 'alignment 90%', 'alignment not recorded']);
+  assert.equal(jv.runResultText('j', emptyOld(0)), 'j: nothing compared');
+  assert.equal(jv.runResultText('j', allFailed(0)), 'j: unable to observe — the live source did not answer: alert_rules_list: HTTP 500: no backend session');
+  assert.equal(jv.runResultText('j', noData(0)), 'j: unable to observe — the live source answered, but returned no data');
+  assert.equal(jv.runResultText('j', stoppedRec(0)), 'j: stopped — partial scan — 49 of 220 files not read; the previous pack is kept');
+  assert.equal(jv.runResultText('j', run(0)), 'j: passed · alignment 90%');
+  assert.equal(jv.outcomeLabel(await listed(emptyOld(0))), 'Nothing compared · grade 80%', 'never "Passed · alignment 100%"');
+  assert.equal(jv.outcomeLabel(await listed(allFailed(0))), 'Unable to observe · the live source did not answer: alert_rules_list: HTTP 500: no backend session');
+  assert.equal(jv.outcomeLabel({ startedAt: at(0), outcome: 'vantage-lost', alignmentPct: null, gradeScore: null }), 'Unable to observe · the live source did not answer', 'an older listing reads as before');
+  assert.equal(jv.outcomeLabel(await listed(run(0))), 'Passed · alignment 90% · grade 80%');
+  const table = jv.renderRunsTable([emptyOld(0), allFailed(1), stoppedRec(2), noData(3)]);
+  assert.ok(table.includes('<span class="sr-text">Nothing compared</span>') && table.includes('<td>nothing compared</td>'));
+  assert.ok(table.includes('unable to observe — the live source did not answer: alert_rules_list: HTTP 500: no backend session'));
+  assert.ok(table.includes('partial scan: 49 of 220 files not read') && table.includes('<td>no live data</td>'));
+  assert.ok(!/100%|null%|undefined%|✅/.test(table), 'no figure, and no pass mark, over nothing');
+  assert.deepEqual([jv.CHECK_OUTCOMES['scan-partial'].label, jv.CHECK_OUTCOMES['nothing-compared'].label], ['Partial scan', 'Nothing compared']);
+  assert.ok(![jv.CHECK_OUTCOMES['scan-partial'].icon, jv.CHECK_OUTCOMES['nothing-compared'].icon].includes('✅'));
+  const ds = buildJourneyDetail(entry('j', [stoppedRec(0)]), [stoppedRec(0)]);
+  assert.deepEqual(nv.evidenceLine(ds, latestCheck(ds)), ['Missing prerequisite', 'The repository was read in part: partial scan — 49 of 220 files not read; the previous pack is kept. The run stopped before comparing anything.']);
+  const dn = buildJourneyDetail(entry('j', [noData(0)]), [noData(0)]);
+  assert.ok(nv.evidenceLine(dn, latestCheck(dn))[1].includes('answered, but returned no data'));
+  const de = buildJourneyDetail(entry('j', [emptyOld(0)]), [emptyOld(0)]);
+  assert.ok(nv.evidenceLine(de, latestCheck(de))[1].startsWith('nothing compared · grade 80%'), 'the facts say nothing compared, never alignment 100%');
 });

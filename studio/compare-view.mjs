@@ -43,6 +43,8 @@ import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 // traceability section's own ux-kit imports can never collide with these.
 import * as diagUx from './ux-kit.mjs';
 import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
+// The weighted health only over a comparison (null: nothing compared, never 100).
+import { healthPctOf } from './verdict-ui.mjs';
 import { buildRemediationFlowViewModel, packDeclaresRemediation, remediationFlowEngine, remediationFlowHtml } from './remediation-flow-view.mjs';
 // A service's grade criteria in Diagnose: what the grade is taken over, and who may keep a set.
 import { criteriaScope, groupNames, notGradedSentence, CRITERION_LONG } from './grade-criteria-ui.mjs';
@@ -1347,7 +1349,7 @@ function assessmentVerdictHtml(d, ctx, diagnostic, whatIf = false, aside = 0) {
   const toneFor = (p, t) => (p >= t ? 'ok' : p > 0 ? 'warn' : 'fail');
   const rollup = diagnostic.traceabilityGraph?.rollup;
   const live = !d.hasLive ? { v: 'Not checked', note: isStatic() ? staticRemedy('live-measure', staticInput()) : 'connect MCP or scan live to verify', tone: 'warn' }
-    : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
+    : d.vantage === 'lost' ? { v: 'Could not observe', note: `a live check ran, but ${d.lostWords || 'no probe family returned data'}`, tone: 'warn' }
       : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
         : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
           : { v: 'Detected', note: 'the live probes answered for this read', tone: 'ok' };
@@ -1832,6 +1834,8 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
     onlyInA: totA,
     onlyInB: totB,
   });
+  // No health figure over nothing compared (verdict-ui.mjs healthPctOf).
+  const healthPct = healthPctOf(weighted, totAligned);
   const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
   const legendHtml = [
     { n: totAligned, units: 0, color: C_ALIGNED, label: 'Aligned', hint: 'shape matches', weightClass: 'good', weightText: '0' },
@@ -1890,7 +1894,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
   const weightsBody = `
     <div class="drift-charts">
       <figure class="drift-chart">
-        ${donut([{ value: totAligned, color: C_ALIGNED }, { value: weighted.totalBadness, color: 'var(--ink-4)' }], weighted.healthPct + '%')}
+        ${donut([{ value: totAligned, color: C_ALIGNED }, { value: weighted.totalBadness, color: 'var(--ink-4)' }], healthPct === null ? '—' : `${healthPct}%`)}
         <figcaption>weighted health</figcaption>
       </figure>
       <span class="drift-charts-arrow" aria-hidden="true">→</span>
@@ -1904,7 +1908,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       </figure>
       <ul class="drift-legend">${legendHtml}</ul>
     </div>
-    <p class="drift-risk-note">${escapeHtml(frame.riskNote)} Health = aligned / (aligned + weighted badness): ${weighted.healthPct}% here, ${escapeHtml(fmtUnits(weighted.totalBadness))} badness units. A structural difference (an additional artefact) costs a fraction of a quality gap (a missing or changed one).</p>`;
+    <p class="drift-risk-note">${escapeHtml(frame.riskNote)} Health = aligned / (aligned + weighted badness): ${healthPct === null ? 'not measured here, because nothing was compared' : `${healthPct}% here`}, ${escapeHtml(fmtUnits(weighted.totalBadness))} badness units. A structural difference (an additional artefact) costs a fraction of a quality gap (a missing or changed one).</p>`;
 
   wrap.innerHTML = `
     <div class="benchmark-block-head">
@@ -2451,7 +2455,8 @@ export function renderDiagnosticTraceabilityGraph(graph) {
   const branches = Array.isArray(graph?.branches) ? graph.branches : [];
   const rollup = graph?.rollup;
   if (!rollup || !branches.length) return '';
-  const fmtPct = (n) => `${Math.round((Number(n) || 0) * 100)}%`;
+  // A rollup with nothing declared, or a ladder nothing on which was observable, has no figure (null): a dash, never 0% or 100%.
+  const fmtPct = (n) => (typeof n === 'number' && Number.isFinite(n) ? `${Math.round(n * 100)}%` : '—');
   const fmtStatus = (status) => ({
     intact: 'Intact',
     partial: 'Partial',
@@ -4189,7 +4194,7 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
     if (/never been verified|no mcp\.refreshedAt/i.test(c.detail || '')) b.title = 'Never verified against live';
     else if (/vantage lost/i.test(c.detail || '')) {
       b.title = 'The last live check saw nothing';
-      b.why = 'A live refresh ran but no probe family answered, so it is not a fresh look at production.';
+      b.why = 'A live refresh ran but no probe family returned data, so it is not a fresh look at production.';
     }
   } else if (c.key === 'comprehensive') {
     b.actionLabel = 'View layer scores';
@@ -4242,6 +4247,11 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   // stamp: hasMcpSource is true even when every probe family failed.
   const liveSeen = hasLive && (vantage === 'full' || vantage === 'restricted');
   const liveUnknown = hasLive && vantage === 'none';   // refreshed, no probe record
+  // A lost vantage is a read where no probe family returned data (C3): it
+  // "answered" nothing only when every family it asked failed — a family that
+  // answered empty, or none asked, returned no data.
+  const lostWords = vantage !== 'lost' ? null
+    : (liveEvidence?.failed || []).length && !(liveEvidence?.empty || []).length ? 'no probe family answered' : 'no probe family returned data';
   const scorePct = Math.round(audit.scorePctExact);
   const gradeName = sentenceCase(ig.label);
   const pointsPerCheck = overall.total ? 100 / overall.total : 0;
@@ -4250,12 +4260,12 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   // 0. An evidence caution (not scored) leads: it changes how every other
   //    reading — above all the comparison — should be read.
   if (liveEvidence && (liveEvidence.partial || vantage === 'lost')) {
-    const silent = [...(liveEvidence.failed || []), ...(liveEvidence.unsupported || [])];
+    const silent = [...(liveEvidence.failed || []), ...(liveEvidence.empty || []), ...(liveEvidence.unsupported || [])];
     blockers.push({
       key: 'live-evidence', scored: false, tone: 'warn',
       title: vantage === 'lost' ? 'The live check could not observe anything' : 'Live evidence is partial',
       observed: vantage === 'lost'
-        ? `no probe family answered${silent.length ? ` (${silent.join(', ')})` : ''}`
+        ? `${lostWords}${silent.length ? ` (${silent.join(', ')})` : ''}`
         : `${liveEvidence.failed.length} of ${liveEvidence.attempted.length} live probes failed (${liveEvidence.failed.join(', ')})`,
       why: 'Surfaces the live draft could not see look like drift, so differences may be overstated.',
       fix: remedy ? remedy('live-evidence-fix') : 'Draft the live pack again from MCP once the endpoint is healthy, then re-check.',
@@ -4425,7 +4435,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     primary, secondary,
     causes: blockers.slice(0, 3).map(b => ({ title: b.title, why: b.why, actionLabel: b.actionLabel, actionId: b.actionId, tone: b.tone })),
     blockers, gapCount, qualityGaps, checks,
-    passes, hasLive, liveSeen, vantage, ig, audit, scorePct, gradeName,
+    passes, hasLive, liveSeen, vantage, lostWords, ig, audit, scorePct, gradeName,
     compared: !!digest && digest.totals.universe > 0, haveB,
     // A product lens narrows what was compared: "no gaps" then holds inside the lens only.
     lensed: !!digest?.useLens, lensLabel,

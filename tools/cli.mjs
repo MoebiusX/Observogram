@@ -147,6 +147,9 @@ Run a command with no/invalid args to see its own usage.`);
 async function runJourneyCommand([sub, ...args]) {
   const journeyLib = await import('./lib/journey.mjs');
   if (sub === 'list') {
+    // A run's figure as every reader reads it (tools/lib/run-basis.mjs): the match only over a
+    // comparison, a live side that gave nothing said with its first probe error.
+    const basis = await import('./lib/run-basis.mjs');
     const names = journeyLib.listJourneys();
     if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); return; }
     for (const n of names) {
@@ -160,10 +163,12 @@ async function runJourneyCommand([sub, ...args]) {
       // — never "skipped").
       const notifySeg = last && journeyLib.notifyStatusLine(last) ? ` · ${journeyLib.notifyStatusLine(last)}` : '';
       const inventorySeg = last && journeyLib.inventoryStatusLine(last) ? ` · ${journeyLib.inventoryStatusLine(last)}` : '';
+      const reading = last ? basis.readingOutcome(last) : null;
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
-        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}${notifySeg}`
-        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
+        : last.outcome === 'scan-partial' ? `scan-partial · ${last.startedAt} · ${basis.runBasis(last).text}${notifySeg}`
+        : reading === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${basis.runBasis(last).text}${notifySeg}`
+        : `${reading} · ${last.startedAt} · ${basis.alignmentWords(last)} · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
           // Step 4: the top candidate cause, only when a chain got worse —
           // a quiet run has nothing to explain — and, whenever the vantage
           // itself changed, that change beside it (never as a cause).

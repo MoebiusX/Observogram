@@ -70,7 +70,7 @@ import {
 } from './lib/contracts/stack-self-metrics.mjs';
 import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-run-evidence.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
-import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
+import { stripMcpUrl, safeMcpUrl, redactCredentials } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
 import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty } from './lib/live-fetch.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
@@ -380,6 +380,25 @@ const OBSERVED_ERROR_LENGTH = 200;
 
 const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
 
+// A URL inside a probe failure, as the pack, the run record and a
+// notification may keep it (P7: reasons and counts only — a backend's error
+// text can echo the link it was asked with): the repository's URL rule
+// (tools/lib/mcp-url-safety.mjs safeMcpUrl: no userinfo, no fragment, no
+// credential parameter) and no query string at all. A URL with none of
+// these stays as it was written; one that does not parse keeps what
+// precedes its query, its userinfo masked.
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+export function maskProbeErrorUrls(text) {
+  return String(text ?? '').replace(URL_IN_TEXT, (raw) => {
+    if (!/[?#]/.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(raw)) return raw;
+    const safe = safeMcpUrl(raw);
+    if (safe === null) return redactCredentials(raw).replace(/[?#].*$/, '');
+    const url = new URL(safe);
+    url.search = '';
+    return url.href;
+  });
+}
+
 // Why a probe family got no answer: every candidate that failed, in the
 // order the cascade tried them, each named and trimmed like any observed
 // error — `metrics_label_values: HTTP 502 · metrics_metadata: MCP error
@@ -388,7 +407,8 @@ const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSE
 // public MCP restarted, the one message kept was the last fallback's
 // schema complaint, which read like a contract change). A message that
 // already begins with the tool's name is not prefixed twice. Null when no
-// attempted candidate left a message.
+// attempted candidate left a message. Every URL in it is masked
+// (maskProbeErrorUrls) before it is cut, so a cut never keeps half a query.
 const PROBE_FAILURE_SEPARATOR = ' · ';
 function probeFailureText(attempted, probeFailures) {
   const entries = [];
@@ -402,7 +422,7 @@ function probeFailureText(attempted, probeFailures) {
     const msg = probeFailures?.[name];
     if (typeof msg !== 'string' || !msg) continue;
     const named = msg.startsWith(`${name}:`) ? msg : `${name}: ${msg}`;
-    entries.push(trimError(named));
+    entries.push(trimError(maskProbeErrorUrls(named)));
   }
   return entries.length ? entries.join(PROBE_FAILURE_SEPARATOR) : null;
 }
@@ -1349,10 +1369,10 @@ export function buildCanonicalPack({
     'mcp.toolsUnmatched':      unmatchedTools.map(t => t.name).join(','),
   };
   // WHY a probe family got no answer — every failed candidate's message in
-  // the order tried, each trimmed like every other observed error. Absent
-  // when nothing errored.
+  // the order tried, each trimmed like every other observed error, every URL
+  // in it masked (whoever wrote the entry). Absent when nothing errored.
   for (const [family, msg] of Object.entries(probeErrors)) {
-    annotations[`mcp.probeErrors.${family}`] = msg;
+    annotations[`mcp.probeErrors.${family}`] = maskProbeErrorUrls(msg);
   }
   // P6: why a family is unsupported when the store behind the MCP answered
   // that it keeps no such thing (or a journey remembered it did): JSON

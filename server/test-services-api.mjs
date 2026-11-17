@@ -1757,6 +1757,17 @@ test('a journey\'s live Pack B (D6): capture names the registered endpoint, keep
     const lostRecord = (await call('oscar', 'GET', '/api/journeys/j-oscar-lost/runs?limit=1')).json.runs?.[0];
     assert.ok(lostRecord && lostRecord.outcome === 'vantage-lost' && lostRecord.vantage === 'lost' && lostRecord.grade === undefined && lostRecord.drift === undefined
       && lostRecord.gate.breaches.length === 1 && lostRecord.gate.breaches[0].criterion === 'vantage', 'the record: lost, its one vantage breach, no grade, no match');
+    // The readers, end to end: the listing lists the lost run as no data (its error is no probe error),
+    // the studio's error carries the 502's outcome, and the Run's toast says what the listing says.
+    const listedLost = (await call('oscar', 'GET', '/api/journeys')).json.journeys.find((j) => j.name === 'j-oscar-lost');
+    assert.deepEqual([listedLost.lastRun.outcome, listedLost.lastRun.reading, listedLost.lastRun.vantage, listedLost.lastRun.liveLoss, listedLost.lastRun.firstProbeError, listedLost.lastRun.alignmentPct, listedLost.lastRun.breaches],
+      ['vantage-lost', 'vantage-lost', 'lost', 'no-data', null, null, 1], 'the listing: a lost run whose live side returned no data, no figure, its one breach');
+    const { servicesRefusal } = await import('../studio/services-api.mjs');
+    const { runRecordedToast } = await import('../studio/overview-model.mjs');
+    const refusal = servicesRefusal(byLost.status, byLost.text);
+    assert.deepEqual([refusal.status, refusal.outcome], [502, 'vantage-lost'], 'the studio reads the 502\'s outcome');
+    assert.deepEqual(runRecordedToast({ name: 'Payment', env: 'prod', before: null, after: listedLost, outcome: refusal.outcome, error: refusal.message }),
+      { text: 'Payment · prod: Live returned no data.', tone: 'error' }, 'the Run\'s toast: recorded, and why');
     await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${epId}`);
     const gone = await call('oscar', 'POST', '/api/journeys/j-registered/run', {});
     assert.deepEqual([gone.status, gone.json.ok], [400, false], `an endpoint deleted since the capture: 400 before any run — ${gone.text.slice(0, 200)}`);

@@ -120,11 +120,14 @@ import { loadVerdicts, emptyVerdicts } from './verdicts.mjs';
 import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMode, decideOverviewLayout, UI_MODE_KEY, UI_MODES, OVERVIEW_LAYOUT_KEY, OVERVIEW_LAYOUTS, START_IDLE, startChoose, startAdopted,
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
-  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, scopeSummary, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
+  uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
   targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
+// The Run's toast: its facts from the board's model, its words from the board's renderer.
+import { runToastModel, runRecordedToast } from './overview-model.mjs';
+import { runToastText } from './overview-view.mjs';
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
 import { createControlRoomDriver } from './control-room-api.mjs';
 import { buildControlRoomModel } from './control-room-model.mjs';
@@ -2012,6 +2015,8 @@ function overviewModel() {
     pending: !f.loaded,
     diagnostic, diagnosticError, decision,
     journeys: f.journeys, journeysError: f.journeysError, run: f.run,
+    // A Run that stopped on a partial scan after that check (overview-api.mjs loadOverviewFacts), said beside it.
+    stopped: f.stopped || null,
     running: f.running, startError: f.startError,
     layout: overviewLayout, cells: posture?.cells || null, unkinded: posture?.unkinded || null, layered: f.layered, conformance: f.conformance, conformanceError: f.conformanceError,
     now: Date.now(), productName: state.brand?.chrome?.name || '', access: state.access, start: overviewStart, startable: true,
@@ -2693,8 +2698,14 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   let error = null;
   let need = null;
   let out = null;
+  // The 502's own word for a run it recorded (`vantage-lost`), null otherwise.
+  let outcome = null;
+  // The row's journeys-listing entry before the Run: a Run the server answered with an error but
+  // recorded (a live side that gave nothing, a scan that lost files) is the newer record after it.
+  const listed = () => (Array.isArray(listFacts.journeys) && row.journey ? listFacts.journeys.find((j) => j?.name === row.journey) || null : null);
+  const before = listed();
   try { out = await runServiceRecord(row.serviceId, row.env, { repoAuth: token }); }
-  catch (e) { error = e?.message || String(e); need = e?.repoAuth || null; }
+  catch (e) { error = e?.message || String(e); need = e?.repoAuth || null; outcome = typeof e?.outcome === 'string' ? e.outcome : null; }
   // A token its host refused is no use for the next Run either.
   if (host && need?.refused) repoTokens.delete(host);
   listRunning = { ...listRunning };
@@ -2702,19 +2713,19 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   if (error) listResults = { ...listResults, [key]: { error, repoAuth: need } };
   await refreshCatalogue();
   await refreshListFacts();
+  // The run finished and was recorded: its reading is the toast, and the row's cell says it — the
+  // server's refusal is not repeated beneath the row (it stays there while the listing does not show
+  // the record the 502 says it kept).
+  const recorded = error ? runRecordedToast({ name: row.name, env: row.env, before, after: (Array.isArray(listFacts.journeys) ? listFacts.journeys : []).find((j) => j?.name === (row.journey || listRow(key)?.journey)) || null, outcome, error }) : null;
+  if (recorded && !need && !recorded.unlisted) listResults = { ...listResults, [key]: null };
   if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
+  if (recorded) { toast(recorded.text, recorded.tone); return; }
   if (error) { announce(`${row.name} · ${row.env}: the run did not finish.`); return; }
-  const g = out?.record?.grade;
-  const pct = out?.record?.drift?.alignmentPct;
-  // What the scan left out rides in the toast (and on the board, from the
-  // run record): never a grade over files nobody was told were missing.
-  const scan = out?.scan;
-  const of = Number(scan?.candidates) > Number(scan?.files) ? ` of ${scan.candidates}` : '';
-  const lost = scanLossText(scan);
-  const read = scan ? `${scan.files ?? '?'}${of} files from ${scan.source || 'the repository'}${lost ? ` (${lost})` : ''}` : `the pack file${row.repository?.text ? ` ${row.repository.text}` : ''}`;
-  // The live read's scope, as the record says it (none: the whole estate the endpoint serves).
-  const scoped = out?.record?.packB?.liveScope ? `, live read scoped to ${scopeSummary(out.record.packB.liveScope)}` : '';
-  toast(`${row.name} · ${row.env} checked: ${read}${scoped}${g?.letter ? `, grade ${g.letter}` : ''}${Number.isFinite(pct) ? `, ${Math.round(pct)}% matches live` : ''}.`, lost ? '' : 'ok');
+  // What the scan left out, what the live side did not read and what was not compared ride in the
+  // toast (and on the board, from the run record): never a grade or a match over what nobody was told
+  // was missing (overview-model.mjs runToastModel, overview-view.mjs runToastText).
+  const m = runToastModel(row, out);
+  toast(runToastText(m), m.tone);
 }
 
 // Signing in to a repository host (server/repo-sign-in.mjs): a window of the

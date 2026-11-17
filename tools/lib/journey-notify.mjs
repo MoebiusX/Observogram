@@ -69,41 +69,55 @@ export function newCandidateCauses(record, previousRun) {
 // The decision: { send, reason, triggers[] }. Pure over the record and the
 // newest previous record (null on a first run).
 //   always      → send every run.
-//   breach      → send on a non-pass run (gate-failed / vantage-lost) and
-//                 once when a breach clears; a pass after a pass is skipped.
+//   breach      → send on a non-pass run (gate-failed / vantage-lost / a Run
+//                 that stopped on a partial scan) and once when a breach
+//                 clears; a pass after a pass is skipped.
 //   transitions → send when the outcome changed, a chain got worse, a new
 //                 candidate cause appeared or the vantage changed. A first
 //                 run is a baseline, not a transition (skipped — this
 //                 deliberately differs from livePackDecision, which keeps
 //                 the first run's snapshot). A vantage-lost run after a
 //                 vantage-lost run is skipped: nobody is paged every 15 min
-//                 for an outage they already know about.
+//                 for an outage they already know about; so is a stopped Run
+//                 after a stopped Run.
+// A stopped Run (outcome scan-partial) is no observation of the artefacts: a
+// run after one changed no outcome since it, its vantage did not "change"
+// from it, and no breach "cleared". A run the record marks not comparable
+// with the one before (record.comparable.withPrevious false: its scan read
+// other files) is said so, never as a chain that got worse or an outcome
+// that changed across the pair.
 export function notifyDecision({ policy = NOTIFY_DEFAULT_POLICY, record, previousRun = null } = {}) {
   const p = NOTIFY_POLICIES.includes(policy) ? policy : NOTIFY_DEFAULT_POLICY;
   const outcome = String(record?.outcome ?? 'unknown');
   const prev = isObj(previousRun) ? previousRun : null;
   const prevOutcome = prev ? String(prev.outcome ?? 'unknown') : null;
   if (p === 'always') return { send: true, reason: 'policy always', triggers: ['always'] };
+  const prevStopped = prevOutcome === 'scan-partial';
   if (p === 'breach') {
     if (outcome === 'vantage-lost') return { send: true, reason: 'vantage lost', triggers: ['vantage-lost'] };
+    if (outcome === 'scan-partial') return { send: true, reason: 'partial scan', triggers: ['scan-partial'] };
     if (outcome !== 'pass') {
-      const criteria = (Array.isArray(record?.gate?.breaches) ? record.gate.breaches : []).map(b => String(b?.criterion ?? '?'));
+      const criteria = (Array.isArray(record?.gate?.breaches) ? record.gate.breaches : []).map(b => String(b?.criterion ?? b?.key ?? '?'));
       const uniq = [...new Set(criteria)];
       return { send: true, reason: `gate failed: ${uniq.join(', ') || outcome}`, triggers: uniq.length ? uniq.map(c => `gate-failed:${c}`) : [`gate-failed`] };
     }
-    if (prev && prevOutcome !== 'pass') return { send: true, reason: `breach cleared: ${prevOutcome} → pass`, triggers: ['breach-cleared'] };
+    if (prev && prevOutcome !== 'pass' && !prevStopped) return { send: true, reason: `breach cleared: ${prevOutcome} → pass`, triggers: ['breach-cleared'] };
     return { send: false, reason: 'outcome pass, no breach to clear', triggers: [] };
   }
   // transitions
   if (!prev) return { send: false, reason: 'first run: no previous run to compare against', triggers: [] };
-  if (outcome === 'vantage-lost' && prevOutcome === 'vantage-lost') {
-    return { send: false, reason: `still vantage-lost since ${prev.startedAt || '?'}`, triggers: [] };
+  if ((outcome === 'vantage-lost' || outcome === 'scan-partial') && prevOutcome === outcome) {
+    return { send: false, reason: `still ${outcome} since ${prev.startedAt || '?'}`, triggers: [] };
   }
+  const notComparable = isObj(record?.comparable) && record.comparable.withPrevious === false;
   const triggers = [];
-  if (prevOutcome !== outcome) triggers.push(`outcome changed ${prevOutcome} → ${outcome}`);
-  if (chainGotWorse(record)) triggers.push('chain got worse');
+  // A stopped Run before this one changed no outcome (it observed nothing), nor did the run before one
+  // this run is not comparable with; a Run that stops is news after any other.
+  if (prevOutcome !== outcome && ((!prevStopped && !notComparable) || outcome === 'scan-partial')) triggers.push(`outcome changed ${prevOutcome} → ${outcome}`);
+  if (chainGotWorse(record) && !notComparable) triggers.push('chain got worse');
+  if (notComparable) triggers.push('not comparable with the previous run');
   if (newCandidateCauses(record, prev).length) triggers.push('new candidate cause');
-  if (record?.causes?.vantage?.changed === true) triggers.push('vantage changed');
+  if (record?.causes?.vantage?.changed === true && record.causes.vantage.from != null && !prevStopped) triggers.push('vantage changed');
   if (!triggers.length) return { send: false, reason: `no transition since ${prev.startedAt || '?'}`, triggers: [] };
   return { send: true, reason: triggers.join(' · '), triggers };
 }
@@ -150,7 +164,8 @@ export function buildNotifyPayload({ record, previousRun = null, decision, links
     gate: { breaches: Array.isArray(r.gate?.breaches) ? r.gate.breaches : [] },
     // `off`: the criteria the score left out (the service's switches at that run) — only when it left some out.
     grade: isObj(r.grade) ? { score: r.grade.score ?? null, pass: r.grade.pass ?? null, letter: r.grade.letter ?? null, ...(Array.isArray(r.grade.off) && r.grade.off.length ? { off: r.grade.off.filter((k) => typeof k === 'string').slice(0, 7) } : {}) } : null,
-    drift: isObj(r.drift) ? { alignmentPct: r.drift.alignmentPct ?? null, drifted: r.drift.drifted ?? null, declaredNotLive: r.drift.declaredNotLive ?? null, liveNotDeclared: r.drift.liveNotDeclared ?? null } : null,
+    // The match only over a comparison (the record's drift.compared, copied: 0 → no figure).
+    drift: isObj(r.drift) ? { alignmentPct: r.drift.compared === 0 ? null : (r.drift.alignmentPct ?? null), compared: r.drift.compared ?? null, drifted: r.drift.drifted ?? null, declaredNotLive: r.drift.declaredNotLive ?? null, liveNotDeclared: r.drift.liveNotDeclared ?? null } : null,
     freshness: { liveAgeHours: r.freshness?.liveAgeHours ?? null },
     vantage: r.vantage ?? null,
     probes: { failed: Array.isArray(r.probes?.failed) ? r.probes.failed : [] },
@@ -174,10 +189,12 @@ export function renderNotifyText(payload) {
   const out = [String(p.text || `${p.journey ?? '?'}: ${p.outcome ?? '?'}`), ''];
   out.push(`reason: ${p.reason ?? '-'}`);
   if (p.error) out.push(`error: ${p.error}`);
+  // Nothing compared: no match figure, and the text says so.
+  if (isObj(p.drift) && p.drift.compared === 0) out.push('match: nothing compared');
   const breaches = Array.isArray(p.gate?.breaches) ? p.gate.breaches : [];
   if (breaches.length) {
     out.push('', 'gate breaches:');
-    for (const b of breaches) out.push(`- ${b?.criterion ?? '?'} — ${b?.detail ?? ''}`);
+    for (const b of breaches) out.push(`- ${b?.criterion ?? b?.key ?? '?'} — ${b?.detail ?? ''}`);
   }
   const changed = Array.isArray(p.transition?.changed) ? p.transition.changed.filter(isObj) : [];
   if (changed.length) {

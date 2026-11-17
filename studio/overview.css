@@ -66,6 +66,8 @@
 .ov-live__pill { flex: 0 0 auto; }
 .ov-live__sentence, .ov-next__sentence { flex: 1 1 320px; margin: 0; font: 550 20px/1.35 var(--og-font); letter-spacing: -0.01em; color: var(--og-text); }
 .ov-live__cadence { margin: 10px 0 0; font: 500 13.5px/1.3 var(--og-font); }
+.ov-live__reason { margin: 8px 0 0; font: 400 13.5px/1.4 var(--og-font); overflow-wrap: anywhere; }
+.ov-live__reason--warn { color: var(--og-warn); }
 .ov-live__error { margin-top: 12px; }
 .ov-check[aria-busy="true"] { opacity: 0.75; cursor: progress; }
 .ov-next__why { margin-top: 12px; }
@@ -516,6 +518,11 @@ p.ov-scan__sum { cursor: default; }
 .ov-mx__grade b { font: 600 13.5px/1.3 var(--og-font); color: var(--og-text); }
 .ov-mx__when { display: inline-flex; align-items: center; gap: 5px; font: 400 12px/1.3 var(--og-font); }
 .ov-mx__when .ov-svc__ic { width: 14px; height: 14px; margin: 0; }
+/* Why a cell shows no figure, or what its figure leaves out: the first probe error, why nothing was compared, the files not read. It wraps (never clipped: the whole text is on screen). */
+.ov-mx__why { font: 400 12px/1.35 var(--og-font); color: var(--og-warn); overflow-wrap: anywhere; }
+.ov-mx__note { font: 400 12px/1.35 var(--og-font); color: var(--og-muted); overflow-wrap: anywhere; }
+.ov-mx__note--warn, .ov-mx__scope--warn { color: var(--og-warn); }
+.ov-mx__scope--warn { white-space: normal; }
 .ov-mx__acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .ov-mx__acts .og-btn { min-height: 30px; padding: 4px 12px; font-size: 13px; }
 .ov-mx__acts .ov-svc__edit { margin-left: 2px; }

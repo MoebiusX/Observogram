@@ -64,7 +64,9 @@ its repository (GitHub, Azure DevOps, a folder or an upload), and a column
 per environment in the order a release travels — dev, test, acceptance,
 staging, production, then any other by name. Each cell is that environment:
 its live endpoint (its name; the host beneath, whole on hover), the branch
-its Run reads, the grade letter with how much matches live, when it was last
+its Run reads, the grade letter with how much matches live (only where
+something was compared: else *Live did not answer* with its first probe error,
+*Live returned no data* or *Nothing compared* with why), when it was last
 checked, **Run** (scans the repository and checks it against live),
 **Open** (the service's board) and **Change** (that environment's endpoint
 and branch, and the service's repository and targets); an environment the
@@ -124,8 +126,8 @@ three columns, every number the engine's own —
   of it, and are listed in Remediate. **Can you trust what the
   signals show?** The chain against live, a row per link (*Exporters 21/21 ·
   Alerts 66/66 · Dashboards 7 not read live*), the chain's alignment as a
-  ring, the promises that hold end to end, and one of four
-  words — *Never checked · Unchanged · Changed · Unreachable* — with a timed
+  ring, the promises that hold end to end, and one of five
+  words — *Never checked · Unchanged · Changed · Unreachable · Nothing compared* — with a timed
   sentence from the service's saved journey: *Checked 2 hours ago against
   live — its exporters and alerts match live, and the 7 dashboards could not
   be read. 31 details differ beyond the chain.* **Check again** runs the journey against

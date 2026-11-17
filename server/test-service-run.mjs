@@ -2292,3 +2292,45 @@ test('a live scope per environment: PATCH liveScopes (the whole map; a bad scope
   }
 });
 
+
+test('SR1 GET /api/journeys lists what the last run rests on — compared, the figure only over a comparison, the vantage, the failed families, the first probe error, the scan and comparable; an older record\'s 100 over an empty union lists no figure; a Run that stopped on a partial scan is named beside the last check, never as it', async () => {
+  const NAME = 'basis-of-run';
+  try {
+    mkdirSync(join(WORKSPACE, 'journeys'), { recursive: true });
+    writeCheckByHand(NAME, { packA: CATALOGUE_A, packB: CATALOGUE_B });
+    mkdirSync(join(WORKSPACE, 'runs', NAME), { recursive: true });
+    const drop = (rec) => writeFileSync(join(WORKSPACE, 'runs', NAME, `${rec.startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({ journey: NAME, tookMs: 5, gate: { thresholds: {}, breaches: [] }, ...rec }));
+    const listed = async () => (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === NAME);
+    const probes = (o) => ({ attempted: [], succeeded: [], empty: [], failed: [], unsupported: [], ...o });
+    // An older record over an empty union: 100 claimed, nothing compared.
+    drop({ startedAt: '2099-02-01T00:00:00.000Z', outcome: 'pass', vantage: 'full', probes: probes({ attempted: ['alert_rules'], succeeded: ['alert_rules'] }), drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 69 } });
+    let j = await listed();
+    assert.deepEqual([j.lastRun.alignmentPct, j.lastRun.compared, j.lastRun.reading, j.lastRun.vantage, j.stoppedRun], [null, 0, 'nothing-compared', 'full', null]);
+    // A partial live side and a partial scan, not comparable with the run before: the figure and what it rests on.
+    drop({ startedAt: '2099-02-02T00:00:00.000Z', outcome: 'gate-failed', vantage: 'partial', probes: probes({ attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], failed: ['dashboards'] }),
+      probeErrors: { dashboards: 'dashboards_search: HTTP 401 — https://grafana.example.test/api/search?api_key=EXAMPLE&limit=1 · dashboards_list: HTTP 404' },
+      drift: { alignmentPct: 54, compared: 100, aligned: 54, drifted: 6, declaredNotLive: 30, liveNotDeclared: 10 }, grade: { score: 55 },
+      packA: { source: 'a', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }], filter: { surface: 'kubernetes', excluded: 12 }, excludedMost: false } },
+      comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' } });
+    j = await listed();
+    assert.deepEqual(Object.keys(j.lastRun).slice(0, 3), ['startedAt', 'outcome', 'alignmentPct'], 'the figure stays the listing\'s third key');
+    const { startedAt: _s, outcome, alignmentPct, compared, vantage, reading, firstProbeError, liveLoss, notReadLive, probesFailed, scoped, setAsideCount, scan, comparable } = j.lastRun;
+    assert.deepEqual({ outcome, alignmentPct, compared, vantage, reading, firstProbeError, liveLoss, notReadLive, probesFailed, scoped, setAsideCount, scan, comparable }, {
+      outcome: 'gate-failed', alignmentPct: 54, compared: 100, vantage: 'partial', reading: 'gate-failed', firstProbeError: 'dashboards_search: HTTP 401 — https://grafana.example.test/api/search?api_key=***&limit=1', liveLoss: null,
+      notReadLive: null, probesFailed: ['dashboards'], scoped: false, setAsideCount: 0,
+      scan: { partial: true, notRead: 49, candidates: 220, files: 171, treeTruncated: false, filter: { surface: 'kubernetes', excluded: 12 }, excludedMost: false },
+      comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' },
+    });
+    assert.ok(!JSON.stringify(j).includes('EXAMPLE'), 'a credential-named parameter never reaches the listing');
+    // A Run that stopped since: the last check stays the last check, the stop is named beside it.
+    drop({ startedAt: '2099-02-03T00:00:00.000Z', outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)', packA: { source: 'a', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: 'b' } });
+    j = await listed();
+    assert.deepEqual([j.lastRun.startedAt, j.lastRun.outcome, j.stoppedRun], ['2099-02-02T00:00:00.000Z', 'gate-failed', { startedAt: '2099-02-03T00:00:00.000Z', notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)' }]);
+    // A lost run (C4): no figure, the first probe error; its families answered empty: no data.
+    drop({ startedAt: '2099-02-04T00:00:00.000Z', outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: probes({ attempted: ['alert_rules'], empty: ['alert_rules'] }), probeErrors: {}, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } });
+    j = await listed();
+    assert.deepEqual([j.lastRun.outcome, j.lastRun.alignmentPct, j.lastRun.reading, j.lastRun.firstProbeError, j.lastRun.liveLoss, j.lastRun.breaches, j.stoppedRun], ['vantage-lost', null, 'vantage-lost', null, 'no-data', 1, null]);
+  } finally {
+    forgetChecks([NAME]);
+  }
+});

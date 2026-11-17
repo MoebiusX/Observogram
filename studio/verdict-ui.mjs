@@ -286,6 +286,31 @@ export function runHistory() { return _runs; }
 // the onReady callback fires once and runHistory() is populated.
 // fetchFn(path) → parsed JSON — defaults to the studio's api(); a host
 // studio vendoring this file passes its own transport instead.
+// The weighted health a reader may show: null when nothing was compared (the engine's figure is null
+// over an empty denominator; one before that rule said 100 there), else the engine's.
+export function healthPctOf(weighted, aligned = 0) {
+  const pct = typeof weighted?.healthPct === 'number' && Number.isFinite(weighted.healthPct) ? weighted.healthPct : null;
+  const denominator = (Number(aligned) || 0) + (Number(weighted?.totalBadness) || 0);
+  return pct === null || !(denominator > 0) ? null : pct;
+}
+
+// A run record's match for its history (tools/lib/run-basis.mjs matchPctOf, restated: this module is
+// vendored alone): null when nothing was compared — drift.compared, or the four counts of an older
+// record — or when the live side returned no data (no probe family did), whatever the record says.
+export function historyAlignmentPct(record) {
+  const d = record && typeof record === 'object' ? record.drift : null;
+  if (!d || typeof d !== 'object') return null;
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const keys = ['aligned', 'drifted', 'declaredNotLive', 'liveNotDeclared'];
+  const compared = n(d.compared) !== null && d.compared >= 0 ? d.compared
+    : keys.some((k) => n(d[k]) !== null) ? keys.reduce((s, k) => s + Math.max(0, n(d[k]) ?? 0), 0) : null;
+  const p = record.probes && typeof record.probes === 'object' ? record.probes : null;
+  const listed = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : null);
+  const succeeded = p ? listed(p.succeeded) : null;
+  const lost = record.vantage === 'lost' || (!!p && !!listed(p.attempted)?.length && !!succeeded && !succeeded.length);
+  return compared === 0 || lost ? null : n(d.alignmentPct);
+}
+
 export function loadRunHistory(onReady, { fetchFn = api } = {}) {
   if (_runs) { return; }
   if (_runsPromise) { _runsPromise.then(onReady); return; }
@@ -305,7 +330,7 @@ export function loadRunHistory(onReady, { fetchFn = api } = {}) {
             : typeof r.grade?.score === 'number' ? r.grade.score : null;
           return {
             gradeScore,
-            alignmentPct: typeof r.drift?.alignmentPct === 'number' ? r.drift.alignmentPct : null,
+            alignmentPct: historyAlignmentPct(r),
             at: r.at || r.startedAt || null,
             outcome: r.outcome || null,
           };

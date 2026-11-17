@@ -19,6 +19,9 @@ import { api, getActiveOrg } from './api.mjs';
 import { escapeHtml, toast, packSourceHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
+// What a run's figure rests on (the board unit's copy of tools/lib/run-basis.mjs): no match without a
+// comparison, a run whose live side gave nothing read as unable to observe, whatever its record says.
+import { comparedOf, matchPctOf, readingOutcome, liveLossOf, scanFactsOf, scanPartialReading } from './overview-model.mjs';
 
 // tools/lib/stack-evidence.mjs — the browser-safe history helpers over the
 // run records (step 3). The server exposes tools/lib at /lib (the same
@@ -78,6 +81,20 @@ export const CHECK_OUTCOMES = {
     meaning: 'The check ran and the observability artefacts fell short of the journey\'s gate.',
     remedy: 'Review the breached criteria and the candidate causes, fix the artefact, then run again to confirm the fix held.',
   },
+  // The check ran, but neither side had anything to compare: its gate says nothing about the artefacts,
+  // and never reads as passed (a record written before that rule may still say pass).
+  'nothing-compared': {
+    label: 'Nothing compared', tone: 'warn', chip: 'warn', icon: '⚠️', cls: 'is-lost',
+    meaning: 'The check ran, but nothing was compared: neither side had anything it could pair, so this says nothing about whether the artefacts work, and its gate does not pass on it.',
+    remedy: 'Open the newest record to see what each side held — a live side read in part, a scope that leaves the service out, files the scan did not read — then run again.',
+  },
+  // A service's Run that stopped: the repository was read in part, so nothing was compared and the
+  // service keeps the pack of its last complete scan.
+  'scan-partial': {
+    label: 'Partial scan', tone: 'warn', chip: 'warn', icon: '⚠️', cls: 'is-lost',
+    meaning: 'The repository was read in part, so the run stopped before comparing anything; the previous pack is kept. Nothing about the artefacts was compared on this run.',
+    remedy: 'Make sure the repository answers in full — its host may refuse a burst of reads or want a token — then run the service again.',
+  },
   pass: {
     label: 'Passed', tone: 'ok', chip: 'ok', icon: '✅', cls: 'is-pass',
     meaning: 'The check ran and the observability artefacts met the journey\'s gate.',
@@ -90,6 +107,9 @@ export const CHECK_OUTCOMES = {
   },
 };
 export const checkOutcome = (key) => CHECK_OUTCOMES[key] || CHECK_OUTCOMES.unknown;
+// A run's outcome as a reader says it (a pass over nothing compared is 'nothing-compared'; a run whose
+// live side gave nothing 'vantage-lost'), for a record or a journeys-listing entry.
+export const readingOf = (x) => readingOutcome(x) || x?.outcome || 'unknown';
 
 // A journey notifies through one of its org's notify hooks, a variable pair
 // the server's operator sets: OBSERVOGRAM_ORG_<KEY>_NOTIFY_<HOOK>_URL and its
@@ -150,22 +170,54 @@ export const DELIVERY_OUTCOMES = {
   unknown:          { label: 'Delivery unknown', chip: 'muted', meaning: 'The record was written before delivery finished; the next run will tell.' },
 };
 
-function outcomeLabel(last) {
-  const o = checkOutcome(last.outcome);
-  if (last.outcome === 'vantage-lost') return `${o.label} · the live source did not answer`;
+// A run's words, for a run record or a journeys-listing entry (GET /api/journeys lastRun, whose
+// figure and reasons the server read with tools/lib/run-basis.mjs).
+const listedLoss = (x) => (x && typeof x === 'object' && 'firstProbeError' in x
+  ? { error: typeof x.firstProbeError === 'string' && x.firstProbeError ? x.firstProbeError : null, cause: x.firstProbeError ? 'error' : (x.liveLoss || 'error') }
+  : liveLossOf(x));
+// Why the live side gave nothing: 'the live source did not answer: <first probe error>' ·
+// 'the live source answered, but returned no data' · 'the live source did not answer'.
+export function liveLossWords(x) {
+  const l = listedLoss(x);
+  return l.error ? `the live source did not answer: ${l.error}` : l.cause === 'no-data' ? 'the live source answered, but returned no data' : 'the live source did not answer';
+}
+// A stopped Run's reading in a sentence: 'partial scan — 49 of 220 files not read; the previous pack is kept'.
+export const scanPartialText = (scan) => { const t = scanPartialReading(scan); return `${t[0].toLowerCase()}${t.slice(1)}`; };
+// The match in a few words: 'alignment 92%' · 'nothing compared' · 'alignment not recorded'.
+export function alignmentWords(rec) {
+  if (comparedOf(rec?.drift) === 0) return 'nothing compared';
+  const pct = matchPctOf(rec);
+  return pct === null ? 'alignment not recorded' : `alignment ${pct}%`;
+}
+// The same from a journeys-listing entry (the figure the server listed only over a comparison).
+export function listedAlignmentWords(last) {
+  if (last?.compared === 0) return 'nothing compared';
+  return typeof last?.alignmentPct === 'number' ? `alignment ${last.alignmentPct}%` : 'alignment not recorded';
+}
+
+export function outcomeLabel(last) {
+  const reading = readingOutcome(last) || last.outcome;
+  const o = checkOutcome(reading);
+  if (reading === 'vantage-lost') return `${o.label} · ${liveLossWords(last)}`;
+  if (reading === 'scan-partial') return `${o.label} · ${scanPartialText(last.scan)}`;
   // A score over fewer than the seven criteria (lastRun.gradeOff) says so.
   const off = Array.isArray(last.gradeOff) ? last.gradeOff.length : 0;
-  return `${o.label} · alignment ${last.alignmentPct ?? '?'}% · grade ${last.gradeScore ?? '?'}%${off && off < 7 ? ` on ${7 - off} of 7 criteria` : ''}`;
+  const grade = ` · grade ${last.gradeScore ?? '?'}%${off && off < 7 ? ` on ${7 - off} of 7 criteria` : ''}`;
+  return reading === 'nothing-compared' ? `${o.label}${grade}` : `${o.label} · ${listedAlignmentWords(last)}${grade}`;
 }
 
 // One line for a finished run, for the toast (the #toast live region
 // announces it) — the plain outcome first, then the delivery if it failed.
 export function runResultText(name, rec) {
   const n = rec?.gate?.breaches?.length ?? 0;
-  const what = rec?.outcome === 'pass' ? `passed · alignment ${rec.drift?.alignmentPct ?? '?'}%`
-    : rec?.outcome === 'gate-failed' ? `check failed — ${n} ${n === 1 ? 'criterion' : 'criteria'} breached`
-      : rec?.outcome === 'vantage-lost' ? 'unable to observe — the live source did not answer'
-        : checkOutcome(rec?.outcome).label.toLowerCase();
+  const reading = readingOutcome(rec) || rec?.outcome;
+  const breached = `${n} ${n === 1 ? 'criterion' : 'criteria'} breached`;
+  const what = reading === 'pass' ? `passed · ${alignmentWords(rec)}`
+    : reading === 'gate-failed' ? `check failed — ${breached}`
+      : reading === 'nothing-compared' ? `nothing compared${n ? ` — ${breached}` : ''}`
+        : reading === 'vantage-lost' ? `unable to observe — ${liveLossWords(rec)}`
+          : reading === 'scan-partial' ? `stopped — ${scanPartialText(rec?.packA?.scan)}`
+            : checkOutcome(reading).label.toLowerCase();
   const notify = rec?.notify?.status === 'failed' ? ' · notification failed' : '';
   return `${name}: ${what}${notify}`;
 }
@@ -186,7 +238,9 @@ export function runAllText(names, tally, failures = []) {
   const summary = listSentence([
     tally.pass && `${tally.pass} passed`,
     tally['gate-failed'] && `${tally['gate-failed']} failed`,
+    tally['nothing-compared'] && `${tally['nothing-compared']} compared nothing`,
     tally['vantage-lost'] && `${tally['vantage-lost']} unable to observe`,
+    tally['scan-partial'] && `${tally['scan-partial']} stopped on a partial scan`,
     tally.error && `${tally.error} did not finish`,
   ]);
   let why = '';
@@ -314,9 +368,10 @@ export function renderJourneyCards(host, { journeys = [], runsByName = {}, stack
 
   host.innerHTML = journeys.map(j => {
     const runs = runsByName[j.name] || [];
-    const series = runs.slice().reverse().map(r => r.drift?.alignmentPct);
+    // The match only over a comparison: a run that compared nothing, or whose live side gave nothing, is a gap.
+    const series = runs.slice().reverse().map((r) => matchPctOf(r));
     const last = j.lastRun;
-    const om = last ? checkOutcome(last.outcome) : null;
+    const om = last ? checkOutcome(readingOutcome(last) || last.outcome) : null;
     // gate.stack is a nested block (requireSampled / rows) — print it as JSON, not [object Object].
     const gateBits = Object.entries(j.gate || {}).map(([k, v]) => `${k}=${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || 'no gate';
     return `
@@ -418,9 +473,12 @@ function renderChainsLine(last) {
   // assurance: counted apart, shown only when there are any.
   if (typeof c.undeclaredNodes === 'number' && c.undeclaredNodes > 0) bits.push(`${c.undeclaredNodes} live-only in undeclared chains`);
   const tr = last.transition;
-  const mark = tr && tr.any
-    ? ` <span class="journey-stack-mark">changed since previous run (${tr.worse ?? 0} worse)</span>`
-    : '';
+  // A run the record marks not comparable with the one before (its scan read other files): no move is said.
+  const mark = last.comparable?.withPrevious === false
+    ? ` <span class="journey-stack-mark">not comparable with the previous run${last.comparable.reason ? `: ${escapeHtml(last.comparable.reason)}` : ''}</span>`
+    : tr && tr.any
+      ? ` <span class="journey-stack-mark">changed since previous run (${tr.worse ?? 0} worse)</span>`
+      : '';
   return `<div class="journey-stack journey-chains"><span class="journey-stack-label">${escapeHtml(bits.join(' · '))}</span>${mark}</div>`;
 }
 
@@ -474,17 +532,30 @@ function renderNotifyLine(last) {
   return `<div class="journey-stack journey-notify"><span class="journey-stack-label" title="${escapeHtml(d.meaning)}">${escapeHtml(`${status}${n.reason ? ` · ${n.reason}` : ''}`)}</span></div>`;
 }
 
-function renderRunsTable(runs) {
+// The history, newest first: each run's outcome as a reader says it, its match only over a comparison,
+// its grade only where it has one.
+export function renderRunsTable(runs) {
   if (!runs.length) return '';
   const rows = runs.slice(0, 8).map(r => {
-    const om = checkOutcome(r.outcome);
+    const reading = readingOutcome(r) || r.outcome;
+    const om = checkOutcome(reading);
+    const pct = matchPctOf(r);
+    const lost = reading === 'vantage-lost';
+    const align = lost ? (listedLoss(r).cause === 'no-data' ? 'no live data' : '—')
+      : reading === 'scan-partial' ? '—'
+        : comparedOf(r.drift) === 0 ? 'nothing compared' : pct !== null ? `${pct}%` : '?';
+    const grade = lost || !r.grade || typeof r.grade !== 'object' ? '—'
+      : `${r.grade.score ?? '?'}%${Array.isArray(r.grade.off) && r.grade.off.length && r.grade.off.length < 7 ? ` <span class="og-muted">on ${7 - r.grade.off.length} of 7</span>` : ''}`;
+    const s = reading === 'scan-partial' ? scanFactsOf(r.packA?.scan) : null;
+    const breached = lost ? escapeHtml(`unable to observe — ${liveLossWords(r)}`)
+      : reading === 'scan-partial' ? escapeHtml(`partial scan${s && s.notRead !== null && s.candidates !== null ? `: ${s.notRead} of ${s.candidates} files not read` : ''}`)
+        : r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map((b) => b?.criterion ?? b?.key ?? '?').join(', ')) : '—';
     return `<tr>
       <td><span title="${escapeHtml(om.label)}" aria-hidden="true">${om.icon}</span><span class="sr-text">${escapeHtml(om.label)}</span></td>
       <td>${escapeHtml(new Date(r.startedAt).toLocaleString())}</td>
-      <td>${r.drift?.alignmentPct ?? '?'}%</td>
-      <td>${r.grade?.score ?? '?'}%${Array.isArray(r.grade?.off) && r.grade.off.length && r.grade.off.length < 7 ? ` <span class="og-muted">on ${7 - r.grade.off.length} of 7</span>` : ''}</td>
-      <td>${r.outcome === 'vantage-lost' ? escapeHtml(`unable to observe: ${r.error || 'the live source did not answer'}`)
-            : r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map(b => b.criterion).join(', ')) : '—'}</td>
+      <td>${escapeHtml(align)}</td>
+      <td>${grade}</td>
+      <td>${breached}</td>
       <td>${r.tookMs ?? '?'} ms</td>
     </tr>`;
   }).join('');

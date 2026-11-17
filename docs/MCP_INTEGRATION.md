@@ -743,7 +743,7 @@ strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it |
+| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it. Every URL a message quotes keeps no query string, fragment or userinfo (`tools/fetch-live-pack.mjs` `maskProbeErrorUrls`, over `tools/lib/mcp-url-safety.mjs` `safeMcpUrl`), masked before the cut — so the reasons a declared artefact is not checked, a gate log's gaps, a lost run's `error` and a notification built from it carry none either |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
@@ -1644,18 +1644,27 @@ docs/NOTIFY_HOOKS.md has the rule's every sentence and the migration of a
 journey that names another variable.
 
 The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
-`always` posts every run; `breach` posts a gate-failed or vantage-lost run
+`always` posts every run; `breach` posts a gate-failed or vantage-lost run,
+a Run that stopped on a partial scan (`scan-partial`, reason *partial scan*),
 and once when the breach clears; `transitions` (the default) posts when the
 outcome changed, a chain got worse (`transition.changed[].direction ===
 'worse'`), a new candidate cause appeared (kind + evidence not on the
 previous run) or the vantage changed — a first run is a baseline, not a
 transition (skipped; deliberately unlike `keepLivePack`, which snapshots
 the first run), and a vantage-lost run after a vantage-lost run is skipped
-(nobody is paged every 15 minutes for one outage).
+(nobody is paged every 15 minutes for one outage), as is a stopped Run after
+a stopped Run. A stopped Run before a run observed nothing: no outcome
+changed since it, no vantage changed from it (its record has no vantage), no
+breach cleared. A run whose record says it is not comparable with the one
+before (`comparable.withPrevious: false`: its scan read other files) posts
+`not comparable with the previous run` in place of a chain that got worse or
+an outcome that changed across the pair.
 
 The payload (`kind: observogram.journey`, `version: 1`) copies the record —
 `transition`, `causes` (with its *not a root-cause verdict* note), `chains`,
-trimmed `stack` rows, `grade`, `drift`, `gate.breaches`, `packs` with
+trimmed `stack` rows, `grade`, `drift` (with `compared`, the number of things
+compared; `alignmentPct` is `null` when nothing was, and the `format: text` body
+says `match: nothing compared`), `gate.breaches`, `packs` with
 `//user:pass@` redacted — plus `reason`, `triggers`, a one-line `text`
 (`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`) and
 `links` when `studioUrl` is set. It never carries a definition key, an env

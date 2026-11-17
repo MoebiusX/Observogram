@@ -148,7 +148,7 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   assert(payload.reason === decision.reason && payload.triggers.join() === decision.triggers.join() && payload.triggers !== decision.triggers, 'reason and triggers come from the decision (copied)');
   assert(payload.transition === record.transition && payload.causes === record.causes && payload.chains === record.chains && payload.livePack === record.livePack, 'transition, causes, chains and livePack are the record\'s own objects — copied, never recomputed');
   assert(payload.packs.b.source === 'mcp:https://***@host/mcp' && payload.packs.a.source === 'C:/repo/pack.yaml' && payload.packs.b.name === 'production-live', 'pack B userinfo arrives redacted');
-  assert(JSON.stringify(payload.grade) === JSON.stringify({ score: 91, pass: true, letter: 'A' }) && JSON.stringify(payload.drift) === JSON.stringify({ alignmentPct: 88, drifted: 1, declaredNotLive: 0, liveNotDeclared: 2 }), 'grade and drift are trimmed to the summary fields');
+  assert(JSON.stringify(payload.grade) === JSON.stringify({ score: 91, pass: true, letter: 'A' }) && JSON.stringify(payload.drift) === JSON.stringify({ alignmentPct: 88, compared: null, drifted: 1, declaredNotLive: 0, liveNotDeclared: 2 }), 'grade and drift are trimmed to the summary fields (compared: null for a record written before it was kept)');
   assert(payload.freshness.liveAgeHours === 0.2 && payload.vantage === 'partial' && payload.probes.failed.join() === 'b', 'freshness, vantage and failed probes ride along');
   assert(JSON.stringify(payload.stack) === JSON.stringify([{ id: 'scrape_targets_down', family: 'scrape', outcome: 'data', value: 2, unit: 'count', hint: 'nonzero' }]), 'stack rows are trimmed to id/family/outcome/value/unit/hint');
   assert(payload.links === links && payload.text === 'j: pass · chains 2/3 intact' && payload.error === null, 'links and text are passed through; error is null on a verdict');
@@ -198,6 +198,34 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   const gfText = renderNotifyText(buildNotifyPayload({ record: failed('t1', ['minAlignmentPct']), decision: notifyDecision({ policy: 'breach', record: failed('t1') }), text: 'j: gate-failed' }));
   assert(/gate breaches:\n- minAlignmentPct — minAlignmentPct breached/.test(gfText), 'text lists gate breaches');
   assert(renderNotifyText({}).startsWith('?: ?\n\nreason: -'), 'renderNotifyText tolerates an empty payload');
+}
+
+// --- no figure without its basis: nothing compared, a stopped Run, a run not comparable with the one before ---
+{
+  const stopped = (startedAt) => ({ journey: 'j', startedAt, tookMs: 3, outcome: 'scan-partial', error: '49 of 220 files not read: a.json — it could not be downloaded (HTTP 403)', packA: { source: 'a', scan: { partial: true, notRead: 49, candidates: 220 } }, gate: { thresholds: {}, breaches: [] } });
+  // The payload copies drift.compared; no figure over nothing compared, whatever alignmentPct a record carries.
+  const nothing = failed('t1', ['minAlignmentPct'], { drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } });
+  const np = buildNotifyPayload({ record: nothing, decision: notifyDecision({ policy: 'always', record: nothing }) });
+  assert(JSON.stringify(np.drift) === JSON.stringify({ alignmentPct: null, compared: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }), 'the payload over nothing compared: compared 0, no figure', np.drift);
+  const claims = buildNotifyPayload({ record: { ...nothing, drift: { ...nothing.drift, alignmentPct: 100 } }, decision: { reason: 'r', triggers: [] } });
+  assert(claims.drift.alignmentPct === null, 'a record that claims 100 over compared 0 is posted without a figure');
+  assert(/\nmatch: nothing compared\n/.test(renderNotifyText(np)), 'the text says nothing compared', renderNotifyText(np));
+  assert(!/match:/.test(renderNotifyText(buildNotifyPayload({ record: pass('t1', { drift: { alignmentPct: 92, compared: 50, aligned: 46, drifted: 2, declaredNotLive: 2, liveNotDeclared: 0 } }), decision: { reason: 'r', triggers: [] } }))), 'a run that compared something: no match line');
+  // breach posts a stopped Run, as a lost vantage is; transitions skips a repeat.
+  assert(JSON.stringify(notifyDecision({ policy: 'breach', record: stopped('t2'), previousRun: pass('t1') })) === JSON.stringify({ send: true, reason: 'partial scan', triggers: ['scan-partial'] }), 'breach: a stopped Run is posted as a partial scan — never "gate failed: scan-partial"');
+  assert(notifyDecision({ policy: 'transitions', record: stopped('t2'), previousRun: pass('t1') }).send === true, 'transitions: a Run that stops after a check is news');
+  assert(JSON.stringify(notifyDecision({ policy: 'transitions', record: stopped('t3'), previousRun: stopped('t2') })) === JSON.stringify({ send: false, reason: 'still scan-partial since t2', triggers: [] }), 'transitions: a stopped Run after a stopped Run is skipped');
+  // A stopped Run before this run observed nothing: no outcome changed since it, no vantage changed from it, no breach cleared.
+  const after = failed('t3', ['minAlignmentPct'], { causes: { causes: [], vantage: { changed: true, from: null, to: { vantage: 'partial', failed: ['dashboards'] }, detail: 'vantage none → partial' } } });
+  assert(JSON.stringify(notifyDecision({ policy: 'transitions', record: after, previousRun: stopped('t2') })) === JSON.stringify({ send: false, reason: 'no transition since t2', triggers: [] }), 'transitions: no page after a stopped Run for what the check before it already said');
+  assert(notifyDecision({ policy: 'breach', record: pass('t3'), previousRun: stopped('t2') }).send === false, 'breach: no "breach cleared" from a stopped Run');
+  // Not comparable with the run before: said so, never "chain got worse" or "outcome changed" across the pair.
+  const worse = failed('t2', ['minAlignmentPct'], { comparable: { withPrevious: false, reason: 'this scan could not read 49 of 220 files' }, transition: { since: 't1', changed: [{ direction: 'worse' }], any: true } });
+  const d = notifyDecision({ policy: 'transitions', record: worse, previousRun: pass('t1') });
+  assert(JSON.stringify(d.triggers) === JSON.stringify(['not comparable with the previous run']) && d.send === true, 'transitions: not comparable is the trigger, nothing else across the pair', d);
+  // A breach written { key } is read by it.
+  assert(notifyDecision({ policy: 'breach', record: { ...failed('t1'), gate: { breaches: [{ key: 'vantage', detail: 'x' }] } } }).reason === 'gate failed: vantage', 'a breach { key } names its key');
+  assert(/- vantage — x/.test(renderNotifyText({ gate: { breaches: [{ key: 'vantage', detail: 'x' }] } })), 'the text names a breach { key }');
 }
 
 report('journey-notify', 'all journey-notify assertions pass.');

@@ -40,6 +40,9 @@ export function servicesRefusal(status, body) {
   // A repository its host would not show without the person's own token
   // (POST /api/services/:id/run): which host, and whether their token was refused.
   if (json?.repoAuth && typeof json.repoAuth === 'object') err.repoAuth = { ...json.repoAuth };
+  // A run the server answered with an error but recorded names its outcome
+  // (the 502 of a lost live side: `vantage-lost`) — a word, never a value.
+  if (typeof json?.outcome === 'string' && /^[a-z][a-z-]{0,31}$/.test(json.outcome)) err.outcome = json.outcome;
   return err;
 }
 
@@ -164,7 +167,8 @@ export async function putLivePack(envId, { name, text }, { fetchFn = requestJson
 // POST /api/services/:id/run { env, repoAuth? } → { record, pack, journey, scan } — the repository
 // scanned and checked against live. `repoAuth` is the person's own GitHub or Azure DevOps token,
 // for this read only. A 502 (the repository or the live side did not answer) throws its sentence
-// with `.status`; the live side's loss has kept a record, which the next read shows. A repository
+// with `.status`; the live side's loss has kept a record, which the next read shows, and the error
+// says so (`.outcome` 'vantage-lost', from the 502's body). A repository
 // that needs the person's token throws with `.repoAuth` ({ kind, label, refused }).
 export async function runServiceRecord(id, env, { fetchFn = requestJson, repoAuth = null } = {}) {
   return fetchFn(`/api/services/${enc(id)}/run`, jsonBody('POST', { ...(env ? { env } : {}), ...(repoAuth ? { repoAuth } : {}) }));
