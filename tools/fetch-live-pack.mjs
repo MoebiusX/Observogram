@@ -72,7 +72,7 @@ import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-ru
 import { brandEnv } from './lib/brand-env.mjs';
 import { stripMcpUrl, safeMcpUrl, redactCredentials, credentialParamName } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
-import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty } from './lib/live-fetch.mjs';
+import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty, excludeProblem, excludeProbes, excludedBy } from './lib/live-fetch.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2876,11 +2876,17 @@ const STAGE_OF_PROBE = Object.freeze({
 // pattern that crawls over an adversarial 256-character name, in the shape of
 // normalizeScope's own errors (`scope.metricExclude[i] "…" is …`), so the
 // server's start route and its configured-scope reader refuse it the same way
-// as any other bad scope value, before a job starts.
+// as any other bad scope value, before a job starts. A pattern the static half
+// refuses is refused with its sentence and never timed (its work has no bound
+// to time within); the rest are timed on names built from the pattern itself
+// (live-fetch.mjs excludeProbes) beside the four adversarial ids, so a pattern
+// that opens with a literal no id carries is timed doing its work, not nothing.
 export function timedExcludeErrors(patterns) {
   const errors = [];
   (Array.isArray(patterns) ? patterns : []).forEach((pattern, i) => {
-    if (compileBoundedPattern(pattern).re) return;
+    const problem = excludeProblem(pattern);
+    if (problem) { errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} ${problem}`); return; }
+    if (compileBoundedPattern(pattern, { ids: excludeProbes(pattern) }).re) return;
     errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} is too slow to match (it crawls over a 256-character name)`);
   });
   return errors;
@@ -3821,7 +3827,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       // counted in the gate log.
       if (excludeMatchers.length) {
         const before = kept.length;
-        kept = kept.filter(n => !excludeMatchers.some(re => re.test(n)));
+        kept = kept.filter(n => !excludedBy(excludeMatchers, n));
         excluded = before - kept.length;
       }
       if (snapshot && kept.length > SNAPSHOT_LIMITS.metricNames) {

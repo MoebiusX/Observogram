@@ -544,7 +544,10 @@ Belongs here:
 - under the endpoint, *Live scope — what of the estate is this service's*:
   metric prefixes, dashboard / rule folder uids, exclude patterns, rule
   groups and the datasource uid — a new environment pre-filled from the
-  server default, each field said so; an environment that exists reads its
+  server default, each field said so (a default that names no metric
+  prefixes cannot show it is this service's: never pre-filled, offered as
+  **Use the server default**; typed prefixes then keep none of its other
+  answers, said before the save); an environment that exists reads its
   own scope or none (its form and its cell say *No live scope — the server
   default no longer applies here; set one*, the form offers **Use the
   server default**); the Run then reads only that of the estate, and the

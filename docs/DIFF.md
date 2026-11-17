@@ -372,13 +372,20 @@ unmatched artefact on the other side, in a scoped family, goes to
 **outside** the scope — `outside the snapshot's metric scope (prefixes
 payments_, checkout_)`, with `; excluded ^app_event_\d+_total$` appended when
 the snapshot also dropped names by pattern (`outside the snapshot's metric
-scope (excluded ^go_)` when it set patterns and no prefix), `outside the
+scope (excluded ^go_)` when it set patterns and no prefix; a name longer than
+256 characters is never dropped by a pattern, by the fetcher or here —
+`tools/lib/live-fetch.mjs` `excludedBy` — and a pattern that can split a name
+of up to 256 characters more than a million ways is refused where the scope is
+parsed, never run), `outside the
 snapshot's dashboard folders (Payments)`, `outside the snapshot's alert rule
 groups (payments, checkout:slo)` (the group a crawled rule's `source` names,
 `<file>#<group>/<name>`), `outside the snapshot's alert rule scope (folders
 Payments; rule groups payments)` when both were applied
 — or **cannot tell**, when the artefact does not say what the scope needs (a
-crawled dashboard names no folder uid): `the snapshot read only the folders
+crawled dashboard names no folder uid, and states a folder title only where
+the repository provisions it — a sidecar annotation read as its YAML value, or
+a dashboard provider that the same compose container's Grafana reads, alone):
+`the snapshot read only the folders
 Payments; Pack A does not say which folder this dashboard is in, so it was
 not checked`, `the snapshot read only the rule groups payments; Pack A does not
 say which group this recording rule is in, so it was not checked` (a canonical

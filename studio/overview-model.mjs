@@ -2018,12 +2018,17 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 // The pre-fill a new environment of `service` (null: a new service) opens with: { values } — the
 // default's five answers — or { refused: { defaultPrefixes, servicePrefixes } } when the service's
-// environments read other metric prefixes of their own, or null (no default).
+// environments read other metric prefixes of their own, or null (no default). A default that names
+// no metric prefixes cannot show it is this service's (SPEC P5: never pre-filled for a service whose
+// prefixes differ from the default's) — its folders, rule groups and patterns are one service's — so
+// it is never pre-filled: { refused: { defaultPrefixes: [], servicePrefixes: null, unprefixed: true } },
+// and the form offers Use the server default instead.
 export function scopePrefillOf(service, defaults) {
   if (!defaults || typeof defaults !== 'object' || !scopeFromValues(scopeFormValues(defaults))) return null;
-  const mine = (Array.isArray(service?.environments) ? service.environments : []).map((e) => prefixesOf(e?.liveScope)).filter((p) => p.length);
   const dp = prefixesOf(defaults);
-  if (dp.length && mine.some((p) => !sameSet(p, dp))) return { refused: { defaultPrefixes: dp, servicePrefixes: [...new Set(mine.flat())] } };
+  if (!dp.length) return { refused: { defaultPrefixes: [], servicePrefixes: null, unprefixed: true } };
+  const mine = (Array.isArray(service?.environments) ? service.environments : []).map((e) => prefixesOf(e?.liveScope)).filter((p) => p.length);
+  if (mine.some((p) => !sameSet(p, dp))) return { refused: { defaultPrefixes: dp, servicePrefixes: [...new Set(mine.flat())] } };
   return { values: scopeFormValues(defaults) };
 }
 
@@ -2050,8 +2055,8 @@ export function useServerDefaultScope(form) {
 // The answers still holding the pre-fill that a save would NOT keep: all of them when the save
 // would write over a scope the environment has of its own, or onto a record the form was not
 // opened on (`known` false: a blank Add naming an existing service); all but the prefixes when
-// the prefixes typed differ from the default's (its rule groups, folders and patterns are another
-// service's then); none otherwise.
+// the prefixes typed differ from the default's — a default that names none included, once any are
+// typed (its rule groups, folders and patterns are another service's then); none otherwise.
 function scopeDropped(values, { prefill, known = true, was = null }) {
   if (!prefill) return [];
   const pre = scopeFormValues(prefill);
@@ -2060,13 +2065,15 @@ function scopeDropped(values, { prefill, known = true, was = null }) {
   if (!known || was) return held;
   const typed = scopeList(values?.scopePrefixes, 'comma');
   const preset = scopeList(pre.scopePrefixes, 'comma');
-  return preset.length && !sameSet(typed, preset) ? held.filter((f) => f.field !== 'metricPrefixes') : [];
+  return !sameSet(typed, preset) ? held.filter((f) => f.field !== 'metricPrefixes') : [];
 }
 
 // The scope a save keeps for an environment (savePlan): an untouched scope of its own as kept (a
 // rule group with a comma, say, is never split by a save that did not touch it); else what is
 // typed, less the pre-filled answers it must not keep (scopeDropped) — a scope typed equal to the
-// server default IS saved: the default never applies on its own. Null for none.
+// server default IS saved: the default never applies on its own. Over a scope of its own, a
+// pre-fill that leaves nothing typed keeps that scope (it is never cleared by answers not saved).
+// Null for none.
 export function scopeSaveOf(values, { was = null, prefill = null, known = true } = {}) {
   const untouched = was && SCOPE_FIELDS.every((f) => String(values?.[f.value] ?? '') === scopeFormValues(was)[f.value]);
   if (untouched) return was;
@@ -2074,7 +2081,7 @@ export function scopeSaveOf(values, { was = null, prefill = null, known = true }
   if (!dropped.length) return scopeFromValues(values);
   const kept = { ...values };
   for (const f of dropped) kept[f.value] = '';
-  return scopeFromValues(kept);
+  return scopeFromValues(kept) ?? (was || null);
 }
 
 // The matrix cell's live scope for an environment (serviceListModel): its own, said in a few words;
@@ -2151,6 +2158,10 @@ function scopeCheckModel(form, v) {
     else if (live.ruleGroups === null) notes.push(`The last live read of ${env}${ago} did not record its rule groups: Run it again to check them.`);
     else if (Array.isArray(live.foldersNotRead) && live.foldersNotRead.length) {
       notes.push(`The last live read of ${env} read only the folders ${shortList(live.folders || [])}: Run it with this scope once to check the rule groups of ${shortList(live.foldersNotRead)}.`);
+    } else if (live.ruleGroupsKept && Number.isInteger(live.ruleGroupsKept.of) && Number.isInteger(live.ruleGroupsKept.kept)) {
+      // The live read listed more rule groups than its record keeps: a group not among those kept may be there.
+      const unlisted = groups.filter((g) => !(Array.isArray(live.ruleGroups) && live.ruleGroups.includes(g)));
+      if (unlisted.length) notes.push(`The last live read of ${env}${ago} listed ${live.ruleGroupsKept.of} rule groups and kept the first ${live.ruleGroupsKept.kept}: ${quotedList(unlisted)} ${unlisted.length === 1 ? 'is' : 'are'} not among them, so whether ${unlisted.length === 1 ? 'it is' : 'they are'} there is not known.`);
     } else if (Array.isArray(live.missingGroups) && live.missingGroups.length) {
       const missing = live.missingGroups;
       const where = Array.isArray(scope.folderUids) && scope.folderUids.length ? ` in the folders ${shortList(scope.folderUids)}` : '';
@@ -2168,7 +2179,23 @@ function scopeCheckModel(form, v) {
     if (!x.unknown) warnings.push(`None of the ${x.declared} declared ${noun} is inside this scope: a Run would compare none of them.`);
     else {
       const what = x.family === 'dashboard' ? 'folder' : x.family === 'metric' ? 'name' : (Array.isArray(scope.folderUids) && scope.folderUids.length && groups.length ? 'folder or group' : groups.length ? 'group' : 'folder');
-      warnings.push(`None of the ${x.declared} declared ${noun} is known to be inside this scope: ${x.unknown} of them do not say which ${what} they are in${x.outside ? `, ${x.outside} are outside` : ''}.`);
+      // Those the repository files under a folder TITLE the live read gave no uid of (server/scope-check.mjs
+      // byTitle): their place is not known, which is no fault of the repository's — said apart.
+      const byTitle = Number.isInteger(x.byTitle) && x.byTitle > 0 ? Math.min(x.byTitle, x.unknown) : 0;
+      const silent = x.unknown - byTitle;
+      const parts = [];
+      if (byTitle) {
+        const titles = Array.isArray(x.titles) && x.titles.length ? ` (${quotedList(x.titles)})` : '';
+        const folders = Array.isArray(x.untitledFolders) && x.untitledFolders.length ? x.untitledFolders : (Array.isArray(scope.folderUids) ? scope.folderUids : []);
+        const read = live ? `the last live read of ${env}${ago} did not give the title of the folder${folders.length === 1 ? '' : 's'} ${shortList(folders)}` : `no live read of ${env} has given the titles of its folders yet`;
+        parts.push(`${byTitle === x.declared ? 'they name' : `${byTitle} of them name`} their folder by its title only${titles}, and ${read}`);
+      }
+      if (silent) parts.push(`${silent} of them do not say which ${what} they are in`);
+      if (x.outside) parts.push(`${x.outside} are outside`);
+      const sentence = `None of the ${x.declared} declared ${noun} is known to be inside this scope: ${parts.join(byTitle ? '; ' : ', ')}.`;
+      // Every one filed by a title alone, none outside: not known to be wrong — a note, not a warning.
+      if (byTitle === x.unknown && !x.outside) notes.push(`${sentence} A Run with it compares those it finds in these folders; one it does not find reads not checked.`);
+      else warnings.push(sentence);
     }
   }
   return { state: 'done', warnings, notes };
@@ -2722,7 +2749,10 @@ export function formOpened(services, { serviceId = null, env = null, endpoints =
   // service, any listed one does): only then is the setting offered, so an older server never
   // takes an answer it would drop.
   const surfaceKnown = s ? !!(s.envSurfaces && typeof s.envSurfaces === 'object') : (Array.isArray(services) && services.some((x) => x && x.envSurfaces && typeof x.envSurfaces === 'object'));
-  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, surfaceKnown, ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
+  // The services listed, by slug: a blank Add whose name keys one of them completes that record, and
+  // savePlan keeps no pre-filled scope answer onto it (scopeModel says so before the save).
+  const listedSlugs = s ? null : (Array.isArray(services) ? services : []).map((x) => x?.slug).filter((x) => typeof x === 'string' && x);
+  const opened = { open: true, mode: s ? 'edit' : 'add', serviceId: s?.id ?? null, envFixed: !!e && !adding, values, saving: false, error: null, uploaded, upload: null, packs, original, scopeDefaults: scopeDefaults || null, scopeFrom: scoped.from, defaultRef: r?.ref || '', record, surfaceKnown, ...(listedSlugs ? { listedSlugs } : {}), ...(envChoices && !adding ? { envChoices } : {}), ...(adding ? { addEnv: true } : {}) };
   Object.assign(opened, scoped.form);
   // Opened on no environment of its own (the row's Change of a service whose first is another): its first choice.
   return envChoices && !e && !adding ? formInput({ ...opened, envFixed: true }, 'env', envChoices[0]) : opened;
@@ -2812,9 +2842,13 @@ const trimmed = (v) => String(v ?? '').trim();
 export const FORM_DRAFT_TTL_MS = 15 * 60_000;
 const FORM_DRAFT_VALUE_MAX = 2048;
 
+// The server default the scope answers were pre-filled with (form.scopePrefill: a new environment's
+// pre-fill, or Use the server default) rides along, compact, so the restored form keeps and drops on
+// save what it said it would before the round trip.
 export function formDraft(form, { now = Date.now() } = {}) {
   if (!form?.open || form.chaosRun) return null;
-  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched };
+  const prefill = form.scopePrefill ? scopeFromValues(scopeFormValues(form.scopePrefill)) : null;
+  return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched, ...(prefill ? { scopePrefill: prefill } : {}) };
 }
 
 export function formRestored(services, draft, { endpoints = [], sources = null, scopeDefaults = null, now = Date.now() } = {}) {
@@ -2836,6 +2870,13 @@ export function formRestored(services, draft, { endpoints = [], sources = null, 
     // A deployment surface this build does not know stays as the form opened it.
     if (field === 'surface' && value !== '' && !SURFACE_IDS.includes(value)) continue;
     form = formInput(form, field, value);
+  }
+  // The pre-fill the draft's form held (formDraft), read back as a compact scope, each answer within
+  // the draft's bound: the form says and saves what it did before the round trip — an environment
+  // that exists opens with none, so Use the server default would otherwise be forgotten.
+  const pre = draft.scopePrefill && typeof draft.scopePrefill === 'object' && !Array.isArray(draft.scopePrefill) ? scopeFromValues(scopeFormValues(draft.scopePrefill)) : null;
+  if (pre && Object.values(scopeFormValues(pre)).every((x) => x.length <= FORM_DRAFT_VALUE_MAX)) {
+    form = { ...form, scopePrefill: pre, scopePrefillRefused: null, scopeFrom: 'server' };
   }
   return form;
 }
@@ -3320,9 +3361,12 @@ const packReady = (p) => !!(p?.staged || p?.kept);
 // placeholder, fromDefault }], dropped, offerDefault, defaultIgnored, check }.
 // `from` is where the values now on the form stand: the server default's pre-fill while they still
 // equal it. `fromDefault`: the field still holds the pre-filled value. `dropped`: the sentence when a
-// save would not keep pre-filled answers (scopeDropped). `offerDefault`: an environment that exists,
-// with no scope of its own while the server has a default — Use the server default. `defaultIgnored`:
-// the row's sentence for it (SCOPE_DEFAULT_IGNORED). `check`: the scope check's answer, worded.
+// save would not keep pre-filled answers (scopeDropped, read as savePlan reads it: a blank Add whose
+// name keys a service already listed keeps none of them). The hint says what a save keeps.
+// `offerDefault`: Use the server default — for an environment that exists with no scope of its own
+// while the server has a default, and for a new one whose default names no metric prefixes (never
+// pre-filled: scopePrefillOf). `defaultIgnored`: the row's sentence for the first
+// (SCOPE_DEFAULT_IGNORED). `check`: the scope check's answer, worded.
 function scopeModel(form, v) {
   const shown = !!v.endpointId && v.endpointId !== LIVE_PACK;
   const typed = scopeFromValues(v);
@@ -3334,21 +3378,34 @@ function scopeModel(form, v) {
   const env = form.addEnv ? null : (form.record?.environments || []).find((x) => x?.name === trimmed(v.env)) || null;
   const was = env?.liveScope && typeof env.liveScope === 'object' && Object.keys(env.liveScope).length ? env.liveScope : null;
   const ignored = !!env && !was && !!defaults && !prefill;
-  const dropped = scopeDropped(v, { prefill, known: true, was });
+  // As savePlan reads it (scopeKnown || !existing): a form opened on no record whose name keys a
+  // service already listed completes that record, onto which no pre-filled answer is saved.
+  const known = !!form.record || !(Array.isArray(form.listedSlugs) && form.listedSlugs.includes(defaultKeyOf(v.name)));
+  const dropped = scopeDropped(v, { prefill, known, was });
+  const kept = dropped.length ? scopeSaveOf(v, { was, prefill, known }) : typed;
   const fieldNames = { metricPrefixes: 'metric prefixes', folderUids: 'folder uids', metricExclude: 'exclude patterns', ruleGroups: 'rule groups', datasourceUid: 'datasource uid' };
   const names = dropped.map((f) => fieldNames[f.field]);
   const joined = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
   const refused = form.scopePrefillRefused || null;
   const service = trimmed(v.name) || 'this service';
-  const hint = from === 'server' ? "Pre-filled from the server default: saved as this environment's own scope. Change or clear any field — the server default never applies on its own."
-    : typed ? `This environment's own scope: each Run reads only ${scopeSummary(typed)} of the estate, and the match counts only that.`
-      : refused ? `Empty: the server default (prefixes ${refused.defaultPrefixes.join(', ')}) is for another service — ${refused.servicePrefixes ? `${service}'s environments read ${refused.servicePrefixes.join(', ')}` : `${service}'s repository declares no metric with those prefixes`}.`
-        : ignored ? `${SCOPE_DEFAULT_IGNORED}. Each Run reads the whole estate the endpoint serves; the server default (${scopeSummary(defaults)}) is not applied to an environment that exists — Use the server default to make it this environment's own.`
-          : 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.';
+  const envName = trimmed(v.env) || 'this environment';
+  const hint = from === 'server' && !dropped.length ? "Pre-filled from the server default: saved as this environment's own scope. Change or clear any field — the server default never applies on its own."
+    : kept ? `This environment's own scope: each Run reads only ${scopeSummary(kept)} of the estate, and the match counts only that.`
+      : typed ? `None of these answers is saved as ${envName}'s live scope.`
+        : refused?.unprefixed ? `Empty: the server default (${scopeSummary(defaults) || 'set on the server'}) names no metric prefixes, so nothing shows it is ${service}'s — it is not pre-filled. Use the server default to make it this environment's own.`
+          : refused ? `Empty: the server default (prefixes ${refused.defaultPrefixes.join(', ')}) is for another service — ${refused.servicePrefixes ? `${service}'s environments read ${refused.servicePrefixes.join(', ')}` : `${service}'s repository declares no metric with those prefixes`}.`
+            : ignored ? `${SCOPE_DEFAULT_IGNORED}. Each Run reads the whole estate the endpoint serves; the server default (${scopeSummary(defaults)}) is not applied to an environment that exists — Use the server default to make it this environment's own.`
+              : 'Empty: the whole estate the endpoint serves is read. Set prefixes or folders when it serves more than this service.';
+  const presetPrefixes = prefixesOf(prefill);
+  const droppedText = !dropped.length ? null
+    : was ? `${envName} has a live scope of its own: the server default's ${joined} will not be saved over it.`
+      : !known ? `${service} is a service already listed, and this form was not opened on it: the server default's ${joined} will not be saved for ${envName} — type your own, or use Change on its row.`
+        : presetPrefixes.length ? `The server default is for the metric prefixes ${presetPrefixes.join(', ')}: its ${joined} will not be saved for this environment — type them again to keep them.`
+          : `The server default names no metric prefixes, so nothing says it is for ${scopeList(v.scopePrefixes, 'comma').join(', ')}: its ${joined} will not be saved for this environment — type them again to keep them.`;
   return {
     shown, from, hint, fields,
-    dropped: dropped.length ? `The server default is for the metric prefixes ${prefixesOf(prefill).join(', ')}: its ${joined} will not be saved for this environment — type them again to keep them.` : null,
-    offerDefault: ignored && !typed,
+    dropped: droppedText,
+    offerDefault: (ignored || (!!refused?.unprefixed && !!defaults && !prefill)) && !typed,
     defaultIgnored: ignored ? SCOPE_DEFAULT_IGNORED : null,
     check: scopeCheckModel(form, v),
   };

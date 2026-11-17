@@ -85,7 +85,7 @@ import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
-import { abortAllLiveJobs } from './live-jobs.mjs';
+import { abortAllLiveJobs, snapshotScopeConfig } from './live-jobs.mjs';
 import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/lib/live-fetch.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { envRefOf, envSurfaceOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
@@ -1232,6 +1232,13 @@ app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), a
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+  // A studio-written check that names a service with a record reads that environment's own live
+  // scope, else none (withServiceScope) — whatever its file still says (a scope an environment or a
+  // service deleted since left in it) — as it is graded on the record's switches. The file is not
+  // rewritten here; a check written by hand reads what its writer typed.
+  const scopeOwner = typeof def.service === 'string' && def.service.trim() && studioBanner(def.__source)
+    ? getServiceBySlug(currentStore(), normalizeServiceKey(def.service)) : null;
+  if (scopeOwner) def = withServiceScope(def, scopeOwner);
   const targets = journeyRunTargets(req, def);
   if (targets.refused) return res.status(targets.refused.status).json(targets.refused.body);
   await executeJourneyRun(req, res, def, targets);
@@ -3225,27 +3232,53 @@ function syncTargetsIntoChecks(log) {
 // Boot step 8: a saved check of a service reads with its environment's own live scope, else none
 // (withServiceScope). A check saved while the server's configured snapshot scope applied to every
 // environment without its own still carries that scope; it is rewritten here, at the first start
-// after the change, and the count is logged — studio-written files only (writeGradeOffToChecks), a
-// check written by hand is left as it is. Idempotent; best effort: never a boot failure.
+// after the change, and logged with its name. Only that scope is ever taken out: a check whose scope
+// is not the org's configured default (OBSERVOGRAM_SNAPSHOT_* and the org's own, as the Run before
+// this change wrote it; none configured, or one that does not parse: nothing is the default's) keeps
+// it — one typed into a capture by hand among them, with its comments — and so does a check written
+// by hand (no studio banner) or one that names no service. A check whose service has no record (one
+// deleted before the change) reads with none, as a deleted service's checks do now. Only the scope is
+// written; the rest of the check is as it was. Idempotent: a check no longer carrying the default is
+// not touched again. Best effort: never a boot failure.
+const sameScopeSet = (a, b) => {
+  const fields = ['metricPrefixes', 'folderUids', 'metricExclude', 'ruleGroups'];
+  const list = (s, f) => (Array.isArray(s?.[f]) ? [...new Set(s[f].map(String))].sort() : []);
+  return fields.every((f) => JSON.stringify(list(a, f)) === JSON.stringify(list(b, f))) && (a?.datasourceUid || null) === (b?.datasourceUid || null);
+};
+const CHECK_NAMES_LOGGED = 10;
 function syncScopesIntoChecks(log) {
-  let written = 0;
   for (const org of listOrgs(currentStore())) {
+    const rewritten = [];
     try {
       runWithOrg(org.id, () => {
+        const configured = snapshotScopeConfig(currentStore(), org.id);
+        const theDefault = configured.errors.length ? null : compactScope(configured.defaults);
+        if (!theDefault) return;
         for (const name of listJourneys()) {
           let def;
           try { def = loadJourneyDef(name, { allowPath: false }); } catch { continue; }
-          if (!def?.packB?.mcp || typeof def.service !== 'string' || !def.service.trim()) continue;
+          const mcp = def?.packB?.mcp;
+          if (!mcp || def.packB.file || typeof def.service !== 'string' || !def.service.trim()) continue;
+          if (!mcp.scope || !sameScopeSet(mcp.scope, theDefault)) continue;
+          const banner = studioBanner(def.__source);
+          if (!banner) continue;   // written by hand: left as it is
           const service = getServiceBySlug(currentStore(), normalizeServiceKey(def.service));
-          if (!service) continue;
-          const want = JSON.stringify(withServiceScope(def, service)?.packB?.mcp?.scope ?? null);
-          if (want === JSON.stringify(def.packB.mcp.scope ?? null) || !studioBanner(def.__source)) continue;
-          written += writeGradeOffToChecks([name], service);
+          const want = service ? withServiceScope(def, service)?.packB?.mcp?.scope ?? null : null;
+          if (want && sameScopeSet(want, mcp.scope)) continue;   // the environment's own scope is the default's
+          const { __source: _source, ...rest } = def;
+          const { scope: _was, ...mcpRest } = mcp;
+          try {
+            saveJourneyDef(name, { ...rest, packB: { ...rest.packB, mcp: { ...mcpRest, ...(want ? { scope: want } : {}) } } }, { banner });
+            rewritten.push(name);
+          } catch (e) { process.stderr.write(`[studio] org ${org.id}: the saved check ${name} could not be rewritten with its environment's own live scope (${e.message})\n`); }
         }
       });
     } catch (e) { process.stderr.write(`[studio] org ${org.id}: the live scopes could not be written into its saved checks (${e.message})\n`); }
+    if (rewritten.length) {
+      const shown = rewritten.slice(0, CHECK_NAMES_LOGGED).join(', ') + (rewritten.length > CHECK_NAMES_LOGGED ? `, … (${rewritten.length - CHECK_NAMES_LOGGED} more)` : '');
+      log(`[studio] org ${org.id}: the server's snapshot scope taken out of ${rewritten.length} saved check${rewritten.length === 1 ? '' : 's'} (${shown}) — it no longer applies to a service environment; each reads its environment's own live scope, else none`);
+    }
   }
-  if (written) log(`[studio] ${written} saved check${written === 1 ? ' now reads' : 's now read'} with ${written === 1 ? 'its' : 'their'} environment's own live scope — the server's snapshot scope no longer applies to an environment that exists`);
 }
 
 // The studio no longer reads the install's deployment-wide live pack

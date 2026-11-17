@@ -2862,7 +2862,7 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary, mounts = n
     if (!obj?.services) continue;
     for (const [svcName, svc] of Object.entries(obj.services)) {
     // The folders it bind-mounts from the repository: where a dashboard provider reads its files.
-    if (mounts) mounts.push(...composeBindMounts(f.relPath, svc));
+    if (mounts) mounts.push(...composeBindMounts(f.relPath, svc, svcName));
     const image = String(svc?.image || '');
     if (!image) continue;
     for (const p of BACKEND_PATTERNS) {
@@ -2924,11 +2924,16 @@ function normalizeRelPath(path) {
 }
 const containerPath = (path) => `/${normalizeRelPath(String(path).replace(/^\/+/, '')) ?? ''}`;
 
-// A compose service's bind mounts of repository folders: { source (repository path), target (container path) }.
+// A compose service's bind mounts of repository folders and files: { source (repository path), target
+// (container path), service (`<compose file>#<service>`: whose container it is), provisioning (where
+// that container's Grafana reads its provisioning files: GF_PATHS_PROVISIONING, else
+// /etc/grafana/provisioning) }.
 // Short syntax `<host>:<container>[:<mode>]` with a relative host path; long syntax `{ type: bind, source, target }`.
 // A named volume, an absolute or home path and a templated value are not the repository's.
-function composeBindMounts(composePath, svc) {
+function composeBindMounts(composePath, svc, svcName = '') {
   const dir = composePath.includes('/') ? composePath.slice(0, composePath.lastIndexOf('/')) : '';
+  const service = `${composePath}#${svcName}`;
+  const provisioning = grafanaProvisioningPath(svc);
   const out = [];
   for (const v of Array.isArray(svc?.volumes) ? svc.volumes : []) {
     let source = null;
@@ -2942,9 +2947,31 @@ function composeBindMounts(composePath, svc) {
     if (!source.startsWith('./') && !source.startsWith('../') && !source.includes('/')) continue;   // a named volume
     const resolved = normalizeRelPath(dir ? `${dir}/${source}` : source);
     if (resolved === null) continue;
-    out.push({ source: resolved, target: containerPath(target) });
+    out.push({ source: resolved, target: containerPath(target), service, provisioning });
   }
   return out;
+}
+
+// Where a compose service's Grafana reads its provisioning files: its GF_PATHS_PROVISIONING (a map
+// or `NAME=value` list entry, its compose default when templated), else Grafana's own default.
+function grafanaProvisioningPath(svc) {
+  const env = svc?.environment;
+  let value = null;
+  if (Array.isArray(env)) {
+    for (const e of env) if (typeof e === 'string' && e.startsWith('GF_PATHS_PROVISIONING=')) value = e.slice('GF_PATHS_PROVISIONING='.length);
+  } else if (env && typeof env === 'object' && (typeof env.GF_PATHS_PROVISIONING === 'string' || typeof env.GF_PATHS_PROVISIONING === 'number')) {
+    value = String(env.GF_PATHS_PROVISIONING);
+  }
+  const path = value === null ? '' : composeDefaults(value).trim();
+  return path.startsWith('/') ? containerPath(path) : '/etc/grafana/provisioning';
+}
+
+// Where a repository file sits in a container that mounts it (a mount of the file itself, or of a folder
+// holding it), or null.
+function mountedAt(relPath, mount) {
+  if (relPath === mount.source) return mount.target;
+  const under = mount.source === '' ? relPath : relPath.startsWith(`${mount.source}/`) ? relPath.slice(mount.source.length + 1) : null;
+  return under === null ? null : `${mount.target}/${under}`.replace(/\/+/g, '/');
 }
 
 // A dashboard provider file's providers.
@@ -2970,23 +2997,67 @@ function walkDashboardProvider(f, providers, summary) {
 // The Grafana sidecar's folder a chart template's documents state: per document, the title (the
 // last segment of `grafana_folder` / `k8s-sidecar-target-directory`, an annotation or a label; a
 // value the chart fills in at deploy time says nothing), its own data keys and the chart files it
-// ships (.Files.Glob "<pattern>" / .Files.Get "<path>", relative to the chart's root).
+// ships (.Files.Glob "<pattern>" / .Files.Get "<path>", relative to the chart's root). The value is
+// read as YAML reads it (sidecarValue); one that does not read as a single scalar says nothing.
 function helmSidecarFolders(f) {
   const out = [];
   const chartRoot = f.relPath.includes('/templates/') ? f.relPath.slice(0, f.relPath.indexOf('/templates/'))
     : f.relPath.startsWith('templates/') ? '' : null;
   for (const doc of f.content.split(/^---\s*$/m)) {
-    const m = /^\s*["']?(grafana_folder|k8s-sidecar-target-directory)["']?\s*:\s*(.+?)\s*$/m.exec(doc);
+    const m = /^([ \t]*)["']?(grafana_folder|k8s-sidecar-target-directory)["']?[ \t]*:(.*)$/m.exec(doc);
     if (!m) continue;
-    const raw = m[2].replace(/^["']|["']$/g, '').trim();
+    const raw = sidecarValue(m[3], doc.slice(m.index + m[0].length).split(/\r?\n/).slice(1), m[1].length);
     if (!raw || raw.includes('{{') || raw.includes('$')) continue;
     const title = raw.replace(/\/+$/, '').split('/').pop().trim();
     if (!title) continue;
     const keys = extractConfigMapData(doc).map((b) => b.key);
     const files = chartRoot === null ? [] : [...doc.matchAll(/\.Files\.(Glob|Get)\s+"([^"]+)"/g)].map((x) => ({ pattern: x[2], chartRoot }));
-    out.push({ title, source: `${f.relPath} (ConfigMap ${m[1]})`, keys, files });
+    out.push({ title, source: `${f.relPath} (ConfigMap ${m[2]})`, keys, files });
   }
   return out;
+}
+
+// A sidecar annotation's value as YAML reads it, from the text after its key's colon (`rest`) and
+// the lines below it (`below`; `indent`, the key's own): a double-quoted value's content (its
+// escapes read as JSON's), a single-quoted one's (`''` a quote), a plain one up to a comment
+// (` #…`); a block scalar (`|`, `>` with its indicators) or a plain value on the lines below, from
+// the lines indented past the key — a folded one joined by spaces, a literal one only when it is one
+// line. Null for anything else (a flow collection, an anchor or alias, a tag, text after a closing
+// quote): no claim is made from a value that does not read as one scalar.
+function sidecarValue(rest, below, indent) {
+  const text = String(rest).trim();
+  const stripComment = (s) => s.replace(/(^|[ \t])#.*$/, '').trim();
+  const following = () => {
+    const lines = [];
+    for (const line of below) {
+      if (!line.trim()) { if (lines.length) break; continue; }
+      if ((line.length - line.trimStart().length) <= indent) break;
+      lines.push(line.trim());
+    }
+    return lines;
+  };
+  if (text === '' || text.startsWith('#')) {
+    const lines = following().map(stripComment).filter(Boolean);
+    return lines.length && !/^["'|>[{&*!%@`]/.test(lines[0]) ? lines.join(' ') : null;
+  }
+  if (text[0] === '"') {
+    const m = /^"((?:[^"\\]|\\.)*)"(.*)$/.exec(text);
+    if (!m || stripComment(m[2]) !== '') return null;
+    try { return JSON.parse(`"${m[1]}"`).trim(); } catch { return null; }
+  }
+  if (text[0] === "'") {
+    const m = /^'((?:[^']|'')*)'(.*)$/.exec(text);
+    if (!m || stripComment(m[2]) !== '') return null;
+    return m[1].replace(/''/g, "'").trim();
+  }
+  if (/^[|>]/.test(text)) {
+    if (!/^[|>](?:[+-]?[1-9]?|[1-9][+-]?)$/.test(stripComment(text))) return null;
+    const lines = following();
+    if (!lines.length) return null;
+    return text[0] === '>' ? lines.join(' ') : lines.length === 1 ? lines[0] : null;
+  }
+  if (/^[[{&*!%@`]/.test(text)) return null;
+  return stripComment(text) || null;
 }
 
 // A glob of .Files.Glob (`*` within a segment, `**` across them) as a test on a chart-relative path.
@@ -3005,12 +3076,33 @@ function chartGlob(pattern) {
   return new RegExp(`^${re}$`);
 }
 
-// Each crawled dashboard file the repository provisions into a folder, placed there.
+// Each crawled dashboard file the repository provisions into a folder, placed there. A provider
+// places a dashboard only in a container that reads both: the compose service mounting the
+// provider file into its Grafana's provisioning folder (<provisioning>/dashboards/<file>) mounts the
+// dashboard under the provider's path too. A provider file nothing mounts, or mounted into another
+// service than the dashboard, provisions nothing there; a dashboard two providers of one container
+// read (the same path, or one inside the other: Grafana reads a provider's sub-folders too) is
+// provisioned twice, and one two containers place differently has no one folder — none, never a guess.
 function resolveDashboardFolders(dashboards, { providers, mounts, helmFolders }, summary) {
   const place = (d, title, folderUid, source) => {
     d.folder = title;
     d.params = { ...(d.params || {}), folderTitle: title, ...(folderUid ? { folderUid } : {}), folderSource: source };
   };
+  // Per compose service: its mounts, and the providers its Grafana reads.
+  const services = new Map();
+  for (const m of mounts) {
+    if (!services.has(m.service)) services.set(m.service, { mounts: [], provisioning: m.provisioning });
+    services.get(m.service).mounts.push(m);
+  }
+  for (const s of services.values()) {
+    s.providers = providers.filter((p) => s.mounts.some((m) => {
+      const at = mountedAt(p.relPath, m);
+      return at !== null && at.slice(0, at.lastIndexOf('/')) === `${s.provisioning}/dashboards`;
+    }));
+  }
+  const placementOf = (p, at) => (p.fromStructure
+    ? (() => { const under = at.slice(p.path.length + 1).split('/'); return { title: under.length > 1 ? under[under.length - 2] : 'General', folderUid: null, source: p.relPath }; })()
+    : { title: p.folder || 'General', folderUid: p.folderUid, source: p.relPath });
   for (const d of dashboards) {
     const relPath = typeof d.source === 'string' && d.source.startsWith('file://') ? d.source.slice('file://'.length) : null;
     if (!relPath || relPath.includes('#') || d.params?.folderTitle) continue;
@@ -3022,22 +3114,21 @@ function resolveDashboardFolders(dashboards, { providers, mounts, helmFolders },
     const titles = [...new Set(shipped.map((h) => h.title))];
     if (titles.length === 1) { place(d, titles[0], null, shipped[0].source); continue; }
     if (titles.length > 1) continue;   // two folders say they ship it: none
-    // A provider reading the folder a compose service mounts it from.
-    const mount = mounts.find((x) => relPath === x.source || relPath.startsWith(`${x.source}/`));
-    if (!mount) continue;
-    const inContainer = `${mount.target}/${relPath.slice(mount.source.length).replace(/^\/+/, '')}`.replace(/\/+/g, '/');
-    const fits = providers.filter((p) => p.path && (inContainer === p.path || inContainer.startsWith(`${p.path}/`)));
-    if (!fits.length) continue;
-    const longest = Math.max(...fits.map((p) => p.path.length));
-    const best = fits.filter((p) => p.path.length === longest);
-    if (best.length !== 1) continue;   // two providers equally good: none, never a guess
-    const p = best[0];
-    if (p.fromStructure) {
-      const under = inContainer.slice(p.path.length + 1).split('/');
-      place(d, under.length > 1 ? under[under.length - 2] : 'General', null, p.relPath);
-    } else {
-      place(d, p.folder || 'General', p.folderUid, p.relPath);
+    // The providers reading it, container by container.
+    const placements = [];
+    let twice = false;
+    for (const s of services.values()) {
+      for (const m of s.mounts) {
+        const at = mountedAt(relPath, m);
+        if (at === null) continue;
+        const fits = s.providers.filter((p) => p.path && (at === p.path || at.startsWith(`${p.path}/`)));
+        if (fits.length > 1) twice = true;
+        else if (fits.length === 1) placements.push(placementOf(fits[0], at));
+      }
     }
+    const distinct = [...new Map(placements.map((x) => [`${x.title}\u0000${x.folderUid ?? ''}`, x])).values()];
+    if (twice || distinct.length !== 1) continue;
+    place(d, distinct[0].title, distinct[0].folderUid, distinct[0].source);
   }
   const stated = dashboards.filter((d) => d.params?.folderTitle).length;
   if (stated) summary.discovered.dashboardFolders = stated;
