@@ -1448,6 +1448,13 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     ['harbor.corp.example/dockerhub/envoyproxy/envoy-distroless:v1.24.0', 'envoy'], ['kong/kong:3.9', 'kong'],
     ['hashicorp/consul-k8s-control-plane:1.5.0', null], ['hashicorp/consul-dataplane:1.5.0', null], ['envoyproxy/envoy-build-ubuntu:f94a38f62220a2b017878b790b6ea98a0f6c5f9c', null],
     ['grafana/alloy-operator:0.3.0', null], ['kong/kubernetes-ingress-controller:3.3', null],
+    // Their variants stack — a dev build of each, Windows, FIPS, the nightlies, a pre-release — and the companions' own
+    // variants stay companions.
+    ['envoyproxy/envoy-distroless-dev:3b5ab3fd', 'envoy'], ['envoyproxy/envoy-contrib-debug-dev:3b5ab3fd', 'envoy'], ['envoyproxy/envoy-windows:v1.25.3', 'envoy'],
+    ['envoyproxy/envoy-windows-ltsc2022-dev:3b5ab3fd', 'envoy'], ['docker.io/hashicorp/consul-enterprise-fips:1.19.2-ent', 'consul'],
+    ['kong/kong-gateway-dev:3.8.0.0', 'kong'], ['kong/kong-dev:3.8.0', 'kong'], ['grafana/alloy-dev:v1.14.0-devel-ca637d8', 'alloy'],
+    ['envoyproxy/envoy-tools-dev:3b5ab3fd', null], ['hashicorp/consul-dataplane-fips:1.5.3', null], ['hashicorp/consul-k8s-control-plane-fips:1.5.3', null],
+    ['kong/kong-gateway-operator:1.3', null],
   ]) assert(scannedProduct(ref) === want, `scanned image ${ref}: ${want ?? 'no backend'}`, scannedProduct(ref));
   // A tag a chart or a deploy step fills in after its numbers gives those numbers; one that continues them, none.
   const chartVersion = (tag) => (crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/templates/deploy.yaml': workload(`"quay.io/prometheus/prometheus:${tag}"`) },
@@ -1464,9 +1471,11 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   const nameless = crawlFiles({ 'docker-compose.yml': [
     'services:', '  a:', '    image: ${REGISTRY}/${GRAFANA_IMAGE}:${GRAFANA_TAG}', '  b:', '    image: ${GRAFANA_REPO}:${GRAFANA_TAG:-11.2.0}', '  c:', '    image: $REGISTRY/$IMAGE:$TAG',
     '  app:', '    build: ./app', '    image: ${IMAGE_NAME}:${DEMO_VERSION}-frontend', '  built:', '    build: .', '    image: ${APP_IMAGE}',
+    '  web:', '    extends: built', '    image: ${WEB_IMAGE}', '  api:', '    extends:', '      service: web', '    image: ${REGISTRY}/${API_IMAGE}:${TAG}',
+    '  shared:', '    extends:', '      file: common.yml', '      service: app', '    image: ${SHARED_IMAGE}', '  loop:', '    extends: loop', '    image: ${LOOP_IMAGE}',
   ].join('\n') + '\n' }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
   const saidOf = (out) => out.summary.warnings.filter((w) => /is a variable \(/.test(w)).map((w) => /the image of (\S+) is/.exec(w)[1]);
-  assert(JSON.stringify(saidOf(nameless)) === JSON.stringify(['a', 'b', 'c']), 'an image the variables leave no name is said; a service compose builds is not', nameless.summary.warnings);
+  assert(JSON.stringify(saidOf(nameless)) === JSON.stringify(['a', 'b', 'c', 'shared', 'loop']), 'an image the variables leave no name is said; a service compose builds, or one that extends it in this file, is not', nameless.summary.warnings);
   // Image reading stays linear in a value's length.
   const t0 = Date.now();
   crawlFiles({ 'docker-compose.yml': `services:\n  x:\n    image: "${':'.repeat(200000)}x"\n  y:\n    image: "\${${'A'.repeat(200000)}"\n` }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
@@ -1593,6 +1602,11 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify((recordNamed.canonical.spec.alerting?.rules || []).map((r) => r.name).sort()) === JSON.stringify(['CheckoutErrorsHigh', 'CheckoutPodRestarting'])
     && !(recordNamed.canonical.spec.policy?.burn_rate_alerts || []).some((e) => /checkout/.test(e.slo)),
   'where every recording rule is named at deploy time, the alerts stay operational, no SLO read from their names', [rulesOf(recordNamed), recordNamed.summary.warnings]);
+  // ...and a lifecycle block over them covers those operational rules, never SLOs read from their names.
+  const recordNamedPlanned = read({ 'deploy/app.yaml': `# observogram-lifecycle:\n#   deployment:\n#     prod: planned\n${deployment}---\n${resource().replace('- record: checkout:errors:ratio_5m', '- record: ${PREFIX}:errors:ratio_5m')}` });
+  const recordNamedSymbols = JSON.parse(recordNamedPlanned.canonical.metadata.annotations['observogram.lifecycle'] ?? '[]')[0]?.symbols ?? [];
+  assert(['alerting.rules.CheckoutErrorsHigh', 'alerting.rules.CheckoutPodRestarting'].every((s) => recordNamedSymbols.includes(s)) && !recordNamedSymbols.some((s) => /^(?:slis|slos|policy)\./.test(s)),
+    'a lifecycle block over rules whose recording rules are all named at deploy time covers the operational rules', recordNamedSymbols);
   // A template action that prints a scalar is the placeholder, never a key: the rest of a plain scalar (a threshold on
   // the line below), or a key's value below it.
   const threshold = template(resource().replace('          expr: checkout:errors:ratio_5m > 0.01', '          expr: checkout:errors:ratio_5m >\n            {{ .Values.slo.threshold }}'));
@@ -1716,13 +1730,29 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     ...alert('NamespaceEnvDown', 'up{namespace="$NAMESPACE"} == 0'),
     ...alert('FluxDown', 'up{namespace="${namespace:=apps}"} == 0', ['severity: warning', 'cluster: ${cluster_name:-dev}']),
     ...alert('${app_name:=api}Down', 'up == 0'),
+    // A pipeline's tokens are a deploy step's too: Azure DevOps Replace Tokens, Octopus Deploy, an Azure Pipelines
+    // macro — in an expression (outside a string, where '#' would start a comment), a label value, a rule's name.
+    ...alert('TokenWindow', 'rate(errors_total[#{AlertWindow}#]) > 0.05'),
+    ...alert('OctopusEnv', 'up{env="#{Octopus.Environment.Name}"} == 0', ['severity: \'#{Severity}#\'']),
+    ...alert('MacroEnv', 'up{env="$(Env)"} == 0'),
+    ...alert("'#{App}#Down'", 'up == 0'),
+    // A label key a deploy step names is no key written: the rule is held to the labels it writes.
+    ...alert('KeyFilled', 'up{job="api"} == 0', ['severity: warning', '${TEAM_KEY}: payments']),
   ].join('\n') + '\n' });
   assert(JSON.stringify(partialOf(dollars)) === JSON.stringify({
     HostDown: null, HostDownBraced: null, ODataErrors: null, RetryErrors: null, Commented: null, NodeNamed: null,
     NamespaceDown: 'expr=', NamespaceEnvDown: 'expr=', FluxDown: 'expr=;labels.filled=cluster;labels=severity',
+    TokenWindow: 'expr=', OctopusEnv: 'expr=;labels.filled=severity;labels=', MacroEnv: 'expr=', KeyFilled: 'labels=severity',
   }) && (dollars.canonical.spec.alerting.rules.find((r) => r.name === 'NodeNamed')?.labels?.node_name ?? '').includes('reReplaceAll')
-    && dollars.summary.warnings.some((w) => /rule\(s\) are not declared: each takes its name from a value filled in at deploy time .*\$\{app_name:=api\}Down/.test(w)),
-  'PromQL\'s own $ is compared; a deploy step\'s variable, Flux\'s default form too, is not, and names no rule', [partialOf(dollars), dollars.summary.warnings]);
+    && !JSON.stringify(dollars.canonical.spec.alerting.rules.find((r) => r.name === 'KeyFilled')).includes('TEAM_KEY')
+    && dollars.canonical.spec.alerting.rules.find((r) => r.name === 'TokenWindow')?.expr === 'rate(errors_total[#{AlertWindow}#]) > 0.05'
+    && dollars.summary.warnings.some((w) => /rule\(s\) are not declared: each takes its name from a value filled in at deploy time .*\$\{app_name:=api\}Down.*#\{App\}#Down/.test(w)),
+  'PromQL\'s own $ is compared; a deploy step\'s variable, Flux\'s default form and a pipeline\'s token too, is not, and names no rule', [partialOf(dollars), dollars.summary.warnings]);
+  // An SLO's rule whose comment names a variable states its rules: the comment is no part of what the ruler runs.
+  const commentedSlo = scan({ 'prometheus/rules/recording.yml': recording, 'prometheus/rules/slo.rules.yml': ['groups:', '  - name: shop-slo', '    rules:',
+    '      - alert: ShopBudgetBurn', '        expr: |', '          # runbook: ${RUNBOOK_BASE}/budget', '          shop:checkout:error_ratio_5m > 0.0144', '        for: 2m', '        labels:', '          severity: critical'].join('\n') + '\n' });
+  assert(Object.keys(commentedSlo.canonical.metadata.annotations).some((k) => k.startsWith('observogram.source_rules.')),
+    'an SLO rule whose comment names a variable still states its rules', Object.keys(commentedSlo.canonical.metadata.annotations));
   // An SLO's page rule whose wait a deploy step or the chart fills in, beside a ticket rule writing its own: no
   // window from it, said (the chart's value as …), and the pack stays valid.
   const sloRules = (pageFor) => ['groups:', '  - name: shop-slo', '    rules:',
@@ -1737,15 +1767,31 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     const errors = validateCanonical(out.canonical, SCHEMA);
     assert(errors.length === 0 && !/\$|helmvalue/.test(JSON.stringify(out.canonical.spec.policy?.burn_rate_alerts ?? []))
       && JSON.stringify(out.summary.omitted.ruleWaits.map((o) => [o.rule, o.value])) === JSON.stringify([['ShopBudgetBurnPage', shown]])
-      && out.summary.warnings.some((w) => w.includes(`ShopBudgetBurnPage=${shown} (`)),
+      && out.summary.warnings.some((w) => w.includes(`ShopBudgetBurnPage=${shown} (`) && /states none of its rules, so none is compared/.test(w) && !/held to the rest/.test(w)),
     `an SLO rule's wait ${where} fills in gives no window, is said, and the pack stays valid`, [errors.slice(0, 2), out.canonical.spec.policy?.burn_rate_alerts, out.summary.omitted.ruleWaits]);
   }
+  // A page and a ticket rule of one name (the fold keeps the first): the ticket's wait a deploy step fills in is said too.
+  const oneName = scan({ 'prometheus/rules/recording.yml': recording, 'prometheus/rules/slo.rules.yml': ['groups:', '  - name: shop-slo', '    rules:',
+    '      - alert: ShopBudgetBurn', '        expr: shop:checkout:error_ratio_5m > 0.0144', '        for: 2m', '        labels:', '          severity: critical',
+    '      - alert: ShopBudgetBurn', '        expr: shop:checkout:error_ratio_5m > 0.006', '        for: ${SLO_TICKET_FOR}', '        labels:', '          severity: warning'].join('\n') + '\n' });
+  assert(JSON.stringify(oneName.summary.omitted.ruleWaits.map((o) => [o.rule, o.value])) === JSON.stringify([['ShopBudgetBurn', '${SLO_TICKET_FOR}']]),
+    'the wait of an SLO\'s second rule of one name, filled in, is said', oneName.summary.omitted.ruleWaits);
   // An SLO id a long recorded name derives is cut to a spec Slug (kube-prometheus-stack's container CPU rules).
   const longNames = scan({ 'prometheus/rules/k8s.rules.yml': ['groups:', '  - name: k8s.rules.container_cpu_usage_seconds_total', '    rules:',
     '      - record: node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate', '        expr: sum by (namespace, pod, container) (irate(container_cpu_usage_seconds_total{job="kubelet"}[5m]))',
     '      - record: node_namespace_pod_container:container_cpu_usage_seconds_total:sum_rate5m', '        expr: sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{job="kubelet"}[5m]))'].join('\n') + '\n' });
-  assert(validateCanonical(longNames.canonical, SCHEMA).length === 0 && (longNames.canonical.spec.slos || []).length > 0 && longNames.canonical.spec.slos.every((s) => s.id.length <= 64),
-    'an SLO id a long recorded name derives is cut to a spec Slug', [(longNames.canonical.spec.slos || []).map((s) => s.id), validateCanonical(longNames.canonical, SCHEMA).slice(0, 2)]);
+  assert(validateCanonical(longNames.canonical, SCHEMA).length === 0 && (longNames.canonical.spec.slos || []).length > 0
+    && longNames.canonical.spec.slos.every((s) => s.id.length <= 64 && s.id === `${String(s.sli).replace(/^ref:slis\./, '')}_99`),
+    'an SLO id a long recorded name derives is cut to a spec Slug, and stays its SLI id and _99', [(longNames.canonical.spec.slos || []).map((s) => s.id), validateCanonical(longNames.canonical, SCHEMA).slice(0, 2)]);
+  // The mixins' histogram idiom (`<labels>:<metric>:99quantile`, `<labels>:<metric>_bucket|_sum|_count:sum_rate`):
+  // four recorded bases that agree on their first 64 characters keep four SLIs and four SLOs, each its own id.
+  const histogram = scan({ 'operations/mimir-mixin-compiled/rules.yaml': ['groups:', '  - name: mimir_querier_api', '    rules:',
+    ...[':99quantile', ':50quantile', ':avg', '_bucket:sum_rate', '_sum:sum_rate', '_count:sum_rate'].flatMap((op) => [
+      `      - record: cluster_namespace_job_route:cortex_querier_request_duration_seconds${op}`, '        expr: sum(rate(cortex_querier_request_duration_seconds_count[1m])) by (cluster, namespace, job, route)'])].join('\n') + '\n' });
+  const histogramIds = (k) => (histogram.canonical.spec[k] || []).map((x) => x.id);
+  assert(validateCanonical(histogram.canonical, SCHEMA).length === 0 && histogram.summary.inferred.slis === 4
+    && new Set(histogramIds('slis')).size === 4 && new Set(histogramIds('slos')).size === 4 && histogramIds('slos').every((id) => id.length <= 64 && id.endsWith('_99')),
+  'recorded bases that agree on their first 64 characters keep an SLI and an SLO each, each a Slug of its own', [histogramIds('slis'), histogramIds('slos'), histogram.summary.inferred]);
   // The chart's values in a group's name, its interval and a recording rule's name never reach the pack or the summary
   // as the placeholder.
   const groupValues = scan({ ...chart, 'charts/shop/templates/rules.yaml': prometheusRule(['groups:', '  - name: {{ .Values.prefix }}.rules', '    interval: {{ .Values.interval }}', '    rules:',
@@ -1764,7 +1810,16 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     '              {{- with .Values.extraLabels }}{{ toYaml . | nindent (int .Values.labelIndent) }}{{- end }}'].join('\n') + '\n' });
   const afterRules = scan({ ...chart, 'charts/shop/templates/rules.yaml': prometheusRule(['groups:', '  - name: shop', '    rules:', ...alert('ApiDown', 'up{job="api"} == 0', ['severity: critical']).map((l) => `  ${l}`),
     '    {{- with .Values.prometheusRule.groupFields }}{{- toYaml . | nindent 6 }}{{- end }}']) });
-  for (const [what, out] of [['a computed indent four columns deep', computedFour], ['a computed indent closing a ConfigMap\'s block', computedLast], ['an include after an indented rules list', afterRules]]) {
+  // A computed indent right after a list item's first line renders that item's keys (the group's, here); one at
+  // the margin closing a ConfigMap's block is placed by the line above it.
+  const afterItem = scan({ ...chart, 'charts/shop/templates/rules.yaml': ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', 'spec:',
+    '  groups:', '    - name: shop', '      {{- with .Values.groupLabels }}{{ toYaml (dict "labels" .) | nindent (int .Values.groupIndent) }}{{- end }}', '      rules:',
+    '        - alert: ApiPanics', '          expr: rate(panics_total[5m]) > 0', '          labels:', '            severity: critical'].join('\n') + '\n' });
+  const marginLast = scan({ ...chart, 'charts/shop/templates/rules.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-rules', 'data:', '  alerts.rules.yaml: |',
+    '    groups:', '      - name: shop', '        rules:', '          - alert: ApiPanics', '            expr: rate(panics_total[5m]) > 0', '            labels:', '              severity: critical',
+    '{{- with .Values.extraLabels }}{{ toYaml . | nindent (int .Values.labelIndent) }}{{- end }}'].join('\n') + '\n' });
+  for (const [what, out] of [['a computed indent four columns deep', computedFour], ['a computed indent closing a ConfigMap\'s block', computedLast], ['an include after an indented rules list', afterRules],
+    ['a computed indent after a group\'s first line', afterItem], ['a computed indent at the margin closing a ConfigMap\'s block', marginLast]]) {
     const rules = out.canonical.spec.alerting?.rules || [];
     assert(rules.length === 1 && rules[0].severity === 'SEV1' && Object.values(partialOf(out))[0] === 'labels=severity' && !out.summary.warnings.some((w) => /stopped reading/.test(w)),
       `${what}: the rule is held to the labels it writes`, [rules, partialOf(out), out.summary.warnings]);

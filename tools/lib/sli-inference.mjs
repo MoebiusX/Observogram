@@ -49,15 +49,31 @@ export const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$
 const POLICY_SEGMENT = 'errorbudget';
 
 // An id a recorded name derives is a spec Slug (`$defs.Slug`, at most 64
-// characters): cut there, trailing separators trimmed, an SLO's keeping its
-// `_99` (kube-prometheus-stack's `node_namespace_pod_container:
-// container_cpu_usage_seconds_total:*` would give a 65-character SLO id, a
-// pack the schema refuses). The crawler cuts an id an alert's name derives
-// the same way (crawlFiles' symbolId).
-const SLUG_MAX = 64;
-const cutSlug = (id, max) => id.slice(0, max).replace(/[^a-z0-9]+$/, '');
-const sliIdOf = (service, metric) => cutSlug(`${service}_${metric}`.toLowerCase(), SLUG_MAX);
-const sloIdOf = (sliId) => `${cutSlug(sliId, SLUG_MAX - 3)}_99`;
+// characters). An SLI id is cut to 61, so its SLO id, `<sli>_99`, fits
+// too: every reader that strips the `_99` to find the SLI (the deploy
+// verifier, chain history, lifecycle blocks) keeps working. An id cut
+// ends in a fingerprint of the whole name (FNV-1a, 8 hex, as compile.mjs's
+// grafanaUid does), so recorded bases that share their first characters
+// (the mixins' `<labels>:<metric>_bucket|_sum|_count:*`) never become one
+// id. kube-prometheus-stack's `node_namespace_pod_container:
+// container_cpu_usage_seconds_total:*` gave a 65-character SLO id, a pack
+// the schema refuses. The live fetch derives its ids with the same
+// functions, so both sides agree; an id that fits is unchanged.
+const SLI_ID_MAX = 61;
+const fingerprint = (s) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+};
+/** An SLI id from its text: a spec Slug with room for its SLO's `_99`, cut with a fingerprint when it is longer. */
+export function sliSlug(text) {
+  const id = String(text ?? '').toLowerCase();
+  return id.length <= SLI_ID_MAX
+    ? id.replace(/[^a-z0-9]+$/, '')
+    : `${id.slice(0, SLI_ID_MAX - 9).replace(/[^a-z0-9]+$/, '')}_${fingerprint(id)}`;
+}
+const sliIdOf = (service, metric) => sliSlug(`${service}_${metric}`);
+const sloIdOf = (sliId) => `${sliId}_99`;
 
 /** Canonical SLI id contributed by a recording rule, or null. */
 export function ruleNameToSliId(name) {

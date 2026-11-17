@@ -727,6 +727,32 @@ test('rules read from several places: a copy is declared as often as one place h
   assert.deepEqual(diskOf('inBoth').map((e) => [e.match, fieldsOf(e.deltas), e.a.spec.expr]),
     [['drifted', ['-:expr'], 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1']], 'the overlay is held to the ruler, with the one change');
   assert.deepEqual(diskOf('onlyInA').map((e) => e.artefact.spec.expr), ['node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2'], 'the base reads declared, not live');
+  // The requirement chain holds the form the diff holds: a base and an overlay that write an SLO's recorded series
+  // differently, the ruler running the overlay's form with a label the scan does not declare.
+  const overlayRatio = '1 - shop:checkout:good_5m / clamp_min(shop:checkout:total_5m, 1)';
+  const seriesForms = scanOf({
+    'k8s/base/prometheusrule.yaml': resource(),
+    'k8s/overlays/prod/prometheusrule.yaml': resource().replace('expr: 1 - shop:checkout:good_5m / shop:checkout:total_5m', `expr: ${overlayRatio}`),
+  });
+  const answer = listing([rule, DISK], { shape: 'labels' });
+  answer.groups[0].rules = answer.groups[0].rules.map((r) => ({ ...r, labels: { team: 'shop' }, ...(r.name === 'shop:checkout:error_ratio_5m' ? { query: `${overlayRatio}\n` } : {}) }));
+  const ruler = buildCanonicalPack({
+    refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.shop.example/mcp', packName: 'production-live',
+    health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] }, capabilities: null,
+    probeResults: {
+      recording_rules: { tool: 'vmalert_rules', outcome: 'data', adapted: probe('recording_rules').adapt(answer) },
+      alert_rules: { tool: 'vmalert_rules', outcome: 'data', adapted: probe('alert_rules').adapt(answer) },
+    },
+    probeFailures: {},
+  });
+  const held = compare(seriesForms.canonical, ruler);
+  const formOf = (artefact) => (String(artefact?.spec?.expr ?? '').includes('clamp_min') ? 'overlay' : 'base');
+  const ratioRows = (bucket) => Object.values(held.diff.layers).flatMap((l) => l[bucket]).filter((e) => e.key.includes('error_ratio_5m'));
+  const artefactOf = (id) => Object.values(held.a.layers).flat().find((x) => x.id === id);
+  const chainRows = held.chains.branches.flatMap((b) => b.nodes).filter((n) => n.kind === 'recording_rule' && /error_ratio_5m/.test(n.label));
+  assert.deepEqual([ratioRows('inBoth').map((e) => `${formOf(e.a)} ${e.match}`), ratioRows('onlyInA').map((e) => formOf(e.artefact))], [['overlay drifted'], ['base']],
+    'the diff holds the overlay, the closest form, and the base reads declared, not live');
+  assert.deepEqual(chainRows.map((n) => `${formOf(artefactOf(n.aId))} ${n.status}`).sort(), ['base declared_only', 'overlay drifted'], 'the chain holds the same form');
   // Rules of one name in two rule files that one ruler loads (a page and a ticket rule): both run, both are stated,
   // and the one loosened live reads drifted.
   const page = ruleGroups().join('\n');

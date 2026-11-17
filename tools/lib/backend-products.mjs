@@ -73,15 +73,17 @@ export const BACKEND_PATTERNS = [
   { match: image(String.raw`^cilium\/cilium`, String.raw`quay\.io\/cilium\/cilium`, named('cilium', 'cilium-')), product: 'cilium', signal: 'network' },
   { match: image(String.raw`^openpolicyagent\/opa`, named('opa', 'openpolicyagent-')), product: 'opa',      signal: 'policy' },
   // The vendors' own product images by name, under any registry — Envoy's
-  // contrib, distroless, alpine, debug and dev builds, Consul Enterprise, Kong
-  // Gateway — and none of their companions (consul-k8s-control-plane,
-  // consul-dataplane, envoy-build-ubuntu; alloy-operator below).
-  { match: image(named(String.raw`envoy(?:-contrib)?(?:-(?:distroless|alpine|debug|dev))?`, 'envoyproxy-')), product: 'envoy', signal: 'mesh' },
-  { match: image(named(String.raw`consul(?:-enterprise)?`, 'hashicorp-')), product: 'consul',         signal: 'mesh' },
-  { match: image(named(String.raw`kong(?:-gateway)?`, 'kong-')),                product: 'kong',           signal: 'gateway' },
+  // contrib, distroless, alpine, debug, Windows and VRP builds and each one's
+  // dev build, Consul Enterprise and its FIPS build, Kong Gateway and the
+  // nightlies (kong-dev, kong-gateway-dev), Alloy's pre-release alloy-dev —
+  // and none of their companions (consul-k8s-control-plane, consul-dataplane,
+  // envoy-tools, envoy-build-ubuntu; alloy-operator below).
+  { match: image(named(String.raw`envoy(?:-contrib)?(?:-(?:distroless|alpine|debug|windows(?:-ltsc\d{4})?|google-vrp))?(?:-dev)?`, 'envoyproxy-')), product: 'envoy', signal: 'mesh' },
+  { match: image(named(String.raw`consul(?:-enterprise)?(?:-fips)?`, 'hashicorp-')), product: 'consul',         signal: 'mesh' },
+  { match: image(named(String.raw`kong(?:-gateway)?(?:-dev)?`, 'kong-')),                product: 'kong',           signal: 'gateway' },
   { match: image(String.raw`^traefik\/traefik`, named('traefik', 'library-')),     product: 'traefik',        signal: 'gateway' },
   { match: /fluent[-/]?bit|fluent-bit/i,                                  product: 'fluent-bit',              signal: 'logs' },
-  { match: image(named('alloy', 'grafana-')),                                      product: 'alloy',          signal: 'collection' },
+  { match: image(named(String.raw`alloy(?:-dev)?`, 'grafana-')),                   product: 'alloy',          signal: 'collection' },
   { match: /^elastic\/beats|^beats:/i,                                      product: 'beats',                   signal: 'collection' },
   { match: image(String.raw`timberio\/vector`, named('vector', 'timberio-')),         product: 'vector',                  signal: 'collection' },
   // Additional common production stacks

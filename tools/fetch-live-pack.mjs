@@ -56,11 +56,11 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr, sliSlug } from './lib/sli-inference.mjs';
 import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey } from './lib/artefact-model.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
-import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
+import { backendForScrapeJob, knownBackendProduct, productsAScrapeJobServes } from './lib/backend-products.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
 import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
 import { promqlForKind } from './lib/inventory-coverage.mjs';
@@ -1451,9 +1451,18 @@ export function buildCanonicalPack({
   // live pairs with the same backend read from a repository's images.
   const scrapeJobs = normalizeScrapeJobs(probeResults?.scrape_configs?.adapted);
   const backendEvidence = new Map();
-  const attestProduct = (name, by) => {
+  // The first evidence of a product is kept — but evidence that names it
+  // (its own job, its version, a tool for it) replaces a job named for an
+  // exporter that reads look-alikes alike (productsAScrapeJobServes): the
+  // comparison sets a backend only such a job attests aside (diff.mjs), and
+  // whether it is the only evidence must not hang on the listing's order.
+  const sharedEvidence = new Set();
+  const attestProduct = (name, by, { shared = false } = {}) => {
     const product = knownBackendProduct(name)?.product || name;
-    if (product && !backendEvidence.has(product)) backendEvidence.set(product, by);
+    if (!product) return;
+    if (backendEvidence.has(product) && !(sharedEvidence.has(product) && !shared)) return;
+    backendEvidence.set(product, by);
+    if (shared) sharedEvidence.add(product); else sharedEvidence.delete(product);
   };
   const liveVersionOf = new Map();   // product (table spelling) → its version capture
   for (const [product, info] of Object.entries(liveVersions || {})) {
@@ -1464,7 +1473,7 @@ export function buildCanonicalPack({
   for (const job of scrapeJobs) {
     if (scrapeJobDown(job)) continue;
     const hit = backendForScrapeJob(job.job);
-    if (hit) attestProduct(hit.product, `scrape job ${job.job}`);
+    if (hit) attestProduct(hit.product, `scrape job ${job.job}`, { shared: productsAScrapeJobServes(job.job).length > 0 });
   }
   for (const v of Object.values(probeResults)) {
     if (classify(v) !== 'data') continue;
@@ -1747,7 +1756,8 @@ export function buildCanonicalPack({
     // is not evidence that anyone measures its availability — these used
     // to be stamped Verified, which was false assurance. Scaffold.
     for (const name of serviceSlugs) {
-      const sliId = `${name.replace(/-/g, '_')}_availability`;
+      // Cut as recorded names are (sli-inference.mjs sliSlug): a long service name gives a valid pack.
+      const sliId = sliSlug(`${name.replace(/-/g, '_')}_availability`);
       const sloId = `${sliId}_99`;
       slis.push({
         id: sliId,

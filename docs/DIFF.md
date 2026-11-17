@@ -79,8 +79,10 @@ Within each identity group it:
 
 1. Pairs exact behavioural matches first.
 2. Pairs remaining same-identity artefacts as drifted, the closest pair over
-   all of them first (ties in declared order), so an artefact declared first
-   cannot take the counterpart of a closer one.
+   all of them first — the fewest fields apart, ties in declared order — so
+   an artefact declared first cannot take the counterpart of a closer one.
+   The requirement chain pairs the same way (`pairClosestFirst`,
+   tools/lib/artefact-model.mjs), so the chain and the diff hold one form.
 3. Leaves surplus controls visible as `onlyInA` or `onlyInB`.
 
 Duplicate entries receive stable occurrence suffixes such as
@@ -146,7 +148,8 @@ Normalisation rules:
   them. Anything that fails to parse falls back to whitespace collapse only
   — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`. A
   comment (`#` to the end of a line, outside a string) is dropped first,
-  parsed or not: a ruler lists the query re-printed without it.
+  parsed or not: a ruler lists the query re-printed without it. A pipeline's
+  token (`#{Name}#`, `#{Name}`) is no comment, and what follows it is kept.
   Explicit non-goals (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B):
   no algebraic rewrites, no binary-expression or vector-matching
   reordering, no regex equivalence, no histogram folding.
@@ -174,7 +177,7 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
 | `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
-| `notObserved` | one pack holds it, in a family the OTHER pack says it had no way to observe — unchecked, never counted; entries carry `side`, `artefact` and the other side's `reason` |
+| `notObserved` | one pack holds it, in a family the OTHER pack says it had no way to observe, or a backend only a shared exporter's job attests (below) — unchecked, never counted; entries carry `side`, `artefact` and the other side's `reason` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
@@ -213,7 +216,10 @@ pair goes to `notObserved` with that reason (`the live evidence (scrape job
 elasticsearch-exporter) reads elasticsearch and opensearch alike, …`),
 neither *in both* nor *declared, not live*. The live side's own
 `mcp.backends.evidence` annotation says which job attested each backend; a
-job named for either product still says which runs.
+job named for either product still says which runs, whichever job the
+listing gives first (the live fetch keeps such a job's evidence over the
+exporter's). Only the comparison's own key pairs backends by product: under
+a name or an id the live backend keeps its product and is never set aside.
 
 The same holds one level down, for a **field a producer was shown only in
 part**. A live rule listing that gives each alert rule a flat `severity` and
@@ -243,7 +249,10 @@ deploy step fills them in (*A value the chart fills in*, below): a field one
 side was shown none of is not compared against the other, and the pair's
 `unobserved` names it (`{ field: 'for', side: 'a', keys: [] }`) whether the
 other side states it or not; where both sides list it — two readings of the
-repository — their texts are compared. `labels.filled=<keys>` names the label
+repository — their texts are compared where the pack keeps them, which is
+the expression's: a wait or a label value a deploy step fills in is left out
+on both sides, so two readings that fill it differently read alike.
+`labels.filled=<keys>` names the label
 keys written with a value filled in: each is named uncompared, unless the
 other side fills it in too.
 
@@ -326,10 +335,12 @@ copy reads *live, not declared*. PrometheusRule resources named alike in
 several files that write a rule, recording or alerting, differently — a
 kustomize base and its overlay, which the scan does not merge, or two apps
 that share a name — declare and state every form, and the scan says so. Each
-live rule is held to the closest form, an SLO's stated rules and its
-operational rules alike; the others read *declared, not live* — the form
-that runs too, where it has drifted further from the ruler than another
-form. An SLO's burn-rate windows are read from its first form's rules. Rules
+live rule is held to the closest form — the one differing from it in the
+fewest fields, the form declared first on a tie — an SLO's stated rules and
+its operational rules alike; the others read *declared, not live*, the form
+that runs too where it differs from the ruler in as many fields as an
+earlier form or more (an overlay whose patched threshold the ruler changed
+again leaves the base held). An SLO's burn-rate windows are read from its first form's rules. Rules
 of one name in files that are no such resources — a page and a ticket rule
 in two rule files, two services' alerts — all run, and are all stated.
 
@@ -337,9 +348,16 @@ in two rule files, two services' alerts — all run, and are all stated.
 as the placeholder stripGoTemplate leaves (`up{job="helmvalue"}`, `for:
 helmvalue` from kube-prometheus-stack's `dig … .Values.customRules`), or as
 a variable a deploy step substitutes — any `${…}` (`${VAR}`, Flux's
-`${var:=default}`) or a bare `$NAME` in capitals, never a capture group
-(`$1`, `$host` naming a group the expression's regex defines), text PromQL
-holds itself (`/odata/$metadata`), a comment, or the ruler's own templating.
+`${var:=default}`), a bare `$NAME` in capitals, or a pipeline's token
+(Azure DevOps' `#{Name}#`, Octopus Deploy's `#{Name}`, an Azure Pipelines
+macro `$(Name)`), never a capture group (`$1`, `$host` naming a group the
+expression's regex defines), text PromQL holds itself (`/odata/$metadata`),
+a comment, or the ruler's own templating. A label key a deploy step names is
+no key written: the rule is held to the labels it writes. An unquoted token
+after a space is a YAML comment, so the value reads only up to it
+(`for: #{PageFor}#` as no wait, `expr: x > #{Threshold}#` as an expression
+cut there); a quoted value, a block scalar, or a token with no space before
+it reads whole.
 It is no statement of the repository's: an operational rule is held to the
 rest of what it writes (`observogram.partial.alerting.rules[i]` = `expr=`,
 `for=`, `labels=<keys written>`, `labels.filled=<keys filled in>`), and the
@@ -351,7 +369,9 @@ such a value. Against the rendered rule live runs, the rule aligns on what
 the chart writes, and the pair names the rest, a wait or a label key the
 ruler lists none of included. Comparing the expression with the placeholder
 as a wildcard is not done here. An SLO's rules holding one state nothing
-(below).
+(below), so none of them is compared, and the scan's warning says so for a
+wait it left out; an SLO's rule whose comment names a variable still states
+its rules.
 
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and

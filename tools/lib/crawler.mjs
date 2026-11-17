@@ -1088,16 +1088,26 @@ export function crawlFiles(filesInput, opts = {}) {
     out = out.slice(0, SLUG_MAX).replace(/[^a-z0-9]+$/, '');
     return out.length >= 2 ? out : fallback;
   };
+  // A wait a rule's window could not take (no spec Duration, a value a chart
+  // or a deploy step fills in) is said for every rule that guards an SLO —
+  // one on a recorded SLO's series, or any rule where the repository records
+  // none — whether or not the fold below keeps it; a rule left to the
+  // operational ones says it there. Such an SLO's rules are compared only
+  // where it states them (sourceRuleAnnotations): never in a repository that
+  // records no SLO, never once a rule of it holds a value filled in.
+  const sloRuleWaits = new Map();
+  for (const r of alertRules) {
+    if (!r.waitLeftOut) continue;
+    if (recordsSeries && !recordedSloForExpr(alertRuleExpr(r.rule), (id) => sloMap.has(id))) continue;
+    summary.omitted.ruleWaits.push(r.waitLeftOut);
+    sloRuleWaits.set(r.waitLeftOut, !haveRecordedSlis || notStatedAsWritten(r));
+  }
   for (const alert of burnRateAlerts) {
     const linked = recordedSloForExpr(alert.expr, (id) => sloMap.has(id));
-    // A wait the rule's window could not take (no spec Duration, a value a
-    // chart or a deploy step fills in) is said where the rule binds an SLO;
-    // a rule left to the operational ones says it there.
-    if (linked) { alert.slo = linked; if (alert.waitLeftOut) summary.omitted.ruleWaits.push(alert.waitLeftOut); continue; }
+    if (linked) { alert.slo = linked; continue; }
 
     if (recordsSeries) { alert._drop = true; continue; }
 
-    if (alert.waitLeftOut) summary.omitted.ruleWaits.push(alert.waitLeftOut);
     const sloId = symbolId(alert.slo, `${repoNs}_slo`);
     alert.slo = sloId;
     if (!sloMap.has(sloId)) {
@@ -1172,11 +1182,14 @@ export function crawlFiles(filesInput, opts = {}) {
           fields.push('for=');
         }
         const labelKeys = Object.keys(entry.labels ?? {});
-        const filledKeys = labelKeys.filter((k) => filledAtDeploy(entry.labels[k]));
-        for (const k of filledKeys) delete entry.labels[k];
+        // A key a chart or a deploy step names is no key written, and its name is unknown: the rule is held to
+        // the labels it writes, as beside an include, never naming the placeholder.
+        const filledNames = labelKeys.filter((k) => filledAtDeploy(k));
+        const filledKeys = labelKeys.filter((k) => !filledNames.includes(k) && filledAtDeploy(entry.labels[k]));
+        for (const k of [...filledNames, ...filledKeys]) delete entry.labels[k];
         if (filledKeys.includes('severity')) delete entry.severity;
         if (entry.labels && !Object.keys(entry.labels).length) delete entry.labels;
-        if (r.partialLabels || filledKeys.length) fields.push(partialLabelsAnnotation(Object.keys(entry.labels ?? {})));
+        if (r.partialLabels || filledKeys.length || filledNames.length) fields.push(partialLabelsAnnotation(Object.keys(entry.labels ?? {})));
         if (filledKeys.length) fields.push(filledLabelsAnnotation(filledKeys));
         operational.kept.push(entry);
         if (fields.length) partialRules[`${PARTIAL_ANNOTATION}alerting.rules[${operational.kept.length - 1}]`] = fields.sort().join(';');
@@ -1185,7 +1198,10 @@ export function crawlFiles(filesInput, opts = {}) {
   }
   summary.discovered.alertRules = operational.kept.length;
   if (summary.omitted.ruleWaits.length) {
-    summary.warnings.push(`${summary.omitted.ruleWaits.length} alert rule wait(s) are filled in at deploy time or are no spec Duration, and are left out — each rule is held to the rest of what it writes: ${summary.omitted.ruleWaits.slice(0, 8).map((o) => `${o.rule}=${o.value} (${o.source})`).join(', ')}${summary.omitted.ruleWaits.length > 8 ? ', …' : ''}.`);
+    const named = (list) => `${list.slice(0, 8).map((o) => `${o.rule}=${o.value} (${o.source})`).join(', ')}${list.length > 8 ? ', …' : ''}`;
+    const held = summary.omitted.ruleWaits.filter((o) => !sloRuleWaits.get(o));
+    const unstated = summary.omitted.ruleWaits.filter((o) => sloRuleWaits.get(o));
+    summary.warnings.push(`${summary.omitted.ruleWaits.length} alert rule wait(s) are filled in at deploy time or are no spec Duration, and are left out${held.length ? ` — each rule is held to the rest of what it writes: ${named(held)}` : ''}${unstated.length ? `${held.length ? ';' : ' —'} the SLO each of these guards states none of its rules, so none is compared: ${named(unstated)}` : ''}.`);
   }
   // A resource named alike in several files whose rules differ: each form is
   // declared and stated — said, naming them.
@@ -1473,8 +1489,9 @@ export function crawlFiles(filesInput, opts = {}) {
     ...buildLifecycleAnnotations(classified, {
       recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary,
       linkedSlo: (expr) => recordedSloForExpr(expr, (id) => sloMap.has(id)),
+      sliOfSlo: (id) => sloMap.get(id)?.sli,
       // The ids an alert derives when the repo records no SLI (the loop above).
-      derivedIds: haveRecordedSlis ? null : (slo) => {
+      derivedIds: recordsSeries ? null : (slo) => {
         const sloId = symbolId(slo, `${repoNs}_slo`);
         return { sloId, sliId: symbolId(sloId.replace(/_99|_999|_995|_slo$/i, '') || sloId, `${repoNs}_sli`) };
       },
@@ -1792,7 +1809,14 @@ function stripGoTemplate(content, { rules = false, shift = 0 } = {}) {
         while (below < kept.length && (kept[below] === null || !kept[below].trim() || /^\s*#/.test(kept[below]))) below++;
         const keyColumn = columnOf(kept[above]);
         renders = below < kept.length && columnOf(kept[below]) > keyColumn ? columnOf(kept[below]) : keyColumn + 2;
-      } else renders = columnOf(kept[above]);
+      } else {
+        // Beside a list item's first key (`- name: api`, `- alert: X`): that
+        // item's own map, past its dashes — beside the key, not the item.
+        const body = kept[above].trim();
+        const dashes = /^(?:-[ \t]+)+/.exec(body)?.[0] ?? '';
+        const keyed = dashes && /^(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s#'"{[][^#]*?)[ \t]*:(?:[ \t]|$)/.test(body.slice(dashes.length));
+        renders = columnOf(kept[above]) + (keyed ? dashes.length : 0);
+      }
     }
     const where = includeColumn(kept, at, renders, argued);
     // A scalar the action prints: the rest of a plain scalar, or the value of
@@ -1959,8 +1983,11 @@ function extractConfigMapData(content) {
         if (line.trim()) {
           if (!isTemplateLine(line)) break;
           const actions = templateLineActions(line);
-          // A computed indent (column null) renders where the line stands.
-          if (actions.render && (actions.literal || (actions.column ?? indentOf(line)) > current.indent)) break;
+          // A computed indent (column null) renders where the line stands —
+          // or, written at the margin (where kube-prometheus-stack writes its
+          // includes), where the YAML above it places it (stripGoTemplate).
+          const stands = indentOf(line);
+          if (actions.render && (actions.literal || (actions.column === null ? stands === 0 || stands > current.indent : actions.column > current.indent))) break;
         }
         end--;
       }
@@ -2721,8 +2748,10 @@ function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
 //     lists none of its rules to hold the statement to.
 // A braced variable takes the forms a deploy step's substitution writes with
 // a default or an edit (`${var:=default}`, `${var:-d}`, `${var:+a}`,
-// `${var:0:7}`, `${var/a/b}`: Flux's post-build substitution, envsubst).
-const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*/;
+// `${var:0:7}`, `${var/a/b}`: Flux's post-build substitution, envsubst); its
+// tail stops at the next `$` or line end, so a run of unclosed `${x:` reads
+// in linear time. A pipeline's token is one too (DEPLOY_TOKEN_RE).
+const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}$\n]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*|#\{[^}\n]+\}#?|\$\([A-Za-z_][\w.]*\)/;
 
 // A value of an operational rule's that a chart or a deploy step fills in:
 // the placeholder stripGoTemplate leaves, or a variable a deploy step
@@ -2734,11 +2763,17 @@ const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}]*)?\}|\$
 // `Outer$Inner`), a PromQL comment, or Grafana's own macros
 // (`$__rate_interval`), which live lists as written (crawlFiles holds the
 // rule to the rest).
-const DEPLOY_VARIABLE_RE = /\$\{(?!__)[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}]*)?\}|\$(?!__)[A-Z_][A-Z0-9_]*(?![A-Za-z0-9_])/g;
+const DEPLOY_VARIABLE_RE = /\$\{(?!__)[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}$\n]*)?\}|\$(?!__)[A-Z_][A-Z0-9_]*(?![A-Za-z0-9_])/g;
 const HELM_VALUE_RE = new RegExp(`\\b${HELM_VALUE}\\b`);
+// A token a pipeline's replace step fills in: Azure DevOps' Replace Tokens
+// (`#{Name}#`), Octopus Deploy (`#{Name}`) or an Azure Pipelines macro
+// (`$(Name)`) — the forms promql-canon.mjs's comment stripper keeps as text.
+const DEPLOY_TOKEN_RE = /#\{[^}\n]+\}#?|\$\([A-Za-z_][\w.]*\)/;
 function filledAtDeploy(value, { expression = false } = {}) {
   if (typeof value !== 'string') return false;
   let own = withoutRulerTemplates(value);
+  // A pipeline's token wherever it stands, in a string or outside one.
+  if (DEPLOY_TOKEN_RE.test(own)) return true;
   if (expression) own = withoutPromqlComments(own);
   if (HELM_VALUE_RE.test(own)) return true;
   const groups = new Set([...own.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g)].map((m) => m[1]));
@@ -2775,9 +2810,12 @@ function notStatedAsWritten({ rule, labelsUnread }) {
   if (labelsUnread) return true;
   const text = (v) => (typeof v === 'string' ? v : '');
   const injected = (v) => new RegExp(`\\b${HELM_VALUE}\\b`).test(v) || INJECTED_NAME_RE.test(v);
-  for (const v of [rule.alert, rule.title, rule.expr, rule.for]) {
+  for (const v of [rule.alert, rule.title, rule.for]) {
     if (injected(text(v)) || text(v).includes('{{')) return true;
   }
+  // The expression less its comments: a variable a comment names is no
+  // deploy step's (the ruler lists the query re-printed without it).
+  if (injected(withoutPromqlComments(text(rule.expr))) || text(rule.expr).includes('{{')) return true;
   const labels = rule.labels;
   if (labels === null || labels === undefined) return false;
   if (typeof labels !== 'object' || Array.isArray(labels)) return true;
@@ -2866,7 +2904,7 @@ function buildMetricFamilyAnnotations(families) {
 // an alert or a dashboard in another file keeps the SLO behind it, its rules and
 // their metrics visible. So a statement can only ever hide what its own file, or
 // files that say the same, declare.
-function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, derivedIds }) {
+function buildLifecycleAnnotations(classified, { recordingRules, alertRules, burnRateAlerts, metricDefinitions, metricFamilies, evidence, summary, linkedSlo, sliOfSlo, derivedIds }) {
   const blocks = new Map();
   for (const f of classified) {
     if (f.kind !== 'prometheus-rules' && f.kind !== 'helm-template' && !holdsRuleResourceText(f)) continue;
@@ -2916,7 +2954,7 @@ function buildLifecycleAnnotations(classified, { recordingRules, alertRules, bur
     if (linked) {
       own(`policy.burn_rate_alerts.${linked}`, file);
       own(`slos.${linked}`, file);
-      own(`slis.${linked.replace(/_99$/, '')}`, file);
+      own(`slis.${sliOfSlo(linked)}`, file);
     } else if (derivedIds) {
       const { sloId, sliId } = derivedIds(slo);
       own(`policy.burn_rate_alerts.${sloId}`, file);
@@ -3224,9 +3262,18 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
     const nameOf = (ref) => ref.split('@')[0].replace(/:[^/:]*$/, '').split('/').pop();
     if (!image || !/[A-Za-z0-9]/.test(nameOf(image))) {
       // An image that is wholly a variable is said, not dropped in silence —
-      // but for a service compose builds (`build:`): its image is the
+      // but for a service compose builds (`build:`, its own or one it
+      // inherits from a service of this file it extends): its image is the
       // project's own, never a backend.
-      if (/\$/.test(String(svc?.image ?? '')) && !svc?.build) summary.warnings.push(`${f.relPath}: the image of ${svcName} is a variable (${String(svc.image).trim()}) a .env or the environment sets, which the scan does not read; no backend is drafted from it.`);
+      const builds = (name, seen = new Set()) => {
+        const s = obj.services[name];
+        if (!s || typeof s !== 'object' || seen.has(name)) return false;
+        if (s.build) return true;
+        seen.add(name);
+        const base = typeof s.extends === 'string' ? s.extends : (s.extends && typeof s.extends === 'object' && !s.extends.file ? s.extends.service : null);
+        return typeof base === 'string' && builds(base, seen);
+      };
+      if (/\$/.test(String(svc?.image ?? '')) && !builds(svcName)) summary.warnings.push(`${f.relPath}: the image of ${svcName} is a variable (${String(svc.image).trim()}) a .env or the environment sets, which the scan does not read; no backend is drafted from it.`);
       continue;
     }
     const p = backendPatternFor(image, { bare: true });
@@ -3712,6 +3759,8 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       // Labels a chart's include renders, which the scan does not read.
       ...(from.partialLabels ? { partialLabels: true } : {}),
     };
+    // Its wait left out, said for every rule that guards an SLO (crawlFiles), not only the fold's first.
+    if (candidate.waitLeftOut) Object.defineProperty(kept, 'waitLeftOut', { value: candidate.waitLeftOut, enumerable: false });
     alertRules.push(kept);
     if (!record.entry) record.entry = kept;
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {

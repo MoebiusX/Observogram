@@ -440,6 +440,35 @@ export function deltasOf(a, b) {
   return rules ? [...deltas, ...rules.deltas.map((d) => ({ ...d, a: ownCopy(d.a), b: ownCopy(d.b) }))] : deltas;
 }
 
+// The pairing of same-key artefacts that match on no exact pass: the closest
+// pair first over every pair, not each A in turn, ties in declared order — so
+// a form declared first (a kustomize base) cannot take the counterpart of a
+// closer one (the overlay that runs). Level by level of `countOf(ia, ib)`, the
+// number of fields a pair differs in, each A in declared order takes the first
+// free B at that level: the same order as sorting every (count, ia, ib)
+// triple, without holding them. `countOf` is called at most a few times a
+// pair, so a caller memoises it. One pairing for the flat diff (diff.mjs) and
+// the requirement chain (traceability-graph.mjs). → Map(ia → ib).
+export function pairClosestFirst(countA, countB, countOf) {
+  const levels = new Set();
+  for (let ia = 0; ia < countA; ia++) for (let ib = 0; ib < countB; ib++) levels.add(countOf(ia, ib));
+  const pairedA = new Map();
+  const pairedB = new Set();
+  const pairs = Math.min(countA, countB);
+  for (const level of [...levels].sort((x, y) => x - y)) {
+    for (let ia = 0; ia < countA && pairedA.size < pairs; ia++) {
+      if (pairedA.has(ia)) continue;
+      for (let ib = 0; ib < countB; ib++) {
+        if (pairedB.has(ib) || countOf(ia, ib) !== level) continue;
+        pairedA.set(ia, ib);
+        pairedB.add(ib);
+        break;
+      }
+    }
+  }
+  return pairedA;
+}
+
 // A kept value handed out as the caller's own: what a caller does to one answer
 // must not reach the next.
 const ownCopy = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v)) : v);

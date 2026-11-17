@@ -78,8 +78,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "ca748c283c7e1524a4598a7acecda01365195dbcd71e802dd73e79db28e35874",
-      "bytes": 42325,
+      "sha256": "5233d21dae8dd067455a959f6e2063499f18840ee47eef2ae86275f4c4c249e2",
+      "bytes": 43692,
       "exports": [
         "PARTIAL_ANNOTATION_PREFIX",
         "REDACTED_CHANNEL_VALUE",
@@ -95,6 +95,7 @@
         "isWithheldValue",
         "metricFamilyResolver",
         "modelOf",
+        "pairClosestFirst",
         "parsePartialAnnotation",
         "parseSourceRulesAnnotation",
         "partialAnnotation",
@@ -168,8 +169,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/backend-products.mjs": {
-      "sha256": "e29b3bda7f084db6b214540baa78dfe910729a9e63eaa0c5eca1e22ae05a057a",
-      "bytes": 12285,
+      "sha256": "eb64b834dc42ecab672e5cee064bb134829e76b20a22dc3dcc7bb09d2ec80ce3",
+      "bytes": 12497,
       "exports": [
         "BACKEND_PATTERNS",
         "backendForScrapeJob",
@@ -474,8 +475,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/control-room.mjs": {
-      "sha256": "47980c9b0988d7d8e53a677924b7ef7b9b14435482c3173e5738df7da1412505",
-      "bytes": 61387,
+      "sha256": "c3119355a3c84d46ea0d773e1965058c9acd52ffba5573c3f978dd710170515d",
+      "bytes": 61632,
       "exports": [
         "CONTROL_ROOM_LIMITS",
         "cleanError",
@@ -500,14 +501,15 @@
         "tools/lib/contracts/control-room-families.mjs",
         "tools/lib/contracts/mcp-capabilities.mjs",
         "tools/lib/good-when.mjs",
-        "tools/lib/mcp-client.mjs"
+        "tools/lib/mcp-client.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "90595bbed167737f66c68b29eb69ab242b27ef9c09bcf26d3b9639e793336f24",
-      "bytes": 225220,
+      "sha256": "2801fb4e211371697150d23c308a72d583f636ce03ce2103c95357c2bf9c7792",
+      "bytes": 228740,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -638,8 +640,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "0a5f7c473de5e84969d04dde0bb431edb4aaaf794f205e64c957d60874e045bf",
-      "bytes": 49399,
+      "sha256": "77f27961b88cf41a8860f64498d1ce515cb41e68b5d4834f6053ff9f412c2e8d",
+      "bytes": 49771,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -1109,8 +1111,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-canon.mjs": {
-      "sha256": "3b12d40dfa3c032c78c590e8f5684678a77e1e7e7e0b4110a483a243e2d00170",
-      "bytes": 9919,
+      "sha256": "78fe0ce18ff0432010c5a7ab9910eab7229c72a2b3334b36c88a578e9126a5e5",
+      "bytes": 10367,
       "exports": [
         "canonicalizePromql",
         "withoutPromqlComments"
@@ -1360,8 +1362,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "bb0ba90dcdb8c59a01cf102e228211ab96aef1a631efdc3f4dae2c64950718d1",
-      "bytes": 22935,
+      "sha256": "75a7135af1cd3652cfe7004f73844a7688baf4c741f0666c7f0b4da9cf7290fc",
+      "bytes": 23738,
       "exports": [
         "SPEC_DURATION_RE",
         "SPEC_RECORDING_RULE_NAME_RE",
@@ -1380,6 +1382,7 @@
         "recordedSloForExpr",
         "ruleNameToSliId",
         "ruleNameToSloId",
+        "sliSlug",
         "sourceRuleTerms"
       ],
       "imports": [
@@ -1448,8 +1451,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/traceability-graph.mjs": {
-      "sha256": "3d881bdeb2334b00ed52c64276a6a7f780981b1a7d97a262fc15fb173ec2c110",
-      "bytes": 62399,
+      "sha256": "c6a993c552044d6dd7e446f5fb5e043208bf252ff920863ad3a7fcf396fed197",
+      "bytes": 62652,
       "exports": [
         "buildBranch",
         "buildDependencyGraph",

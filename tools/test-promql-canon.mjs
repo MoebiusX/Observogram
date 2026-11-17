@@ -34,6 +34,10 @@ assert(equiv('# page when the ratio passes $THRESHOLD\nsum(rate(errors_total[5m]
 assert(canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes('"/api/#/.*"') && canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes("'a # b'")
   && !canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes('down'), 'a # inside a string is the string\'s, not a comment');
 assert(!equiv('# down\nup == 0', '# down\nup == 1'), 'what a comment leaves is still compared');
+// A deploy step's token is no comment: what follows it is still compared.
+assert(!equiv('sum(rate(x[#{Window}#])) > 5', 'sum(rate(x[#{Window}#])) > 50'), 'an Azure DevOps token (#{Name}#) is no comment');
+assert(!equiv('rate(x{job="api"}[#{AlertWindow}]) > 0.05', 'rate(x{job="api"}[#{AlertWindow}]) > 0.5'), 'an Octopus Deploy token (#{Name}) is no comment');
+assert(equiv('rate(x[#{W}#]) > 5 # page', 'rate(x[#{W}#]) > 5'), 'a comment after a token is still dropped');
 assert(equiv('rate( x{b="2", a="1"} [5m] )', 'rate(x{a="1",b="2"}[5m])'),
   'whitespace + matcher order combine');
 assert(equiv('SUM BY (b, a) (x)', 'SUM BY (a, b) (x)'),

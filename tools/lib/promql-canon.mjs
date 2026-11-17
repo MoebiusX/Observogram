@@ -205,6 +205,7 @@ function isStructurallySound(expr) {
 // An expression less its comments: `#` to the end of the line, outside a
 // string literal. No part of what a ruler runs — it lists the query
 // re-printed without them — nor of what a rule file states.
+const DEPLOY_TOKEN_RE = /#\{[^}\n]*\}#?/y;
 export function withoutPromqlComments(text) {
   let out = '';
   let quote = null;
@@ -216,7 +217,17 @@ export function withoutPromqlComments(text) {
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
-    if (ch === '#') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
+    if (ch === '#') {
+      // A deploy step's token — `#{Name}#` (Azure DevOps Replace Tokens),
+      // `#{Name}` (Octopus Deploy) — is no comment: the step fills it in
+      // before a ruler reads the file, and the text goes on after it.
+      DEPLOY_TOKEN_RE.lastIndex = i;
+      const token = DEPLOY_TOKEN_RE.exec(text);
+      if (token) { out += token[0]; i += token[0].length - 1; continue; }
+      while (i < text.length && text[i] !== '\n') i++;
+      out += '\n';
+      continue;
+    }
     out += ch;
   }
   return out;

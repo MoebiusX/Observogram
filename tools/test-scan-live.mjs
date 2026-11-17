@@ -766,10 +766,28 @@ const liveRule = (rules, name, at = 0) => rules.groups[0].rules.filter(r => r.na
     ['opensearch', ['opensearch', 'prometheus'], undefined, { inBoth: ['opensearch'] }],
     ['opensearch', ['elasticsearch', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
     ['elasticsearch', ['elasticsearch-exporter', 'prometheus'], undefined, { inBoth: ['elasticsearch'] }],
+    // A job named for the product says which runs, whichever job the listing gives first.
+    ['opensearch', ['elasticsearch-exporter', 'elasticsearch', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
+    ['opensearch', ['elasticsearch', 'elasticsearch-exporter', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
   ]) {
     const got = searchOf(stack, jobs, scopeMode);
     assert(JSON.stringify(got) === JSON.stringify(want), `${stack}, live jobs ${jobs.join(' + ')}${scopeMode ? ` (${scopeMode} scope)` : ''}: ${JSON.stringify(want)}`, got);
   }
+  // Under a name or an id the backends never pair by product: the live one keeps its own product.
+  for (const identity of ['name', 'id']) {
+    const repo = crawlFiles({ 'docker-compose.yml': stacks.opensearch }, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+    const d = diffPacks(adapt(repo, { environment: 'prod' }), adapt(liveOf(['elasticsearch-exporter', 'prometheus']), {}), { identity, scopeMode: 'all' });
+    const liveSide = Object.values(d.layers).flatMap((l) => [...(l.onlyInB || []), ...(l.outOfScope || [])]).map((e) => e.artefact).filter((x) => /search/.test(String(x?.spec?.product ?? '')));
+    assert(JSON.stringify(liveSide.map((x) => x.spec.product)) === JSON.stringify(['elasticsearch']), `identity ${identity}: the live search backend keeps its product`, liveSide.map((x) => x.spec));
+  }
+  // A long service name gives the live draft's availability guess a valid id.
+  const longService = buildCanonicalPack({
+    refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.example.test/mcp', packName: 'production-live',
+    health: { services: [{ name: 'payments-settlement-reconciliation-batch-worker-eu' }] }, topology: { dependencies: [] }, capabilities: null,
+    probeResults: {}, probeFailures: {},
+  });
+  assert(validateCanonical(longService, SCHEMA).length === 0 && (longService.spec.slos || []).every((s) => s.id.length <= 64 && s.id === `${s.sli}_99`),
+    'a long service name gives a valid live pack, its SLO id its SLI id and _99', [(longService.spec.slos || []).map((s) => s.id), validateCanonical(longService, SCHEMA).slice(0, 2)]);
 }
 
 report('scan-vs-live', 'a repository scan and the live draft of the same system match.');

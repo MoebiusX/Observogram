@@ -114,6 +114,7 @@ import {
   deltasOf,
   unobservedOf,
   foldMetricFamilies,
+  pairClosestFirst,
 } from './artefact-model.mjs';
 import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
 import { identityMode, DEFAULT_IDENTITY_MODE } from './identity-modes.mjs';
@@ -228,11 +229,16 @@ function prefixChecked(fn) {
 
 export function diffPacks(aLayered, bLayered, opts = {}) {
   if (!aLayered || !bLayered) throw new Error('diffPacks: both packs required');
-  bLayered = withSharedExporterBackends(aLayered, bLayered);
-  aLayered = withSharedExporterBackends(bLayered, aLayered);
 
   const identity = resolveIdentity(opts.identity);
   const pairKey = identity ? identity.keyOf : keyOf;
+  // Only the behavioural key pairs a backend by its product: under a name or
+  // an id the relabelled copy would pair nothing and only misname the live
+  // backend in the answer.
+  if (!identity) {
+    bLayered = withSharedExporterBackends(aLayered, bLayered);
+    aLayered = withSharedExporterBackends(bLayered, aLayered);
+  }
 
   const scopeMode = normalizeScopeMode(opts.scopeMode);
   const serviceScope = buildServiceScope(aLayered, opts.service);
@@ -987,18 +993,27 @@ function matchGroups(baseKey, aGroup, bGroup, bucket) {
   let seq = 0;
   const unusedB = bGroup.map((b, i) => ({ b, i }));
   const usedA = new Set();
+  // Each pair's number of differing fields, measured once and only when a
+  // pass asks for it (deltasOf canonicalizes and parses both sides).
+  const NOT_MEASURED = 0xFFFFFFFF;
+  const counts = new Uint32Array(aGroup.length * bGroup.length).fill(NOT_MEASURED);
+  const countOf = (ia, ib) => {
+    const at = ia * bGroup.length + ib;
+    if (counts[at] === NOT_MEASURED) counts[at] = deltasOf(aGroup[ia], bGroup[ib]).length;
+    return counts[at];
+  };
 
   // Pair exact behavioural matches first so a self-diff remains fully aligned
   // even when one pack contains duplicate identity keys — and, among those, a
   // pair compared whole before one that only matches on the part it was
   // shown: a rule seen in part must not take the counterpart of a rule that
   // matches in full.
-  const exact = (a, b) => deltasOf(a, b).length === 0;
-  const whole = (a, b) => exact(a, b) && unobservedOf(a, b).length === 0;
+  const exact = (ia, ib) => countOf(ia, ib) === 0;
+  const whole = (ia, ib) => exact(ia, ib) && unobservedOf(aGroup[ia], bGroup[ib]).length === 0;
   for (const matches of [whole, exact]) {
     for (let ai = 0; ai < aGroup.length; ai++) {
       if (usedA.has(ai)) continue;
-      const bi = unusedB.findIndex(({ b }) => matches(aGroup[ai], b));
+      const bi = unusedB.findIndex(({ i }) => matches(ai, i));
       if (bi === -1) continue;
       const [{ b }] = unusedB.splice(bi, 1);
       bucket.inBoth.push({
@@ -1023,17 +1038,8 @@ function matchGroups(baseKey, aGroup, bGroup, bucket) {
   // kustomize base before the overlay that runs) — ties in declared order;
   // then surplus controls stay visible as onlyInA/B. Pairs are reported in
   // A's declared order.
-  const closeness = [];
-  unusedA.forEach(({ a }, ia) => unusedB.forEach(({ b }, ib) => closeness.push([deltasOf(a, b).length, ia, ib])));
-  closeness.sort((x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2]);
-  const pairedA = new Map();
-  const pairedB = new Set();
-  for (const [, ia, ib] of closeness) {
-    if (pairedA.size === Math.min(unusedA.length, unusedB.length)) break;
-    if (pairedA.has(ia) || pairedB.has(ib)) continue;
-    pairedA.set(ia, ib);
-    pairedB.add(ib);
-  }
+  const pairedA = pairClosestFirst(unusedA.length, unusedB.length, (ia, ib) => countOf(unusedA[ia].i, unusedB[ib].i));
+  const pairedB = new Set(pairedA.values());
   unusedA.forEach(({ a }, ia) => {
     if (!pairedA.has(ia)) return;
     const { b } = unusedB[pairedA.get(ia)];
