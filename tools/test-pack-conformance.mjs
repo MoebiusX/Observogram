@@ -189,17 +189,19 @@ test('transitions on production-curated: real value → marker-only; marker dele
 
 // ---------- 5. crawler stubs ----------
 
-test('an empty-repo crawl: the crawler marks every value it invents (the stub SLI/SLO, the owners, the otel fields); only the version is `unmarked`', () => {
+test('an empty-repo crawl: the crawler marks every value it invents (the stub SLI/SLO, its burn-rate entry, the owners, the otel fields); only the version is `unmarked`', () => {
   const pack = emptyCrawl();
   const r = packConformance(pack);
   assert.equal(r.writers.crawler, true);
-  assert.equal(r.markers, 17);
+  assert.equal(r.markers, 18);
+  // The burn-rate entry no rule wrote is a placeholder, as live's own is (never "declared, not live").
+  assert.deepEqual(r.rows.filter(x => x.symbol.startsWith('policy.')).map(x => [x.symbol, x.field, x.state, x.marker]), [['policy.burn_rate_alerts[0]', 'windows', 'placeholder', 'crawler.scaffold.policy.burn_rate_alerts[0]']]);
   const sli = r.rows.filter(x => x.symbol === 'slis.service_availability');
   assert.deepEqual(sli.map(x => [x.field, x.state, x.marker]), [['good', 'placeholder', 'crawler.scaffold.slis.service_availability'], ['total', 'placeholder', 'crawler.scaffold.slis.service_availability']]);
   assert.ok(r.rows.filter(x => x.marker).every(x => x.state === 'placeholder' && x.writer === 'crawler'), `every crawler stub is recognised: ${r.rows.filter(x => x.marker && x.state !== 'placeholder').map(x => `${x.symbol}.${x.field}`).join(',')}`);
   assert.deepEqual(r.rows.filter(x => x.symbol.startsWith('metadata.')).map(x => [x.field, x.state, x.marker]), [['version', 'unmarked', null], ['owners', 'placeholder', 'crawler.scaffold.metadata.owners']]);
   assert.deepEqual(r.rows.filter(x => x.symbol.startsWith('otel.')).map(x => x.field), ['semconv', 'resource_attributes', 'sdk.languages', 'sdk.sampling', 'sdk.propagators'], 'the five field symbols land as five rows');
-  assert.deepEqual(r.counts.byState, { placeholder: 25, 'marker-only': 0, unmarked: 1, dangling: 0 });
+  assert.deepEqual(r.counts.byState, { placeholder: 26, 'marker-only': 0, unmarked: 1, dangling: 0 });
   // The unmarked fingerprint still fires for a crawler-written pack whose stub SLI lost its marker (an older crawl).
   const older = clone(pack); delete older.metadata.annotations['crawler.scaffold.slis.service_availability'];
   assert.deepEqual(packConformance(older).rows.filter(x => x.symbol === 'slis.service_availability').map(x => [x.field, x.state]), [['good', 'unmarked'], ['total', 'unmarked']]);

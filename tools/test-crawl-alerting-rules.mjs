@@ -156,14 +156,25 @@ assert(layered.layers.L4.policy.filter(a => a.id.startsWith('POL-')).length === 
   const all = [...OPERATIONAL, ...BURN_RULES].sort();
   assert(ann['crawler.discovered.alert_names'] === JSON.stringify(all) && ann['crawler.discovered.alert_names_count'] === String(all.length),
     'every alert name the scan read, burn-rate ones included, sorted, in crawler.discovered.alert_names', [ann['crawler.discovered.alert_names'], ann['crawler.discovered.alert_names_count']]);
-  // A repository with no recording rules (the tier-3 fallback): alerting.rules keeps none, the names stay.
+  // A repository with no recording rules (the tier-3 fallback): every alert rule is declared in
+  // alerting.rules, as live lists it; the SLO, SLI and burn-rate entry derived from each name stay
+  // beside them, every one a marked placeholder (never "declared, not live"); the names stay.
   const tier3 = crawlFiles({ 'prometheus/shop.rules.yml': [
     'groups:', '  - name: shop', '    rules:',
     '      - alert: ShopDown', '        expr: up{job="shop"} == 0', '        for: 1m', '        labels:', '          severity: critical',
     '      - alert: ShopSlow', '        expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job="shop"}[5m]))) > 1', '        labels:', '          severity: warning',
   ].join('\n') }, opts).canonical;
-  assert(!tier3.spec.alerting?.rules && tier3.metadata.annotations['crawler.discovered.alert_names'] === '["ShopDown","ShopSlow"]',
-    'no recording rules: no alerting.rules, and every alert still named for the scope', [tier3.spec.alerting, tier3.metadata.annotations['crawler.discovered.alert_names']]);
+  assert(JSON.stringify(tier3.spec.alerting?.rules?.map(r => [r.name, r.engine])) === '[["ShopDown","prometheus"],["ShopSlow","prometheus"]]'
+    && tier3.metadata.annotations['crawler.discovered.alert_names'] === '["ShopDown","ShopSlow"]',
+    'no recording rules: every alert rule in alerting.rules, and every alert still named for the scope', [tier3.spec.alerting, tier3.metadata.annotations['crawler.discovered.alert_names']]);
+  const t3 = adapt(tier3);
+  const t3burn = t3.layers.L4.policy.filter(a => a.id.startsWith('POL-'));
+  const t3slos = t3.layers.L1;
+  assert(t3burn.length === 2 && t3burn.every(a => a.source === 'Scaffold') && t3slos.length === 4 && t3slos.every(a => a.source === 'Scaffold')
+    && t3.layers.L4.alerting.filter(a => a.id.startsWith('RULE-')).every(a => a.source === 'Declared'),
+    'no recording rules: the SLO, SLI and burn-rate entry derived from each alert name are placeholders, the rules Declared',
+    [t3burn.map(a => [a.title, a.source]), t3slos.map(a => [a.id, a.source])]);
+  assert(validateCanonical(tier3, SCHEMA).length === 0, 'no recording rules: the pack validates', validateCanonical(tier3, SCHEMA).slice(0, 3));
   assert(!crawlFiles({ 'README.md': '# no rules' }, opts).canonical.metadata.annotations['crawler.discovered.alert_names'], 'no rule read: no annotation');
 }
 

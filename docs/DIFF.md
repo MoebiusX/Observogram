@@ -200,6 +200,35 @@ counterpart is compared as usual, whatever the annotation says. The live
 fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
 look at*); a pack without them behaves exactly as before.
 `summary.notObserved` counts the entries; they are outside the union.
+A live read that covered only some STORES of a rule family says so in
+`observogram.unread.alert_rule` (`{ grafana?, ruler?, loki }`) and
+`observogram.unread.recording_rule` (`{ grafana }`): no Grafana alert-rule
+tool answered, no Prometheus-compatible ruler did, no tool reads a Loki
+ruler or Grafana-managed recording rules. An unmatched artefact every one of
+whose rules lives in a store so named — a declared rule's `engine` (absent,
+`prometheus`, `mimir`, `thanos`, `victoriametrics` → a ruler; `grafana`;
+`loki`), a recording rule that states Grafana's facts — goes to `notObserved`
+with that reason; a scope's own reason, more specific, comes first.
+
+**A Grafana-managed rule** states beside the spec what the closed AlertRule
+cannot hold (`observogram.grafana_rule.alerting.rules[<i>]`, the adapter's
+`grafana`: `{ uid?, folder?, folderUid?, group?, condition? }`). Its
+`condition` — the expression nodes from the query to the alert (a threshold,
+its recovery threshold, a reduce, math, classic conditions), the other
+queries, the condition reference and `paused`, as one text both readers
+derive the same way — is part of its behaviour: a threshold raised in Grafana
+reads drifted on `condition`. A side that states none (a listing that does
+not show it) is no difference: the pair carries `unobserved: [{ field:
+'condition', side, keys: [] }]` and counts in `partlyCompared`. Its `uid`
+pairs a rule renamed on one side: when both sides state one uid under two
+names and neither name has a counterpart, the two are one `inBoth` entry,
+`matchedBy: 'uid'`, drifted on `name` (the alertname routing and silences
+match) — on the default identity path only, and never in place of a name both
+sides hold. Its `folder` (a title, as a provisioning file states it) and
+`group` answer a scope: a folder entry whose live read named one of its
+folders by that title holds it inside; one that named every folder and none
+so, outside; else not known, and the reason names the folder the pack
+states.
 
 The same holds one level down, for a **field a producer was shown only in
 part**. A live rule listing that gives each alert rule a flat `severity` and
@@ -304,8 +333,7 @@ Not covered, as for an operational rule: a ruler that re-prints expressions
 rule as different on `expr`, and a listing with neither a labels map nor a
 flat severity on `labels` and `severity`; Helm control flow inside a rule,
 and a plain YAML scalar continued on the next line, are read wrong by the
-scan; a Grafana-managed rule's threshold kept in a threshold node is in no
-reading's `expr`; a label whose key the comparison drops everywhere as
+scan; a label whose key the comparison drops everywhere as
 volatile (`source`, `host`, `version`, `url`, `description`, …) is
 compared on neither kind of rule. Two burn-rate entries on one SLO — no
 reader writes them — both carry the SLO's one statement, and a rule that

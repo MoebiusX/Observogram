@@ -29,9 +29,10 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFakeMcp } from '../server/fixtures/fake-mcp.mjs';
-import { probeCandidates, capabilityTool, candidateTool } from './lib/contracts/mcp-capabilities.mjs';
+import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool } from './lib/contracts/mcp-capabilities.mjs';
 import { fetchMcp, buildCanonicalPack, isProbeRefusal, notServedStatus } from './fetch-live-pack.mjs';
 import { partialLiveEvidence } from '../studio/diagnostic-grade.mjs';
+import { liveEvidenceFacts } from './lib/journey.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
@@ -62,7 +63,7 @@ const NAMES = { label: '__name__', values: ['up', 'http_server_request_duration_
 
 // One fetch against a fake that advertises `tools` and answers through
 // `answers` (tool name → answer, or a function of the call's arguments).
-async function fetchFrom(answers, { probeMemory = null, extraTools = [] } = {}) {
+async function fetchFrom(answers, { probeMemory = null, extraTools = [], scope = null } = {}) {
   const tools = [T.health, T.topology, ...Object.keys(answers), ...extraTools];
   const fake = await startFakeMcp([...new Set(tools)], (name, args) => {
     if (name === T.health) return { services: [] };
@@ -71,7 +72,7 @@ async function fetchFrom(answers, { probeMemory = null, extraTools = [] } = {}) 
     return typeof a === 'function' ? a(args) : (a ?? {});
   });
   try {
-    const fetched = await fetchMcp({ mcpUrl: fake.url, refreshedAt: AT, ...(probeMemory ? { probeMemory } : {}) });
+    const fetched = await fetchMcp({ mcpUrl: fake.url, refreshedAt: AT, ...(probeMemory ? { probeMemory } : {}), ...(scope ? { scope } : {}) });
     const pack = buildCanonicalPack({ refreshedAt: AT, mcpUrl: fake.url, ...fetched });
     return { fetched, pack, ann: pack.metadata.annotations, calls: fake.calls.map((c) => ({ name: c.name, args: c.arguments || {} })) };
   } finally {
@@ -132,6 +133,36 @@ test('a ruler that refused the read still gathers the firing alerts and the reco
   assert.ok(calls.some((c) => c.name === T.query && /ALERTS/.test(String(c.args.query || ''))), 'the firing-alerts query ran');
   assert.equal(ann['mcp.discovered.alerts_firing.names'], 'CheckoutDown');
   assert.equal(ann['mcp.discovered.recording_rules_via_inventory.count'], '2', 'the recorded series are read from the metric names');
+});
+
+test('a scoped read whose Grafana alert-rule engine is refused beside a ruler that answered: the rules stand, the family is read in part (mcp.probesPartial, the refusal its masked probe error) and the vantage is partial, in the pack and in the facts a run records (A2); refused beside an empty ruler it fails, the refusal kept as one, and the firing alerts are still gathered (C6 inside the union)', async () => {
+  const grafana = probeCandidates('alert_rules').map(nameOf).find((n) => productAttestedByTool(n) === 'grafana');
+  const scope = { folderUids: ['shop-alerts'], ruleGroups: ['shop'] };
+  const ruler = { groups: [{ name: 'shop', rules: [{ name: 'CheckoutDown', type: 'alerting', query: 'up{job="checkout"} == 0', labels: { severity: 'critical' } }] }] };
+  const refused = { __isError: 'Error: HTTP 403: Forbidden — https://grafana.example.com/api/v1/provisioning/alert-rules?folder_uid=shop-alerts' };
+  const beside = await fetchFrom({ [T.names]: NAMES, [T.rules]: ruler, [grafana]: refused }, { scope });
+  assert.ok(beside.calls.some((c) => c.name === grafana && c.args.folder_uid === 'shop-alerts'), 'the scope\'s folder was asked of Grafana');
+  assert.ok(list(beside.ann, 'mcp.probesSucceeded').includes('alert_rules') && !list(beside.ann, 'mcp.probesFailed').includes('alert_rules'), 'the rules that answered stand');
+  assert.equal(beside.ann['mcp.probesPartial'], 'alert_rules', 'read in part');
+  assert.match(beside.ann['mcp.probeErrors.alert_rules'], new RegExp(`^${grafana}: .*HTTP 403`), 'the refusal kept');
+  assert.ok(!beside.ann['mcp.probeErrors.alert_rules'].includes('folder_uid='), 'masked as every probe error is');
+  const ev = partialLiveEvidence(beside.pack);
+  assert.deepEqual([ev.vantage, ev.inPart, ev.failed], ['partial', ['alert_rules'], []], 'the vantage reads the hole');
+  const facts = liveEvidenceFacts(beside.pack);
+  assert.deepEqual([facts.vantage, facts.probes.partial], ['partial', ['alert_rules']], 'and so does the run record');
+  // The same read with Grafana answering — nothing in the folder — is whole.
+  const whole = await fetchFrom({ [T.names]: NAMES, [T.rules]: ruler, [grafana]: [] }, { scope });
+  assert.deepEqual([whole.ann['mcp.probesPartial'], partialLiveEvidence(whole.pack).vantage], [undefined, 'full']);
+  // Refused beside a ruler that lists nothing: no honest zero — failed, the refusal kept as one, so the
+  // firing alerts are gathered as for a refused cascade.
+  const alone = await fetchFrom({
+    [T.names]: NAMES, [T.rules]: { groups: [] }, [grafana]: refused,
+    [T.query]: (args) => (/ALERTS/.test(String(args.query || '')) ? { result: [{ metric: { alertname: 'CheckoutDown', severity: 'page' }, value: [0, '1'] }] } : { result: [] }),
+  }, { scope });
+  assert.ok(list(alone.ann, 'mcp.probesFailed').includes('alert_rules') && !list(alone.ann, 'mcp.probesEmpty').includes('alert_rules'));
+  assert.deepEqual(alone.fetched.probeResults.alert_rules.refused, [grafana]);
+  assert.equal(alone.ann['mcp.probesPartial'], undefined, 'a failed family is no partial one');
+  assert.equal(alone.ann['mcp.discovered.alerts_firing.names'], 'CheckoutDown', 'the firing-alerts fallback ran');
 });
 
 test('the texts a refusal comes in (one rule for the probe cascade and the ping)', () => {

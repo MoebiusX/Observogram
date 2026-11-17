@@ -1462,6 +1462,26 @@ export function scanComparability(scan, records) {
   return null;
 }
 
+// The same question for the live side: whether this live read applied the scope the last graded
+// run's did (`liveScope`: this run's packB.liveScope; a live record written before scopes existed
+// keeps none, and read the whole estate). Null when they read alike, or the last graded run was no
+// live read; else { withPrevious: false, reason } — the first Run after the server default stopped
+// applying to an environment that read under it reads the whole estate, and a scope changed
+// reads another part of it.
+const SCOPE_WORDS = [['metricPrefixes', 'prefix', 'prefixes'], ['folderUids', 'folder', 'folders'], ['ruleGroups', 'rule group', 'rule groups'], ['metricExclude', 'exclude pattern', 'exclude patterns']];
+const ownScope = (s) => (isRecord(s) && Object.keys(s).length ? s : null);
+const scopeKey = (s) => (s ? JSON.stringify(Object.keys(s).sort().map((k) => [k, Array.isArray(s[k]) ? s[k].map(String).sort() : s[k]])) : '');
+const scopeWords = (s) => [...SCOPE_WORDS.map(([k, one, many]) => (Array.isArray(s[k]) && s[k].length ? `${s[k].length} ${s[k].length === 1 ? one : many}` : null)),
+  typeof s.datasourceUid === 'string' && s.datasourceUid ? `datasource ${s.datasourceUid}` : null].filter(Boolean).join(', ') || 'a scope';
+export function liveScopeComparability(liveScope, records) {
+  const previous = checkedRecords(records).find((r) => isRecord(r.grade));
+  if (!previous || !/^mcp:/i.test(String(previous.packB?.source || ''))) return null;
+  const was = ownScope(previous.packB.liveScope);
+  const now = ownScope(liveScope);
+  if (scopeKey(was) === scopeKey(now)) return null;
+  return { withPrevious: false, reason: `the previous run read ${was ? `only a live scope (${scopeWords(was)})` : 'the whole live estate'}; this one reads ${now ? `only ${was ? 'another' : 'a'} live scope (${scopeWords(now)})` : 'the whole live estate'}` };
+}
+
 // The gate breach a scan that lost files makes, whatever the check's thresholds: a check on part
 // of the repository cannot pass. [] for a whole scan, or none.
 export function scanGateBreaches(scan) {
@@ -1707,8 +1727,9 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     inventory,
   };
   // A scan that lost files (packAScan, above) fails the gate whatever it asks, and its figures are not
-  // set beside the last graded run's (`recent`, the history read once above).
-  const comparable = scanComparability(packAScan, recent);
+  // set beside the last graded run's (`recent`, the history read once above); nor are a live read's
+  // that applied another scope than that run's (the scan's reason first).
+  const comparable = scanComparability(packAScan, recent) ?? (liveTarget ? liveScopeComparability(packBScopeOf(def), recent) : null);
   const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)];
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
@@ -2183,7 +2204,8 @@ export function renderJourneyMarkdown(r) {
   lines.push(...stackEvidenceTable(r.stackEvidence));
   lines.push(...inventoryTable(r));
   lines.push(...requirementChainsTable(r.branches));
-  // A run the record marks not comparable with the one before (its scan read other files): no chain moves are said.
+  // A run the record marks not comparable with the one before (its scan, or its live scope, read other files or
+  // another part of the estate): no chain moves are said.
   lines.push(...(notComparable
     ? ['', '### Transitions since previous run', '', `_not comparable with the previous run${r.comparable.reason ? `: ${mdCell(r.comparable.reason)}` : ''}_`]
     : transitionsSection(r)));

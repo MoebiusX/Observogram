@@ -185,6 +185,14 @@ const tier3 = crawlFiles(readTree(TIER3_DIR), { repoName: 'tier3-alerts', now: N
   const d = diffPacks(adapt(c), adapt(live));
   assert(d.layers.L1.onlyInA.length === 0 && d.layers.L1.inBoth.length === 0 && d.layers.L1.scaffold.filter(x => x.side === 'a').length === 4,
     'a repository with no recording rules shows its L1 placeholders as parked, not declared-not-live (the reading the live side applies to its own stubs)', { onlyInA: d.layers.L1.onlyInA.length, scaffold: d.layers.L1.scaffold.map(x => x.side) });
+  // Its alert rules are declared in alerting.rules; against a live pack whose alert-rule read got no answer they are
+  // not checked, and the burn-rate entries derived from their names are placeholders — nothing is declared-not-live.
+  assert(JSON.stringify((c.spec.alerting.rules || []).map(r => r.name).sort()) === JSON.stringify(['5xxSpike', 'AVeryLongAlertNameThatGoesOnAndOnVeryLongAlertNameThatGoesOnAndOnVeryLongAlertNameTha']),
+    'the alerts-only repository declares its alert rules, under their exact names', (c.spec.alerting.rules || []).map(r => r.name));
+  assert(d.layers.L4.onlyInA.length === 0 && d.layers.L4.notObserved.filter(x => x.key.startsWith('alert_rule::')).length === 2
+    && d.layers.L4.scaffold.filter(x => x.side === 'a' && x.key.startsWith('burn_rate::')).length === c.spec.policy.burn_rate_alerts.length,
+    'against the live stub the alert rules are not checked and the derived burn-rate entries parked: nothing at L4 is declared-not-live',
+    { onlyInA: d.layers.L4.onlyInA.map(x => x.key), notObserved: d.layers.L4.notObserved.map(x => x.key) });
 }
 
 // ---------- the empty repository and the programmatic doors ----------

@@ -532,9 +532,12 @@ Belongs here:
   filter left out.*); not offered for a pack file;
 - under the endpoint, *Live scope — what of the estate is this service's*:
   metric prefixes, dashboard / rule folder uids, exclude patterns, rule
-  groups and the datasource uid, prefilled from the environment's own scope
-  or the server's snapshot scope (said so); the Run then reads only that of
-  the estate, and the cell says *scoped: 2 prefixes, 5 folders*;
+  groups and the datasource uid — a new environment pre-filled from the
+  server default, each field said so; an environment that exists reads its
+  own scope or none (its form and its cell say *No live scope — the server
+  default no longer applies here; set one*, the form offers **Use the
+  server default**); the Run then reads only that of the estate, and the
+  cell says *scoped: 2 prefixes, 5 folders*;
 - the Live answer's last choice, *A pack file — an export of live…*: *Choose
   a pack file*, sent with Save in place of the MCP endpoint (one or the
   other — choosing an endpoint again drops the export); each Run checks

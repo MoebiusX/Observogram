@@ -1039,6 +1039,7 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/services/:id/environments': 'operator',
   'POST /api/services/:id/run': 'operator',
   'POST /api/services/:id/control-room': 'operator',
+  'POST /api/services/:id/scope-check': 'operator',
   'PATCH /api/environments/:id': 'operator',
   'DELETE /api/environments/:id': 'operator',
   'PUT /api/packs/:id/verdicts/:artefact': 'operator',
@@ -1562,6 +1563,8 @@ const PROBES = Object.freeze({
   'POST /api/services/:id/environments': ['POST', '/api/services/999999/environments'],
   'POST /api/services/:id/run': ['POST', '/api/services/999999/run'],
   'POST /api/services/:id/control-room': ['POST', '/api/services/999999/control-room'],
+  // A scope check of an unknown service: 404, nothing read.
+  'POST /api/services/:id/scope-check': ['POST', '/api/services/999999/scope-check'],
   'PATCH /api/environments/:id': ['PATCH', '/api/environments/999999'],
   'DELETE /api/environments/:id': ['DELETE', '/api/environments/999999'],
   // The MCP endpoints: the list, an empty body (400), an unknown id (404).

@@ -45,7 +45,7 @@ const { planCrawlerFetch, selectCrawlerFiles, settleFetched, fetchGithubFiles, H
 const { readRepoFolder } = await import('./lib/repo-folder.mjs');
 const {
   scanRepoFolder, walkRepoFiles, runJourney, readJourneyRuns, notifyTargetOf,
-  SCAN_PARTIAL_OUTCOME, inheritedScan, scanComparability, scanGateBreaches, writeStoppedRun,
+  SCAN_PARTIAL_OUTCOME, inheritedScan, scanComparability, liveScopeComparability, scanGateBreaches, writeStoppedRun,
 } = await import('./lib/journey.mjs');
 const { scanModel, scanLossText, DEPLOYMENT_SURFACE_CHOICES, surfaceLabel } = await import('../studio/overview-model.mjs');
 
@@ -498,4 +498,22 @@ test('a stopped Run\'s record (writeStoppedRun): no grade, no drift, a notify bl
     { withPrevious: false, reason: 'the previous run read only the Kubernetes and Helm files (14 left out); this one reads every file' }, 'a record written before: its profile');
   assert.deepEqual([scanComparability(whole, [after]), scanComparability(null, [after]), scanComparability(whole, [])], [null, null, null]);
   assert.deepEqual([scanGateBreaches(whole), scanGateBreaches(null)], [[], []]);
+});
+
+test('liveScopeComparability: a live read that applied another scope than the last graded run\'s is not set beside it — the first Run after the server default stopped applying to an environment that read under it reads the whole estate; the same scope in another order, a previous run that was no live read, or none graded: comparable', () => {
+  const DEFAULT = { ruleGroups: ['shop-a-slo'], metricExclude: ['^go_'] };
+  const live = (liveScope, extra = {}) => ({ outcome: 'pass', grade: { score: 60 }, packB: { source: 'mcp:https://mcp.example.com/mcp', ...(liveScope === undefined ? {} : { liveScope }) }, ...extra });
+  assert.deepEqual(liveScopeComparability(null, [live(DEFAULT)]),
+    { withPrevious: false, reason: 'the previous run read only a live scope (1 rule group, 1 exclude pattern); this one reads the whole live estate' }, 'the default no longer applies');
+  assert.deepEqual(liveScopeComparability({ metricPrefixes: ['shop_', 'cart_'] }, [live(null)]),
+    { withPrevious: false, reason: 'the previous run read the whole live estate; this one reads only a live scope (2 prefixes)' });
+  assert.deepEqual(liveScopeComparability({ folderUids: ['b'], datasourceUid: 'prom' }, [live({ folderUids: ['a'] })]),
+    { withPrevious: false, reason: 'the previous run read only a live scope (1 folder); this one reads only another live scope (1 folder, datasource prom)' });
+  assert.equal(liveScopeComparability({ metricPrefixes: ['cart_', 'shop_'] }, [live({ metricPrefixes: ['shop_', 'cart_'] })]), null, 'the same scope in another order');
+  assert.equal(liveScopeComparability(null, [live(undefined)]), null, 'a live record written before scopes read the whole estate');
+  assert.equal(liveScopeComparability({}, [live(null)]), null, 'an empty scope is none');
+  assert.equal(liveScopeComparability(null, [live(DEFAULT, { packB: { source: '/packs/live.pack.json' } })]), null, 'the last graded run was no live read');
+  // The last graded run decides: a stopped Run and an ungraded (lost) record in between are passed over.
+  assert.deepEqual(liveScopeComparability(null, [{ outcome: SCAN_PARTIAL_OUTCOME, packB: { source: 'mcp:x' } }, { outcome: 'vantage-lost', packB: { source: 'mcp:x', liveScope: null } }, live(DEFAULT)]).withPrevious, false);
+  assert.equal(liveScopeComparability(null, []), null, 'none graded');
 });

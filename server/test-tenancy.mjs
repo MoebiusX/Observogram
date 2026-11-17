@@ -500,6 +500,8 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     // A service's Run: the other org's service is unknown here — no repository read, no MCP call (the sweep counts the fake's calls).
     'POST /api/services/:id/run': [`/api/services/${serviceId}/run`, { env: 'prod' }, is404('POST /api/services/:id/run')],
     'POST /api/services/:id/control-room': [`/api/services/${serviceId}/control-room`, { env: 'prod' }, is404('POST /api/services/:id/control-room')],
+    // The live scope's check: the other org's service is unknown here — none of its packs read.
+    'POST /api/services/:id/scope-check': [`/api/services/${serviceId}/scope-check`, { env: 'prod', scope: {} }, is404('POST /api/services/:id/scope-check')],
     'PATCH /api/environments/:id': [`/api/environments/${environmentId}`, { tier: 'tier-1' }, is404('PATCH /api/environments/:id')],
     'DELETE /api/environments/:id': [`/api/environments/${environmentId}`, undefined, is404('DELETE /api/environments/:id')],
     // The waivers (GAP batch 2, B3.2): the other org's service and waiver are unknown here.

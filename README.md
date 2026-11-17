@@ -1183,11 +1183,12 @@ org is never found (404, or 400 for `mcpEndpointId`).
 
 | Method | Path | Who | Body | What it does |
 |---|---|---|---|---|
-| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`, `livePack`, the export of live kept in its place, `{ packId, name, uploadedAt, bytes }` or `null`, and `liveScope`, the environment's own live scope, or `null` — then the org's configured snapshot scope applies, else none), `liveScopes`, `envSurfaces` and `packs` (`id`, `label`, `source`, `role`) |
+| `GET` | `/api/services` | viewer | — | `services`, by slug, each with `environments` (their `mcpEndpoint` as `{ id, name, origin }` or `null`, `livePack`, the export of live kept in its place, `{ packId, name, uploadedAt, bytes }` or `null`, and `liveScope`, the environment's own live scope, or `null` — then none: the org's configured snapshot scope only pre-fills a new environment's form), `liveScopes`, `envSurfaces` and `packs` (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | operator | `{ name, slug?, owners?, tier?, description?, repository?, targets?, envRefs?, liveScopes?, envSurfaces? }` | a service record (201); `envRefs` the branch each environment's Run reads where it is not the repository's ([a branch per environment](#a-services-run)); `liveScopes` the scope each environment's live read applies ([a live scope per environment](#a-services-run)); `envSurfaces` the deployment surface each environment's Run reads alone — `kubernetes`, `eks`, `local-kubernetes` or `compose`; none: every file ([a deployment surface per environment](#a-services-run)); `slug` defaults to the name's key; `owners` at most 50 names; `repository` is where its declaration lives — `{ kind: github \| ado \| path, location, ref? }` (see [A service's Run](#a-services-run)) or `null`; `targets` the MTTD / MTTR targets the studio keeps for it — `{ profile: lab \| financial \| degradation \| noncritical }`, `{ profile: custom, mttd, mttr }` in whole minutes (`"3m"`, `"90m"`) or `null` — kept as `{ profile, mttd, mttr, by, at }`; a slug in use is 409 naming its id |
 | `GET` | `/api/services/:id` | viewer | — | one service record with its environments and packs; 404 `no service <id>` |
 | `PATCH` | `/api/services/:id` | operator | any of `name`, `owners`, `tier`, `description`, `repository`, `gradeOff`, `setAside`, `targets`, `envRefs`, `liveScopes`, `envSurfaces` | `changed` lists the fields that differed (none: no audit row); `envRefs`, `liveScopes` and `envSurfaces` are each the whole map (another repository clears `envRefs` and keeps `envSurfaces`), and a rename of an environment (`PATCH /api/environments/:id`) takes its branch, its scope and its surface along; a surface the scan does not know is 400 naming its environment; a scope that does not parse is 400 naming its environment and field, before anything is kept; `targets` as on a create, `null` clears them; `slug` in the body is 400 — the slug is fixed, create a new service instead. `gradeOff` is the whole list of grade criteria the service is not graded on, `[{ key, reason }]` (`[]`: every one graded) — [below](#criteria-a-service-is-not-graded-on); `setAside` the whole list of differences with live its grade leaves out — [below](#differences-set-aside) |
-| `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; a `pack` repository is used as it is (no scan, no `scan`) and an environment's export of live in place of the endpoint (no MCP call); the live read applies the environment's scope, else the org's configured snapshot scope (409 when that does not parse), else none — saved as `packB.mcp.scope` and said as `record.packB.liveScope` (`null`: unscoped); a scan that lost files while the service keeps a complete scan of the same repository is 409 `{ ok: false, outcome: 'scan-partial', error, journey, kept, scan, record }` — nothing registered, no MCP call (`OBSERVOGRAM_PARTIAL_SCAN=check` checks it instead, its gate failed); the live MCP API's posture; see [A service's Run](#a-services-run) |
+| `POST` | `/api/services/:id/run` | operator | `{ env?, repoAuth? }` — `repoAuth` the person's own GitHub or Azure DevOps token, for this read only ([whose access](#whose-access-reads-a-repository)) | the service's Run: its repository scanned now and registered as its pack, its check for that environment saved (the journey `<slug>.<env>`) and run against the environment's MCP endpoint — `{ record, pack, journey, scan }`; a `pack` repository is used as it is (no scan, no `scan`) and an environment's export of live in place of the endpoint (no MCP call); the live read applies the environment's own scope, else none — saved as `packB.mcp.scope` and said as `record.packB.liveScope` (`null`: unscoped); a scan that lost files while the service keeps a complete scan of the same repository is 409 `{ ok: false, outcome: 'scan-partial', error, journey, kept, scan, record }` — nothing registered, no MCP call (`OBSERVOGRAM_PARTIAL_SCAN=check` checks it instead, its gate failed); the live MCP API's posture; see [A service's Run](#a-services-run) |
+| `POST` | `/api/services/:id/scope-check` | operator | `{ env, scope }` — the scope as `liveScopes` holds one | what the scope would leave out of that environment's Run, from stored packs only (no MCP call, no row): `{ env, known, declared: { packId, label, families: [{ family, declared, inside, outside, unknown }] } \| null, live: { packId, label, readAt, folders, ruleGroups, foldersNotRead, missingGroups } \| null }` — `declared` the environment's last scan, else the service's own pack (an environment not added yet: `known: false`); `live` the live pack its last Run kept, its `ruleGroups` those the read listed before a rule-group scope narrowed them; a scope that does not parse is 400 with the PATCH's text |
 | `POST` | `/api/services/:id/control-room` | operator | `{ env?, fresh? }` | Overview's control room: the environment's live endpoint read now (by id, with its read token) — `{ scope, slos, alerts, scrape, timing, families, absent, calls, readAt, cached }` (`slos`: each SLO's SLI now and its error budget left, read from the repository's own recorded series by name, `{ outcome, rows: [{ id, sli, objective, window, objectiveSource, now, budget }], cut }`, at most 8), each part with its outcome (`data`, `empty`, `failed`, `not-attempted`), every part scoped to the service — the alert rules its saved check's Pack A names and its scrape jobs (`scope: { kind: 'service', jobs, alerts, cut }`; `neverRun: true` and nothing read before its first Run); one read shared for 30 s, `fresh` at most every 5 s; no audit row; the live MCP API's posture; see [The control room](#overview--the-front-door) |
 | `DELETE` | `/api/services/:id` | operator | — | `deleted`, with the counts of `environments`, `packLinks` and `waivers` removed with it |
 | `PUT` | `/api/services/:id/repository-upload` | operator | `{ name, files: { <path inside the folder>: <text> } }` | the repository uploaded from the person's own machine (Overview's **Upload**: a folder or a `.zip`, read in their browser by the scan's rule): the copy kept in the org's part of the workspace, one per service and replaced by the next, and the record pointed at it — `service.repository` is `{ kind: upload, location: <name>, ref: null, uploadedAt, files, bytes }` (one `service.update` row); paths stay inside the folder, at most 20,000 files, 5 MB each and 16 MB in all; a service deleted or pointed elsewhere takes its copy with it. POST and PATCH never name an upload (400) |
@@ -1431,17 +1432,35 @@ and the recording-rule evidence read from every name listed, the chaos feed,
 and the scrape targets, routes and versions estate-wide (no scope field
 names them). A change of scope reaches the environment's saved check at once,
 as the service's grade switches do. An
-environment with none of its own reads with the org's configured snapshot
-scope (`OBSERVOGRAM_SNAPSHOT_*`, `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`), else
-unscoped. The Run writes the scope it applied into the check as
-`packB.mcp.scope` — a **Check now** and `packc journey run` read the same —
-and the record says it as `packB.liveScope` (`null`: the read was unscoped; a
-record written before has no key, and reads as before). The environment's
-view carries its own as `liveScope`; a rename takes it along, a deletion
-takes it away. In *Add a service* and **Change**, step 4 shows the five
-answers under the endpoint, prefilled from the environment's own or the
-server's (*Prefilled from the server's snapshot scope*), and the matrix cell
-says *scoped: 2 prefixes, 5 folders*.
+environment with none of its own reads **unscoped**: the org's configured
+snapshot scope (`OBSERVOGRAM_SNAPSHOT_*`, `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*`)
+never applies to a service environment — one service's rule groups and
+exclude pattern must not narrow another's read. It pre-fills the form of a
+NEW environment instead, each field said *from the server default*, and saved
+it is that environment's own; it is not pre-filled for a service whose
+environments read other metric prefixes, and a pre-fill whose prefixes no
+metric the service's repository declares carries is cleared and said why.
+Typed prefixes that differ from the default's keep none of the default's
+other answers (*… will not be saved for this environment*), and a pre-fill is
+never written over an environment's own scope. An environment that exists and
+has none says *No live scope — the server default no longer applies here; set
+one* and offers **Use the server default**. The Run writes the scope it
+applied into the check as `packB.mcp.scope` — a **Check now** and `packc
+journey run` read the same — and the record says it as `packB.liveScope`
+(`null`: the read was unscoped; a record written before has no key, and reads
+as before). A run whose live read applied another scope than the last graded
+run's — the first Run after this change of an environment that read under
+the server default — says its figures are not comparable with that run's
+(`comparable`, as a partial scan does). A capture that names a service reads with that environment's own
+scope, never with the one Pack B was read under; a check of no service keeps
+its own; a deleted service's scope leaves its checks; and the first start
+after the change rewrites the saved checks that still carried the server
+default (logged). The environment's view carries its own as `liveScope`; a
+rename takes it along, a deletion takes it away. In *Add a service* and
+**Change**, step 4 shows the five answers under the endpoint and the scope's
+check (`POST /api/services/:id/scope-check`, stored packs only): a rule group
+the environment's last live read did not list, and a declared family with
+nothing inside the scope. The matrix cell says *scoped: 2 prefixes, 5 folders*.
 
 **Every environment reads the same files; a deployment surface per
 environment.** An environment's name chooses nothing: a service's
@@ -2417,7 +2436,7 @@ restart loses them (a pack already registered stays). A snapshot is labelled
 MCP](#fetch-live-from-mcp)).
 
 **The snapshot scope** (inert when unset; a request's `scope` replaces it
-whole; a plain draft and the refresh never read it, a service's Run does where its environment has no scope of its own — [a live scope per environment](#a-services-run)):
+whole; a plain draft and the refresh never read it, nor does a service's Run — it only pre-fills a new environment's form, [a live scope per environment](#a-services-run)):
 
 | Variable | Meaning |
 |---|---|

@@ -816,11 +816,14 @@ function mxCellHtml(r, col, svc, canWrite) {
     ? `<button type="button" class="ov-mx__ep" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" title="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch">${escapeHtml(r.live.name)}</button>${host ? `<span class="ov-mx__host og-muted" title="${attr(r.live.origin)}">${escapeHtml(host)}</span>` : ''}`
     : `<button type="button" class="ov-svc__fill" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}">Choose the MCP endpoint</button>`;
   const branch = r.branch ? `<span class="ov-mx__ref og-muted" title="${attr(r.branch.own ? `The branch ${r.env} reads` : "The repository's branch")}">${escapeHtml(r.branch.name || 'default branch')}</span>` : '';
-  // The live read's scope, where it has one: the environment's own, or the server's snapshot scope; an
-  // environment that relied on the server's default, which no longer applies to it, says so.
+  // The live read's scope, where it has one: the environment's own (an older host's model may still
+  // say the server's snapshot scope). An environment with none of its own while the server has a
+  // default (the model's `defaultIgnored`; `defaultSummary` what the default reads) says the default
+  // no longer applies to it; a scope with no text prints nothing.
+  const ignoredSummary = typeof r.scope?.defaultSummary === 'string' && r.scope.defaultSummary ? r.scope.defaultSummary : null;
   const scope = r.scope?.defaultIgnored
-    ? `<span class="ov-mx__scope ov-mx__scope--warn" title="${attr(`This environment has no live scope of its own. The server's snapshot scope (${typeof r.scope.defaultIgnored === 'string' ? r.scope.defaultIgnored : 'its default'}) applied to it before; it no longer applies, so its Run reads the whole estate the endpoint serves.`)}">No live scope — the server default no longer applies here; set one</span>`
-    : r.scope?.text ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
+    ? `<span class="ov-mx__scope ov-mx__scope--unscoped" title="${attr(`This environment has no live scope of its own. The server default${ignoredSummary ? ` (${ignoredSummary})` : ''} applied to it before; it no longer applies to an environment that exists, so its Run reads the whole estate the endpoint serves. Change → Use the server default makes it this environment's own.`)}">No live scope — the server default no longer applies here; set one</span>`
+    : typeof r.scope?.text === 'string' && r.scope.text ? `<span class="ov-mx__scope og-muted" title="${attr(r.scope.from === 'server' ? "The server's snapshot scope: the Run reads only this of the estate" : `${r.env}'s own live scope: the Run reads only this of the estate`)}">scoped: ${escapeHtml(r.scope.text)}</span>` : '';
   const l = r.last;
   let grade;
   let why = '';
@@ -952,15 +955,20 @@ function uploadHtml(f) {
 }
 
 // The live scope under the endpoint (formModel's `scope`): what of the estate the endpoint serves
-// is this service's — the snapshot scope's five answers, prefilled as the model says, and the hint.
+// is this service's — the snapshot scope's five answers (each said "from the server default" while
+// it holds the pre-fill), the hint, what a save would not keep, Use the server default for an
+// environment with none of its own, and the scope check's answer.
 function scopeHtml(f, v) {
   const s = f.scope;
   const fields = s.fields.map((x) => `
-              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
+              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}${x.fromDefault ? '<span class="ov-form__scope-from og-muted"> · from the server default</span>' : ''}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
   return `
           <div class="ov-form__sub ov-form__scope" role="group" aria-labelledby="ov-form-scope-l">
             <span class="ov-form__l" id="ov-form-scope-l">Live scope — what of the estate is this service's</span>${fields}
-            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>
+            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>${s.dropped ? `
+            <span class="ov-form__scope-warn">${escapeHtml(s.dropped)}</span>` : ''}${s.offerDefault ? `
+            <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-scope-default">Use the server default</button>` : ''}
+            ${scopeCheckBlockHtml(s.check)}
           </div>`;
 }
 
@@ -971,6 +979,15 @@ function surfaceHtml(f) {
   return `
             <label class="ov-form__f ov-form__surface"><span class="ov-form__l">${escapeHtml(s.label)}</span><select class="og-input" data-field="surface" aria-describedby="ov-form-surface-hint">${s.options.map((o) => `<option value="${attr(o.id)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select>
               <span class="ov-form__hint og-muted" id="ov-form-surface-hint">${escapeHtml(s.hint)}</span></label>`;
+}
+
+// The scope check's answer (formModel's scope.check, overview-model.mjs scopeCheckView): always drawn,
+// so the host can replace it in place when the answer arrives — the form is not drawn again while
+// the person types.
+export function scopeCheckBlockHtml(check) {
+  const warnings = Array.isArray(check?.warnings) ? check.warnings : [];
+  const notes = Array.isArray(check?.notes) ? check.notes : [];
+  return `<div class="ov-form__scope-check" role="status">${warnings.length ? `<ul class="ov-form__scope-warn">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}${notes.map((n) => `<span class="ov-form__hint og-muted">${escapeHtml(n)}</span>`).join('')}</div>`;
 }
 
 // A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
@@ -1344,6 +1361,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
     'ov-form-pack-repo': () => ov.pickPackFile?.('repo'),
     'ov-form-pack-live': () => ov.pickPackFile?.('live'),
+    // An environment with no live scope of its own: the server default, made its own (the fields fill in).
+    'ov-form-scope-default': () => ov.useServerDefaultScope?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });

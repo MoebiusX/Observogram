@@ -964,13 +964,14 @@ test('the folder push-down: an engine whose tool takes a folder uid is asked onc
   const besidesAlerts = besides.records.filter((r) => r.stage === 'alert_rules').pop();
   assert.deepEqual([besidesAlerts.state, besidesAlerts.counts, besidesAlerts.message], ['done', { listed: 0, kept: 0, engines: 0 }, 'the folder scope was pushed down to grafana (1 folder asked for; no rule in them)']);
   assert.deepEqual(JSON.parse(besides.pack.metadata.annotations['observogram.scope.alert_rule']), { by: 'folder', values: [{ uid: 'nope', title: null }] });
-  // The draft is untouched: the registry resolves the candidate argless, and the draft's reader keeps no group.
+  // The draft's candidates resolve argless; every reader — a draft's as a snapshot's — keeps each rule's group
+  // (the canonical never carries it).
   const alertProbe = PROBES.find((p) => p.name === 'alert_rules');
   assert.ok(alertProbe.candidates.every((c) => typeof c === 'string'), 'no draft candidate carries a folder argument');
-  assert.ok(alertProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.deepEqual(alertProbe.adapt(VM()), alertProbe.adaptSnapshot(VM()));
   assert.ok(alertProbe.adaptSnapshot(VM()).every((r) => typeof r.group === 'string' && r.group !== ''));
   const recordingProbe = PROBES.find((p) => p.name === 'recording_rules');
-  assert.ok(recordingProbe.adapt(VM()).every((r) => !('group' in r)));
+  assert.deepEqual(recordingProbe.adapt(VM()), recordingProbe.adaptSnapshot(VM()));
   assert.deepEqual([...new Set(recordingProbe.adaptSnapshot(VM()).map((r) => r.group))].sort(), ['finops:capacity', 'finops:ingestion', 'genai:operations']);
   assert.deepEqual(alertProbe.adaptSnapshot(PROVISIONED).map((r) => r.group), ['stack-validation', 'payments']);
   // A name listed under two groups carries each (the group is positional, never joined by name); a flat listing names none.

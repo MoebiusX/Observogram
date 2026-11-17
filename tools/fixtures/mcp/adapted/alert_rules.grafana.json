@@ -8,7 +8,13 @@
     },
     "annotations": {},
     "folderUid": "bg0gvuuj8otmof",
-    "group": "stack-validation"
+    "group": "stack-validation",
+    "grafana": {
+      "uid": "stack-validation-always",
+      "folderUid": "bg0gvuuj8otmof",
+      "group": "stack-validation",
+      "condition": "B = threshold(A > 0); condition B"
+    }
   },
   {
     "name": "PaymentsErrorRatioHigh",
@@ -22,6 +28,12 @@
       "summary": "Payment errors above 5%"
     },
     "folderUid": "payments-alerts",
-    "group": "payments"
+    "group": "payments",
+    "grafana": {
+      "uid": "payments-error-ratio",
+      "folderUid": "payments-alerts",
+      "group": "payments",
+      "condition": "B = reduce(last, A); C = threshold(B > 0.05); condition C"
+    }
   }
 ]

@@ -56,8 +56,8 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError, MCP_PROTOCOL_VERSION } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr } from './lib/sli-inference.mjs';
-import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey } from './lib/artefact-model.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, sourceRuleTerms, isSpecRecordingRuleName, alertRuleExpr, recordedSloForExpr, grafanaRuleFacts } from './lib/sli-inference.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, partialAnnotation, sourceRulesAnnotationKey, GRAFANA_RULE_ANNOTATION_PREFIX } from './lib/artefact-model.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -1236,6 +1236,44 @@ export function routesFromLiveAlertmanager(configText) {
     .filter(r => r.channels.length > 0);
 }
 
+// What a live read of the rule families states beside the probe outcomes:
+//   mcp.probesPartial + mcp.probeErrors.alert_rules  an alert-rule engine that
+//       errored beside one that answered with rules (unionAlertRules): the rules
+//       stand, the family was read in part (C3 reads it as a partial vantage)
+//   observogram.unread.alert_rule     { grafana?, ruler?, loki: why } — the
+//       stores the alert-rule read did not cover while the family answered:
+//       a declared rule of that store is not checked (diff.mjs)
+//   observogram.unread.recording_rule { grafana: why } — no recording-rule
+//       tool reads Grafana's own store
+//   mcp.discovered.rule_groups(_count) the rule groups the read listed, before
+//       a rule-group scope narrowed them (the studio's scope check)
+const RULE_GROUPS_RECORDED = 500;
+function ruleReadAnnotations(probeResults, ruleGroups) {
+  const out = {};
+  const alert = probeResults?.alert_rules;
+  if (alert?.outcome === 'data' && typeof alert.partial === 'string' && alert.partial) {
+    out['mcp.probesPartial'] = 'alert_rules';
+    // Masked where it is written, as every probe error is.
+    out['mcp.probeErrors.alert_rules'] = maskProbeErrorUrls(alert.partial);
+  }
+  if (alert?.outcome === 'data' || alert?.outcome === 'empty') {
+    const stated = alert.unread && typeof alert.unread === 'object' ? alert.unread : {};
+    const unread = Object.fromEntries(Object.entries(stated).filter(([, why]) => typeof why === 'string' && why));
+    // No alert-rule tool reads a Loki ruler (tools/lib/contracts/mcp-capabilities.mjs attests none).
+    unread.loki = 'no alert-rule tool reads a Loki ruler, so Loki rules were not read';
+    out['observogram.unread.alert_rule'] = JSON.stringify(unread);
+  }
+  const recording = probeResults?.recording_rules;
+  if (recording?.outcome === 'data' || recording?.outcome === 'empty') {
+    out['observogram.unread.recording_rule'] = JSON.stringify({ grafana: 'no recording-rule tool reads Grafana-managed recording rules, so they were not read' });
+  }
+  if (Array.isArray(ruleGroups) && ruleGroups.length) {
+    out['mcp.discovered.rule_groups'] = annotationJson(ruleGroups.slice(0, RULE_GROUPS_RECORDED));
+    if (ruleGroups.length > RULE_GROUPS_RECORDED) out['mcp.discovered.rule_groups_count'] = String(ruleGroups.length);
+  }
+  return out;
+}
+
 export function buildCanonicalPack({
   refreshedAt,
   mcpUrl,
@@ -1261,6 +1299,8 @@ export function buildCanonicalPack({
   grafanaObserved = null,
   // sampleChaosRuns' answer — null when the caller predates it.
   chaosRuns = null,
+  // The rule groups the rule families listed (fetchMcp) — null when the caller predates it.
+  ruleGroups = null,
   packName = PACK_NAME,
 } = {}) {
   // Destructuring defaults only fire for `undefined`. The MCP probe
@@ -1389,6 +1429,7 @@ export function buildCanonicalPack({
       ...(n.remembered === true ? { remembered: true } : {}),
     });
   }
+  Object.assign(annotations, ruleReadAnnotations(probeResults, ruleGroups));
   // The fetcher's own clock. mcp.refreshedAt is whatever the caller
   // stamped (server and journey stamp it after the fetch returns), so
   // freshness judgements on mcp.observed.* read mcp.observedAt.<family>
@@ -2071,6 +2112,7 @@ export function buildCanonicalPack({
       const symbol = `alerting.rules[${liveAlertRules.length - 1}]`;
       if (!unhealthy.has(a.name)) markVerified(symbol);
       if (Array.isArray(a.labelsObserved)) annotations[`${PARTIAL_ANNOTATION_PREFIX}${symbol}`] = partialAnnotation({ labels: a.labelsObserved });
+      if (a.grafana) annotations[`${GRAFANA_RULE_ANNOTATION_PREFIX}${symbol}`] = JSON.stringify(a.grafana);
     }
   }
   if (burnMapping.severityInferred.length) {
@@ -2393,22 +2435,62 @@ function provisionedRuleList(response) {
 // the first data node that is not an expression → expr (the reading the
 // crawler gives a provisioning file, tools/lib/sli-inference.mjs
 // alertRuleExpr), `folderUID` → folderUid and `ruleGroup` → group (what a
-// snapshot's folder and rule-group scopes read). A Grafana-managed RECORDING
-// rule (`record` set) is not an alert rule and is left out. Empty for any
-// other shape.
+// snapshot's folder and rule-group scopes read), and what the rule states
+// beyond the spec as `grafana` (sli-inference.mjs grafanaRuleFacts: its uid,
+// folder uid, group and condition — the threshold the query alone does not
+// say). A Grafana-managed RECORDING rule (`record` set) is not an alert rule
+// and is left out. Empty for any other shape.
 export function adaptProvisionedAlertRules(response) {
   const list = provisionedRuleList(response) || [];
   return list
     .filter(r => r && typeof r === 'object' && typeof r.title === 'string' && r.title.trim() && Array.isArray(r.data) && !r.record)
-    .map(r => ({
-      name: r.title,
-      expr: alertRuleExpr(r),
-      ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
-      labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
-      annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
-      ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
-      ...(typeof r.ruleGroup === 'string' && r.ruleGroup.trim() ? { group: r.ruleGroup.trim() } : {}),
-    }));
+    .map(r => {
+      const facts = grafanaRuleFacts(r);
+      return {
+        name: r.title,
+        expr: alertRuleExpr(r),
+        ...(typeof r.for === 'string' && r.for ? { for: r.for } : {}),
+        labels: r.labels && typeof r.labels === 'object' ? r.labels : {},
+        annotations: r.annotations && typeof r.annotations === 'object' ? r.annotations : {},
+        ...(typeof r.folderUID === 'string' && r.folderUID ? { folderUid: r.folderUID } : {}),
+        ...(typeof r.ruleGroup === 'string' && r.ruleGroup.trim() ? { group: r.ruleGroup.trim() } : {}),
+        ...(facts ? { grafana: facts } : {}),
+      };
+    });
+}
+
+// Grafana's RULER answer (GET /api/ruler/grafana/api/v1/rules, optionally per
+// folder): an object keyed by folder TITLE, each a list of rule groups
+// ({ name, interval, rules }), each rule `{ for, labels, annotations,
+// grafana_alert: { title, uid, namespace_uid, rule_group, condition, data, … } }`.
+// Only Grafana's own ruler: every rule carries `grafana_alert`.
+function isRulerShape(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
+  const keys = Object.keys(response);
+  if (!keys.length || keys.some(k => ['groups', 'rules', 'data', 'status'].includes(k))) return false;
+  return keys.every(k => Array.isArray(response[k]) && response[k].every(g => g && typeof g === 'object' && typeof g.name === 'string'
+    && Array.isArray(g.rules) && g.rules.every(r => r && typeof r === 'object' && r.grafana_alert && typeof r.grafana_alert === 'object')));
+}
+// One ruler rule, flat, as a listing's rule reads: the title as its name, the
+// query node as its expression, the folder title (the answer's key) and uid,
+// the group, and what it states beyond the spec (`grafana`).
+function flatRulerRule(rule, group, folderTitle) {
+  const ga = rule.grafana_alert;
+  const groupName = typeof ga.rule_group === 'string' && ga.rule_group.trim() ? ga.rule_group.trim() : group.name;
+  const facts = grafanaRuleFacts(ga, { folder: folderTitle, folderUid: ga.namespace_uid, group: groupName });
+  const record = ga.record && typeof ga.record === 'object' ? ga.record : null;
+  return {
+    name: ga.title,
+    type: record ? 'recording' : 'alerting',
+    ...(record ? { record: String(record.metric ?? '') } : {}),
+    expr: alertRuleExpr(ga),
+    ...(typeof rule.for === 'string' && rule.for ? { for: rule.for } : {}),
+    labels: rule.labels && typeof rule.labels === 'object' ? rule.labels : {},
+    annotations: rule.annotations && typeof rule.annotations === 'object' ? rule.annotations : {},
+    ...(facts ? { grafana: facts } : {}),
+    ...(facts?.folderUid ? { folderUid: facts.folderUid } : {}),
+    _group: groupName, _interval: group.interval,
+  };
 }
 
 // The rules of a rule-groups listing, flat, each beside the group it sits in
@@ -2416,7 +2498,11 @@ export function adaptProvisionedAlertRules(response) {
 //   { groups: [{ name, interval, rules: [{ record|name|alert, expr|query, type?, interval? }] }] }
 //   { rules: [{ record/name/alert, expr/query, interval? }] }      (flat: no group)
 //   { data: { groups: [...] } }                                      (Prometheus /api/v1/rules)
+//   { <folder title>: [{ name, interval, rules: [{ grafana_alert }] }] }  (Grafana's ruler)
 function flatRules(response) {
+  if (isRulerShape(response)) {
+    return Object.entries(response).flatMap(([folder, groups]) => groups.flatMap(g => g.rules.map(r => flatRulerRule(r, g, folder))));
+  }
   const groups = response?.groups || response?.data?.groups || [];
   return response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval })));
 }
@@ -2477,11 +2563,12 @@ export const PROBES = [
         ...pickPresent(r, RECORDING_OBSERVATION_FIELDS),
       };
     },
+    // Every read keeps each rule's group beside it (the rule-group scope, and
+    // the rule groups a live read records); the canonical never carries it
+    // (stripRuleObservation), so a pack reads as it did.
     adapt(response) {
-      return flatRules(response).filter(this.isRule).map(this.read).filter(r => r.expr);
+      return this.adaptSnapshot(response);
     },
-    // A snapshot keeps each rule's group beside it (the rule-group scope);
-    // the draft keeps `adapt` alone, byte for byte.
     adaptSnapshot(response) {
       return flatRules(response).filter(this.isRule).map(r => withGroup(this.read(r), r)).filter(r => r.expr);
     },
@@ -2520,14 +2607,17 @@ export const PROBES = [
         // the alerting state and activeAt (Prometheus nests activeAt per
         // active alert instance; take the first). Never enters the spec.
         ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
+        // A Grafana ruler's rule: what it states beyond the spec, and its folder uid (the folder scope).
+        ...(r.grafana && typeof r.grafana === 'object' ? { grafana: r.grafana } : {}),
+        ...(r.grafana && typeof r.folderUid === 'string' && r.folderUid ? { folderUid: r.folderUid } : {}),
       };
     },
+    // Every read — a draft's as a snapshot's — reads Grafana-managed rules in
+    // the provisioning and ruler shapes and keeps each rule's group beside it
+    // (the rule-group scope). The canonical never carries the group.
     adapt(response) {
-      const listing = flatRules(response);
-      return readAlertRules(listing.filter(this.isRule), this.read, listing);
+      return this.adaptSnapshot(response);
     },
-    // A snapshot also reads Grafana-managed rules in the provisioning shape
-    // (D9) and keeps each rule's group beside it (the rule-group scope).
     adaptSnapshot(response) {
       if (provisionedRuleList(response)) return adaptProvisionedAlertRules(response);
       const listing = flatRules(response);
@@ -2690,8 +2780,9 @@ export function timedExcludeErrors(patterns) {
 //     group only when every rule names one; a datasource uid no advertised
 //     tool takes is named as a gap;
 //   - every advertised alert-rule engine is read and the rules unioned by
-//     name (the first engine wins a clash; each rule's `observedBy` names
-//     what its tool attests);
+//     store (unionAlertRules: Grafana's rules by uid, a ruler's by name; the
+//     first engine of a store wins a clash; each rule's `observedBy` names
+//     its store) — a draft reads them so too;
 //   - a dashboard's id is the crawler's rule (snapshotDashboardId);
 //   - the answer gains `snapshot: { scope, gaps, learned, counts }`, which
 //     buildSnapshotPack reads.
@@ -2990,8 +3081,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     dashCounts.kept = kept.length;
     return kept;
   };
-  // Rules are read as a snapshot reads them (every engine, their group and folder) only where the
-  // scope can narrow them: a snapshot, or a scoped draft with folders or rule groups.
+  // A scope narrows the rule families where it can (a snapshot, or a scoped draft with folders or
+  // rule groups); every read keeps each rule's group, and the alert rules go through the union.
   const rulesScoped = snapshot || folders.length > 0 || groups.length > 0;
   const adaptFor = (probe, response) => (snapScope && probe.name === 'dashboards'
     ? scopedSearchItems(response).map((d) => (snapshot ? dashboardFromSearchItem(d, snapshotDashboardId) : dashboardFromSearchItem(d)))
@@ -3043,11 +3134,20 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const engineOf = (name) => productAttestedByTool(name) || name;
   const pushedDown = [];        // the engines whose rules came per folder, in the end
   const unionNotes = [];        // what the union had to do about it, for the gate log
-  // A snapshot reads EVERY advertised alert-rule engine and unions the rules
-  // by name: the first engine's rules as it lists them, then each later
-  // engine's rules whose name no earlier engine holds. Each rule names what
-  // its tool attests (`observedBy`; buildCanonicalPack reads the engine from
-  // it). An engine whose answer holds no rule contributes nothing.
+  // Every read — a snapshot's and a draft's — asks EVERY advertised alert-rule
+  // engine and unions the rules: the first engine's rules as it lists them,
+  // then each later engine's rules that no earlier engine of the SAME STORE
+  // holds. Two stores keep their own rules: Grafana's alert rules (a tool that
+  // attests `grafana`, or whose answer is Grafana-managed rules — the
+  // provisioning or ruler shape) and a Prometheus-compatible ruler (vmalert,
+  // Prometheus, Mimir, …): a Grafana-managed rule is never dropped because a
+  // ruler holds a rule of its title. Within Grafana's store a rule is held by
+  // its uid, within a ruler by its name. Each rule names what its store attests
+  // (`observedBy`; buildCanonicalPack reads the engine from it). An engine
+  // whose answer holds no rule contributes nothing. Without tools/list every
+  // candidate would be called on every read: then each store stops at its
+  // first answer with rules, and the Alertmanager's firing alerts are asked
+  // only when no store had any.
   //
   // An engine asked per folder is read whole or not at all. Its folder
   // answers stand only when every folder answered and every rule came from
@@ -3057,14 +3157,63 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // when another engine's rules name no folder — so the folder scope cannot
   // narrow the family — a per-folder engine is read whole too: the pack never
   // holds half an engine under an annotation that says the family was whole.
+  //
+  // A read refused or failed (C6): when no engine answered with rules and one
+  // was refused or errored, the family FAILED — an empty answer from another
+  // engine is no honest zero beside a hole nobody can size — and a refusal is
+  // kept as one (`refused`). When one answered with rules beside an engine that
+  // was refused or errored, the rules stand, the error is kept (`partial`,
+  // written as mcp.probeErrors.alert_rules) and the family is listed in
+  // mcp.probesPartial. An engine whose store answered it keeps no such thing
+  // (the family's unsupportedOnHttpStatus — the cascade's rule) is neither: when
+  // every engine asked said so, the family is unsupported. An answer in no alert-rule shape this
+  // reader knows, or one listing rules without their expressions, is no answer
+  // either. The Alertmanager candidate lists firing alerts, not declarations:
+  // never a failure of the family. What a store could not read rides on the
+  // result as `unread` ({ grafana?, ruler?, loki? }: why), so a declared rule
+  // of that store is not checked rather than "declared, not live".
   const unionAlertRules = async (probe, candidates) => {
     const attempted = [];
-    const perEngine = [];   // { name, adapted, perFolder }
-    // The snapshot's reading of one answer, or null (no answer, or not a list).
-    const adaptedOf = (response) => {
+    const perEngine = [];   // { name, adapted, perFolder, store }
+    const failedEngines = [];   // engines (never the Alertmanager's evidence) that gave no usable answer
+    const listedTools = discoveredToolNames.size > 0;
+    const evidenceOnly = (name) => productAttestedByTool(name) === 'alertmanager';
+    // The store a tool's rules belong to: by what its answer is first, then by what it attests.
+    const storeOf = (name, adapted = []) => (evidenceOnly(name) ? 'evidence' : adapted.some(r => r?.grafana) || productAttestedByTool(name) === 'grafana' ? 'grafana' : 'ruler');
+    // An error that only says the tool is not there (tools/list was not read): not offered, never a failure.
+    const notThere = (name) => !listedTools && /unknown tool|tool not found|no such tool|method not found|-32601/i.test(String(probeFailures[name] || ''));
+    // An engine that gave no answer, read by the cascade's own rules (C6, P6): refused (401/403,
+    // isProbeRefusal) is a refusal, kept as such; a store that answered it keeps no such thing (the
+    // family's unsupportedOnHttpStatus, notServedStatus) is not served — neither an answer nor a
+    // failure, so it never makes the read partial; any other error is a failure. The Alertmanager's
+    // evidence and a tool that is not there are none of them.
+    const notServedCodes = notServedStatusesOf(probe.name);
+    const notServedEngines = [];   // { name, store, reason }
+    const gaveNoAnswer = (name, store) => {
+      const why = probeFailures[name];
+      if (evidenceOnly(name) || notThere(name) || !why) return;
+      const code = notServedStatus(why, notServedCodes);
+      if (code !== null) notServedEngines.push({ name, store, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
+      else failedEngines.push({ name, store, refused: isProbeRefusal(why) });
+    };
+    // The reading of one answer, or null (no answer, or none this reader can use; the reason kept).
+    const adaptedOf = (response, name) => {
       if (response == null) return null;
-      try { const adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); return Array.isArray(adapted) ? adapted : null; }
-      catch { return null; }
+      const known = Array.isArray(response) || (response && typeof response === 'object'
+        && (Object.keys(response).length === 0 || Array.isArray(response.rules) || response.rules === null
+          || Array.isArray(response.groups) || Array.isArray(response.data) || Array.isArray(response.data?.groups) || isRulerShape(response)));
+      if (!known && !evidenceOnly(name)) {
+        if (!probeFailures[name]) probeFailures[name] = 'the answer is in no alert-rule listing shape this reader knows';
+        return null;
+      }
+      let adapted;
+      try { adapted = probe.adaptSnapshot ? probe.adaptSnapshot(response) : probe.adapt(response); } catch { return null; }
+      if (!Array.isArray(adapted)) return null;
+      if (adapted.length && !adapted.some(r => typeof r?.expr === 'string' && r.expr.trim()) && !evidenceOnly(name)) {
+        if (!probeFailures[name]) probeFailures[name] = 'the answer lists alert rules without their expressions';
+        return null;
+      }
+      return adapted;
     };
     // Unscoped, the loop awaits exactly one call per candidate, as it always
     // did: the probes race under Promise.all and the pack records the order
@@ -3072,6 +3221,11 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // golden pins.
     for (const candidate of candidates) {
       const name = candName(candidate);
+      if (!listedTools) {
+        // The store this candidate is presumed to read before it answers: the Alertmanager's evidence waits for every store.
+        const presumed = evidenceOnly(name) ? null : storeOf(name);
+        if (perEngine.some(e => (presumed === null || e.store === presumed) && e.adapted.length > 0)) continue;
+      }
       attempted.push(name);
       const calls = ruleFolderCalls(candidate);
       let adapted = null;
@@ -3080,7 +3234,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       if (calls) {
         const all = [];
         for (const { uid, args } of calls) {
-          const one = adaptedOf(await cachedCall(name, args));
+          const one = adaptedOf(await cachedCall(name, args), name);
           if (!one) { why = `gave no answer for folder ${uid}`; break; }
           if (one.some(r => r?.folderUid !== uid)) { why = 'answered rules outside the folder asked for'; break; }
           all.push(...one);
@@ -3088,11 +3242,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         if (!why) { adapted = all; perFolder = true; }
       }
       if (!adapted) {
-        adapted = adaptedOf(await cachedCall(name, candArgs(candidate)));
+        adapted = adaptedOf(await cachedCall(name, candArgs(candidate)), name);
         if (adapted && why) unionNotes.push(`${engineOf(name)} ${why}, so it was read whole instead`);
       }
-      if (!adapted) continue;
-      perEngine.push({ name, adapted, perFolder });
+      if (!adapted) {
+        gaveNoAnswer(name, storeOf(name));
+        continue;
+      }
+      perEngine.push({ name, adapted, perFolder, store: storeOf(name, adapted) });
     }
     // Whole, or not at all: a per-folder engine beside one that names no folder
     // is re-read whole, and left out when that read fails — never half an
@@ -3101,9 +3258,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     if (union.length && !union.every(r => typeof r?.folderUid === 'string' && r.folderUid !== '')) {
       for (const e of [...perEngine]) {
         if (!e.perFolder) continue;
-        const whole = adaptedOf(await cachedCall(e.name, candArgs(candidates.find(c => candName(c) === e.name))));
+        const whole = adaptedOf(await cachedCall(e.name, candArgs(candidates.find(c => candName(c) === e.name))), e.name);
         if (whole) { e.adapted = whole; e.perFolder = false; unionNotes.push(`${engineOf(e.name)} was read whole, since another engine names no folder`); } else {
           perEngine.splice(perEngine.indexOf(e), 1);
+          failedEngines.push({ name: e.name, store: e.store, refused: isProbeRefusal(probeFailures[e.name]) });
           unionNotes.push(`${engineOf(e.name)} gave no answer when read whole beside an engine that names no folder, so its rules were left out`);
         }
       }
@@ -3112,22 +3270,53 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const rules = [];
     const engines = [];
     let listed = 0;
+    const heldKey = (store, r) => `${store}\u0000${store === 'grafana' && typeof r?.grafana?.uid === 'string' && r.grafana.uid ? `uid:${r.grafana.uid}` : r?.name}`;
     for (const e of perEngine) {
       if (e.adapted.length === 0) continue;
       listed += e.adapted.length;
-      const held = new Set(rules.map(r => r.name));
-      const observedBy = productAttestedByTool(e.name);
-      for (const r of e.adapted) if (r && !held.has(r.name)) rules.push({ ...r, observedBy });
+      const held = new Set(rules.map(r => heldKey(r._store, r)));
+      const observedBy = e.store === 'grafana' ? 'grafana' : productAttestedByTool(e.name);
+      for (const r of e.adapted) if (r && !held.has(heldKey(e.store, r))) rules.push({ ...r, observedBy, _store: e.store });
       engines.push(e.name);
     }
+    for (const r of rules) delete r._store;
+    const failedText = failedEngines.length ? probeFailureText(failedEngines.map(e => e.name), probeFailures) : null;
     if (engines.length) {
-      probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data' };
+      probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data', ...(failedText ? { partial: failedText } : {}) };
       observedAt[probe.name] = new Date().toISOString();
-    } else if (perEngine.length) {
+    } else if (perEngine.length && !failedEngines.length) {
       probeResults[probe.name] = { tool: perEngine[0].name, attempted, adapted: [], rawSize: 2, outcome: 'empty' };
       observedAt[probe.name] = new Date().toISOString();
+    } else if (!perEngine.length && !failedEngines.length && notServedEngines.length) {
+      // P6, as the cascade has it: every engine asked answered that its store keeps no such rules —
+      // unsupported here, never failed (`since` the first time the journey saw it).
+      probeResults[probe.name] = {
+        tool: null, attempted, adapted: null, outcome: 'unsupported',
+        notServed: { reason: notServedEngines[0].reason, since: memoryOf(probe.name)?.since ?? new Date().toISOString(), tools: [...new Set(notServedEngines.map(e => e.name))] },
+      };
     } else {
-      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed' };
+      // C6: no engine with rules beside a refused or failed one — a hole nobody can size. A refusal
+      // stays one (`refused`: the firing-alerts fallback reads it, as it does the cascade's).
+      const refused = [...new Set(failedEngines.filter(e => e.refused).map(e => e.name))];
+      probeResults[probe.name] = { tool: null, attempted, adapted: null, outcome: 'failed', ...(refused.length ? { refused } : {}) };
+    }
+    // What a store could not read while the family answered: a declared rule of that store is not checked.
+    if (perEngine.length && probeResults[probe.name].outcome !== 'failed') {
+      const unread = {};
+      const answeredStore = (store) => perEngine.some(e => e.store === store);
+      for (const [store, what, tool] of [
+        ['grafana', 'Grafana-managed rules', 'Grafana alert-rule tool'],
+        ['ruler', 'rules a Prometheus-compatible ruler evaluates', 'Prometheus-compatible rule tools'],
+      ]) {
+        if (answeredStore(store)) continue;
+        const tried = [...failedEngines, ...notServedEngines].filter(e => e.store === store).map(e => e.name);
+        const offered = probe.candidates.some(c => storeOf(candName(c)) === store && (!listedTools || discoveredToolNames.has(candName(c))));
+        unread[store] = tried.length
+          ? `the ${tool} got no answer: ${probeFailureText(tried, probeFailures)}, so ${what} were not read`
+          : !offered ? `this MCP offers no ${store === 'grafana' ? 'Grafana alert-rule tool' : 'Prometheus-compatible rule tool'}, so ${what} were not read`
+            : `no ${tool} answered, so ${what} were not read`;
+      }
+      probeResults[probe.name].unread = unread;
     }
     // Every rule the family holds came per folder: an engine that answered
     // whole with no rule at all narrows nothing and names nothing outside them.
@@ -3144,6 +3333,27 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // listing and Grafana-managed rules do; a flat `rules` listing does not) —
   // otherwise not applied, and said. The message joins what was not applied.
   const folderCount = () => `${folders.length} folder${folders.length === 1 ? '' : 's'} asked for`;
+  // The rule groups each rule family listed, before a rule-group scope narrowed
+  // them ({ group, folderUid?, folder?, alert, recording }, per folder uid and
+  // group): what a scope's rule groups are checked against (the studio's scope
+  // check reads mcp.discovered.rule_groups). On the way, the title of a scoped
+  // folder a Grafana ruler names (its answer is keyed by folder title).
+  const ruleGroupsListed = new Map();
+  const noteRuleGroups = (list, family) => {
+    for (const r of Array.isArray(list) ? list : []) {
+      const group = typeof r?.group === 'string' && r.group.trim() ? r.group.trim() : null;
+      const folderUid = typeof r?.folderUid === 'string' && r.folderUid ? r.folderUid
+        : typeof r?.grafana?.folderUid === 'string' && r.grafana.folderUid ? r.grafana.folderUid : null;
+      const title = typeof r?.grafana?.folder === 'string' && r.grafana.folder ? r.grafana.folder.slice(0, 100) : null;
+      if (folderUid && title && folders.includes(folderUid) && !folderTitles[folderUid]) folderTitles[folderUid] = title;
+      if (!group) continue;
+      const key = `${folderUid ?? ''}\u0000${group}`;
+      let entry = ruleGroupsListed.get(key);
+      if (!entry) { entry = { group, ...(folderUid ? { folderUid } : {}), alert: 0, recording: 0 }; ruleGroupsListed.set(key, entry); }
+      if (!entry.folder && title) entry.folder = title;
+      entry[family === 'alert_rule' ? 'alert' : 'recording'] += 1;
+    }
+  };
   const scopeRules = (name, family, { allPushedDown = false } = {}) => {
     const r = probeResults[name];
     const list = Array.isArray(r?.adapted) ? r.adapted : [];
@@ -3191,6 +3401,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     if (probe.name === 'alert_rules' || probe.name === 'scrape_configs' || probe.name === 'alerting_routes') {
       checkAbort();
       if (probe.name === 'alert_rules') {
+        noteRuleGroups(probeResults.alert_rules?.adapted, 'alert_rule');
         const union = unionResult;
         const listed = union ? union.listed : adaptedLength('alert_rules');
         alertRulesListed = listed;
@@ -3225,7 +3436,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     } else {
       candidates = probe.candidates.slice();
     }
-    if (rulesScoped && probe.name === 'alert_rules') {
+    if (probe.name === 'alert_rules') {
       // Per-call state rides on a local, never on the shared PROBES row.
       unionResult = await unionAlertRules(probe, candidates);
       return;
@@ -3703,6 +3914,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   checkAbort();
   report('signals', 'done', { counts: { stackRows: stackSamples?.rows?.length ?? 0, firingAlerts: ruleEvidence.firingAlerts.length } });
   {
+    noteRuleGroups(probeResults.recording_rules?.adapted, 'recording_rule');
     const listed = adaptedLength('recording_rules');
     const message = snapScope ? scopeRules('recording_rules', 'recording_rule') : null;
     endProbeStage('recording_rules', {
@@ -3762,6 +3974,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
     grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
     chaosRuns,                  // { status, outcome, feed, runs, reason, callsMade } — the chaos run feed, or null
+    // The rule groups the rule families listed, before a scope narrowed them (mcp.discovered.rule_groups).
+    ruleGroups: [...ruleGroupsListed.values()].sort((x, y) => (x.folderUid ?? '').localeCompare(y.folderUid ?? '', 'en') || x.group.localeCompare(y.group, 'en')),
     // A snapshot only: what buildSnapshotPack records — the scope applied,
     // each gapped stage with its reason, the families the scope narrowed
     // and the folder titles the answers named, the per-stage counts.

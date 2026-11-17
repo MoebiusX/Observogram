@@ -109,6 +109,10 @@ export function isWithheldValue(value) {
 // states, so it is never a difference on its own (deltasOf), and the pair
 // says which keys went uncompared (unobservedOf). Today one field of one
 // family uses it: an alert rule's `labels`.
+// A second field a side may not have been shown is the `condition` of a
+// Grafana-managed rule (below): a listing that does not show a rule's
+// threshold states none, and a condition only one side states is never a
+// difference — the pair says it went uncompared (`{ field: 'condition' }`).
 export const PARTIAL_ANNOTATION_PREFIX = 'observogram.partial.';
 
 /** `{ labels: ['severity'] }` → `labels=severity`, fields and keys sorted. */
@@ -134,6 +138,31 @@ export function parsePartialAnnotation(value) {
 function stripRef(s) {
   if (typeof s !== 'string') return s ?? '';
   return s.replace(/^ref:/, '').replace(/^slos\./, '').replace(/^slis\./, '');
+}
+
+// WHAT A GRAFANA-MANAGED RULE STATES BEYOND THE SPEC
+// Spec 1.4's AlertRule is closed: a Grafana-managed rule's uid, folder, group
+// and its threshold (an expression node beside the query, never in `expr`)
+// have no field there. Both readers state them beside the rule
+// (sli-inference.mjs grafanaRuleFacts):
+//   observogram.grafana_rule.<symbol> = {"uid":…,"folder":…,"folderUid":…,"group":…,"condition":…}
+// for `alerting.rules[<i>]` (and a Grafana-managed recording rule's
+// `queries.recording_rules[<i>]`). The adapter puts it on the artefact as
+// `grafana`. The comparison holds an alert rule's `condition` as part of its
+// behaviour; the uid pairs a rule renamed on one side (diff.mjs); the folder
+// and group answer a scope (live-fetch.mjs).
+export const GRAFANA_RULE_ANNOTATION_PREFIX = 'observogram.grafana_rule.';
+const GRAFANA_RULE_FIELDS = Object.freeze(['uid', 'folder', 'folderUid', 'group', 'condition']);
+
+/** The annotation's value → { uid?, folder?, folderUid?, group?, condition? } (non-empty strings only), or null. */
+export function parseGrafanaRuleAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out = {};
+  for (const k of GRAFANA_RULE_FIELDS) if (typeof parsed[k] === 'string' && parsed[k]) out[k] = parsed[k];
+  return Object.keys(out).length ? out : null;
 }
 
 // THE RULES A BURN-RATE ENTRY WAS READ FROM
@@ -177,6 +206,7 @@ export function parseSourceRulesAnnotation(value) {
     const terms = { name: r.name, expr: r.expr };
     if (typeof r.for === 'string' && r.for) terms.for = r.for;
     if (typeof r.severity === 'string' && r.severity) terms.severity = r.severity;
+    if (typeof r.condition === 'string' && r.condition) terms.condition = r.condition;
     if (r.labels && typeof r.labels === 'object' && !Array.isArray(r.labels)) {
       const labels = {};
       for (const k of Object.keys(r.labels)) if (k !== '__proto__' && typeof r.labels[k] === 'string') labels[k] = r.labels[k];
@@ -353,7 +383,9 @@ export function modelOf(artefact) {
   const kind = classify(artefact);
   const idFn = IDENTITY[kind] || IDENTITY.unknown;
   const identity = idFn(artefact?.spec || {}, artefact || {});
-  const behavior = behaviorFor(kind, artefact?.spec ?? {});
+  // A Grafana-managed alert rule's threshold and other steps (`grafana.condition`) are part of what it does.
+  const condition = kind === 'alert_rule' && typeof artefact?.grafana?.condition === 'string' && artefact.grafana.condition ? artefact.grafana.condition : null;
+  const behavior = behaviorFor(kind, condition ? { ...(artefact?.spec ?? {}), condition } : (artefact?.spec ?? {}));
   return { kind, identity, behavior };
 }
 
@@ -452,6 +484,8 @@ function behaviourDeltas(kind, ba, bb, a, b) {
     const sb = JSON.stringify(bb[f] ?? null);
     if (sa === sb) continue;
     if (isPartialEvidenceExpressionDelta(kind, f, ba[f], bb[f])) continue;
+    // A condition one side does not state (a listing that does not show it) cannot contradict the other's.
+    if (kind === 'alert_rule' && f === 'condition' && (ba[f] == null || bb[f] == null)) continue;
     if (kind === 'alert_route' && f === 'channels' && isWithheldChannelDelta(ba[f], bb[f])) continue;
     if (shown && f === 'labels') {
       // Compared on the keys both were shown, and reported on those alone.
@@ -495,6 +529,8 @@ function ruleUnobserved(a, b, ba, bb) {
     const keys = [...named].filter((k) => !seen.includes(k)).sort();
     if (keys.length) out.push({ field: 'labels', side, keys });
   }
+  // A Grafana-managed rule's condition stated by one side only went uncompared.
+  if ((ba?.condition == null) !== (bb?.condition == null)) out.push({ field: 'condition', side: ba?.condition == null ? 'a' : 'b', keys: [] });
   return out;
 }
 

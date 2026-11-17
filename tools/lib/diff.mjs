@@ -12,6 +12,11 @@
 //   rule's output series, a panel's binding target) and a `behavior` that
 //   captures its full deployed contract. `identityKeyOf` pairs A↔B by
 //   behaviour; `deltasOf` decides aligned vs drifted.
+//   A Grafana-managed alert rule renamed on one side (Grafana keeps its uid;
+//   a title a deploy suffixed, `#2`) still pairs: when both sides state the
+//   same uid under two names and neither name has a counterpart, the two are
+//   one pair, `matchedBy: 'uid'`, drifted on `name` (the alertname routing
+//   and silences match). Only on the default path.
 //
 // SET OPS
 //   For each layer we produce these buckets:
@@ -46,6 +51,11 @@
 //                  not say what the scope needs — a crawled dashboard names no
 //                  folder uid — with a reason that states only that. An
 //                  artefact inside the scope is compared as usual.
+//                  And a live read that covered only some of a family's
+//                  stores (`observogram.unread.<kind>`: no Grafana alert-rule
+//                  tool answered, no ruler did, no tool reads Loki or
+//                  Grafana-managed recording rules) parks an unmatched
+//                  artefact of a store it did not read, with that reason.
 //   summary.jaccard and summary.alignment are null when the union is empty:
 //   nothing compared is no match (never 1).
 //
@@ -117,7 +127,7 @@ import {
   unobservedOf,
   foldMetricFamilies,
 } from './artefact-model.mjs';
-import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
+import { scopeOf, inScope, scopeReason, folderTitleOf } from './live-fetch.mjs';
 import { identityMode, DEFAULT_IDENTITY_MODE } from './identity-modes.mjs';
 import { DYNAMIC_FAMILY_LIMITS, GENERIC_METRIC_PREFIXES, compileMetricFamilyPattern, metricFamilyPrefix } from './exporter-metrics.mjs';
 
@@ -199,6 +209,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   // The artefact families each pack says it could not observe, with why.
   const aBlind = unobservedKinds(aLayered);
   const bBlind = unobservedKinds(bLayered);
+  // The stores of a family each pack's read did not cover, with why.
+  const aUnread = unreadStores(aLayered);
+  const bUnread = unreadStores(bLayered);
   // The families each pack read only within a scope (a live snapshot's).
   const aScoped = scopeOf(aLayered?.meta?.annotations);
   const bScoped = scopeOf(bLayered?.meta?.annotations);
@@ -234,6 +247,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     const aByKey = groupByKey(aItems, pairKey, 'a');
     const bByKey = groupByKey(bItems, pairKey, 'b');
     collectCollisions(collisions, layerId, aByKey, bByKey);
+    const renamed = identity ? [] : pairRenamedByUid(aByKey, bByKey);
 
     // Kinds (artefact families) the declared side (A) actually participates in
     // for this layer. The behavioural key is `${kind}::${identity}`, so the
@@ -245,6 +259,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     // of that family's live members become in-scope (genuine shadow signal).
     const aKinds = new Set();
     for (const k of aByKey.keys()) aKinds.add(k.slice(0, k.indexOf('::')));
+    // A rule paired by its uid left A's groups, but its family is still declared.
+    for (const { key } of renamed) aKinds.add(key.slice(0, key.indexOf('::')));
     if (aFamilies.length) aKinds.add('metric');
     // A side that says it cannot observe metrics claims nothing through a family.
     const aClaims = aBlind.has('metric') ? [] : aFamilies;
@@ -259,7 +275,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       } else if (!claimByFamily(k, aGroup, bClaims, 'a', bucket)) {
         // B never looked at this family, or read it only within a scope this
         // artefact is not in: A's artefact is unchecked, not absent.
-        const unchecked = bBlind.has(kind) ? bBlind.get(kind) : outsideScope(kind, aGroup, bScoped, 'a');
+        const unchecked = bBlind.has(kind) ? bBlind.get(kind) : (outsideScope(kind, aGroup, bScoped, 'a') ?? unreadByEngine(kind, aGroup, bUnread));
         const ahead = unchecked ? null : declaredAheadReason(aGroup, lifecycleEnvironments);
         if (unchecked) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unchecked);
         else if (ahead) pushNotObserved(bucketAhead(bucket), k, aGroup, 'a', ahead);
@@ -269,7 +285,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     for (const [k, bGroup] of bByKey) {
       if (aByKey.has(k) || claimByFamily(k, bGroup, aClaims, 'b', bucket)) continue;
       const kind = k.slice(0, k.indexOf('::'));
-      const unchecked = aBlind.has(kind) ? aBlind.get(kind) : outsideScope(kind, bGroup, aScoped, 'b');
+      const unchecked = aBlind.has(kind) ? aBlind.get(kind) : (outsideScope(kind, bGroup, aScoped, 'b') ?? unreadByEngine(kind, bGroup, aUnread));
       if (unchecked) {
         pushNotObserved(bucket.notObserved, k, bGroup, 'b', unchecked);
       } else if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
@@ -283,6 +299,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       }
     }
 
+    for (const pair of renamed) bucket.inBoth.push(uidPair(pair));
     pairDeclaredFamilies(aFamilies, bFamilies, bucket);
     noteOtherCover(aClaims, bItems);
     noteOtherCover(bClaims, aItems);
@@ -742,7 +759,96 @@ function outsideScope(kind, group, otherScoped, holder) {
   if (!entry) return null;
   const verdicts = group.map((artefact) => inScope(kind, artefact, entry));
   if (verdicts.includes(true)) return null;
-  return scopeReason(kind, verdicts.includes(false) ? false : null, entry, { holder });
+  return scopeReason(kind, verdicts.includes(false) ? false : null, entry, { holder, folderTitle: folderTitleOf(group[0]) });
+}
+
+// The stores of a family a pack's live read did not cover, read from its
+// `observogram.unread.<kind>` annotations (tools/fetch-live-pack.mjs): kind →
+// { <store>: reason }. A value that is not a JSON object of strings says nothing.
+const UNREAD_PREFIX = 'observogram.unread.';
+function unreadStores(layered) {
+  const out = new Map();
+  const annotations = layered?.meta?.annotations;
+  if (!annotations || typeof annotations !== 'object') return out;
+  for (const kind of ['alert_rule', 'recording_rule']) {
+    let parsed;
+    try { parsed = JSON.parse(annotations[`${UNREAD_PREFIX}${kind}`] ?? 'null'); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const stores = Object.fromEntries(Object.entries(parsed).filter(([, why]) => typeof why === 'string' && why));
+    if (Object.keys(stores).length) out.set(kind, stores);
+  }
+  return out;
+}
+
+// The store an artefact's rule lives in, as the live read's stores are named:
+// a Grafana-managed rule (`engine: grafana`, or a recording rule that states
+// Grafana's facts), a Loki ruler's, or a Prometheus-compatible ruler's (an
+// engine absent, prometheus, mimir, thanos, victoriametrics). Null for one no
+// store holds (the Alertmanager's firing alerts).
+const RULER_ENGINES = new Set(['prometheus', 'mimir', 'thanos', 'victoriametrics']);
+function ruleStoreOf(kind, artefact) {
+  if (kind === 'recording_rule') return artefact?.grafana ? 'grafana' : 'ruler';
+  const engine = artefact?.spec?.engine;
+  if (engine === 'grafana') return 'grafana';
+  if (engine === 'loki') return 'loki';
+  return engine === undefined || engine === null || engine === '' || RULER_ENGINES.has(engine) ? 'ruler' : null;
+}
+
+// The notObserved reason when the other pack's read did not cover the store
+// every artefact of this group lives in (unreadStores), else null.
+function unreadByEngine(kind, group, otherUnread) {
+  const stores = otherUnread.get(kind);
+  if (!stores) return null;
+  const of = group.map((artefact) => ruleStoreOf(kind, artefact));
+  if (!of.length || of.some((store) => store === null || !stores[store])) return null;
+  return stores[of[0]];
+}
+
+// Alert rules renamed on one side: for each Grafana uid stated by exactly one
+// alert rule on each side, under two different keys, neither of which the other
+// side holds, the two are taken out of their key groups (a group emptied is
+// deleted) and paired — the key is A's, with the next occurrence suffix when
+// A's group keeps other members. Name pairing comes first: a name both sides
+// hold is never re-paired by uid.
+function pairRenamedByUid(aByKey, bByKey) {
+  const byUid = (byKey) => {
+    const out = new Map();
+    for (const [k, group] of byKey) {
+      if (!k.startsWith('alert_rule::')) continue;
+      for (const artefact of group) {
+        const uid = artefact?.grafana?.uid;
+        if (typeof uid !== 'string' || !uid) continue;
+        if (!out.has(uid)) out.set(uid, []);
+        out.get(uid).push({ k, artefact });
+      }
+    }
+    return out;
+  };
+  const aUids = byUid(aByKey);
+  const bUids = byUid(bByKey);
+  const take = (byKey, k, x) => {
+    const left = byKey.get(k).filter((y) => y !== x);
+    if (left.length) byKey.set(k, left); else byKey.delete(k);
+    return left.length;
+  };
+  const pairs = [];
+  for (const [uid, as] of [...aUids].sort(([x], [y]) => x.localeCompare(y, 'en'))) {
+    const bs = bUids.get(uid);
+    if (!bs || as.length !== 1 || bs.length !== 1) continue;
+    const [{ k: ka, artefact: a }] = as;
+    const [{ k: kb, artefact: b }] = bs;
+    if (ka === kb || bByKey.has(ka) || aByKey.has(kb)) continue;
+    const left = take(aByKey, ka, a);
+    take(bByKey, kb, b);
+    pairs.push({ key: left ? occurrenceKey(ka, left, true) : ka, a, b });
+  }
+  return pairs;
+}
+
+// A pair the uid made: drifted on what differs (the name at least), as any pair.
+function uidPair({ key, a, b }) {
+  const deltas = deltasOf(a, b);
+  return { key, a, b, match: deltas.length ? 'drifted' : 'aligned', matchedBy: 'uid', deltas, ...unobservedNote(a, b) };
 }
 
 function pushNotObserved(target, baseKey, group, side, reason) {

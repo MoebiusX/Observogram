@@ -139,3 +139,15 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
 export async function loadRepositoryFolders(path = null, { fetchFn = requestJson } = {}) {
   return fetchFn(`/api/repository-folders${path ? `?path=${enc(path)}` : ''}`);
 }
+
+// POST /api/services/:id/scope-check — what a live scope would leave out of the environment's Run,
+// asked before it is saved (overview-model.mjs scopeCheckOf / scopeChecked): the declared families
+// with nothing inside it, the rule groups the environment's last live read did not list. Stored
+// packs only (no MCP call); a scope that does not parse throws the server's sentence (400).
+export async function checkServiceScope(serviceId, { env, scope }, { fetchFn = requestJson } = {}) {
+  return fetchFn(`/api/services/${enc(String(serviceId))}/scope-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ env, scope }),
+  });
+}

@@ -853,8 +853,8 @@ function environmentView(env, service, endpoint) {
     ref: envRefOf(service, env.name),
     // The export of live it is checked against in place of an MCP endpoint, else null.
     livePack: livePackOf(service, env.name),
-    // The scope its live read applies, as the service keeps it (compact), else null — then the org's
-    // configured snapshot scope applies, if any (GET /api/mcp/jobs's scope), else none.
+    // The scope its live read applies, as the service keeps it (compact), else null — then none: the
+    // org's configured snapshot scope only pre-fills a new environment's form.
     liveScope: liveScopeOf(service, env.name),
     createdAt: env.createdAt, updatedAt: env.updatedAt,
   };

@@ -1291,4 +1291,54 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'the rule pinned: `_` mapped, `--` kept, cut at 60, `d-` before a digit, the title when the uid yields nothing, null when neither does', exported);
 }
 
+// ---------- a crawled dashboard states the folder the repository provisions it into ----------
+// (SPEC P5: only then is it "not read" for lack of a folder.) tools/fixtures/crawl/dashboard-folders/README.md.
+{
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { buildCanonicalPack } = await import('./fetch-live-pack.mjs');
+  const { scopeAnnotations } = await import('./lib/live-fetch.mjs');
+  const dir = fileURLToPath(new URL('./fixtures/crawl/dashboard-folders/', import.meta.url));
+  const files = new Map();
+  (function walk(d) {
+    for (const n of readdirSync(d).sort()) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (n !== 'README.md') files.set(p.slice(dir.length).replace(/\\/g, '/'), readFileSync(p, 'utf8'));
+    }
+  })(dir);
+  assert(detectArtefactKind('grafana/provisioning/dashboards/providers.yaml', files.get('grafana/provisioning/dashboards/providers.yaml')) === 'grafana-dashboard-provider', 'a dashboard provider file is read as one');
+  const { canonical, summary } = crawlFiles(files, { repoName: 'shop', environment: 'staging', now: '2026-06-05T00:00:00.000Z' });
+  const byId = Object.fromEntries(canonical.spec.dashboards.map(d => [d.id, [d.folder, d.params?.folderTitle ?? null, d.params?.folderUid ?? null, d.params?.folderSource ?? null]]));
+  const PROVIDERS = 'grafana/provisioning/dashboards/providers.yaml';
+  assert(JSON.stringify(byId) === JSON.stringify({
+    node: ['Platform', 'Platform', null, 'charts/shop/templates/dashboards.yaml (ConfigMap k8s-sidecar-target-directory)'],
+    'shop-overview': ['Shop Ops', 'Shop Ops', null, 'charts/shop/templates/dashboards.yaml (ConfigMap grafana_folder)'],
+    unmounted: ['guessed-from-tag', null, null, null],
+    dup: ['guessed-from-tag', null, null, null],
+    other: ['guessed-from-tag', null, null, null],
+    checkout: ['Shop', 'Shop', 'shop-dash', PROVIDERS],
+    payments: ['Payments', 'Payments', null, PROVIDERS],
+    'teams-root': ['General', 'General', null, PROVIDERS],
+  }), 'each dashboard states the folder the repository provisions it into — a provider (uid and title; the file structure; General) through a compose mount, a sidecar ConfigMap (inline, and .Files.Glob); one no provider reads, one in no mounted folder and one two providers claim state none', byId);
+  assert(summary.discovered.dashboardProviders === 4 && summary.discovered.dashboardFolders === 5, 'counted', [summary.discovered.dashboardProviders, summary.discovered.dashboardFolders]);
+  assert(validateCanonical(canonical, SCHEMA).length === 0, 'the pack validates', validateCanonical(canonical, SCHEMA).slice(0, 3));
+  // Under a live folder scope: a dashboard stated in a folder the read kept and not live is declared, not live; one
+  // stated in a folder the read named and left out is outside; one stating none keeps "does not say which folder".
+  const live = buildCanonicalPack({
+    refreshedAt: '2026-06-05T00:00:00Z', mcpUrl: 'https://mcp.shop.example',
+    health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] },
+    probeResults: { dashboards: { tool: 'search', attempted: ['search'], adapted: [], outcome: 'empty' } },
+  });
+  Object.assign(live.metadata.annotations, scopeAnnotations({ folderUids: ['shop-dash', 'platform-uid'] }, { applied: ['dashboard'], folderTitles: { 'shop-dash': 'Shop', 'platform-uid': 'Platform Ops' } }));
+  const d = diffPacks(adapt(canonical), adapt(live));
+  const dash = (bucket) => Object.values(d.layers).flatMap(l => l[bucket] || []).filter(e => e.key.startsWith('dashboard::')).map(e => [JSON.parse(e.key.slice('dashboard::'.length)).id, e.reason ?? null]);
+  assert(JSON.stringify(dash('onlyInA')) === JSON.stringify([['checkout', null]]), 'a dashboard in a folder the read kept: compared (not live: declared, not live)', dash('onlyInA'));
+  const parked = Object.fromEntries(dash('notObserved'));
+  assert(parked.node === 'outside the snapshot\'s dashboard folders (Shop, Platform Ops)' && parked['teams-root'] === 'outside the snapshot\'s dashboard folders (Shop, Platform Ops)',
+    'a dashboard stated in another folder: outside', parked);
+  assert(/does not say which folder this dashboard is in/.test(parked.other || ''), 'a dashboard stating none: not checked for lack of a folder', parked.other);
+}
+
 report('crawler');

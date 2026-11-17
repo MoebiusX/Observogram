@@ -233,6 +233,8 @@ export const ROUTES = Object.freeze({
   // Overview's control room: a read of the environment's live endpoint by id (no audit row, as a ping by id).
   'POST /api/services/:id/control-room': { class: 'operator', ...LIVE, csrf: 'always', audit: [] },
   'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
+  // The live scope form's check (server/scope-check.mjs): stored packs only — no MCP call, no row.
+  'POST /api/services/:id/scope-check': { class: 'operator', audit: [] },
   'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
   'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },
   // The verdicts (server/routes/verdicts.mjs): a record on one artefact of a

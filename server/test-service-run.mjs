@@ -2211,7 +2211,7 @@ test('a pack file for a service whose slug starts with a digit: named svc-…, a
 // A live scope per environment (server/service-admin.mjs parseLiveScopes): the Run's live read narrowed to the
 // service's own metric names, folders and rule groups as a Path-B snapshot narrows them (a scoped draft), written
 // into the check as packB.mcp.scope and said on the record; without one, the org's configured snapshot scope.
-test('a live scope per environment: PATCH liveScopes (the whole map; a bad scope 400 before anything is sent), the environment view, a rename moves it; the Run saves it as packB.mcp.scope, reads only the scoped metric names and says so on the record; without one the configured snapshot scope, else none', async () => {
+test('a live scope per environment: PATCH liveScopes (the whole map; a bad scope 400 before anything is sent), the environment view, a rename moves it; the Run saves it as packB.mcp.scope, reads only the scoped metric names and says so on the record; without one, none — whatever the server\'s configured snapshot scope says', async () => {
   const { loadJourneyDef } = await import('../tools/lib/journey.mjs');
   const made = await call('POST', '/api/services', { name: 'Scoped Shop' });
   assert.equal(made.status, 201, made.text);
@@ -2269,21 +2269,20 @@ test('a live scope per environment: PATCH liveScopes (the whole map; a bad scope
     assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricPrefixes: ['alertmanager_cluster_'] } } })).status, 200);
     assert.deepEqual(defOf().packB.mcp.scope, { metricPrefixes: ['alertmanager_cluster_'] }, 'no Run needed');
 
-    // Without the environment's own: the org's configured snapshot scope; one that does not parse is a 409.
+    // Without the environment's own: none — the server's configured snapshot scope never applies to an
+    // environment that exists (it only pre-fills a new one's form), and one that does not parse refuses nothing.
     assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: null } })).json.service.liveScopes.prod, undefined);
-    assert.equal(defOf().packB.mcp.scope, undefined, 'none of its own and none configured: the check reads unscoped');
+    assert.equal(defOf().packB.mcp.scope, undefined, 'none of its own: the check reads unscoped');
     process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES = 'ALERTS';
     try {
       const configured = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
       assert.equal(configured.status, 200, configured.text);
-      assert.deepEqual(configured.json.record.packB.liveScope, { metricPrefixes: ['ALERTS'] });
-      assert.deepEqual(namesOf(livePackOfRun(configured)), ['ALERTS', 'ALERTS_FOR_STATE']);
+      assert.equal(configured.json.record.packB.liveScope, null, 'the server default is not applied');
+      assert.equal(defOf().packB.mcp.scope, undefined, 'nor saved into the check');
+      assert.equal(namesOf(livePackOfRun(configured)).length, 43, 'every name the endpoint lists');
       process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES = '9bad';
-      const before = fake.calls.length;
       const bad = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
-      assert.equal(bad.status, 409, bad.text);
-      assert.match(bad.json.error, /^the configured snapshot scope does not parse — OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES\[0\] "9bad"/);
-      assert.equal(fake.calls.length, before, 'nothing sent');
+      assert.equal(bad.status, 200, 'a configured scope that does not parse refuses no Run: it is not read there');
     } finally { delete process.env.OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES; }
 
     // A rename takes the scope along; a deletion takes it away.
@@ -2830,3 +2829,178 @@ test('every environment of a service reads the same files — an environment nam
   }
 });
 
+// ---------- a live scope belongs to the service (SPEC P5, defect 6) ----------
+
+// Two services reading one Grafana estate, each from a repository holding the fixture's three
+// Grafana-managed rules (tools/fixtures/crawl/grafana-rules); the endpoint answers the provisioning
+// API's shape with two of them changed in Grafana (one renamed, one threshold raised).
+async function scopeEstate() {
+  const { productAttestedByTool } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
+  const GRAFANA = probeCandidates('alert_rules').map(nameOf).find((n) => productAttestedByTool(n) === 'grafana');
+  const RULES = JSON.parse(readFileSync(join(FIXTURES, 'crawl', 'grafana-rules', 'live', 'provisioning.json'), 'utf8'));
+  const tools = [capabilityTool('system_health'), capabilityTool('system_topology'), nameOf(probeCandidates('metric_names')[0]), GRAFANA];
+  const grafana = await startFakeMcp(tools, (name, args) => (name === GRAFANA ? (args.folder_uid ? RULES.filter((r) => r.folderUID === args.folder_uid) : RULES) : ANSWERS[name] ? ANSWERS[name](args) : { ok: true }));
+  const endpoint = await endpointIdFor(BASE, grafana.url, { name: `fake-grafana-${grafana.url.split(':').pop().replace(/\D/g, '')}` });
+  const repo = mkdtempSync(join(tmpdir(), 'observogram-scope-repo-'));
+  mkdirSync(join(repo, 'grafana', 'provisioning', 'alerting'), { recursive: true });
+  writeFileSync(join(repo, 'grafana', 'provisioning', 'alerting', 'shop.yaml'), readFileSync(join(FIXTURES, 'crawl', 'grafana-rules', 'shop.yaml'), 'utf8'));
+  const make = async (name, liveScopes = null) => {
+    const r = await call('POST', '/api/services', { name, repository: { kind: 'path', location: repo }, ...(liveScopes ? { liveScopes } : {}) });
+    assert.equal(r.status, 201, r.text);
+    const id = r.json.service.id;
+    assert.equal((await call('POST', `/api/services/${id}/environments`, { name: 'prod', mcpEndpointId: endpoint })).status, 201);
+    return id;
+  };
+  return { grafana, endpoint, repo, make, close: async () => { await grafana.close?.(); rmSync(repo, { recursive: true, force: true }); } };
+}
+const loadDef = async (name) => { const { loadJourneyDef } = await import('../tools/lib/journey.mjs'); return runWithOrg('default', () => loadJourneyDef(name)); };
+
+test('a live scope belongs to the service (defect 6): the server default carrying one service\'s rule groups and exclude pattern never reaches another service\'s environment — its Run reads unscoped and compares its alert rules; a capture takes its service\'s own scope, never Pack B\'s; a check of no service keeps its own through a PATCH; a deleted service\'s scope leaves its checks', async () => {
+  const estate = await scopeEstate();
+  const ids = [];
+  const names = ['scope-a.prod', 'scope-b.prod', 'scope-capture-b', 'scope-capture-ghost', 'scope-capture-none'];
+  // The server default is the first service's: its rule group and an exclude pattern.
+  process.env.OBSERVOGRAM_SNAPSHOT_RULE_GROUPS = 'shop-a-slo';
+  process.env.OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE = '^go_';
+  try {
+    const a = await estate.make('Scope A', { prod: { ruleGroups: ['shop'] } });
+    const b = await estate.make('Scope B');
+    ids.push(a, b);
+    // The second service: no scope of its own — read unscoped, its alert rules compared (before: the default's
+    // rule group applied, and its three rules read "outside the snapshot's alert rule groups").
+    const runB = await call('POST', `/api/services/${b}/run`, { env: 'prod' });
+    assert.equal(runB.status, 200, runB.text);
+    assert.equal(runB.json.record.packB.liveScope, null, 'no inherited scope');
+    assert.equal((await loadDef('scope-b.prod')).packB.mcp.scope, undefined, 'nor saved into its check');
+    const alertsOf = (run) => { const t = run.json.record.drift.tiers.alerts; return [t.aligned, t.drifted, t.declaredNotLive, t.notRead]; };
+    assert.deepEqual(alertsOf(runB), [1, 2, 0, 0], 'its three rules compared: one aligned, two drifted (renamed, threshold raised), none declared-not-live, none not read');
+    // The first service: its own scope, applied, and its rules inside it compared the same.
+    const runA = await call('POST', `/api/services/${a}/run`, { env: 'prod' });
+    assert.equal(runA.status, 200, runA.text);
+    assert.deepEqual(runA.json.record.packB.liveScope, { ruleGroups: ['shop'] });
+    assert.deepEqual(alertsOf(runA), [1, 2, 0, 0]);
+    // A capture that names a service with a record: that environment's own scope (B: none) — never Pack B's
+    // (A's live pack, read under A's scope).
+    const capture = (name, extra) => call('POST', '/api/journeys/capture', { name, packAId: runB.json.pack.id, packBId: runA.json.livePack.id, ...extra });
+    assert.equal((await capture('scope-capture-b', { service: 'scope-b', env: 'prod' })).status, 200);
+    assert.equal((await loadDef('scope-capture-b')).packB.mcp.scope, undefined, 'B\'s own (none), not A\'s');
+    // A capture of no service record keeps the scope Pack B was read with.
+    assert.equal((await capture('scope-capture-ghost', { service: 'no-such-service', env: 'prod' })).status, 200);
+    assert.deepEqual((await loadDef('scope-capture-ghost')).packB.mcp.scope, { ruleGroups: ['shop'] });
+    // A check that names no service (its Pack A is A's pack) keeps its scope when A's changes; A's own check takes it.
+    assert.equal((await call('POST', '/api/journeys/capture', { name: 'scope-capture-none', packAId: runA.json.pack.id, packBId: runA.json.livePack.id })).status, 200);
+    assert.deepEqual((await loadDef('scope-capture-none')).packB.mcp.scope, { ruleGroups: ['shop'] });
+    assert.equal((await call('PATCH', `/api/services/${a}`, { liveScopes: { prod: { ruleGroups: ['shop', 'shop-extra'] } } })).status, 200);
+    assert.deepEqual((await loadDef('scope-capture-none')).packB.mcp.scope, { ruleGroups: ['shop'] }, 'a check of no service is not rewritten');
+    assert.deepEqual((await loadDef('scope-a.prod')).packB.mcp.scope, { ruleGroups: ['shop', 'shop-extra'] }, 'the service\'s own check is');
+    // Deleting the service takes its scope out of its checks: one made again under the slug reads unscoped.
+    assert.equal((await call('DELETE', `/api/services/${a}`)).status, 200);
+    ids.shift();
+    assert.equal((await loadDef('scope-a.prod')).packB.mcp.scope, undefined, 'the deleted service\'s scope left its check');
+  } finally {
+    delete process.env.OBSERVOGRAM_SNAPSHOT_RULE_GROUPS;
+    delete process.env.OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE;
+    for (const id of ids) await call('DELETE', `/api/services/${id}`);
+    forgetChecks(names);
+    await estate.close();
+  }
+});
+
+test('the first Run after the server default stopped applying to an environment that read under it: unscoped, and its record is not comparable with the check before — that one read only a live scope, this one the whole estate (said on the row); the Run after it is comparable again', async () => {
+  const estate = await scopeEstate();
+  const ids = [];
+  const NAME = 'scope-moved.prod';
+  try {
+    const id = await estate.make('Scope Moved');
+    ids.push(id);
+    // The check before the upgrade, as a Run under the server default recorded it: graded, read within the default.
+    const startedAt = new Date(Date.now() - 3_600_000).toISOString();
+    mkdirSync(join(WORKSPACE, 'runs', NAME), { recursive: true });
+    writeFileSync(join(WORKSPACE, 'runs', NAME, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+      journey: NAME, startedAt, tookMs: 5, outcome: 'pass', gate: { thresholds: {}, breaches: [] },
+      grade: { score: 60, pass: true, schema: 5 }, packA: { source: 'pack:scope-moved' },
+      packB: { source: `mcp:${estate.grafana.url}`, liveScope: { ruleGroups: ['shop-a-slo'], metricExclude: ['^go_'] } },
+      drift: { aligned: 0, drifted: 0, declaredNotLive: 3, liveNotDeclared: 0, alignmentPct: 0, compared: 3 },
+      scope: { env: 'prod', service: 'scope-moved', scopeMode: null },
+    }));
+    const run = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    assert.equal(run.json.record.packB.liveScope, null, 'read unscoped');
+    const REASON = 'the previous run read only a live scope (1 rule group, 1 exclude pattern); this one reads the whole live estate';
+    assert.deepEqual(run.json.record.comparable, { withPrevious: false, reason: REASON });
+    const listed = (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === NAME);
+    assert.deepEqual(listed.lastRun.comparable, { withPrevious: false, reason: REASON }, 'the listing passes it to the row');
+    const again = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(again.status, 200, again.text);
+    assert.equal('comparable' in again.json.record, false, 'read alike: comparable');
+  } finally {
+    for (const sid of ids) await call('DELETE', `/api/services/${sid}`);
+    forgetChecks([NAME]);
+    rmSync(join(WORKSPACE, 'runs', NAME), { recursive: true, force: true });
+    await estate.close();
+  }
+});
+
+test('POST /api/services/:id/scope-check: what a scope would leave out, from stored packs only — the declared families inside, outside or not known; the rule groups the last live read listed; an environment not added yet against the service\'s own pack; 404, 400 with the PATCH\'s text; nothing sent to the MCP, no row written', async () => {
+  const estate = await scopeEstate();
+  const ids = [];
+  try {
+    const id = await estate.make('Scope Check');
+    ids.push(id);
+    const run = await call('POST', `/api/services/${id}/run`, { env: 'prod' });
+    assert.equal(run.status, 200, run.text);
+    const calls = estate.grafana.calls.length;
+    const rows = auditRows().length;
+    const check = (body, sid = id) => call('POST', `/api/services/${sid}/scope-check`, body);
+    assert.equal((await check({ env: 'prod', scope: {} }, 999999)).status, 404);
+    assert.deepEqual([(await check({ scope: {} })).status, (await check({ scope: {} })).json.error], [400, 'env names the environment whose live scope is checked']);
+    const bad = await check({ env: 'prod', scope: { metricPrefixes: ['9bad'] } });
+    assert.deepEqual([bad.status, /^liveScopes\.prod: scope\.metricPrefixes\[0\] "9bad" is not a metric-name prefix/.test(bad.json.error)], [400, true], bad.text);
+    // A rule group the last live read did not list; the declared rules inside the ones it did.
+    const groups = await check({ env: 'prod', scope: { ruleGroups: ['shop', 'shop-a-slo'] } });
+    assert.equal(groups.status, 200, groups.text);
+    assert.equal(groups.json.known, true);
+    assert.deepEqual(groups.json.declared.families, [{ family: 'alert_rule', declared: 3, inside: 3, outside: 0, unknown: 0 }, { family: 'recording_rule', declared: 0, inside: 0, outside: 0, unknown: 0 }]);
+    assert.deepEqual([groups.json.live.ruleGroups, groups.json.live.missingGroups, groups.json.live.foldersNotRead, groups.json.live.folders], [['shop'], ['shop-a-slo'], [], null]);
+    assert.ok(groups.json.live.readAt, 'when it was read');
+    // Prefixes no declared metric carries: the metric family has nothing inside.
+    const prefixes = await check({ env: 'prod', scope: { metricPrefixes: ['zzz_'] } });
+    const metric = prefixes.json.declared.families.find((x) => x.family === 'metric');
+    assert.ok(metric.declared > 0 && metric.inside === 0 && metric.outside === metric.declared, JSON.stringify(metric));
+    // An environment not added yet: the service's own pack, no live read.
+    const fresh = await check({ env: 'staging', scope: { ruleGroups: ['shop'] } });
+    assert.equal(fresh.status, 200, fresh.text);
+    assert.deepEqual([fresh.json.known, fresh.json.live], [false, null]);
+    assert.ok(fresh.json.declared === null || fresh.json.declared.families.find((x) => x.family === 'alert_rule')?.inside === 3, JSON.stringify(fresh.json.declared));
+    assert.deepEqual([estate.grafana.calls.length, auditRows().length], [calls, rows], 'nothing sent, no row');
+  } finally {
+    for (const id of ids) await call('DELETE', `/api/services/${id}`);
+    forgetChecks(['scope-check.prod']);
+    await estate.close();
+  }
+});
+
+test('a start rewrites the saved checks that still carry the server default\'s scope to their environment\'s own (none): a studio-written check of a service, one that names no environment; a check written by hand keeps its scope', async () => {
+  const made = await call('POST', '/api/services', { name: 'Scope Sync' });
+  assert.equal(made.status, 201, made.text);
+  const id = made.json.service.id;
+  const write = (name, banner, extra = []) => writeFileSync(journeyFileOf(name), [
+    ...(banner ? [`# ${banner}`] : []), `name: ${name}`, 'packA: { file: ../packs/none.pack.yaml }',
+    `packB: { mcp: { url: "${fake.url}", endpointId: ${ids.endpoint}, scope: { ruleGroups: ["shop-a-slo"], metricExclude: ["^go_"] } } }`,
+    ...extra, 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+  const names = ['scope-sync.prod', 'scope-sync-envless', 'scope-sync-by-hand'];
+  try {
+    write('scope-sync.prod', 'Saved by the service scope-sync, environment prod, on 2026-11-11T16:00:00.000Z.', ['env: prod', 'service: scope-sync']);
+    write('scope-sync-envless', 'Captured from a studio session on 2026-11-11T16:00:00.000Z.', ['service: scope-sync']);
+    write('scope-sync-by-hand', null, ['env: prod', 'service: scope-sync']);
+    const again = await start({ port: 0, host: '127.0.0.1', silent: true });
+    await new Promise((resolve) => again.close(resolve));
+    const text = (name) => readFileSync(journeyFileOf(name), 'utf8');
+    assert.ok(!/scope:/.test(text('scope-sync.prod')) && text('scope-sync.prod').startsWith('# Saved by the service scope-sync'), text('scope-sync.prod'));
+    assert.ok(!/scope:/.test(text('scope-sync-envless')), 'a check naming the service and no environment reads with none');
+    assert.match(text('scope-sync-by-hand'), /shop-a-slo/, 'a hand-written check keeps what its writer typed');
+  } finally {
+    await call('DELETE', `/api/services/${id}`);
+    forgetChecks(names);
+  }
+});

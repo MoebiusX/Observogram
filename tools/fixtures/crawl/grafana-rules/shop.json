@@ -1,0 +1,168 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "shop",
+      "folder": "Shop",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "checkout-errors",
+          "title": "CheckoutErrorRatioHigh",
+          "condition": "B",
+          "for": "5m",
+          "labels": {
+            "severity": "critical",
+            "team": "shop"
+          },
+          "annotations": {
+            "summary": "Checkout errors above 5%"
+          },
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(http_requests_total{job=\"checkout\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"checkout\"}[5m]))",
+                "instant": true
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.05
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "uid": "payments-latency",
+          "title": "PaymentsLatencyHigh",
+          "condition": "C",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "team": "shop"
+          },
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"payments\"}[5m])))",
+                "instant": true
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "last"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.5
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "uid": "cart-restarts",
+          "title": "CartPodRestarts",
+          "condition": "C",
+          "for": "15m",
+          "labels": {
+            "severity": "warning",
+            "team": "shop"
+          },
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "prom",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"shop\",container=\"cart\"}[15m])",
+                "instant": true
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "last"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        3
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

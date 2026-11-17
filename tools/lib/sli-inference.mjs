@@ -21,6 +21,11 @@
 // in spec.alerting.rules — are read into that shape here as well
 // (operationalAlertRule), so a rule file and a ruler's listing of the same
 // rule become the same entry, name for name.
+// The third shared reading is a Grafana-managed rule's own terms
+// (grafanaRuleCondition, grafanaRuleFacts): its threshold and the other
+// expression steps, its uid, folder and group — what the closed AlertRule
+// cannot hold — read the same way from a provisioning file, the
+// provisioning API and the ruler, so the two sides compare them.
 //
 // Pure ESM, no Node APIs.
 
@@ -284,6 +289,149 @@ export function alertRuleExpr(rule) {
   return '';
 }
 
+// ---- A Grafana-managed rule's own terms ----
+//
+// The threshold of a Grafana-managed rule is not in its query: it sits in an
+// expression node (`threshold`, `classic_conditions`, …) beside it, and the
+// condition reference names the node that alerts. `alertRuleExpr` reads the
+// query alone, so a threshold changed in Grafana read as the same rule.
+// grafanaRuleCondition states every step from the query to the alert as one
+// text, the same for a provisioning file, the provisioning API and the ruler.
+// What it leaves out on purpose: a query's time range and datasource uid (per
+// environment), the no-data and error states, keep_firing_for and the
+// notification settings — a file that omits one and a Grafana that defaults it
+// would read as a difference that is not there.
+const GRAFANA_CONDITION_MAX = 2000;
+const EVALUATOR_OPS = Object.freeze({ gt: '>', lt: '<', gte: '>=', lte: '<=', eq: '==', ne: '!=' });
+const RANGE_EVALUATORS = Object.freeze({
+  within_range: 'within', outside_range: 'outside',
+  within_range_included: 'within (included)', outside_range_included: 'outside (included)',
+});
+const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+const numberText = (x) => { const n = Number(x); return Number.isFinite(n) ? String(n) : 'NaN'; };
+
+// JSON with its keys sorted at every depth: one text for one value, whatever
+// order a side wrote its keys in.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function evaluatorText(ev) {
+  const type = oneLine(ev?.type);
+  const params = Array.isArray(ev?.params) ? ev.params : [];
+  if (EVALUATOR_OPS[type]) return `${EVALUATOR_OPS[type]} ${numberText(params[0])}`;
+  if (RANGE_EVALUATORS[type]) return `${RANGE_EVALUATORS[type]} ${numberText(params[0])}..${numberText(params[1])}`;
+  if (type === 'no_value') return 'no value';
+  return `${type || '?'}${params.length ? ` ${params.map(numberText).join(' ')}` : ''}`;
+}
+
+const isExpressionNode = (node, model) => node?.datasourceUid === '__expr__' || model?.datasource?.uid === '__expr__' || GRAFANA_EXPRESSION_TYPES.has(model?.type);
+
+const without = (model, keys) => Object.fromEntries(Object.entries(model || {}).filter(([k]) => !keys.includes(k)));
+const NODE_PLUMBING = ['refId', 'datasource', 'intervalMs', 'maxDataPoints', 'hide'];
+
+function expressionText(model) {
+  const type = oneLine(model?.type);
+  const input = oneLine(model?.expression);
+  if (type === 'threshold') {
+    const c = Array.isArray(model?.conditions) ? model.conditions[0] : null;
+    const recover = c?.unloadEvaluator ? `, recover ${evaluatorText(c.unloadEvaluator)}` : '';
+    return `threshold(${input} ${evaluatorText(c?.evaluator)}${recover})`;
+  }
+  if (type === 'reduce') {
+    const mode = oneLine(model?.settings?.mode);
+    const how = mode === 'replaceNN' ? `, replaceNN ${numberText(model.settings.replaceWithValue)}` : mode ? `, ${mode}` : '';
+    return `reduce(${oneLine(model?.reducer) || '?'}, ${input}${how})`;
+  }
+  if (type === 'math') return `math(${input})`;
+  if (type === 'sql') return `sql(${input})`;
+  if (type === 'resample') return `resample(${input}, ${oneLine(model?.window)}, ${oneLine(model?.downsampler)}, ${oneLine(model?.upsampler)})`;
+  if (type === 'classic_conditions') {
+    const parts = (Array.isArray(model?.conditions) ? model.conditions : []).map((c, i) => {
+      const op = i === 0 ? '' : `${oneLine(c?.operator?.type) || 'and'} `;
+      const ref = Array.isArray(c?.query?.params) ? oneLine(c.query.params[0]) : '';
+      return `${op}${oneLine(c?.reducer?.type) || '?'}(${ref}) ${evaluatorText(c?.evaluator)}`;
+    });
+    return `classic(${parts.join(' ')})`;
+  }
+  return `${type || 'expression'}(${canonicalJson(without(model, NODE_PLUMBING))})`;
+}
+
+function queryText(model) {
+  if (typeof model?.expr === 'string' && model.expr.trim()) return oneLine(model.expr);
+  return canonicalJson(without(model, [...NODE_PLUMBING, 'instant', 'range', 'editorMode', 'legendFormat']));
+}
+
+/**
+ * What a Grafana-managed rule does beyond its query, as one text: each
+ * expression node (`<ref> = threshold(B > 0.5)`, `reduce(last, A)`, `math(…)`,
+ * `classic(…)`, `resample(…)`, `sql(…)`), each query but the one `expr` already
+ * states (`<ref> = query(…)`), the condition reference (`condition C`) and
+ * `paused` — joined with `; `, cut at 2000 characters. The rule as a
+ * provisioning file or the provisioning API spells it, or the ruler's
+ * (`grafana_alert`). Null when the rule is not Grafana-managed, states none of
+ * it, or a node cannot be read (a model that does not parse, a node with no ref).
+ */
+export function grafanaRuleCondition(rule) {
+  const r = rule?.grafana_alert && typeof rule.grafana_alert === 'object' ? rule.grafana_alert : rule;
+  if (!r || typeof r !== 'object' || !Array.isArray(r.data) || !r.data.length) return null;
+  let queryRef = null;
+  for (const node of r.data) {
+    const model = grafanaModel(node);
+    if (!model || typeof model.expr !== 'string' || !model.expr.trim() || isExpressionNode(node, model)) continue;
+    queryRef = oneLine(node?.refId ?? model.refId);
+    break;
+  }
+  const parts = [];
+  for (const node of r.data) {
+    const model = grafanaModel(node);
+    if (!model) return null;
+    const ref = oneLine(node?.refId ?? model.refId);
+    if (!ref) return null;
+    if (isExpressionNode(node, model)) parts.push(`${ref} = ${expressionText(model)}`);
+    else if (ref !== queryRef) parts.push(`${ref} = query(${queryText(model)})`);
+  }
+  const condition = oneLine(r.condition);
+  if (condition) parts.push(`condition ${condition}`);
+  if (r.isPaused === true || r.is_paused === true) parts.push('paused');
+  if (!parts.length) return null;
+  const text = parts.join('; ');
+  return text.length > GRAFANA_CONDITION_MAX ? `${text.slice(0, GRAFANA_CONDITION_MAX - 1)}…` : text;
+}
+
+/**
+ * What a Grafana-managed rule states that spec 1.4's closed AlertRule cannot
+ * hold: { uid?, folder?, folderUid?, group?, condition? }. `where` gives what a
+ * provisioning file states on the rule's group, not the rule (the folder — a
+ * title — the folder uid, the group's name); else the rule's own `folderUID` /
+ * `namespace_uid`, `ruleGroup` / `rule_group`. A rule a reader already read
+ * carries it as `grafana`. A value over its length (uid and folder uid 100,
+ * folder and group 190) is left out. Null for a rule that is not
+ * Grafana-managed, or one that states none of it.
+ */
+export function grafanaRuleFacts(rule, where = {}) {
+  if (rule?.grafana && typeof rule.grafana === 'object' && !Array.isArray(rule.grafana)) return rule.grafana;
+  const r = rule?.grafana_alert && typeof rule.grafana_alert === 'object' ? rule.grafana_alert : rule;
+  if (!isGrafanaManagedRule(r)) return null;
+  const text = (v, max) => (typeof v === 'string' && v.trim() && v.trim().length <= max ? v.trim() : null);
+  const out = {};
+  const uid = text(r.uid, 100);
+  const folder = text(where?.folder, 190);
+  const folderUid = text(where?.folderUid ?? r.folderUID ?? r.namespace_uid, 100);
+  const group = text(where?.group ?? r.ruleGroup ?? r.rule_group, 190);
+  const condition = grafanaRuleCondition(r);
+  if (uid) out.uid = uid;
+  if (folder) out.folder = folder;
+  if (folderUid) out.folderUid = folderUid;
+  if (group) out.group = group;
+  if (condition) out.condition = condition;
+  return Object.keys(out).length ? out : null;
+}
+
 /** The entry an alerting rule starts as, keyed by the id its NAME derives. */
 export function burnCandidateFromAlertRule(rule) {
   const alertName = rule?.alert || rule?.title || rule?.name || '';
@@ -346,18 +494,20 @@ export function operationalAlertRule(rule, { engine, source } = {}) {
  * burn-rate classification (recordedSloForExpr), so a rule is one or the
  * other, never both. Each is read with operationalAlertRule; `engineOf`
  * and `sourceOf` supply what only the caller knows. Rules with no name or
- * expression are skipped and returned in `skipped`.
+ * expression are skipped and returned in `skipped`; `keptRules` holds the
+ * rule each `kept` entry was read from, in the same order.
  */
 export function operationalAlertRules(rules, hasSlo, { engineOf = () => undefined, sourceOf = () => undefined } = {}) {
   const kept = [];
+  const keptRules = [];
   const skipped = [];
   for (const rule of rules || []) {
     if (recordedSloForExpr(alertRuleExpr(rule), hasSlo)) continue;
     const entry = operationalAlertRule(rule, { engine: engineOf(rule), source: sourceOf(rule) });
-    if (entry) kept.push(entry);
+    if (entry) { kept.push(entry); keptRules.push(rule); }
     else skipped.push(String(rule?.alert ?? rule?.title ?? rule?.name ?? '').trim() || '(unnamed)');
   }
-  return { kept, skipped };
+  return { kept, skipped, keptRules };
 }
 
 /**
@@ -379,7 +529,9 @@ export function operationalAlertRules(rules, hasSlo, { engineOf = () => undefine
  * the first rule of a name and drop the others. Each is read with
  * operationalAlertRule, the one reading of a rule's terms for a rule file
  * and for a ruler's listing, and reduced to what is compared:
- *   { name, expr, for?, severity?, labels? }
+ *   { name, expr, for?, severity?, labels?, condition? }
+ * (`condition`: a Grafana-managed rule's threshold and other steps,
+ * grafanaRuleCondition, when the rule states them.)
  * `partialOf(rule)` adds what the reader was shown of the rule only in part,
  * in the shape an artefact's `partial` has (`{ labels: [keys shown] }`).
  *
@@ -398,6 +550,8 @@ export function sourceRuleTerms(rules, hasSlo, { partialOf = () => null } = {}) 
     if (read.for) terms.for = read.for;
     if (read.severity) terms.severity = read.severity;
     if (read.labels) terms.labels = read.labels;
+    const condition = grafanaRuleFacts(rule)?.condition;
+    if (condition) terms.condition = condition;
     const partial = partialOf(rule);
     if (partial && typeof partial === 'object' && !Array.isArray(partial) && Object.keys(partial).length) terms.partial = partial;
     if (!bySlo.has(slo)) bySlo.set(slo, []);
@@ -407,7 +561,7 @@ export function sourceRuleTerms(rules, hasSlo, { partialOf = () => null } = {}) 
   const labelsOf = (r) => JSON.stringify(Object.entries(r.labels || {}).sort(([x], [y]) => byText(x, y)));
   for (const list of bySlo.values()) {
     list.sort((x, y) => byText(x.name, y.name) || byText(x.expr, y.expr) || byText(x.for || '', y.for || '')
-      || byText(x.severity || '', y.severity || '') || byText(labelsOf(x), labelsOf(y)));
+      || byText(x.severity || '', y.severity || '') || byText(labelsOf(x), labelsOf(y)) || byText(x.condition || '', y.condition || ''));
   }
   return bySlo;
 }

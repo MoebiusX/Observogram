@@ -332,22 +332,25 @@ const empty = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'metrics_alerts.empty
 const vEmpty = validateResponseShape('rule-groups', empty);
 assert(vEmpty.ok && vEmpty.items === 0,
   'metrics_alerts {groups: []}: empty payload PASSES the shape check (zero is an answer)', vEmpty);
-// The provisioning shape: a snapshot reads it, the draft's adapter does not
-// (byte-identical draft); a Grafana-managed recording rule is no alert rule.
+// The provisioning shape: every read — a draft's as a snapshot's — reads it,
+// each rule with what it states beyond the spec (`grafana`: uid, folder uid,
+// group, condition); a Grafana-managed recording rule is no alert rule.
 {
   const provisioned = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'grafana_alert_rules.json'), 'utf8'));
   const alertProbe = PROBES.find(p => p.name === 'alert_rules');
-  assert(alertProbe.adapt(clone(provisioned)).length === 0, 'grafana_alert_rules.json: the draft adapter reads no rule from the provisioning shape (unchanged)');
+  assert(JSON.stringify(alertProbe.adapt(clone(provisioned))) === JSON.stringify(alertProbe.adaptSnapshot(clone(provisioned))),
+    'grafana_alert_rules.json: the draft adapter reads the provisioning shape as a snapshot does');
   const read = alertProbe.adaptSnapshot(clone(provisioned));
   assert(read.length === provisioned.filter(r => !r.record).length && read.every(r => r.folderUid && r.group && r.expr),
     'grafana_alert_rules.json: every alerting rule read with its expr, folder uid and group; the recording rule left out', read.map(r => r.name));
-  // A rule-groups answer: adaptSnapshot is adapt plus each rule's group (the rule-group scope reads it); nothing else moves.
+  assert(read.every(r => r.grafana?.uid && r.grafana.folderUid === r.folderUid && r.grafana.group === r.group && /threshold\(.+\); condition /.test(r.grafana.condition || '')),
+    'grafana_alert_rules.json: every alerting rule states its uid, folder uid, group and condition (the threshold node)', read.map(r => r.grafana));
+  // A rule-groups answer: every reader keeps each rule's group (the rule-group scope and the rule groups recorded read it); nothing else moves.
   const vmalert = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'vmalert_rules.json'), 'utf8'));
-  const strip = (rules) => rules.map(({ group: _group, ...rest }) => rest);
   const snap = alertProbe.adaptSnapshot(clone(vmalert));
-  assert(JSON.stringify(strip(snap)) === JSON.stringify(alertProbe.adapt(clone(vmalert))) && snap.every(r => typeof r.group === 'string' && r.group),
-    'adaptSnapshot reads a rule-groups answer as adapt does, each rule naming its group');
-  assert(alertProbe.adapt(clone(vmalert)).every(r => !('group' in r)), 'the draft adapter names no group (byte-identical draft)');
+  assert(JSON.stringify(snap) === JSON.stringify(alertProbe.adapt(clone(vmalert))) && snap.every(r => typeof r.group === 'string' && r.group),
+    'adapt reads a rule-groups answer as adaptSnapshot does, each rule naming its group');
+  assert(snap.every(r => !('grafana' in r)), 'a ruler listing states no Grafana facts');
 }
 const recProbe = PROBES.find(p => p.name === 'recording_rules');
 assert(Array.isArray(recProbe.adapt(empty)) && recProbe.adapt(empty).length === 0,
