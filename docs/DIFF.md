@@ -316,11 +316,16 @@ Not stated, so compared as before:
   deploy time, or a `${VAR}` / `$VAR` a deploy step substitutes, in its
   name, expression, wait or labels (a capture group's `$1` and the ruler's
   own `{{ $labels.x }}` in a label are the rule's text); a labels map filled
-  in whole, or given through a YAML anchor, alias or merge key; a label
-  written as a bare number or boolean (the ruler lists `99.0`, the scan
-  reads `99`); labels the rule's group gives every rule. Held against what
-  live renders there it would read as a difference, so that SLO states no
-  rules;
+  in whole, on the rule or on its group, or given as an alias or a merge
+  key the file does not resolve (an anchor it does not define, a merge key
+  with its mapping written in place); group labels past the scan's copy
+  budget (250,000 in one scan, with a warning). Held against what live
+  renders there it would read as a difference, so that SLO states no rules. The rest the scan
+  reads as the ruler does, and states: the labels a rule's group gives every
+  rule (under the rule's own), anchors, aliases and merge keys naming
+  aliases, a label written as a bare number or boolean (as its text, `99.0`,
+  `True`), a value written over several lines or folded (`>`)
+  (`tools/lib/mini-yaml.mjs`);
 - an SLO the fold gave no entry: the fold reads the first rule of an alert
   name, on both sides, so a rule whose name an earlier rule took (on another
   SLO, or on no SLO) may leave its own SLO with none, and there is then no
@@ -331,9 +336,8 @@ Not stated, so compared as before:
 Not covered, as for an operational rule: a ruler that re-prints expressions
 (another number spelling, the aggregation modifier moved) reads the same
 rule as different on `expr`, and a listing with neither a labels map nor a
-flat severity on `labels` and `severity`; Helm control flow inside a rule,
-and a plain YAML scalar continued on the next line, are read wrong by the
-scan; a label whose key the comparison drops everywhere as
+flat severity on `labels` and `severity`; Helm control flow inside a rule
+is read wrong by the scan; a label whose key the comparison drops everywhere as
 volatile (`source`, `host`, `version`, `url`, `description`, …) is
 compared on neither kind of rule. Two burn-rate entries on one SLO — no
 reader writes them — both carry the SLO's one statement, and a rule that

@@ -107,8 +107,9 @@ and `${tier}` are built-ins; the scaffold's own parameters (`oncall_channel`,
 its default is written into the pack AND reported as a todo
 (`metadata.annotations['library.todo.<symbol>']`) at the artefact where it landed.
 
-YAML is read by `tools/lib/mini-yaml.mjs`: no anchors, no `|-`, no tags, and a
-plain list item must not contain `: ` (it would parse as a mapping) — use ` — `.
+YAML is read by `tools/lib/mini-yaml.mjs`: anchors, aliases and merge keys are
+read, `|-` reads as `|`, a tag as text, and a plain list item must not contain
+`: ` (it would parse as a mapping) — use ` — `.
 
 ## The seed and the copies
 
