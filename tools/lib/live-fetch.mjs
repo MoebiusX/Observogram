@@ -328,13 +328,24 @@ function metricNamesOf(artefact) {
 
 // The folder uid an artefact states, or null. A dashboard read from Grafana
 // carries `params.folderUid`; a rule read through the provisioning API its
-// `folderUid`. A crawled dashboard states none (its `folder` is a name).
+// `folderUid`; a Grafana-managed rule its `grafana.folderUid` (the adapter's
+// reading of observogram.grafana_rule.*). A crawled dashboard states one only
+// when the repository says where it is provisioned (its `folder` is a name).
 export function folderUidOf(artefact) {
   const spec = artefact?.spec || {};
-  for (const v of [spec.params?.folderUid, spec.folderUid, spec.params?.folder_uid, spec.folder_uid]) {
+  for (const v of [spec.params?.folderUid, spec.folderUid, spec.params?.folder_uid, spec.folder_uid, artefact?.grafana?.folderUid]) {
     if (typeof v === 'string' && v !== '') return v;
   }
   return null;
+}
+
+// The folder TITLE a repository states for an artefact, or null: a Grafana
+// provisioning file's group `folder` (a rule's `grafana.folder`), the folder a
+// dashboard provider files a crawled dashboard under (`params.folderTitle`).
+// Never a dashboard's `folder`, which may be a tag the crawler guessed.
+export function folderTitleOf(artefact) {
+  const t = artefact?.grafana?.folder ?? artefact?.spec?.params?.folderTitle;
+  return typeof t === 'string' && t.trim() ? t.trim() : null;
 }
 
 // The rule group a rule artefact states, or null. A rule read from an engine
@@ -350,6 +361,8 @@ export function folderUidOf(artefact) {
 export function ruleGroupOf(artefact) {
   const spec = artefact?.spec || {};
   if (typeof spec.group === 'string' && spec.group.trim() !== '') return spec.group.trim();
+  // A Grafana-managed rule states its group beside the spec (observogram.grafana_rule.*).
+  if (typeof artefact?.grafana?.group === 'string' && artefact.grafana.group.trim() !== '') return artefact.grafana.group.trim();
   const source = typeof spec.source === 'string' ? spec.source : '';
   const name = typeof spec.name === 'string' ? spec.name : '';
   if (!name || !source.endsWith(`/${name}`)) return null;
@@ -365,7 +378,10 @@ export function ruleGroupOf(artefact) {
 // what the scope needs — a metric without a name, a dashboard without a
 // folder uid, a rule without a group). No entry: true, nothing was narrowed.
 // A folder entry that also names groups asks both: outside either is outside;
-// inside the folders but silent on the group is not known.
+// inside the folders but silent on the group is not known. An artefact that
+// states its folder only by TITLE (a provisioning file's rule, a provisioned
+// dashboard) is inside when the live read named one of its folders so, outside
+// when it named every folder and none so, and not known otherwise.
 export function inScope(kind, artefact, scopeEntry) {
   if (!scopeEntry) return true;
   if (scopeEntry.by === 'prefix') {
@@ -379,7 +395,11 @@ export function inScope(kind, artefact, scopeEntry) {
   }
   if (scopeEntry.by === 'folder') {
     const uid = folderUidOf(artefact);
-    const verdicts = [uid === null ? null : scopeEntry.values.some((v) => v.uid === uid)];
+    const title = uid === null ? folderTitleOf(artefact) : null;
+    const verdicts = [uid !== null ? scopeEntry.values.some((v) => v.uid === uid)
+      : title === null ? null
+        : scopeEntry.values.some((v) => v.title === title) ? true
+          : scopeEntry.values.every((v) => v.title !== null) ? false : null];
     if (Array.isArray(scopeEntry.groups) && scopeEntry.groups.length) verdicts.push(groupVerdict(artefact, scopeEntry.groups));
     if (verdicts.includes(false)) return false;
     return verdicts.includes(null) ? null : true;
@@ -420,9 +440,10 @@ const folderNames = (values) => values.map((v) => v.title || v.uid).join(', ');
 
 // The diff's notObserved reason for a verdict of inScope: `false` states what
 // the snapshot read; `null` states only what is known — which folders were
-// read, and that the holder pack does not say where this artefact is. `holder`
-// is the side holding the artefact ('a' or 'b'). `true` has no reason.
-export function scopeReason(kind, verdict, scopeEntry, { holder = 'a' } = {}) {
+// read, and that the holder pack does not say where this artefact is (or, with
+// `folderTitle`, that the folder it names is not known to be one of them).
+// `holder` is the side holding the artefact ('a' or 'b'). `true` has no reason.
+export function scopeReason(kind, verdict, scopeEntry, { holder = 'a', folderTitle = null } = {}) {
   if (verdict === true || !scopeEntry) return null;
   const [one, many] = nounOf(kind);
   const pack = `Pack ${String(holder).toUpperCase() === 'B' ? 'B' : 'A'}`;
@@ -438,6 +459,12 @@ export function scopeReason(kind, verdict, scopeEntry, { holder = 'a' } = {}) {
   if (scopeEntry.by === 'folder') {
     const list = folderNames(scopeEntry.values);
     const groups = Array.isArray(scopeEntry.groups) && scopeEntry.groups.length ? scopeEntry.groups.join(', ') : '';
+    const titled = verdict === null && typeof folderTitle === 'string' && folderTitle !== '';
+    if (titled) {
+      return groups
+        ? `the snapshot read only the folders ${list} and the rule groups ${groups}; ${pack} puts this ${one} in the folder "${folderTitle}", which is not known to be one of them, so it was not checked`
+        : `the snapshot read only the folders ${list}; ${pack} puts this ${one} in the folder "${folderTitle}", which is not known to be one of them (the live read did not give every folder's title), so it was not checked`;
+    }
     if (!groups) {
       return verdict === false
         ? `outside the snapshot's ${one} folders (${list})`

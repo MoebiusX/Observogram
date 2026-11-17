@@ -355,7 +355,12 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 6,950,000 since the Services matrix (2026-11-12: the studio's own code reached 6,809,288 with the list
   // drawn as a row per service and a column per environment, a branch per environment and the shared
   // clause fixes; no dependency).
-  assert.ok(built.bytes < 6_950_000, `the two-pack bundle is under 6,950,000 bytes (${built.bytes})`);
+  // 6,975,000 since Grafana-managed rules pair with live and the live scope is the environment's own
+  // (2026-11-17: the studio's own code reached 6,969,757 with the Grafana rule reading in sli-inference,
+  // crawler, artefact-model and diff, the crawled dashboards' provisioned folders, and the scope form's
+  // server-default pre-fill and check; no dependency). Raised by the least that passes: the tracks
+  // landing together settle the final ceiling at merge.
+  assert.ok(built.bytes < 6_975_000, `the two-pack bundle is under 6,975,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

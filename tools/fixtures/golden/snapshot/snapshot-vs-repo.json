@@ -1,18 +1,18 @@
 {
   "summary": {
-    "onlyInA": 6,
+    "onlyInA": 4,
     "onlyInB": 4,
     "inBoth": 14,
     "aligned": 14,
     "drifted": 0,
     "outOfScope": 80,
-    "scaffold": 17,
+    "scaffold": 19,
     "notObserved": 11,
-    "union": 24,
-    "aTotal": 20,
+    "union": 22,
+    "aTotal": 18,
     "bTotal": 18,
-    "jaccard": 0.58,
-    "alignment": 0.58
+    "jaccard": 0.64,
+    "alignment": 0.64
   },
   "byKind": {
     "alert_rule": {
@@ -22,9 +22,6 @@
     },
     "backend": {
       "outOfScope": 5
-    },
-    "burn_rate": {
-      "onlyInA": 2
     },
     "dashboard": {
       "inBoth": 5

@@ -120,9 +120,12 @@ metric names (prefixes, then exclude patterns, then a 20 000-name cap),
 dashboards (folder uids, before the detail reads), alert rules (folder
 uids, when every rule names its folder; an engine whose tool takes a folder
 uid is asked once per folder) and alert and recording rules by rule group
-(when every rule the engines list names its group); every advertised alert-rule engine is read and the rules unioned
-by name, Grafana-managed rules read from the provisioning shape (`title`,
-`data[]`, `folderUID`); a dashboard's id is its obs-pack-id tag, else the
+(when every rule the engines list names its group); every advertised alert-rule engine is read — by a draft too — and
+the rules unioned by store (Grafana's by uid, a ruler's by name), Grafana-managed rules read from the provisioning
+shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles), each stating its
+uid, folder, group and condition in `observogram.grafana_rule.*`; what the read could not cover in
+`observogram.unread.alert_rule` / `.recording_rule`, an engine that errored beside one that answered in
+`mcp.probesPartial`, the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
 `buildSnapshotPack` writes `mcp.url` as the origin and the
 `observogram.live.*`, `observogram.scope.<kind>` and
@@ -133,8 +136,9 @@ byte. On the server both run as **live jobs** — `POST /api/mcp/jobs` answers
 in memory, so a restart loses them (docs/LIVE_FETCH.md §15.2 has the shapes
 and the stage table). The configured scope is
 `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES`, `_FOLDER_UIDS`, `_DATASOURCE_UID`,
-`_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org); a datasource uid
-is named in the gate log as not applied, since no advertised tool takes one.
+`_METRIC_EXCLUDE` and `_RULE_GROUPS` (deployment) or `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` (one org) — the Expert
+snapshot's default and a new service environment's pre-fill, never applied to a service environment that
+exists; a datasource uid is named in the gate log as not applied, since no advertised tool takes one.
 
 ## Server settings (admin configuration)
 

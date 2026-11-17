@@ -609,19 +609,29 @@ The studio's wiring is `listPickPackFile` in `studio/app.mjs`.
 
 **A live scope per environment** (README, *A live scope per environment*):
 step 4 draws the scope's five answers under the endpoint (`formModel`'s
-`scope`: `{ shown, from, hint, fields }`), and the matrix cell its summary
-(`serviceListModel` rows' `scope`: `{ text, from }`). Pass the server's
-configured snapshot scope, compact, to the three places that read it — none
-of them is required, and without it an environment with no scope of its own
-reads as empty:
+`scope`: `{ shown, from, hint, fields: [{ …, fromDefault }], dropped, offerDefault,
+defaultIgnored, check }`), and the matrix cell its summary (`serviceListModel`
+rows' `scope`: `{ text, from }`, or `{ text: null, defaultIgnored, defaultSummary }`
+for an environment with none of its own while the server has a default — the
+default never applies to it). Pass the server's configured snapshot scope,
+compact, to the places that read it — none of them is required: `formOpened`
+pre-fills only a NEW environment with it (`form.scopePrefill`), an existing one
+opens on its own scope; `useServerDefaultScope(form)` is the form's **Use the
+server default**; `savePlan` takes `scopePrefill` (an older host that passes
+only `scopeDefaults` has it taken as the pre-fill) and keeps what
+`scopeSaveOf` keeps. The scope check is `scopeCheckOf(form)` → the host's
+`checkServiceScope(serviceId, { env, scope })` (overview-api.mjs) →
+`scopeChecked(form, answer, key)` / `scopeCheckFailed`, worded by
+`scopeCheckView(form)` and drawn by `scopeCheckBlockHtml` (overview-view.mjs),
+which a host may replace in place while the person types:
 
 ```js
 import { liveScopeDefaultsOf } from './overview-model.mjs';
 // An operator's read (anyone else gets a refusal: no scope then); a variable that does not parse makes it null.
 const defaults = liveScopeDefaultsOf(await fetchJson('/api/mcp/jobs').then((b) => b.scope, () => null));
 serviceListModel({ …, liveScopeDefaults: defaults });
-formOpened(services, { …, scopeDefaults: defaults });                                    // prefills, form.scopeFrom 'server'
-savePlan(values, { …, scopeDefaults: form.scopeDefaults });                              // liveScopes in the create or patch, when changed
+formOpened(services, { …, scopeDefaults: defaults });                                    // a new environment pre-filled, form.scopePrefill
+savePlan(values, { …, scopeDefaults: form.scopeDefaults, scopePrefill: form.scopePrefill }); // liveScopes in the create or patch, when changed
 ```
 
 `scopeFormValues`, `scopeFromValues`, `scopeSummary`, `sameScope`,

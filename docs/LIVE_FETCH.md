@@ -143,11 +143,12 @@ annotation: a hand-uploaded pack can make them.
 `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE`, `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` for the deployment and
 `OBSERVOGRAM_ORG_<KEY>_SNAPSHOT_*` for one org — the org's overriding the
 deployment's field by field; a request's `scope` replaces the configured one
-whole. Inert when unset; a plain draft and the refresh never read them, a
-service's Run does where its environment has no live scope of its own
-(README, *A live scope per environment*: a scoped draft — the families the
-scope narrows narrowed as here, the same annotations, the draft's signals
-kept). Metric
+whole. Inert when unset; a plain draft, the refresh and a service's Run never
+read them: they are the Expert snapshot's default and pre-fill the form of a
+NEW service environment, each field said *from the server default* — a Run
+reads its environment's own scope, else none (README, *A live scope per
+environment*: a scoped draft — the families the scope narrows narrowed as
+here, the same annotations, the draft's signals kept). Metric
 prefixes filter the name list, then the exclude patterns drop names from what
 the prefixes kept (anchored, bounded regexes, white-space-separated in the
 variable — a backend's names that no declaration will ever match, an
@@ -191,8 +192,28 @@ is a reason to keep it; (5) switch the consumers to the snapshot, keep the
 bridge one release for comparison, then remove it. **What this batch cannot
 replace:** a datasource-uid push-down (no capability declares the slot), and
 parallel dashboard detail reads (the snapshot reads them one at a time).
-Grafana-managed alert rules are read from the provisioning shape recorded
-from Grafana itself (the MCP's envelope around it is not yet evidenced).
+**The alert-rule shapes.** Every read — a snapshot's and a draft's — asks every
+advertised alert-rule engine and unions the rules by store: Grafana's own
+(a tool that attests `grafana`, or whose answer is Grafana-managed rules) by
+uid, a Prometheus-compatible ruler's by name, so a Grafana rule is never
+dropped for a title a ruler holds. A Grafana tool's answer is read in the
+provisioning API's shape (`GET /api/v1/provisioning/alert-rules`: `title`,
+`data[]`, `folderUID`, `ruleGroup`) and in the ruler's
+(`GET /api/ruler/grafana/api/v1/rules`: an object keyed by folder title, its
+groups' rules each a `grafana_alert`); each rule states beside the spec its
+uid, folder, group and condition (`observogram.grafana_rule.alerting.rules[<i>]`
+— the threshold node the query alone does not say). Without tools/list each
+store stops at its first answer with rules. A refused engine with nothing
+else answering is a FAILED family; beside rules from another engine, the
+family is listed in `mcp.probesPartial` with the error in
+`mcp.probeErrors.alert_rules`. What the read could not cover rides in
+`observogram.unread.alert_rule` (`{ grafana?, ruler?, loki }`: why) and
+`observogram.unread.recording_rule` (`{ grafana }`), and the rule groups it
+listed, before a rule-group scope narrowed them, in
+`mcp.discovered.rule_groups` (`[{ group, folderUid?, folder?, alert,
+recording }]`, the first 500; `_count` beyond) — the scope check of a service
+environment reads them. An answer in no alert-rule shape, or listing rules
+without their expressions, is no answer.
 
 ## 15.3 The ping
 

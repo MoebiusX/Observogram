@@ -19,7 +19,7 @@ import { annotationList, buildRequirementTraceability } from './traceability.mjs
 import { boundText, hasDirection } from './good-when.mjs';
 import { SPEC_VERSION } from './validator.mjs';
 import { toolLabels as activeToolLabels } from './artefact-classify.mjs';
-import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation, sourceRulesAnnotationKey, parseSourceRulesAnnotation } from './artefact-model.mjs';
+import { PARTIAL_ANNOTATION_PREFIX, parsePartialAnnotation, sourceRulesAnnotationKey, parseSourceRulesAnnotation, GRAFANA_RULE_ANNOTATION_PREFIX, parseGrafanaRuleAnnotation } from './artefact-model.mjs';
 
 // `metadata.annotations["observogram.artefact.type.<symbol>"]` declares the
 // type of the artefact a canonical symbol projects to (`slis.<id>`,
@@ -139,6 +139,14 @@ export function adapt(canonical, opts = {}) {
     sourceRules: (slo) => {
       const stated = parseSourceRulesAnnotation(annotations[sourceRulesAnnotationKey(slo)]);
       return stated ? { sourceRules: stated } : {};
+    },
+    // What a Grafana-managed rule states beyond the spec's closed AlertRule
+    // (`observogram.grafana_rule.<symbol>`, tools/lib/artefact-model.mjs): its
+    // uid, folder, group and condition ride on the artefact as `grafana`,
+    // beside `spec`. No statement, no key.
+    grafanaRule: (symbol) => {
+      const stated = parseGrafanaRuleAnnotation(annotations[`${GRAFANA_RULE_ANNOTATION_PREFIX}${symbol}`]);
+      return stated ? { grafana: stated } : {};
     },
   };
 
@@ -716,6 +724,7 @@ function adaptQueries(ctx) {
 
     ...ctx.typed(`queries.recording_rules[${i}]`),
     ...ctx.lifecycle(`queries.recording_rules.${r.name}`),
+    ...ctx.grafanaRule(`queries.recording_rules[${i}]`),
     refs: extractRefs(r.expr),
     spec: r,
   }));
@@ -919,6 +928,7 @@ function adaptAlertRules(ctx) {
       ...ctx.typed(`alerting.rules[${i}]`),
       ...ctx.lifecycle(`alerting.rules.${r.name}`),
       ...ctx.partial(`alerting.rules[${i}]`),
+      ...ctx.grafanaRule(`alerting.rules[${i}]`),
       spec: r,
       mcp: ctx.mcpEvidence(`alerting.rules[${i}]`),
     };

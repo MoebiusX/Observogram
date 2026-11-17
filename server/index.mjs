@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, overlaidCanonical } from '../tools/lib/adapter.mjs';
 import { serviceMetadata, catalogEntryOf, livePackKind, normalizeServiceKey } from '../tools/lib/service-keys.mjs';
-import { listServicesForPack } from './store/pack-services.mjs';
+import { listServicesForPack, listPacksForService } from './store/pack-services.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -84,7 +84,7 @@ import { waiversRoutes } from './routes/waivers.mjs';
 import { auditReportRoutes } from './routes/audit-report.mjs';
 import { liveRoutes, livePackCounts } from './routes/live.mjs';
 import { mcpSettingsRoutes } from './routes/mcp-settings.mjs';
-import { abortAllLiveJobs, snapshotScopeConfig } from './live-jobs.mjs';
+import { abortAllLiveJobs } from './live-jobs.mjs';
 import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/lib/live-fetch.mjs';
 import { verdictsDocument } from './verdict-admin.mjs';
 import { envRefOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
@@ -842,7 +842,7 @@ app.use(identityRoutes({ authorize }));
 // server/routes/services.mjs: the request's org's service records under
 // /api/services (viewer reads, operator writes) and their environments
 // under /api/environments, every rule server/service-admin.mjs's.
-app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService, readPackUpload, registerPack: registerUploadedPack }));
+app.use(servicesRoutes({ authorize, onGradeOffChanged: writeGradeOffToServiceChecks, onServiceDeleting: forgetGradeOffOfDeletedService, readPackUpload, registerPack: registerUploadedPack, scopeBasisOf }));
 
 // The verdicts API (GAP batch 2, B3.1) lives in server/routes/verdicts.mjs:
 // a reviewer's trusted | suspect | failed record per artefact of a
@@ -1318,17 +1318,15 @@ function mttxTargetsOfJourney(def) {
 // `packc journey run`, which is what a schedule runs — then grades as the
 // service does. A journey of no service keeps what it carries.
 // The scope a studio-written check's live read applies, as the service's Run would write it: the
-// environment's own, else the org's configured snapshot scope, else none (a configured scope that does
-// not parse leaves the check as it is — its Run says why). A file Pack B has none.
+// environment's own, else none — never the server's configured snapshot scope, which only pre-fills a
+// new environment's form. Only a check that NAMES this service (its `service` key) is the service's
+// to scope: one that reaches the service through its Pack A alone keeps what it was captured with,
+// and one that names no environment reads with none. A file Pack B has none.
 function withServiceScope(def, service) {
   const mcp = def?.packB?.mcp;
   if (!mcp || def.packB.file || !service) return def;
-  let scope = liveScopeOf(service, def.env);
-  if (!scope) {
-    const configured = snapshotScopeConfig(currentStore(), currentOrg());
-    if (configured.errors.length) return def;
-    scope = compactScope(configured.defaults);
-  }
+  if (typeof def.service !== 'string' || !def.service.trim() || normalizeServiceKey(def.service) !== service.slug) return def;
+  const scope = typeof def.env === 'string' && def.env.trim() ? liveScopeOf(service, def.env) : null;
   const { scope: _was, ...rest } = mcp;
   return { ...def, packB: { ...def.packB, mcp: { ...rest, ...(scope ? { scope } : {}) } } };
 }
@@ -1385,12 +1383,14 @@ function serviceCheckNames(service) {
 
 // The checks named, each written by the studio, rewritten with `service`'s
 // switches and set-asides — its own name, its keys and its comment block
-// kept; one whose lists already are the service's is not touched.
+// kept; one whose lists already are the service's is not touched. Answers
+// how many it wrote.
 function writeGradeOffToChecks(names, service) {
   const keys = gradeOffKeysOf(service);
   const aside = JSON.stringify(setAsideOfService(service));
   const runs = JSON.stringify(chaosRunsOfService(service));
   const targets = JSON.stringify(mttxTargetsOfService(service));
+  let written = 0;
   for (const name of names) {
     let def;
     try { def = loadJourneyDef(name, { allowPath: false }); } catch (_) { continue; }
@@ -1403,9 +1403,31 @@ function writeGradeOffToChecks(names, service) {
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
-    try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); }
+    try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); written += 1; }
     catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs and MTTD / MTTR targets (${e.message})\n`); }
   }
+  return written;
+}
+
+// What the scope check (POST /api/services/:id/scope-check, server/scope-check.mjs) reads for an
+// environment of `service` — stored packs only, never an MCP call: `declared`, the environment's
+// last scan (its check's Pack A), else the service's own pack (an environment not added yet has
+// none of its own); `live`, the live pack the environment's last Run kept. Either null.
+function scopeBasisOf(service, envName) {
+  const name = serviceJourneyName(service.slug, envName);
+  let def;
+  try { def = loadJourneyDef(name, { allowPath: false }); } catch { def = null; }
+  const packOf = (id) => {
+    const meta = id ? findPackMeta(id) : null;
+    if (!meta) return null;
+    try { return { packId: meta.id, label: meta.label || meta.id, canonical: loadPackCanonical(meta) }; } catch { return null; }
+  };
+  const scanned = def ? workspacePackRef(def.packA) : null;
+  const primary = listPacksForService(currentStore(), service.id).find((l) => l.role === 'primary');
+  const declared = packOf(scanned?.id) || packOf(primary?.packId);
+  const kept = livePacksByJourney().get(name);
+  const liveMeta = kept ? packOf(kept.id) : null;
+  return { declared, live: liveMeta ? { ...liveMeta, refreshedAt: kept.refreshedAt } : null };
 }
 
 // A service about to be deleted: the checks that are its own, found while it
@@ -1413,7 +1435,8 @@ function writeGradeOffToChecks(names, service) {
 // service's, and a service made again under the name starts with none.
 function forgetGradeOffOfDeletedService(service) {
   const names = serviceCheckNames(service);
-  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [], targets: null });
+  // Its live scopes leave too: a service made again under the slug reads unscoped until it has its own.
+  return () => writeGradeOffToChecks(names, { ...service, gradeOff: [], setAside: [], chaosRuns: [], targets: null, liveScopes: {} });
 }
 
 async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra = {}) {
@@ -1577,20 +1600,11 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   }
   try { actorForRecord(req); } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
   const endpoint = livePack ? null : getMcpEndpointRow(db, env.mcpEndpointId);
-  // The live read's scope (an MCP read only): the environment's own, else the org's configured
-  // snapshot scope (OBSERVOGRAM_SNAPSHOT_* / the org's own variables), else none. Written into the
-  // check as packB.mcp.scope, so a Check now and the command line read the same.
-  let liveScope = null;
-  if (!livePack) {
-    liveScope = liveScopeOf(service, env.name);
-    if (!liveScope) {
-      const configured = snapshotScopeConfig(db, req.observogramOrg);
-      if (configured.errors.length) {
-        return res.status(409).json({ ok: false, error: `the configured snapshot scope does not parse — ${configured.errors.join('; ')}; fix the variable, or give ${service.name} in ${env.name} its own live scope` });
-      }
-      liveScope = compactScope(configured.defaults);
-    }
-  }
+  // The live read's scope (an MCP read only): the environment's own, else none — the server's
+  // configured snapshot scope (OBSERVOGRAM_SNAPSHOT_*) only pre-fills a new environment's form and is
+  // never applied to one that exists. Written into the check as packB.mcp.scope, so a Check now and
+  // the command line read the same.
+  const liveScope = livePack ? null : liveScopeOf(service, env.name);
   const name = serviceJourneyName(service.slug, env.name);
   let previous = null;
   try { previous = loadJourneyDef(name, { allowPath: false }); } catch (_) { /* the first Run */ }
@@ -1726,8 +1740,15 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
   const live = bAnn['mcp.url'] && livePackKind(canonicalB) !== 'snapshot'
     ? journeyPackBSource(currentStore(), bAnn['mcp.url'], { caller: mcpCallerOf(req) }) : null;
   if (live?.status) return res.status(live.status).json(mcpRefusalBody(live));
-  // A live pack read under a scope (a service's Run): the check re-reads it under the same one.
-  if (live?.mcp && bAnn[LIVE_SCOPE_ANNOTATION]) {
+  // The scope the check's live read applies, decided on the record: a capture that names a service
+  // with a record takes that environment's own scope (none without an environment, or when it has
+  // none) — never Pack B's recorded one, which may be another service's; a capture of no service
+  // record re-reads Pack B under the scope it was read with (a service's Run's live pack).
+  const scopeOwner = live?.mcp && typeof b.service === 'string' && b.service.trim() ? getServiceBySlug(currentStore(), normalizeServiceKey(b.service)) : null;
+  if (scopeOwner) {
+    const own = typeof b.env === 'string' && b.env.trim() ? liveScopeOf(scopeOwner, b.env.trim()) : null;
+    if (own) live.mcp.scope = own;
+  } else if (live?.mcp && bAnn[LIVE_SCOPE_ANNOTATION]) {
     let said = null;
     try { said = JSON.parse(bAnn[LIVE_SCOPE_ANNOTATION]); } catch { /* not a scope: none */ }
     if (said && typeof said === 'object' && !Array.isArray(said)) {
@@ -3064,6 +3085,32 @@ function syncTargetsIntoChecks(log) {
   if (written) log(`[studio] wrote the services' MTTD / MTTR targets into ${written} saved check${written === 1 ? '' : 's'}`);
 }
 
+// Boot step 8: a saved check of a service reads with its environment's own live scope, else none
+// (withServiceScope). A check saved while the server's configured snapshot scope applied to every
+// environment without its own still carries that scope; it is rewritten here, at the first start
+// after the change, and the count is logged — studio-written files only (writeGradeOffToChecks), a
+// check written by hand is left as it is. Idempotent; best effort: never a boot failure.
+function syncScopesIntoChecks(log) {
+  let written = 0;
+  for (const org of listOrgs(currentStore())) {
+    try {
+      runWithOrg(org.id, () => {
+        for (const name of listJourneys()) {
+          let def;
+          try { def = loadJourneyDef(name, { allowPath: false }); } catch { continue; }
+          if (!def?.packB?.mcp || typeof def.service !== 'string' || !def.service.trim()) continue;
+          const service = getServiceBySlug(currentStore(), normalizeServiceKey(def.service));
+          if (!service) continue;
+          const want = JSON.stringify(withServiceScope(def, service)?.packB?.mcp?.scope ?? null);
+          if (want === JSON.stringify(def.packB.mcp.scope ?? null) || !studioBanner(def.__source)) continue;
+          written += writeGradeOffToChecks([name], service);
+        }
+      });
+    } catch (e) { process.stderr.write(`[studio] org ${org.id}: the live scopes could not be written into its saved checks (${e.message})\n`); }
+  }
+  if (written) log(`[studio] ${written} saved check${written === 1 ? ' now reads' : 's now read'} with ${written === 1 ? 'its' : 'their'} environment's own live scope — the server's snapshot scope no longer applies to an environment that exists`);
+}
+
 // The studio no longer reads the install's deployment-wide live pack
 // (STORE_PLAN slice 3: one per org). While that file exists and the default
 // org has no live pack of its own yet, one line says where the badge reads
@@ -3136,6 +3183,7 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
   syncTargetsIntoChecks(log);
+  syncScopesIntoChecks(log);
   noteLegacyLivePack(db, log, legacyLivePack);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process

@@ -1,0 +1,23 @@
+apiVersion: 1
+providers:
+  - name: shop
+    type: file
+    folder: Shop
+    folderUid: shop-dash
+    options:
+      path: /var/lib/grafana/dashboards/shop
+  - name: teams
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards/teams
+      foldersFromFilesStructure: true
+  - name: dup-a
+    type: file
+    folder: Dup A
+    options:
+      path: /var/lib/grafana/dashboards/dup
+  - name: dup-b
+    type: file
+    folder: Dup B
+    options:
+      path: /var/lib/grafana/dashboards/dup

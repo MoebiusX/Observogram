@@ -940,16 +940,30 @@ function uploadHtml(f) {
 }
 
 // The live scope under the endpoint (formModel's `scope`): what of the estate the endpoint serves
-// is this service's — the snapshot scope's five answers, prefilled as the model says, and the hint.
+// is this service's — the snapshot scope's five answers (each said "from the server default" while
+// it holds the pre-fill), the hint, what a save would not keep, Use the server default for an
+// environment with none of its own, and the scope check's answer.
 function scopeHtml(f, v) {
   const s = f.scope;
   const fields = s.fields.map((x) => `
-              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
+              <label class="ov-form__f"><span class="ov-form__l">${escapeHtml(x.label)}${x.fromDefault ? '<span class="ov-form__scope-from og-muted"> · from the server default</span>' : ''}</span><input class="og-input" data-field="${attr(x.value)}" value="${attr(v[x.value] ?? '')}" placeholder="${attr(x.placeholder)}" autocomplete="off" spellcheck="false"></label>`).join('');
   return `
           <div class="ov-form__sub ov-form__scope" role="group" aria-labelledby="ov-form-scope-l">
             <span class="ov-form__l" id="ov-form-scope-l">Live scope — what of the estate is this service's</span>${fields}
-            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>
+            <span class="ov-form__hint og-muted">${escapeHtml(s.hint)}</span>${s.dropped ? `
+            <span class="ov-form__scope-warn">${escapeHtml(s.dropped)}</span>` : ''}${s.offerDefault ? `
+            <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-scope-default">Use the server default</button>` : ''}
+            ${scopeCheckBlockHtml(s.check)}
           </div>`;
+}
+
+// The scope check's answer (formModel's scope.check, overview-model.mjs scopeCheckView): always drawn,
+// so the host can replace it in place when the answer arrives — the form is not drawn again while
+// the person types.
+export function scopeCheckBlockHtml(check) {
+  const warnings = Array.isArray(check?.warnings) ? check.warnings : [];
+  const notes = Array.isArray(check?.notes) ? check.notes : [];
+  return `<div class="ov-form__scope-check" role="status">${warnings.length ? `<ul class="ov-form__scope-warn">${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}${notes.map((n) => `<span class="ov-form__hint og-muted">${escapeHtml(n)}</span>`).join('')}</div>`;
 }
 
 // A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
@@ -1312,6 +1326,8 @@ export function renderServiceList(container, list, form, host = appHost, { draft
     'ov-form-upload-zip': () => ov.pickRepositoryZip?.(),
     'ov-form-pack-repo': () => ov.pickPackFile?.('repo'),
     'ov-form-pack-live': () => ov.pickPackFile?.('live'),
+    // An environment with no live scope of its own: the server default, made its own (the fields fill in).
+    'ov-form-scope-default': () => ov.useServerDefaultScope?.(),
     'ov-retry': () => ov.retry?.(),
     'ov-explain': (ev, el) => ov.explain?.(el.dataset.reason),
   });

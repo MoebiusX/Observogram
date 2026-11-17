@@ -121,10 +121,11 @@ import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMod
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, scopeSummary, scanLossText, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
-  targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan } from './overview-model.mjs';
+  targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan,
+  useServerDefaultScope, scopeCheckOf, scopeChecking, scopeChecked, scopeCheckFailed, scopeCheckView } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
-import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture } from './overview-api.mjs';
-import { renderOverview, renderServiceList, readTokenDrafts } from './overview-view.mjs';
+import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture, checkServiceScope } from './overview-api.mjs';
+import { renderOverview, renderServiceList, readTokenDrafts, scopeCheckBlockHtml } from './overview-view.mjs';
 import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
 import { createControlRoomDriver } from './control-room-api.mjs';
 import { buildControlRoomModel } from './control-room-model.mjs';
@@ -2455,6 +2456,36 @@ function openListForm(serviceId = null, env = null, { focus = null, returnTo = n
   const first = opened.mode === 'add' ? 'name' : (opened.envChoices ? 'env' : opened.envFixed ? 'location' : 'env');
   listForm = { ...opened, focus: focus || first, returnTo };
   if (render) renderMainView();
+  checkListFormScope();
+}
+
+// The live scope's check (POST /api/services/:id/scope-check): asked when the form opens on a scope, a
+// moment after the last scope answer typed, and after Use the server default; an answer for an older
+// scope is dropped (overview-model.mjs scopeChecked).
+let scopeCheckTimer = null;
+function checkListFormScope({ delay = 0 } = {}) {
+  clearTimeout(scopeCheckTimer);
+  const ask = scopeCheckOf(listForm);
+  if (!ask) { if (listForm.open && listForm.scopeCheck) { listForm = { ...listForm, scopeCheck: null }; } return; }
+  if (listForm.scopeCheck?.key === ask.key) return;
+  scopeCheckTimer = setTimeout(async () => {
+    listForm = scopeChecking(listForm, ask.key);
+    paintScopeCheck();
+    const prefilled = listForm.scopePrefill;
+    try {
+      const answer = await checkServiceScope(ask.serviceId, { env: ask.env, scope: ask.scope });
+      listForm = scopeChecked(listForm, answer, ask.key);
+    } catch (e) {
+      listForm = scopeCheckFailed(listForm, e, ask.key);
+    }
+    // A pre-fill the answer refused changes the answers themselves: the form is drawn again; else only the check.
+    if (prefilled && !listForm.scopePrefill) renderMainView(); else paintScopeCheck();
+  }, delay);
+}
+// The check's block replaced in place, so a person typing in the form keeps the field and the caret.
+function paintScopeCheck() {
+  const box = document.querySelector('.ov-form__scope .ov-form__scope-check');
+  if (box) box.outerHTML = scopeCheckBlockHtml(scopeCheckView(listForm));
 }
 
 // The board's or the control room's Set targets… / Change targets…: the service's own form, on the
@@ -2592,6 +2623,7 @@ function listFormInput(field, value, { redraw = false } = {}) {
   // Custom targets: straight to the first of their two minute fields; any other choice keeps the select.
   if (field === 'targetProfile') listForm = { ...listForm, focus: value === MTTX_CUSTOM ? 'targetMttd' : 'targetProfile', scroll: value === MTTX_CUSTOM };
   if (redraw) renderMainView();
+  if (/^scope|^env$|^endpointId$/.test(field)) checkListFormScope({ delay: 600 });
 }
 
 // The save plan, call by call. A step that succeeded is written back into
@@ -2615,7 +2647,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   }
   listForm = { ...listForm, saving: true, error: null };
   renderMainView();
-  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched, packs: listForm.packs || null, scopeDefaults: listForm.scopeDefaults ?? liveScopeDefaultsOf(listFacts.liveScope), scopeKnown: !!listForm.record });
+  const plan = savePlan(listForm.values, { services: state.services || [], keyOf: normalizeServiceKey, serviceId: listForm.serviceId, upload: listForm.upload?.staged || null, targetsTouched: !!listForm.targetsTouched, packs: listForm.packs || null, scopeDefaults: listForm.scopeDefaults ?? liveScopeDefaultsOf(listFacts.liveScope), scopePrefill: listForm.scopePrefill ?? null, scopeKnown: !!listForm.record });
   let serviceId = plan.service.id ?? null;
   try {
     let endpointId = plan.endpoint.id;
@@ -2965,6 +2997,7 @@ const overviewActions = {
   // Add environment on a service's row: its form, the environment to name.
   addEnvironment: (serviceId) => openListForm(Number.isInteger(serviceId) ? serviceId : null, null, { addEnv: true }),
   formInput: listFormInput,
+  useServerDefaultScope: () => { listForm = useServerDefaultScope(listForm); renderMainView(); checkListFormScope(); },
   saveService: saveListForm,
   closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
   setTargets: (from) => openTargetsForm(from === 'control-room' ? 'control-room' : 'board'),
@@ -8229,7 +8262,7 @@ function renderCrawlResult(out) {
       <tr><td>metric definitions</td><td>${s.metricDefinitions || 0}</td></tr>
       <tr><td>telemetry sources</td><td>${s.scrapeJobs || 0}</td></tr>
       <tr><td>recording rules</td><td>${s.recordingRules}</td></tr>
-      <tr><td>burn-rate alerts</td><td>${s.burnRateAlerts}</td></tr>
+      <tr><td>alert rules read</td><td>${s.burnRateAlerts}${s.alertRules ? ` · ${s.alertRules} in alerting.rules` : ''}</td></tr>
       <tr><td>dashboards</td><td>${s.dashboards}</td></tr>
       <tr><td>alerting routes</td><td>${s.alertingRoutes}</td></tr>
       <tr><td>pipelines</td><td>${s.pipelines}</td></tr>

@@ -6,8 +6,8 @@
   "root": "tools/lib",
   "modules": {
     "tools/lib/adapter.mjs": {
-      "sha256": "668aacd1b82b911c64c9b95709379d5a2e2e7fb8da214505e1460aae7f2579cd",
-      "bytes": 40751,
+      "sha256": "a11ff588457c29c432e63a6276e924e86b5b959b6bbc11c3c255f155fb21b295",
+      "bytes": 41388,
       "exports": [
         "DECLARED_TYPE_PREFIX",
         "adapt",
@@ -78,9 +78,39 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "d7394de96b3c67e190ab6f891ec337acf369e8df728d92f5c71b1f9c66ba5499",
-      "bytes": 40151,
+      "sha256": "91dd354cd7cd4888b1f3ec887ea54422198ebf5c9340c8567e16eb1d3531a5ea",
+      "bytes": 42804,
       "exports": [
+        "GRAFANA_RULE_ANNOTATION_PREFIX",
+        "PARTIAL_ANNOTATION_PREFIX",
+        "REDACTED_CHANNEL_VALUE",
+        "SOURCE_RULES_ANNOTATION_PREFIX",
+        "UNRESOLVED_CHANNEL_PREFIX",
+        "behaviorEqual",
+        "behaviorOf",
+        "canonicalize",
+        "classify",
+        "deltasOf",
+        "foldMetricFamilies",
+        "identityKeyOf",
+        "isWithheldValue",
+        "metricFamilyResolver",
+        "modelOf",
+        "parseGrafanaRuleAnnotation",
+        "parsePartialAnnotation",
+        "parseSourceRulesAnnotation",
+        "partialAnnotation",
+        "sourceRulesAnnotationKey",
+        "unobservedOf"
+      ],
+      "imports": [
+        "tools/lib/artefact-classify.mjs",
+        "tools/lib/lifecycle.mjs",
+        "tools/lib/promql-canon.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "PARTIAL_ANNOTATION_PREFIX",
         "REDACTED_CHANNEL_VALUE",
         "SOURCE_RULES_ANNOTATION_PREFIX",
@@ -100,14 +130,7 @@
         "partialAnnotation",
         "sourceRulesAnnotationKey",
         "unobservedOf"
-      ],
-      "imports": [
-        "tools/lib/artefact-classify.mjs",
-        "tools/lib/lifecycle.mjs",
-        "tools/lib/promql-canon.mjs"
-      ],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/assurance-rules.mjs": {
       "sha256": "46aa9e1d926bd590a223666985839f3ae4ce552335f200855e77a877664030a0",
@@ -504,8 +527,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "fd7994afc7221706cfa8de48fdfdf717f054ad14ec4ae7ec1b0f950cf1dc1a06",
-      "bytes": 162650,
+      "sha256": "c32c5399e8946fe93ca5d4f5f19e3b70826fb0de0bfbe7ecaed98fa4dd4aa840",
+      "bytes": 177137,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -635,8 +658,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "54309c563c25d2ba3e1a56429816512389c001e0289f8ca3ee3806ba1776b7db",
-      "bytes": 46255,
+      "sha256": "b1e4a7d458ab65c08ba64e3f0e94fa671fe75fe3391bad97992125bd1ca8b030",
+      "bytes": 51483,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -876,9 +899,35 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "014ab85021962f39dbc91d3cf385f8658cbe6a9ebfb0d1de8131ee4faddc6f09",
-      "bytes": 26600,
+      "sha256": "178a2fac18c6063746b079410c022099058822b4b49b47326f550b2d34bcd942",
+      "bytes": 28647,
       "exports": [
+        "LIVE_KINDS",
+        "LIVE_SCOPE_ANNOTATION",
+        "LIVE_STAGES",
+        "SCOPE_ANNOTATION_PREFIX",
+        "SCOPE_FAMILIES",
+        "SCOPE_LIMITS",
+        "SNAPSHOT_LIMITS",
+        "STAGE_STATES",
+        "compactScope",
+        "fetchPlan",
+        "folderTitleOf",
+        "folderUidOf",
+        "inScope",
+        "normalizeScope",
+        "ruleGroupOf",
+        "scopeAnnotations",
+        "scopeIsEmpty",
+        "scopeOf",
+        "scopeReason",
+        "stageNoun",
+        "stagesFor"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "LIVE_KINDS",
         "LIVE_SCOPE_ANNOTATION",
         "LIVE_STAGES",
@@ -899,10 +948,7 @@
         "scopeReason",
         "stageNoun",
         "stagesFor"
-      ],
-      "imports": [],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/mcp-client.mjs": {
       "sha256": "d35ededb657169dfbb7980c6710b9407538ba3b09ee3c2154ada4741bf9f1b48",
@@ -1353,9 +1399,37 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "f20bdad84cb20bf9ada0154873b72248f645112ded71607d9ddd89904251286b",
-      "bytes": 21947,
+      "sha256": "571a8f5369852017452819a08679f56f231872a53ef9225121971a713b83b900",
+      "bytes": 30395,
       "exports": [
+        "SPEC_DURATION_RE",
+        "SPEC_RECORDING_RULE_NAME_RE",
+        "alertRuleExpr",
+        "alertRuleWindows",
+        "burnAlertsFromAlertRules",
+        "burnCandidateFromAlertRule",
+        "canonicalRuleDuration",
+        "defaultBurnWindows",
+        "grafanaRuleCondition",
+        "grafanaRuleFacts",
+        "inferSlisFromRecordingRules",
+        "isGrafanaManagedRule",
+        "isSpecRecordingRuleName",
+        "mergeBurnAlertsBySlo",
+        "operationalAlertRule",
+        "operationalAlertRules",
+        "recordedSloForExpr",
+        "ruleNameToSliId",
+        "ruleNameToSloId",
+        "sourceRuleTerms"
+      ],
+      "imports": [
+        "tools/lib/alert-routes.mjs",
+        "tools/lib/slug.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": [
         "SPEC_DURATION_RE",
         "SPEC_RECORDING_RULE_NAME_RE",
         "alertRuleExpr",
@@ -1374,13 +1448,7 @@
         "ruleNameToSliId",
         "ruleNameToSloId",
         "sourceRuleTerms"
-      ],
-      "imports": [
-        "tools/lib/alert-routes.mjs",
-        "tools/lib/slug.mjs"
-      ],
-      "npm": [],
-      "changedSinceRelease": false
+      ]
     },
     "tools/lib/slug.mjs": {
       "sha256": "bf9f4c4816363d65c66203e4f7fdbc061b9a144f909545278b7192b4ec903c51",
