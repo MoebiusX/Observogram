@@ -3216,7 +3216,13 @@ family with data — or does not answer at all — the run writes an `outcome:
 vantage-lost` record (no grade, no match) before exiting `2` — the loss is a
 point in the history, not a gap, and never a figure. A run that compared
 nothing records no match figure (`drift.alignmentPct: null`, `drift.compared:
-0`), and a gate never passes on an absent figure. The CLI grades on the
+0`), and a gate never passes on an absent figure — nor on a run that compared
+nothing: its report reads `⚠️ … — NOTHING COMPARED` (`· GATE FAILED` with its
+breaches, `· GATE NOT PASSED` under a gate whose own keys held, a
+freshness-only gate say, which then exits `1`), never `✅ PASS`; a journey
+with no gate configured (none, or one whose every key is `false` or `null`)
+has no gate verdict and exits `0`, its report and `journey list` saying
+nothing compared. The CLI grades on the
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name. The example's
@@ -3290,7 +3296,11 @@ runs `journey run --all` as a CronJob against the studio's workspace PVC.
 `notify:` posts a run to a webhook only when it says something new
 (`transitions`: outcome changed, a chain got worse, a new candidate cause, the
 vantage changed; `breach`; `always`) — the outcome lands on the record as
-`notify` and never changes the exit code. Each record of a live run also keeps the stack
+`notify` and never changes the exit code. Both read a run as every reader
+does: one that compared nothing is no pass (`breach` posts it as *nothing
+compared*; under `transitions` a check that stops comparing anything is news,
+a repeat changes no outcome), and the payload's `reading` and one-line text
+say so. Each record of a live run also keeps the stack
 self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
 and Grafana status the MCP answered) — point-in-time signals kept per run so
 the history is the time series, never a verdict.
@@ -3400,7 +3410,13 @@ since the run before, the gate, drift / grade / conformance / freshness, the
 stack evidence table with the Alertmanager and Grafana status, the vantage,
 backend versions, delivery, and the schedule with its cron / schtasks /
 GitHub Actions / CronJob snippets (`GET /api/journeys/:name/schedule`, loaded
-on demand). The saved-journey cards close the page. The charts are
+on demand). The saved-journey cards close the page. A run whose live side
+gave nothing — a lost run, or an older record whose every probe failed —
+shows no grade and no chain integrity, in the focus head (*the live source
+did not answer: <first probe error>*) and the newest record alike; **run
+now** and **run all** read a run the server answered 502 but recorded as lost
+(its body's `outcome`) as *unable to observe* with its first probe error, and
+count it so — never *did not finish* with the server's raw answer. The charts are
 zero-dependency inline SVG (`tools/lib/svg-charts.mjs`); the numbers come
 from one pure model (`tools/lib/neuron-model.mjs`), so what the page says can
 be tested without a browser. The view needs no pack loaded.

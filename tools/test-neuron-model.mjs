@@ -575,3 +575,40 @@ test('NM3 the Journeys and Neuron views\' words: alignment only over a compariso
   const de = buildJourneyDetail(entry('j', [emptyOld(0)]), [emptyOld(0)]);
   assert.ok(nv.evidenceLine(de, latestCheck(de))[1].startsWith('nothing compared · grade 80%'), 'the facts say nothing compared, never alignment 100%');
 });
+
+test('NM4 a lost run read as the record it left: the Journeys view\'s run now and Neuron\'s Run now / Run all read the 502 that recorded it (its outcome) as unable to observe — its first probe error, or a live side that answered with no data — and count it so, never "did not finish" with the server\'s raw answer; Neuron\'s focus head and newest-record rows show no grade and no chain integrity over a live side that gave nothing', async () => {
+  const jv = await import('../studio/journeys-view.mjs');
+  const nv = await import('../studio/neuron-view.mjs');
+  const { servicesRefusal } = await import('../studio/services-api.mjs');
+  const { NO_PROBE_DATA } = await import('./lib/journey.mjs');
+  // The server's 502 of a lost run (server/index.mjs executeJourneyRun), as requestJson throws it.
+  const answer = (error) => servicesRefusal(502, JSON.stringify({ ok: false, error, outcome: 'vantage-lost' }));
+  assert.equal(jv.runResultText('j', jv.lostRunOf(answer('alert_rules_list: HTTP 500: no backend session'))), 'j: unable to observe — the live source did not answer: alert_rules_list: HTTP 500: no backend session');
+  assert.equal(jv.runResultText('j', jv.lostRunOf(answer(NO_PROBE_DATA))), 'j: unable to observe — the live source answered, but returned no data', 'the engine\'s own words for no data');
+  assert.ok(!/[{}]|did not finish/.test(jv.runResultText('j', jv.lostRunOf(answer('x')))), 'no raw answer, never "did not finish"');
+  // A refusal that recorded nothing still did not finish; so does a 502 whose body names no outcome.
+  assert.equal(jv.lostRunOf(servicesRefusal(400, JSON.stringify({ ok: false, error: 'journey j is not run: its notify hook is not set' }))), null);
+  assert.equal(jv.lostRunOf(servicesRefusal(502, JSON.stringify({ ok: false, error: 'fetch failed' }))), null);
+  assert.equal(jv.lostRunOf(new Error('502 Bad Gateway on /api/journeys/j/run: {"ok":false}')), null);
+  // Run all counts them under unable to observe — a bucket the old reading of a 502 could never reach.
+  assert.equal(jv.runAllText(['a', 'b'], { pass: 0, 'gate-failed': 0, 'nothing-compared': 0, 'vantage-lost': 2, 'scan-partial': 0, error: 0 }, []), 'Ran 2 journeys: 2 unable to observe.');
+  // Neuron over the older record whose every probe failed (defect 1 as history holds it: a pass, alignment 100
+  // over an empty union, a grade and the chains' scored integrity).
+  const old = { ...allFailed(0), drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, grade: { score: 17, pass: false, threshold: 85, letter: 'D', letterLabel: 'Consumer Grade', schema: 5, driftConstruct: 'requirement-chain' },
+    traceability: { integrityPct: 0, intact: 0, partial: 0, broken: 2, undeclared: 0, declaredTotal: 2 } };
+  const d = buildJourneyDetail(entry('j', [old]), [old]);
+  assert.deepEqual([d.latest.outcome, d.latest.grade, d.latest.traceability], ['vantage-lost', null, null], 'the model shows no grade and no chain integrity over a live side that gave nothing');
+  const head = nv.focusOutcomeWords(d.latest, T0 + 19 * 3600e3);
+  assert.equal(head, 'the live source did not answer: alert_rules_list: HTTP 500: no backend session · 19 hours ago');
+  assert.ok(!/grade|%/.test(head));
+  const rows = Object.fromEntries(nv.latestFactRows(d.latest));
+  assert.deepEqual([rows.alignment.split(' — ')[0], rows.grade, rows.traceability], ['unable to observe', '— (unable to observe)', '— (unable to observe)']);
+  // A run whose families answered with no data says so; a run over a comparison keeps its words.
+  assert.equal(nv.focusOutcomeWords(buildJourneyDetail(entry('j', [noData(0)]), [noData(0)]).latest, T0 + 2 * 3600e3), 'the live source answered, but returned no data · two hours ago');
+  const ok = buildJourneyDetail(entry('j', [run(0)]), [run(0)]).latest;
+  assert.equal(nv.focusOutcomeWords(ok, T0 + 2 * 3600e3), 'alignment 90% · grade 80% · two hours ago');
+  assert.equal(Object.fromEntries(nv.latestFactRows(ok)).grade.startsWith('80% (PASS at'), true);
+  // Nothing compared: the chains' integrity is not measured (the links would read broken for want of anything compared).
+  const nothing = { ...emptyOld(0), traceability: { integrityPct: 0, intact: 0, partial: 0, broken: 2, undeclared: 0, declaredTotal: 2 } };
+  assert.ok(Object.fromEntries(nv.latestFactRows(buildJourneyDetail(entry('j', [nothing]), [nothing]).latest)).traceability.startsWith('integrity not measured: nothing was compared · 0 intact'));
+});

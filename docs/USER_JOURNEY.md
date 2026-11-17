@@ -366,7 +366,10 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    a pass older than its window, or declared and never recorded as run. With
    none declared it says what each side could not see, never that recovery
    is unproven. Each line counts what the engine counted, so the seven lines
-   still add up to the letter.
+   still add up to the letter. Over a check that compared nothing, the
+   chains' line says so and why (*Nothing was compared on the last check,
+   so no promise is confirmed live. 28 declared things not read live.*),
+   never *0 in 100 hold up live* over links nothing could read.
 
 6. **Overview speaks plainly, with one primary button.** Five status words
    on the board and no others — *Never checked · Unchanged · Changed ·
@@ -383,7 +386,11 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    what was not read beside it: *Live answered in part: dashboards not
    read*, *49 of 220 files not read*) and *Checked* (*92% match*); *Not
    known* when the checks could not be read. The board's Unchanged and
-   Changed are a row's Checked or Checked (partial). No percentage without a
+   Changed are a row's Checked or Checked (partial) — a check that compared
+   only what runs live undeclared (every declared difference set aside)
+   reads *Changed* (*nothing the repository declares was compared: 1 thing
+   runs live that it does not declare*) with its figure on the row, the ring
+   and the toast alike, never *it matches*. No percentage without a
    comparison anywhere — a record written before this rule that claims 100
    over an empty comparison reads *Nothing compared*, and one whose every
    probe failed reads *Unreachable* — and a gate never reads as passed over
@@ -745,12 +752,19 @@ Belongs here:
   the 31 details beyond it.* only when a link of the chain matched, else
   *Nothing in the chain was compared; look at …*; over nothing compared,
   *Nothing was compared, so nothing is confirmed live: see what each side
-  holds.* with **Open in Diagnose**) — **See the
+  holds.* with **Open in Diagnose**; over what runs live undeclared alone,
+  *Nothing the repository declares was compared; 1 thing runs live that it
+  does not declare yet.* with **See the differences**; after a Run that
+  stopped on a partial scan since the check on screen, *The last Run read
+  the repository in part and stopped, so the check shown is the one before
+  it: check it against live again, and run the service again once its
+  repository answers in full.* with **Check again**, its files not read
+  behind *Why*) — **See the
   differences** (Neuron, on the run whose numbers the board showed), **See
   what to fix** (Expert's Diagnose, with the assessment's first three causes
   behind *Why*), **Check now** or **Check again**, or **Open Expert mode**
-  when the check reads a recording; with nothing to change, the sentence
-  alone (*Nothing to do right now: live matches what the repository
+  when the check reads a recording; with nothing to change and no Run
+  stopped since, the sentence alone (*Nothing to do right now: live matches what the repository
   declares.*, or, with the specification's rules still to add, *Live matches
   what the repository declares; the 3 rules the specification requires,
   above, are what is left to add.*); **Open in Remediate**;

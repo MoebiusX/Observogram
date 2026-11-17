@@ -692,15 +692,16 @@ test('a refused Deploy says the server\'s text on the modal\'s status line and d
   assert.match(fn, /catch \(e\) \{\s*setStatus\(`error: \$\{e\.message\}`, 'error'\);/);
 });
 
-// Neuron's Run all runs each journey with api() and ends on ONE toast: a
-// refusal (the same for every journey) must reach it, not only a count.
+// Neuron's Run all runs each journey with services-api.mjs requestJson and
+// ends on ONE toast: a refusal (the same for every journey) must reach it, not
+// only a count; a 502 that recorded a lost run is counted unable to observe.
 const { deniedError } = await import('../studio/api.mjs');
 const { runAllText } = await import('../studio/journeys-view.mjs');
 
 test('Neuron\'s Run all says the server\'s text when the runs are refused, not only how many did not finish', async () => {
   const { routeEntry } = await import('./route-table.mjs');
   const d = authzDecision(routeEntry('POST /api/journeys/:name/run'), ctxOf('identity', P.viewer));
-  const denial = deniedError(d.status, d.body); // what api() throws
+  const denial = deniedError(d.status, d.body); // what requestJson throws (servicesRefusal reads the denial so)
   const names = ['j-one', 'j-two'];
   const tally = (t) => ({ pass: 0, 'gate-failed': 0, 'vantage-lost': 0, error: 0, ...t });
   assert.equal(runAllText(names, tally({ error: 2 }), names.map((name) => ({ name, message: denial.message }))),
@@ -712,9 +713,10 @@ test('Neuron\'s Run all says the server\'s text when the runs are refused, not o
   // Runs that all finished read as before.
   assert.equal(runAllText(names, tally({ pass: 1, 'gate-failed': 1 })), 'Ran 2 journeys: 1 passed and 1 failed.');
 
-  // runJourneys keeps each thrown error's text and hands it to the toast.
+  // runJourneys keeps each thrown error's text and hands it to the toast — every error but a lost run's
+  // recorded 502 (lostRunOf), which is counted under unable to observe.
   const fn = functionSource(withoutComments(readFileSync(join(STUDIO, 'neuron-view.mjs'), 'utf8')), 'runJourneys');
-  assert.match(fn, /catch \(err\) \{\s*tally\.error \+= 1;\s*failures\.push\(\{ name, message: err\?\.message \|\| String\(err\) \}\);/);
+  assert.match(fn, /catch \(err\) \{\s*const lost = lostRunOf\(err\);\s*if \(lost\) \{\s*tally\['vantage-lost'\] \+= 1;[\s\S]*?\} else \{\s*tally\.error \+= 1;\s*failures\.push\(\{ name, message: err\?\.message \|\| String\(err\) \}\);/);
   assert.match(fn, /if \(names\.length > 1\) toast\(runAllText\(names, tally, failures\),/);
 });
 

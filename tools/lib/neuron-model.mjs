@@ -230,6 +230,10 @@ export function exposureSeries(runs) {
 export function buildJourneyDetail(journey, runs) {
   const sorted = sortRunsOldestFirst(runs);
   const latest = sorted.length ? sorted[sorted.length - 1] : null;
+  // The newest run read as a lost vantage — a lost run, or an older record whose every probe failed,
+  // which still carried a grade and the chains' integrity over a live side that gave nothing: it shows
+  // neither, as gradeOf drops its grade from the series and the board does not letter it.
+  const lostRead = !!latest && outcomeOf(latest) === 'vantage-lost';
   const rows = stackRowSeries(sorted);
   return {
     name: journey?.name ?? null,
@@ -271,9 +275,9 @@ export function buildJourneyDetail(journey, runs) {
       scan: scanFactsOf(latest.packA?.scan),
       comparable: comparableWithPrevious(latest),
       drift: isRecord(latest.drift) ? latest.drift : null,
-      grade: isRecord(latest.grade) ? latest.grade : null,
+      grade: isRecord(latest.grade) && !lostRead ? latest.grade : null,
       conformance: isRecord(latest.conformance) ? latest.conformance : null,
-      traceability: isRecord(latest.traceability) ? latest.traceability : null,
+      traceability: isRecord(latest.traceability) && !lostRead ? latest.traceability : null,
       freshness: isRecord(latest.freshness) ? latest.freshness : null,
       breaches: breachesOf(latest),
       chains: isRecord(latest.chains) ? latest.chains : null,

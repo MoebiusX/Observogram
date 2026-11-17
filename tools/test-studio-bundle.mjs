@@ -355,14 +355,14 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 6,950,000 since the Services matrix (2026-11-12: the studio's own code reached 6,809,288 with the list
   // drawn as a row per service and a column per environment, a branch per environment and the shared
   // clause fixes; no dependency).
-  // 7,164,000 since a match figure rests on what was read (2026-11-17: the two-pack bundle measured
-  // 7,148,584 with 0.8.41's YAML reader merged in — the engine's null figures and probe outcomes in the
+  // 7,182,000 since a match figure rests on what was read (2026-11-17: the two-pack bundle measured
+  // 7,167,064 with 0.8.41's YAML reader and the review's reader fixes merged in — the engine's null figures and probe outcomes in the
   // studio's modules, the board unit's copy of tools/lib/run-basis.mjs with the row's five states,
   // nothing compared on the board, the Run's toast over a 502 and a 409, the Journeys and Neuron
   // readings, the service form's deployment surface and live scope with its check, the board's scan line
   // by kind, and the Grafana rule reading in sli-inference, crawler, artefact-model and diff; no
   // dependency), about 15 KB over.
-  assert.ok(built.bytes < 7_164_000, `the two-pack bundle is under 7,164,000 bytes (${built.bytes})`);
+  assert.ok(built.bytes < 7_182_000, `the two-pack bundle is under 7,182,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

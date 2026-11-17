@@ -191,7 +191,15 @@ no Check button — re-reading a file proves nothing about production. A live
 side that showed less than the check before (a probe family newly failed)
 never reads as a count: the sentence says what could not be read, the
 letter falls back to the repository's and says why, Check again is the one
-thing to do. The service picker lists the rows with a pack of their own; a row that only
+thing to do. One record reads one way everywhere: a check that compared
+only what runs live undeclared (every declared difference set aside) is
+*Changed* with its figure on the board, the row and the Run's toast alike,
+never *Nothing compared* beside a ring that shows one, and never *it
+matches*; a Run that stopped on a partial scan since the check on screen is
+the next step's news (*the check shown is the one before it*, **Check
+again**), never *Nothing to do right now* beside it; over a check that
+compared nothing, *Why this grade* says nothing was compared and why, never
+a chain figure. The service picker lists the rows with a pack of their own; a row that only
 appears in a live draft has nothing to grade and is Expert's to show (it
 stays listed only while it is the one remembered).
 
