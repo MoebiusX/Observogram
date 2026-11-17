@@ -38,7 +38,9 @@ export function computeOverviewDiagnostic(layered, posture = null, { off = [] } 
 // `run` is the journey's newest run that checked something; a Run stopped on
 // a scan that lost files (outcome 'scan-partial': the service kept its last
 // complete scan) is `stopped` when it is the newest, never `run` — the board
-// keeps showing the check of the pack the service kept.
+// keeps showing the check of the pack the service kept, however many stops
+// came after it (the runs route's `checked=1`; a server without it answers
+// with its newest runs, and the newest 25 are read as before).
 const STOPPED = 'scan-partial';
 const STOPPED_LOOK_BACK = 25;
 export async function loadOverviewFacts({ pack = null, env = null, journeyFor = () => null, fetchFn = requestJson } = {}) {
@@ -62,14 +64,19 @@ export async function loadOverviewFacts({ pack = null, env = null, journeyFor = 
   // names them as stoppedRun alone, and its stop is read too.
   if (out.journey?.lastRun || out.journey?.stoppedRun) {
     try {
-      const runsOf = async (limit) => {
-        const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?limit=${limit}`);
+      const runsOf = async (query) => {
+        const body = await fetchFn(`/api/journeys/${enc(out.journey.name)}/runs?${query}`);
         return Array.isArray(body?.runs) ? body.runs : [];
       };
-      // The newest record alone, as before; only when it is a stop, the ones behind it.
-      let runs = await runsOf(1);
-      if (runs[0]?.outcome === STOPPED) runs = await runsOf(STOPPED_LOOK_BACK);
+      // The newest record alone, as before; only when it is a stop, the newest that checked something
+      // behind it, past every stop (checked=1) — from a server that answers with a stop all the same
+      // (it does not know checked=1), the 25 newest.
+      let runs = await runsOf('limit=1');
       out.stopped = runs[0]?.outcome === STOPPED ? runs[0] : null;
+      if (out.stopped) {
+        runs = await runsOf('limit=1&checked=1');
+        if (runs.some((r) => r?.outcome === STOPPED)) runs = await runsOf(`limit=${STOPPED_LOOK_BACK}`);
+      }
       out.run = runs.find((r) => r && r.outcome !== STOPPED) || null;
     } catch (e) { out.runError = sentence(e); }
   }

@@ -223,7 +223,8 @@ const itemsUrl = (repo, params) => {
 
 // The repository's tree as GitHub's tree API shapes it ({ type: 'blob', path }),
 // so selectCrawlerFiles filters both alike; paths lose ADO's leading slash.
-// Called without a signal: the tree keeps its own deadline, not the files' budget.
+// `opts.signal` is the tree read's own budget (server/github-crawl.mjs
+// retryRead), never the files' budget; the call keeps its 60 s deadline too.
 export async function adoTree(repo, opts = {}) {
   const doc = await adoFetch(itemsUrl(repo, { scopePath: '/', recursionLevel: 'Full' }), opts);
   return (Array.isArray(doc?.value) ? doc.value : [])

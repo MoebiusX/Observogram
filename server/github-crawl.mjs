@@ -240,8 +240,18 @@ export const HOST_READ_PARALLEL = 8;
 // trade for never sending 200 requests at once, and for an Azure DevOps
 // worst case of 120 s instead of 25 × 60 s. Each file keeps its own 60 s
 // deadline inside it; the repository and tree reads keep theirs apart, not
-// under this budget.
+// under this budget (HOST_READ_CALL_BUDGET_MS).
 export const HOST_READ_FILES_BUDGET_MS = 120_000;
+
+// How long one read that is no file of a read's — a repository's metadata,
+// its tree — may take, its tries and the waits between them together: 90 s,
+// room for a host's 60 s wait between two quick tries. A try again is
+// started only when the wait and a try as long as the last one fit in what
+// is left, so a host or a proxy that fails slowly (a 504 after 55 s) is
+// asked once, as before retries, never four times. A Run's repository read
+// therefore takes at most 90 s for the repository's metadata (when no branch
+// is named), 90 s for its tree and 120 s for its files.
+export const HOST_READ_CALL_BUDGET_MS = 90_000;
 
 // How often a read tries one file (the first try included); the backoff
 // before a try again when the host asks for no wait — 1 s, 2 s, 4 s, each
@@ -286,8 +296,11 @@ const waitAfter = (e, attempt, backoffMs, random) => (Number.isFinite(e?.retryAf
  * wait, and the pool halves — once for a burst, never once per refusal — then
  * grows back by one after a round of answers, never to the size that was
  * refused. A server error or a drop is tried again alone. A host that asks
- * for a wait longer than `maxWaitMs`, or past the budget's end, is asked
- * nothing more in this read. Nothing ever runs more than `parallel` at once.
+ * for a wait longer than `maxWaitMs`, or past the budget's end — a refusal
+ * and a server error alike — is asked nothing more in this read, and the
+ * sentence names which bound it asked past ("more than the 60 s a read
+ * waits", "more than the read had left"). Nothing ever runs more than
+ * `parallel` at once.
  *
  * When the budget runs out its controller aborts with outOfTime's error as
  * the reason: fetch(), res.text() and res.json() reject with the signal's
@@ -336,7 +349,9 @@ export async function downloadFiles(selected, fetchText, {
   };
   const release = () => { inFlight--; wake(); };
   const failed = (e, error, attempt) => ({ error, ...(Number.isInteger(e?.status) ? { status: e.status } : {}), ...(attempt > 1 ? { attempts: attempt } : {}) });
-  const tooLong = () => `the host asked to wait ${secondsOf(gaveUp.waitMs)} s, more than the read had left`;
+  // The bound a host's wait goes past: the longest a read waits, else what the read has left.
+  const pastWhat = (wait) => (wait > maxWaitMs ? `more than the ${secondsOf(maxWaitMs)} s a read waits` : 'more than the read had left');
+  const tooLong = () => `the host asked to wait ${secondsOf(gaveUp.waitMs)} s, ${pastWhat(gaveUp.waitMs)}`;
   let next = 0;
   const worker = async () => {
     while (next < selected.length) {
@@ -362,17 +377,17 @@ export async function downloadFiles(selected, fetchText, {
           last = e;
           const kind = retryKind(e);
           const wait = waitAfter(e, attempt, backoffMs, random);
-          if (kind === 'refused') {
-            // One cut for a burst: a refusal of a request that started before the last cut is that burst's.
-            if (startedAt === cuts) { ceiling = Math.max(1, limit - 1); limit = Math.max(1, Math.floor(limit / 2)); cuts++; streak = 0; }
-            const hinted = Number.isFinite(e?.retryAfterMs) && e.retryAfterMs > 0;
-            if (hinted && (wait > maxWaitMs || now() + wait > deadline)) {
-              if (!gaveUp) {
-                gaveUp = Object.assign(new Error(`not tried: the host refused ${node.path} (${e.status}) and asked to wait ${secondsOf(wait)} s, more than the read had left`), { status: e.status, waitMs: wait });
-                wake(true);
-              }
-            } else pauseUntil = Math.max(pauseUntil, now() + wait);
-          }
+          // One cut for a burst: a refusal of a request that started before the last cut is that burst's.
+          if (kind === 'refused' && startedAt === cuts) { ceiling = Math.max(1, limit - 1); limit = Math.max(1, Math.floor(limit / 2)); cuts++; streak = 0; }
+          // The host's own wait, whatever it answered (a refusal, a server error): one rule — past the
+          // longest a read waits, or past its end, nothing more is asked of that host in this read.
+          const hinted = Number.isFinite(e?.retryAfterMs) && e.retryAfterMs > 0;
+          if (kind && hinted && (wait > maxWaitMs || now() + wait > deadline)) {
+            if (!gaveUp) {
+              gaveUp = Object.assign(new Error(`not tried: the host ${kind === 'refused' ? 'refused' : 'could not serve'} ${node.path} (${e.status}) and asked to wait ${secondsOf(wait)} s, ${pastWhat(wait)}`), { status: e.status, waitMs: wait });
+              wake(true);
+            }
+          } else if (kind === 'refused') pauseUntil = Math.max(pauseUntil, now() + wait);
           if (!kind) { texts.set(node.path, failed(e, attempt > 1 ? `${e.message} — tried ${attempt} times` : e.message, attempt)); break; }
           if (gaveUp) { texts.set(node.path, failed(e, `${e.message} — ${tooLong()}`, attempt)); break; }
           if (attempt === tries) { texts.set(node.path, failed(e, tries > 1 ? `${e.message} — tried ${attempt} times` : e.message, attempt)); break; }
@@ -398,25 +413,44 @@ export async function downloadFiles(selected, fetchText, {
  * One read that is no file of a read's (a repository's metadata, its tree),
  * tried again as a file is when the host refused or dropped it — `attempts`
  * tries in all, after the host's wait or a backoff, all the waits together at
- * most `maxWaitMs` — each try under its own deadline (the caller's fetcher's).
+ * most `maxWaitMs` — under one budget of `callBudgetMs` for its tries and
+ * waits together (HOST_READ_CALL_BUDGET_MS): `call(signal)` gets the budget's
+ * signal, which the fetcher combines with its own 60 s deadline
+ * (fetch-failure.mjs readSignal), and a try again is started only when its
+ * wait and a try as long as the last one fit in what the budget has left.
  * A read that still fails throws its last error, "— tried <n> times" added
- * to its sentence; its status is the host's. `limits` as downloadFiles'.
+ * to its sentence (and "; the read's <n> s ran out" when the budget cut the
+ * try after it); its status is the host's. `limits` as downloadFiles'.
  */
-export async function retryRead(call, { attempts = HOST_READ_ATTEMPTS, backoffMs = HOST_READ_BACKOFF_MS, maxWaitMs = HOST_READ_MAX_WAIT_MS, sleep = sleepUnder, random = Math.random } = {}) {
+export async function retryRead(call, {
+  attempts = HOST_READ_ATTEMPTS, backoffMs = HOST_READ_BACKOFF_MS, maxWaitMs = HOST_READ_MAX_WAIT_MS, callBudgetMs = HOST_READ_CALL_BUDGET_MS,
+  now = Date.now, sleep = sleepUnder, random = Math.random,
+} = {}) {
   const tries = Math.max(1, Math.floor(attempts) || 1);
+  const budget = new AbortController();
+  const reason = Object.assign(new Error(`the read's ${secondsOf(callBudgetMs)} s ran out`), { name: 'ReadBudgetError' });
+  const timer = setTimeout(() => budget.abort(reason), callBudgetMs);
+  const end = now() + callBudgetMs;
+  const said = (e, n, why = '') => { if (e && typeof e === 'object' && typeof e.message === 'string' && (n > 1 || why)) e.message = `${e.message} — tried ${n} time${n === 1 ? '' : 's'}${why}`; return e; };
   let waited = 0;
-  for (let attempt = 1; ; attempt++) {
-    try { return await call(); }
-    catch (e) {
-      const wait = waitAfter(e, attempt, backoffMs, random);
-      if (!retryKind(e) || attempt >= tries || waited + wait > maxWaitMs) {
-        if (attempt > 1 && e && typeof e === 'object' && typeof e.message === 'string') e.message = `${e.message} — tried ${attempt} times`;
-        throw e;
+  let last = null;
+  try {
+    for (let attempt = 1; ; attempt++) {
+      const startedAt = now();
+      try { return await call(budget.signal); }
+      catch (e) {
+        // The budget cut this try: the host's last answer says what failed, and why no more was asked.
+        if (e === reason || e?.name === 'ReadBudgetError') throw last ? said(last, attempt, `; ${reason.message}`) : e;
+        last = e;
+        const wait = waitAfter(e, attempt, backoffMs, random);
+        const took = Math.max(0, now() - startedAt);
+        if (!retryKind(e) || attempt >= tries || waited + wait > maxWaitMs || now() + wait + took > end) throw said(e, attempt);
+        waited += wait;
+        try { await sleep(wait, budget.signal); }
+        catch { throw said(e, attempt, `; ${reason.message}`); }
       }
-      waited += wait;
-      await sleep(wait, null);
     }
-  }
+  } finally { clearTimeout(timer); }
 }
 
 // The JSON a GitHub REST answer carries, an answer that could not be read to
@@ -441,14 +475,29 @@ export async function ghFetch(path, init = {}, { token = null } = {}) {
   try { res = await fetch(`https://api.github.com${path}`, { ...init, headers, signal: readSignal(init.signal ?? null) }); }
   catch (e) { throw unreachable('GitHub', 'https://api.github.com', e); }
   if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    // GitHub's SAML single sign-on refusal — its `X-GitHub-SSO: required; url=…` header (the value
+    // never read out), or its sentence, "Resource protected by organization SAML enforcement." where
+    // a proxy dropped the header: the token is not authorised for the organisation, and the message's
+    // second sentence says what to do about it, so that one is kept too.
+    const sso = res.status === 403 && (res.headers.get('x-github-sso') !== null || /\bSAML enforcement\b/i.test(hostMessage(body)));
     // What GitHub says (fetch-failure.mjs hostMessage): its JSON `message`'s first sentence
-    // ("Not Found", "Bad credentials") — never the body itself, nothing of a body that is not JSON.
-    const said = hostMessage(await res.text().catch(() => ''));
+    // ("Not Found", "Bad credentials"), with no account or address in it — never the body itself,
+    // nothing of a body that is not JSON.
+    const said = hostMessage(body, { sentences: sso ? 2 : 1 });
     const err = new Error(`GitHub ${res.status} on ${path}${said ? `: ${said}` : ''}`);
     err.status = res.status;
     // The wait GitHub asks for (a secondary limit's retry-after, a spent quota's reset), for a read that tries again.
     const wait = hostWaitMs(res.headers);
     if (wait !== null) err.retryAfterMs = wait;
+    // A 403 that refuses the token rather than the pace — SAML single sign-on, a token or an app
+    // without access, an IP allow list — is final, never tried again: GitHub's limits say they are
+    // limits, by a retry-after, a spent quota (x-ratelimit-remaining 0) or their own sentence (a
+    // primary or secondary rate limit, the abuse detection), and only those are.
+    if (res.status === 403) {
+      const spent = String(res.headers.get('x-ratelimit-remaining') ?? '').trim() === '0';
+      if (sso || !(wait !== null || spent || /\brate limit\b|\babuse detection\b/i.test(said))) err.retryable = false;
+    }
     throw err;
   }
   return res;
@@ -489,7 +538,8 @@ export async function rawFetch(owner, repo, ref, path, { signal = null } = {}) {
  * most 200, 5 MB each, 16 MB in all) downloaded by downloadFiles — 8 at a
  * time (HOST_READ_PARALLEL), each under its own 60 s deadline, all under one
  * 120 s budget (HOST_READ_FILES_BUDGET_MS); the repository and tree reads
- * before them keep their own 60 s each, apart — through the contents API
+ * before them each under a 90 s budget of their own, apart, a try 60 s at
+ * most (HOST_READ_CALL_BUDGET_MS, retryRead) — through the contents API
  * with a `token` (a private repository; repo-auth.mjs says whose), else
  * from raw.githubusercontent.com (rawFetch: a public one, no quota spent).
  * A file GitHub refused or dropped is tried again (downloadFiles), and so are
@@ -505,15 +555,16 @@ export async function rawFetch(owner, repo, ref, path, { signal = null } = {}) {
  * truncated GitHub's own flag (a tree too large to list whole: files may be
  * missing that nothing here can name). The POST /api/crawl-github route and a
  * service's Run share it. `limits` ({ parallel, budgetMs, attempts, backoffMs,
- * maxWaitMs, now, sleep, random }) is a test seam for downloadFiles and retryRead.
+ * maxWaitMs, callBudgetMs, now, sleep, random }) is a test seam for
+ * downloadFiles and retryRead.
  */
 export async function fetchGithubFiles({ owner, repo, ref = null }, { token = null, fetchFn = (path, init) => ghFetch(path, init, { token }), rawFn = token ? null : rawFetch, limits = {} } = {}) {
   let at = ref;
   if (!at) {
-    const repoMeta = await retryRead(async () => apiJson(await fetchFn(`/repos/${owner}/${repo}`)), limits);
+    const repoMeta = await retryRead(async (signal) => apiJson(await fetchFn(`/repos/${owner}/${repo}`, { signal })), limits);
     at = repoMeta.default_branch || 'main';
   }
-  const treeResp = await retryRead(async () => apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`)), limits);
+  const treeResp = await retryRead(async (signal) => apiJson(await fetchFn(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(at)}?recursive=1`, { signal })), limits);
   const plan = planCrawlerFetch(treeResp.tree, HOST_READ_CAPS);
   const texts = await downloadFiles(plan.selected, async (node, signal) => {
     const contentRes = rawFn

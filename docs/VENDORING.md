@@ -685,7 +685,9 @@ label }`, the scan the service keeps, or `null`); the server has kept a
 says the stop and whether a complete scan is kept — from the 409 itself while
 the listing does not show it (a first Run that kept none saves no check).
 `loadOverviewFacts` answers `run` — the journey's newest run that checked
-something — and `stopped`, the newest record when it is such a stop (else
+something, however many stops are newer (it asks the runs route for
+`checked=1`; a server that answers without it is read 25 records back, as
+before) — and `stopped`, the newest record when it is such a stop (else
 `null`; read too when the listing names only a stop): a board that passes
 the newest record as `run` would read a stop, which carries no drift, as a
 check. A board unit older

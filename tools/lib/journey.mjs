@@ -1612,8 +1612,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // The journey's history, newest first, read once before this run writes
   // anything (so every comparison is against history, never against itself):
   // the probe memory reads it before the live read, a lost run and the main
-  // path after it.
-  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
+  // path after it. Runs stopped on a partial scan never fill the window.
+  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT, pastStops: true });
   // The run this one is compared against — transitions, causes, notify and
   // the snapshot decision: the newest that checked something (a Run stopped
   // on a partial scan checked nothing).
@@ -2013,13 +2013,23 @@ function writeRunRecord(name, startedAt, record) {
 // The run records of a journey, newest first. Only files of the run shape
 // (JOURNEY_RUN_FILE_RE) are records: a hand-dropped notes.json would
 // otherwise sort after every ISO name and become the "previous run".
-export function readJourneyRuns(name, { limit = 50 } = {}) {
+// `pastStops`: a Run stopped on a partial scan (SCAN_PARTIAL_OUTCOME) does
+// not count toward `limit` — the read goes on past every stop until `limit`
+// records that checked something are read (the stops between them come too,
+// in order), so any number of stops in a row never pushes a journey's last
+// check out of the history a run, a service's Run or the listing reads.
+export function readJourneyRuns(name, { limit = 50, pastStops = false } = {}) {
   const dir = runsDir(name);
   let files = [];
   try { files = readdirSync(dir).filter(f => JOURNEY_RUN_FILE_RE.test(f)).sort().reverse(); } catch (_) { return []; }
   const out = [];
-  for (const f of files.slice(0, limit)) {
-    try { out.push(JSON.parse(readFileSync(join(dir, f), 'utf8'))); } catch (_) {}
+  let checked = 0;
+  for (const f of pastStops ? files : files.slice(0, limit)) {
+    if (pastStops && checked >= limit) break;
+    let record;
+    try { record = JSON.parse(readFileSync(join(dir, f), 'utf8')); } catch (_) { continue; }
+    out.push(record);
+    if (record?.outcome !== SCAN_PARTIAL_OUTCOME) checked++;
   }
   return out;
 }

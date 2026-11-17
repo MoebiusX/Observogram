@@ -19,6 +19,7 @@
 // Server-only; pure but for the default route, read from this process's
 // environment.
 
+import { isIP } from 'node:net';
 import { outboundRoute } from './outbound-proxy.mjs';
 
 // The codes that mean the host was not reached, in words.
@@ -141,18 +142,45 @@ export function hostWaitMs(headers, nowMs = Date.now()) {
 }
 
 // What a host's error answer says, for a sentence a person reads: the JSON
-// body's `message` — its first sentence only, on one line, at most 200
-// characters ("Not Found", "TF401019: The Git repository … does not exist.";
-// a host's further sentences may name an identity or an address) — never the
-// body itself, and nothing for a body that is not JSON (an HTML page, a
-// proxy's text): the status says it alone then.
-export function hostMessage(body) {
+// body's `message` — its first sentence only (`sentences` more where a reader
+// knows the next one is the remedy: GitHub's SAML single sign-on refusal), on
+// one line, at most 200 characters ("Not Found", "TF401019: The Git
+// repository … does not exist."; a host's further sentences may name an
+// identity or an address) — never the body itself, and nothing for a body
+// that is not JSON (an HTML page, a proxy's text): the status says it alone
+// then. What the kept sentences name of whoever asked is taken out
+// (withoutIdentities): GitHub's rate-limit answer names the account or the
+// address in its first sentence ("API rate limit exceeded for user ID 1."),
+// and the sentence reaches a run record, the journeys listing, a 409 and a
+// notification — reasons and counts only.
+export function hostMessage(body, { sentences = 1 } = {}) {
   let message = null;
   try { const j = JSON.parse(String(body ?? '')); if (j && typeof j.message === 'string') message = j.message; } catch { return ''; }
   if (!message) return '';
   const line = message.replace(/\s+/g, ' ').trim();
-  const first = /^(.*?[.!?])(?=\s|$)/.exec(line);
-  return (first ? first[1] : line).slice(0, 200);
+  const kept = new RegExp(`^((?:.*?[.!?](?=\\s|$)\\s*){1,${Math.max(1, Math.floor(sentences) || 1)}})`).exec(line);
+  return withoutIdentities((kept ? kept[1] : line).trim()).slice(0, 200);
+}
+
+// GitHub's rate-limit sentence names who spent the quota after "for": the
+// account (a user ID, a GitHub App's installation ID) or, for a caller with
+// no token, its address. The subject goes and the fact stays: "API rate
+// limit exceeded." Anything else that names whoever asked is written
+// <redacted>: an account ID, an e-mail address, a quoted user name (Azure
+// DevOps' "The user '…'"), an IP address (Node's isIP decides, never a time
+// such as 05:00:00 nor a TF code's colon) — what was refused and why stays.
+const RATE_LIMIT_FOR = /(rate limit (?:exceeded|reached))\s+for\s+((?:user|installation|app|account)\s+ID\s+\d+|[0-9a-f.:]+?)(?=\.?(?:\s|$)|[!?,;)])/gi;
+const ADDRESS_LIKE = /(?<![\w:.])[0-9a-f]*[.:][0-9a-f.:]*/gi;
+function withoutIdentities(text) {
+  return String(text ?? '')
+    .replace(RATE_LIMIT_FOR, (all, fact, who) => (/\bID\b/i.test(who) || isIP(who) ? fact : all))
+    .replace(/\b(user|installation|app|account)\s+ID\s+\d+/gi, '$1 ID <redacted>')
+    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '<redacted>')
+    .replace(/\b(the user|identity)\s+'[^']*'/gi, "$1 '<redacted>'")
+    .replace(ADDRESS_LIKE, (token) => {
+      const bare = token.replace(/\.+$/, '');   // a sentence's full stop is no part of it
+      return isIP(bare) ? `<redacted>${token.slice(bare.length)}` : token;
+    });
 }
 
 // What a reader may do with a read that failed, decided from the status the
@@ -165,11 +193,15 @@ export function hostMessage(body) {
 //              EPIPE; 'fetch failed' with one of those): tried again alone;
 //   null       anything else — 401, 404, a redirect, the 60 s deadline (a
 //              TimeoutError), a body that could not be decoded (Z_*, HPE_*,
-//              UND_ERR_BODY_TIMEOUT), the read's budget (a ReadBudgetError):
-//              never tried again.
+//              UND_ERR_BODY_TIMEOUT), the read's budget (a ReadBudgetError),
+//              or an answer its reader marked final (`err.retryable ===
+//              false`: GitHub's 403 that refuses the token — SAML single
+//              sign-on, a token or an app without access — rather than the
+//              pace, server/github-crawl.mjs ghFetch): never tried again.
 const REFUSED_STATUS = new Set([403, 429, 503]);
 export function retryKind(error) {
   if (!error || typeof error !== 'object') return null;
+  if (error.retryable === false) return null;
   const status = Number(error.status);
   if (Number.isInteger(status) && status > 0) {
     if (REFUSED_STATUS.has(status)) return 'refused';

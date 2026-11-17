@@ -2786,13 +2786,16 @@ test('a Run stopped on a scan that lost files: the refusal keeps what the scan r
     const check = runs.find((r) => r.outcome !== 'scan-partial');
     return { name: 'shop.prod', lastRun: check ? { startedAt: check.startedAt, outcome: check.outcome } : null, stoppedRun: runs[0]?.outcome === 'scan-partial' ? { startedAt: runs[0].startedAt } : null };
   };
-  const facts = (runs) => loadOverviewFacts({
+  // The runs route as the server answers it: `checked=1` keeps the runs that checked something, past every stop;
+  // `knowsChecked: false` is a server from before it, which answers with its newest runs.
+  const facts = (runs, { knowsChecked = true } = {}) => loadOverviewFacts({
     journeyFor: (list) => list[0],
     fetchFn: async (path) => {
       asked.push(path);
       if (path === '/api/journeys') return { journeys: [listedOf(runs)] };
       const limit = Number(/limit=(\d+)/.exec(path)[1]);
-      return { runs: runs.slice(0, limit) };
+      const list = knowsChecked && /[?&]checked=1\b/.test(path) ? runs.filter((r) => r.outcome !== 'scan-partial') : runs;
+      return { runs: list.slice(0, limit) };
     },
   });
   const plain = await facts([checked]);
@@ -2800,7 +2803,15 @@ test('a Run stopped on a scan that lost files: the refusal keeps what the scan r
   asked.length = 0;
   const afterStop = await facts([stop, stop, checked]);
   assert.deepEqual([afterStop.run, afterStop.stopped], [checked, stop], 'the stop is not the check: the board keeps the check of the pack the service kept, and the stop beside it');
-  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=25']);
+  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=1&checked=1']);
+  // More stops than the old look-back of 25: the check is still read.
+  const manyStops = [...Array.from({ length: 40 }, () => stop), checked];
+  assert.deepEqual([(await facts(manyStops)).run, (await facts(manyStops)).stopped], [checked, stop], 'past every stop, however many');
+  // A server that does not know checked=1 answers with the stop: the 25 newest, as before.
+  asked.length = 0;
+  const older = await facts([stop, stop, checked], { knowsChecked: false });
+  assert.deepEqual([older.run, older.stopped], [checked, stop]);
+  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=1&checked=1', '/api/journeys/shop.prod/runs?limit=25']);
   assert.deepEqual([(await facts([stop])).run, (await facts([stop])).stopped], [null, stop], 'only stops: nothing checked yet');
 });
 

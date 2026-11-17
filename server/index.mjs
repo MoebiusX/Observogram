@@ -90,7 +90,7 @@ import { compactScope, normalizeScope, LIVE_SCOPE_ANNOTATION } from '../tools/li
 import { verdictsDocument } from './verdict-admin.mjs';
 import { envRefOf, envSurfaceOf, liveScopeOf, livePackOf, folderRefusal, journeyPackBSource, pickServiceEnvironment, repositorySourceRefusal, resolveJourneyMcp, resolveMcpTarget, serviceJourneyName, serviceTierFor } from './service-admin.mjs';
 import { controlRoomRoutes } from './routes/control-room.mjs';
-import { fetchRepositoryFiles, partialScanPolicy } from './repo-sources.mjs';
+import { fetchRepositoryFiles, partialScanPolicy, repositoryKey } from './repo-sources.mjs';
 import { readUpload } from './repository-uploads.mjs';
 import { PACK_UPLOAD_WAYS, parsePackUpload } from './service-packs.mjs';
 import { RepoAuthRefusal, parseRepoAuth, recordedAccess, redactToken, repoAuthNeed, repoAuthTail, repositoryAccess, repositoryCredential, signInOn } from './repo-auth.mjs';
@@ -989,11 +989,11 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
       try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
       // The last check is the newest run that is not a stopped Run (a Run that stopped on a partial
       // scan checked nothing; outcome scan-partial): it is named beside the check as `stoppedRun`.
-      // The engine's one rule (lastCheckedRun, the run a next run is compared against), over the same
-      // history window; read further back only when the newest is a stop.
+      // The engine's one rule (lastCheckedRun, the run a next run is compared against); read further
+      // back only when the newest is a stop, past every stop however many there are.
       const newest = readJourneyRuns(name, { limit: 1 })[0] || null;
       const stopped = newest?.outcome === SCAN_PARTIAL_OUTCOME ? newest : null;
-      const lastRun = stopped ? lastCheckedRun(readJourneyRuns(name, { limit: BASELINE_SCAN_LIMIT })) : newest;
+      const lastRun = stopped ? lastCheckedRun(readJourneyRuns(name, { limit: 1, pastStops: true })) : newest;
       // A journey whose notification a server run would refuse says so —
       // the run's own text, which names who acts (the server's operator, or
       // whoever holds the workspace); never for a journey a run would
@@ -1124,10 +1124,14 @@ app.get('/api/journeys/notify-hooks', authorize('GET /api/journeys/notify-hooks'
 const servedRun = (run) => (run?.notify && typeof run.notify === 'object' && typeof run.notify.error === 'string'
   ? { ...run, notify: { ...run.notify, error: scrubNotifyError(run.notify.error) } }
   : run);
+// `checked=1`: only the runs that checked something — never a Run stopped on a partial scan — the
+// newest `limit` of them however many stops are newer (the board's last check after a stop).
 app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
+  const checked = req.query.checked === '1';
   try {
-    res.json({ runs: readJourneyRuns(req.params.name, { limit }).map(servedRun) });
+    const runs = readJourneyRuns(req.params.name, { limit, pastStops: checked });
+    res.json({ runs: (checked ? runs.filter((r) => r?.outcome !== SCAN_PARTIAL_OUTCOME) : runs).map(servedRun) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1733,7 +1737,7 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
   // A scan that lost files: stopped while a complete scan of this repository is kept (the default
   // policy) or when it read no file at all; else checked, marked partial (runJourney fails its gate).
   if (scan.partial) {
-    const kept = keptCompleteScan(name, previous, read);
+    const kept = keptCompleteScan(name, previous, repository, read);
     if (!scan.files || (kept && partialScanPolicy() === 'stop')) {
       return stopOnPartialScan(req, res, { def, name, service, env, previous, kept, scan, targets, t0 });
     }
@@ -1755,21 +1759,37 @@ app.post('/api/services/:id/run', authorize('POST /api/services/:id/run'), async
 
 // The service's last complete scan of the repository a Run has just read: the
 // check's Pack A, still registered, made by the newest run that checked
-// something, whose scan read this same place and branch and lost nothing (a
-// record written before scans said so: none of its named files lost) — as
-// { id, label, source }, else null.
-function keptCompleteScan(name, previous, read) {
+// something, whose scan read this same repository and branch and lost nothing
+// (a record written before scans said so: none of its named files lost) — as
+// { id, label, source }, else null. The history is read past every Run
+// stopped since (readJourneyRuns pastStops): stops in a row never push the
+// check out of it, so every partial Run stops while the check stands.
+function keptCompleteScan(name, previous, repository, read) {
   const ref = previous?.packA ? workspacePackRef(previous.packA) : null;
   if (!ref) return null;
   // The engine's one rule for "checked something" (lastCheckedRun), over the records that carry a scan.
-  const last = lastCheckedRun(readJourneyRuns(name, { limit: BASELINE_SCAN_LIMIT })
+  const last = lastCheckedRun(readJourneyRuns(name, { limit: BASELINE_SCAN_LIMIT, pastStops: true })
     .filter((r) => r && typeof r === 'object' && r.packA?.scan && typeof r.packA.scan === 'object'));
   const s = last?.packA?.scan;
   if (!s || typeof last.packA.source !== 'string' || basename(last.packA.source) !== `${ref.id}.pack.yaml`) return null;
-  if ((s.source ?? null) !== (read.source ?? null) || (s.ref ?? null) !== (read.ref ?? null)) return null;
+  if (!scannedSameRepository(s, repository, read) || (s.ref ?? null) !== (read.ref ?? null)) return null;
   const lost = s.partial === true
     || (s.partial === undefined && (Array.isArray(s.skippedFiles) ? s.skippedFiles : []).some((x) => scanSkipKind(x?.why) === 'lost'));
   return lost ? null : { ...ref, source: last.packA.source };
+}
+
+// Whether a recorded scan read the repository this Run read. A host's (GitHub, Azure DevOps): by
+// the whole repository its `access` names — host, organisation and project as well as the names
+// (repo-sources.mjs repositoryKey), never the words for where it came from, which leave out the
+// organisation ("Shop/shop on Azure DevOps"); a host scan that names no access says too little, so it
+// is no scan of this repository and the partial scan is checked, marked partial. A folder or an
+// upload: by those words, which name its whole location.
+function scannedSameRepository(scan, repository, read) {
+  if (repository?.kind === 'github' || repository?.kind === 'ado') {
+    const was = scan.access && typeof scan.access === 'object' ? repositoryKey(scan.access) : null;
+    return was !== null && was === repositoryKey(repository);
+  }
+  return (scan.source ?? null) === (read.source ?? null);
 }
 
 // A Run stopped on a scan that lost files: the stored pack and the check's
