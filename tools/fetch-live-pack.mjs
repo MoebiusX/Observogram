@@ -70,7 +70,7 @@ import {
 } from './lib/contracts/stack-self-metrics.mjs';
 import { CHAOS_RUN_PROBES, chaosRunsFromAnswers } from './lib/contracts/chaos-run-evidence.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
-import { stripMcpUrl, safeMcpUrl, redactCredentials } from './lib/mcp-url-safety.mjs';
+import { stripMcpUrl, safeMcpUrl, redactCredentials, credentialParamName } from './lib/mcp-url-safety.mjs';
 import { dashboardSpecId } from './lib/crawler.mjs';
 import { LIVE_KINDS, SNAPSHOT_LIMITS, stagesFor, stageNoun, normalizeScope, scopeAnnotations, scopeIsEmpty } from './lib/live-fetch.mjs';
 import { compileBoundedPattern } from './lib/artefact-classify.mjs';
@@ -380,35 +380,53 @@ const OBSERVED_ERROR_LENGTH = 200;
 
 const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
 
-// A URL inside a probe failure, as the pack, the run record and a
-// notification may keep it (P7: reasons and counts only — a backend's error
-// text can echo the link it was asked with): the repository's URL rule
+// A probe failure as the pack, the run record and a notification may keep it
+// (P7: reasons and counts only — a backend's error text can echo the request
+// it was asked with). Every URL by the repository's URL rule
 // (tools/lib/mcp-url-safety.mjs safeMcpUrl: no userinfo, no fragment, no
-// credential parameter) and no query string at all. A URL with none of
-// these stays as it was written; one that does not parse keeps what
-// precedes its query, its userinfo masked.
+// credential parameter) and no query string at all; a URL with none of these
+// stays as it was written, one that does not parse keeps what precedes its
+// query, its userinfo masked. Then what quotes a request without a scheme or
+// a secret outside a URL: the query and fragment of a path written alone
+// (urllib3 and requests name the request so: `Max retries exceeded with url:
+// /api/v1/targets?api_key=…`), the userinfo of a `//user:pass@` link, the
+// value of every `name=value` pair whose name says it holds a credential
+// (mcp-url-safety's credentialParamName, as the readers' safeErrorText reads
+// it) and a Bearer or Basic value. The readers' rule (tools/lib/run-basis.mjs
+// safeErrorText) masks nothing this one keeps. Idempotent.
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+const PATH_QUERY_IN_TEXT = /(^|[\s(=:,'"`[])(\/[^\s?#"'<>`]*)[?#][^\s"'<>`)\]]*/g;
+const USERINFO_IN_TEXT = /\/\/[^/\s@]+@/g;
+const NAME_VALUE_IN_TEXT = /(^|[\s?&;,([{'"`])([A-Za-z_][\w.%[\]-]*)=("[^"]*"|'[^']*'|[^\s&;,)\]}'"`]*)/g;
+const AUTH_VALUE_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
+const decodedParamName = (name) => { try { return decodeURIComponent(name); } catch { return name; } };
 export function maskProbeErrorUrls(text) {
-  return String(text ?? '').replace(URL_IN_TEXT, (raw) => {
-    if (!/[?#]/.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(raw)) return raw;
-    const safe = safeMcpUrl(raw);
-    if (safe === null) return redactCredentials(raw).replace(/[?#].*$/, '');
-    const url = new URL(safe);
-    url.search = '';
-    return url.href;
-  });
+  return String(text ?? '')
+    .replace(URL_IN_TEXT, (raw) => {
+      if (!/[?#]/.test(raw) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(raw)) return raw;
+      const safe = safeMcpUrl(raw);
+      if (safe === null) return redactCredentials(raw).replace(/[?#].*$/, '');
+      const url = new URL(safe);
+      url.search = '';
+      return url.href;
+    })
+    .replace(PATH_QUERY_IN_TEXT, (_m, lead, path) => `${lead}${path}`)
+    .replace(USERINFO_IN_TEXT, '//***@')
+    .replace(NAME_VALUE_IN_TEXT, (m, lead, name) => (credentialParamName(decodedParamName(name)) ? `${lead}${name}=***` : m))
+    .replace(AUTH_VALUE_IN_TEXT, '$1 ***');
 }
 
 // Why a probe family got no answer: every candidate that failed, in the
 // order the cascade tried them, each named and trimmed like any observed
-// error — `metrics_label_values: HTTP 502 · metrics_metadata: MCP error
-// -32602 …`. The FIRST entry is the cause worth reading: the cascade only
-// reached the later ones because of it (the night the stack behind the
-// public MCP restarted, the one message kept was the last fallback's
-// schema complaint, which read like a contract change). A message that
-// already begins with the tool's name is not prefixed twice. Null when no
-// attempted candidate left a message. Every URL in it is masked
-// (maskProbeErrorUrls) before it is cut, so a cut never keeps half a query.
+// error — `metrics_label_values: HTTP 502 · list_metrics: HTTP 503 …`. The
+// FIRST entry is the cause worth reading: the cascade only reached the
+// later ones because of it (the night the stack behind the public MCP
+// restarted, the one message kept was the last fallback's schema
+// complaint, which read like a contract change). A message that already
+// begins with the tool's name is not prefixed twice. Null when no
+// attempted candidate left a message. Every URL in it — and every query
+// and credential it quotes — is masked (maskProbeErrorUrls) before it is
+// cut, so a cut never keeps half a query.
 const PROBE_FAILURE_SEPARATOR = ' · ';
 function probeFailureText(attempted, probeFailures) {
   const entries = [];
@@ -429,11 +447,28 @@ function probeFailureText(attempted, probeFailures) {
 
 // C6: a refusal — the MCP gateway's own 401/403 (tools/lib/mcp-client.mjs
 // `MCP HTTP 401 on tools/call: …`), a JSON-RPC error saying so, or a tool
-// whose backend refused the MCP's own credentials (its isError text: `HTTP
-// 403: Forbidden`, `Unauthorized`, `status code 401`). A bare 401 in other
-// words (`returned 401 series`) is not one. The one rule for the probe
-// cascade and the ping's backendAuthRefused.
-const REFUSAL_TEXT = /\bHTTP\s+(?:status\s+)?40[13]\b|\bstatus(?:\s+code)?\s*[:=]?\s*40[13]\b|\b40[13]\s+(?:unauthori[sz]ed|forbidden)\b|\bunauthori[sz]ed\b|\bforbidden\b/i;
+// whose backend refused the MCP's own credentials, in the words its client
+// library gives it: `HTTP 403: Forbidden`, `Unauthorized`, `status code 401`,
+// `"statusCode":401`; the Prometheus Go client's `client error: 403`; a
+// generated Grafana client's `[GET /search][403] searchForbidden`; `API error
+// (403)`; `received 403 from upstream`; gRPC's `code = PermissionDenied` /
+// `code = Unauthenticated`; AWS's `AccessDeniedException`. A bare 401 or 403
+// in other words (`returned 401 series`, `403 series matched`) is not one.
+// The one rule for the probe cascade and the ping's backendAuthRefused.
+const REFUSAL_TEXT = new RegExp([
+  String.raw`\bHTTP\s+(?:status\s+)?40[13]\b`,
+  String.raw`\bstatus(?:[\s_]*code)?"?\s*[:=]?\s*"?40[13]\b`,
+  String.raw`\b40[13]\s+(?:unauthori[sz]ed|forbidden)\b`,
+  String.raw`\bunauthori[sz]ed\b`,
+  String.raw`\bforbidden\b`,
+  String.raw`[a-z](?:unauthori[sz]ed|forbidden)\b`,
+  String.raw`\[40[13]\]`,
+  String.raw`\bclient error:\s*40[13]\b`,
+  String.raw`\((?:HTTP\s+)?40[13]\)`,
+  String.raw`\b40[13]\s+from\b`,
+  String.raw`\bcode\s*=\s*(?:PermissionDenied|Unauthenticated)\b`,
+  String.raw`\bAccessDenied(?:Exception)?\b`,
+].join('|'), 'i');
 export function isProbeRefusal(message) {
   return typeof message === 'string' && REFUSAL_TEXT.test(message);
 }
@@ -451,13 +486,32 @@ const notServedStatusesOf = (family) => {
   const statuses = capability(family).unsupportedOnHttpStatus;
   return Array.isArray(statuses) ? statuses.filter((n) => Number.isInteger(n) && n >= 400 && n < 500 && n !== 401 && n !== 403) : [];
 };
+// A probe family whose answer can say "not served here": its capability row
+// declares the statuses, or its probe reads an answer so (notServedAnswer).
+// False for a name that is no capability (a caller's pre-filled probe table).
+function canNotServeHere(family) {
+  let statuses;
+  try { statuses = notServedStatusesOf(family); } catch { return false; }
+  return statuses.length > 0 || PROBES.some((p) => p.name === family && typeof p.notServedAnswer === 'function');
+}
+
+// A message that says the datasource the tool reads through is missing
+// (Grafana's datasource proxy: `Data source not found`, `Unable to find
+// datasource`, `datasource with uid "x" not found`): a misconfiguration of
+// the read, never a store without the API. The "not found" must be the
+// datasource's own — at most its uid, id or name between — so a URL's
+// `/api/datasources/…` path or a `datasource proxy returned Not Found` (the
+// store behind it answered 404) is no missing datasource.
+const MISSING_DATASOURCE_TEXT = /\bdata\s?sources?(?:\s+(?:with\s+)?(?:uid|id|name))?(?:\s+["'`]?[\w.:-]+["'`]?)?\s+(?:was\s+)?(?:not\s+found|does\s+not\s+exist|doesn't\s+exist)\b|\b(?:unable\s+to\s+find|unknown|no\s+such|missing)\s+(?:the\s+)?data\s?source\b/i;
 
 // The status (one of `statuses`) a failed call's message says the tool's
 // backend answered, or null: the tool's own answer or the call's JSON-RPC
 // error — never the MCP endpoint's own HTTP status (`MCP HTTP 404 on
-// tools/call` is the MCP itself), never a refusal.
+// tools/call` is the MCP itself), never a refusal, and never an answer that
+// names a missing datasource (E2: a wrong datasource uid answers 404 too).
 export function notServedStatus(message, statuses) {
   if (typeof message !== 'string' || /^MCP HTTP \d{3} on /.test(message) || isProbeRefusal(message)) return null;
+  if (MISSING_DATASOURCE_TEXT.test(message)) return null;
   for (const code of Array.isArray(statuses) ? statuses : []) {
     if (!Number.isInteger(code) || code < 400 || code > 499 || code === 401 || code === 403) continue;
     const phrase = HTTP_REASON_PHRASES[code];
@@ -473,9 +527,7 @@ const isErrorEnvelope = (response) => !!response && typeof response === 'object'
 // A not-served family's line wherever a reason is said (the gate log, the
 // pack's unobserved annotation): what was answered, then what it means.
 function notServedText(noun, notServed) {
-  const since = notServed.remembered && typeof notServed.since === 'string'
-    ? ` (answered so since ${notServed.since.slice(0, 10)}; this read got no other answer)` : '';
-  return `${notServed.reason}${since} — the ${noun} are not served here; not counted as a failure`;
+  return `${notServed.reason} — the ${noun} are not served here; not counted as a failure`;
 }
 
 // Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
@@ -1215,6 +1267,37 @@ function alertmanagerConfigText(response) {
   return typeof config === 'string' && config.trim() ? config : null;
 }
 
+// What an Alertmanager status answer that gave no configuration text to read
+// is: { trimmed, why }. "Not served" needs a positive signal (A16, narrowed):
+// `trimmed` only for a status object — no error, no error envelope, one of the
+// status's own fields (versionInfo, version, uptime, cluster) — that has no
+// `config` key at all: a tier that trims it. Everything else is no answer, a
+// failure with its reason: an error, something that is no Alertmanager status,
+// an empty configuration, or one in a shape this reader does not read (Grafana's
+// built-in Alertmanager states it as a JSON object — read as no routes, every
+// declared route would read "declared, not live").
+const ALERTMANAGER_STATUS_FIELDS = Object.freeze(['versionInfo', 'version', 'uptime', 'cluster']);
+const carriesError = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && (v.error != null || v.errorType != null);
+function alertmanagerStatusGap(response) {
+  if (isErrorEnvelope(response)) {
+    return { trimmed: false, why: `the status answer is an error envelope (errorType ${typeof response.errorType === 'string' && response.errorType ? response.errorType : 'unknown'})` };
+  }
+  if (carriesError(response)) return { trimmed: false, why: 'the status answer carries an error' };
+  const obj = locateObject('status-object', response);
+  if (!obj || isErrorEnvelope(obj) || carriesError(obj) || !ALERTMANAGER_STATUS_FIELDS.some((k) => obj[k] !== undefined)) {
+    return { trimmed: false, why: 'the answer is no Alertmanager status' };
+  }
+  const has = (o, k) => !!o && typeof o === 'object' && !Array.isArray(o) && Object.hasOwn(o, k);
+  if (has(obj, 'config') || has(response, 'config')) {
+    const config = has(obj, 'config') ? obj.config : response.config;
+    const text = typeof config === 'string' ? config : config?.original;
+    return config == null || (typeof text === 'string' && !text.trim())
+      ? { trimmed: false, why: 'the Alertmanager status carries an empty configuration' }
+      : { trimmed: false, why: 'the Alertmanager status carries its configuration in a shape this reader does not read' };
+  }
+  return { trimmed: true, why: 'the Alertmanager status carries no configuration' };
+}
+
 // The routes of the Alertmanager configuration a status call returned, read
 // exactly as the crawler reads a config file. Returns [] when there is no
 // configuration, it does not parse, or it declares no route with a channel
@@ -1415,10 +1498,10 @@ export function buildCanonicalPack({
     annotations[`mcp.probeErrors.${family}`] = maskProbeErrorUrls(msg);
   }
   // P6: why a family is unsupported when the store behind the MCP answered
-  // that it keeps no such thing (or a journey remembered it did): JSON
-  // { reason, since, tools, remembered? } — the reason is the tool and the
-  // status it answered, never the answer's text. A journey's memory reads it
-  // back from the run record (tools/lib/journey.mjs probeMemoryOf).
+  // that it keeps no such thing: JSON { reason, since, tools } — the reason
+  // is the tool and the status it answered, never the answer's text. A
+  // journey's memory reads it back from the run record
+  // (tools/lib/journey.mjs probeMemoryOf).
   for (const [family, v] of Object.entries(probeResults || {})) {
     const n = v?.notServed;
     if (classify(v) !== 'unsupported' || !n || typeof n !== 'object') continue;
@@ -1426,8 +1509,18 @@ export function buildCanonicalPack({
       reason: trimError(n.reason) || 'no reason recorded',
       since: typeof n.since === 'string' ? n.since : null,
       tools: Array.isArray(n.tools) ? n.tools.filter((t) => typeof t === 'string') : [],
-      ...(n.remembered === true ? { remembered: true } : {}),
     });
+  }
+  // E2: the tool(s) that answered a family that can read "not served" here
+  // (canNotServeHere) — data or an honest empty — so a journey remembers
+  // which tools serve it: a later not-served answer from one of them is a
+  // failure, not a store that keeps none (tools/lib/journey.mjs
+  // probeMemoryOf). Tool names only, comma-separated.
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    const outcome = classify(v);
+    if ((outcome !== 'data' && outcome !== 'empty') || !v?.tool || !canNotServeHere(family)) continue;
+    const tools = [...new Set(String(v.tool).split('+').filter(Boolean))];
+    if (tools.length) annotations[`mcp.probeAnsweredBy.${family}`] = tools.join(',');
   }
   Object.assign(annotations, ruleReadAnnotations(probeResults, ruleGroups));
   // The fetcher's own clock. mcp.refreshedAt is whatever the caller
@@ -2695,16 +2788,16 @@ export const PROBES = [
     // The running Alertmanager configuration, carried by its status answer.
     candidates: probeCandidates('alerting_routes'),
     target: 'spec.alerting.routes',
-    // An answer WITHOUT a configuration (a tier that trims it) says
-    // nothing about routes: it is not "zero routes", so it must not count
-    // as an answer for this family.
+    // An answer WITHOUT a configuration text this reader reads says nothing
+    // about routes: it is not "zero routes", so it must not count as an
+    // answer for this family. Why it is none: alertmanagerStatusGap.
     answers: (response) => alertmanagerConfigText(response) !== null,
-    unanswered: 'the Alertmanager status carries no configuration',
-    // A status that answers and carries no configuration is a tier that
-    // trims it, every time: the routes are not served here — the family is
-    // unsupported, never failed, and the journey remembers it like scrape
-    // targets the store does not keep.
-    notServedAnswer: () => 'the Alertmanager status carries no configuration',
+    unanswered: (response) => alertmanagerStatusGap(response).why,
+    // Only a status object with no `config` key at all is a tier that trims
+    // it: the routes are not served here — the family is unsupported, never
+    // failed. An error, an envelope, an empty configuration or one in a shape
+    // this reader does not read is a failure (A16, narrowed).
+    notServedAnswer: (response) => (alertmanagerStatusGap(response).trimmed ? 'the Alertmanager status carries no configuration' : null),
     adapt: (response) => routesFromLiveAlertmanager(alertmanagerConfigText(response)),
   },
   {
@@ -2792,15 +2885,20 @@ export function timedExcludeErrors(patterns) {
 // changes nothing. `signal` aborts requests in flight and is checked at stage
 // boundaries and in the dashboard loop: an aborted fetch rejects with the
 // signal's reason (an AbortError).
-// `probeMemory` — `{ unsupported: { <family>: { reason, since, tools } } }`,
-// the caller's memory of the families this endpoint answered it does not
-// serve (P6; tools/lib/journey.mjs probeMemoryOf reads it from the journey's
-// run records). Every family is still asked on every read and its answer
-// decides — data, an honest empty, a refusal, or the not-served answer again;
-// only when every remembered tool asked answers an error that says nothing
-// of the kind (a 503, a timeout) does the family stay unsupported, as
-// remembered (`remembered: true`), instead of reading as a new failure. The
-// library keeps nothing between reads.
+// `probeMemory` — `{ unsupported?: { <family>: { reason, since, tools } },
+// answered?: { <family>: { tools, at, anyTool? } } }`, the caller's memory of
+// this endpoint (P6; tools/lib/journey.mjs probeMemoryOf reads it from the
+// journey's run records). Every family is asked on every read and its answer
+// alone decides: data, an honest empty, a refusal, a failure, or the
+// not-served answer — a not-served family that now answers a 503 or a
+// timeout is a failure like any other (a remembered "not served" never
+// absorbs an outage); `unsupported` only keeps the instant a not-served
+// answer was first given (`since`). `answered` names the tools the records
+// saw answer each family (data or an honest empty; `anyTool` for a record
+// that did not say which): such a tool's not-served answer now is no "not
+// served" — the store served the family, so its 400 / 404 / 405 or trimmed
+// status is a lost route or a changed datasource — but a failure that says
+// so (E2). The library keeps nothing between reads.
 export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, transport = mcpTransport(),
   mode = 'draft', scope = null, onStage = null, signal = null, probeMemory = null } = {}) {
   // The hook is resolved before anything touches the wire — a load failure
@@ -2881,6 +2979,16 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const tools = Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [];
     if (!tools.length) return null;
     return { reason: e.reason, since: typeof e.since === 'string' && e.since ? e.since : null, tools };
+  };
+  // The caller's memory of the tools that answered a family (see the header),
+  // validated: { tools, at, anyTool } or null.
+  const answeredOf = (family) => {
+    const e = probeMemory?.answered?.[family];
+    if (!e || typeof e !== 'object') return null;
+    const tools = Array.isArray(e.tools) ? e.tools.filter((t) => typeof t === 'string' && t) : [];
+    const anyTool = e.anyTool === true;
+    if (!tools.length && !anyTool) return null;
+    return { tools, at: typeof e.at === 'string' && e.at ? e.at : null, anyTool };
   };
 
   // Single retry on transient 5xx — upstream observability backends
@@ -3450,6 +3558,22 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     const notServed = [];   // [{ tool, reason }]
     const notServedCodes = notServedStatusesOf(probe.name);
     const canNotServe = notServedCodes.length > 0 || typeof probe.notServedAnswer === 'function';
+    // E2: a tool the journey's records saw answer this family (data or an
+    // honest empty) reads a store that serves it — its not-served answer now
+    // is a lost route or a changed datasource: a failure that says so (its
+    // probe error: `<tool>: it answered on <day>; now <the answer>`), never
+    // "not served".
+    const answered = canNotServe ? answeredOf(probe.name) : null;
+    const notServedFrom = (tool, reason) => {
+      if (!answered || !(answered.anyTool || answered.tools.includes(tool))) {
+        notServed.push({ tool, reason });
+        return;
+      }
+      const said = probeFailures[tool] || reason;
+      if (said.startsWith(`${tool}: it answered `)) return;   // said so already (the same tool asked twice)
+      const bare = said.startsWith(`${tool}: `) ? said.slice(tool.length + 2) : said;
+      probeFailures[tool] = `${tool}: it answered ${answered.at ? `on ${answered.at.slice(0, 10)}` : 'before'}; now ${bare}`;
+    };
     // Remember the first candidate that responded with a non-null
     // result, even if that result was empty. If all candidates either
     // fail outright OR return empty, we fall back to reporting the
@@ -3466,7 +3590,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         if (isProbeRefusal(why)) refused.push(name);
         else if (notServedCodes.length) {
           const code = notServedStatus(why, notServedCodes);
-          if (code !== null) notServed.push({ tool: name, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
+          if (code !== null) notServedFrom(name, `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}`);
         }
         continue;
       }
@@ -3476,7 +3600,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         const unanswered = typeof probe.unanswered === 'function' ? probe.unanswered(response) : probe.unanswered;
         if (!probeFailures[name]) probeFailures[name] = unanswered || 'the answer does not carry what this probe reads';
         const served = typeof probe.notServedAnswer === 'function' ? probe.notServedAnswer(response, notServedCodes) : null;
-        if (served) notServed.push({ tool: name, reason: `${name}: ${served}` });
+        if (served) notServedFrom(name, `${name}: ${served}`);
         continue;
       }
       let adapted;
@@ -3521,25 +3645,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       return;
     }
     const asked = [...new Set(attempted)];
-    const memo = canNotServe ? memoryOf(probe.name) : null;
     // P6: every candidate asked answered that the store behind it keeps no
     // such thing — unsupported here, never failed; `since` carries the first
-    // time the journey saw it, `tools` what answered it.
+    // time the journey saw it, `tools` what answered it. Anything else — a
+    // 503, a timeout, an error — is a failure, whatever the journey remembers.
     if (canNotServe && notServed.length && asked.every((tool) => notServed.some((n) => n.tool === tool))) {
       probeResults[probe.name] = {
         tool: null, attempted, adapted: null, outcome: 'unsupported',
-        notServed: { reason: notServed[0].reason, since: memo?.since ?? new Date().toISOString(), tools: asked },
-      };
-      return;
-    }
-    // P6: remembered — every tool asked is one that answered "not served"
-    // before, and this time each errored without saying anything of the
-    // kind (no refusal: returned above): the family stays unsupported as
-    // remembered, never a new failure.
-    if (memo && asked.length && asked.every((tool) => memo.tools.includes(tool))) {
-      probeResults[probe.name] = {
-        tool: null, attempted, adapted: null, outcome: 'unsupported',
-        notServed: { reason: memo.reason, since: memo.since, tools: asked, remembered: true },
+        notServed: { reason: notServed[0].reason, since: memoryOf(probe.name)?.since ?? new Date().toISOString(), tools: asked },
       };
       return;
     }

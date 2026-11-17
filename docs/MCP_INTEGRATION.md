@@ -101,8 +101,13 @@ answers without the MCP's backend credentials, and the answer says so), else
 read from where a failure surfaced: HTTP 401/403 → `auth-refused`; no answer
 or a 5xx → `unreachable`; a timeout → `timeout`; any other status, a body that
 is not JSON-RPC, a JSON-RPC error or a redirect → `not-mcp`; else `connected`
-(a read whose tool answered an unauthorized text is kept as
-`backendAuthRefused`, the MCP's own credentials to its backend). Advertised
+(a read whose tool answered a refusal is kept as `backendAuthRefused`, the
+MCP's own credentials to its backend — by the probe cascade's own rule,
+`isProbeRefusal`, which reads a 401 or 403 in the words a client library
+gives it: `HTTP 403`, `status code 401`, the Prometheus Go client's `client
+error: 403`, a generated Grafana client's `[403] searchForbidden`, gRPC's
+`PermissionDenied` / `Unauthenticated`, AWS's `AccessDeniedException`; a bare
+401 in other words, `returned 401 series`, is none). Advertised
 tools are reported only through `capabilityInventory` (the capabilities a
 fetch reads; the rest a count). The answer lists what it `checked` and what it
 did `notChecked`; it writes no pack and no live file.
@@ -688,9 +693,9 @@ metadata:
     mcp.probeErrors.dashboards: "grafana_dashboards_search: HTTP 502 Bad Gateway · grafana_search: HTTP 503"   # every failed candidate of a FAILED family, first first, each trimmed to 200 chars
     # mcp.probeUnsupported.scrape_configs: '{"reason":"metrics_targets: HTTP 404 Not Found","since":"…","tools":["metrics_targets"]}'
     #   only for a family whose every candidate's store answered it keeps no such thing — scrape targets
-    #   answered 400 / 404 / 405 (a federated or remote-write store), an Alertmanager status that carries no
-    #   configuration — the reason is the tool and the status, never the answer's text; `remembered: true`
-    #   when a journey's memory kept it unsupported through an answer that said nothing of the kind (a 503)
+    #   answered 400 / 404 / 405 (a federated or remote-write store), an Alertmanager status object with no
+    #   configuration key at all — the reason is the tool and the status, never the answer's text
+    # mcp.probeAnsweredBy.scrape_configs: "metrics_targets"   # who answered a family that can read "not served" (a journey's memory)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
@@ -747,7 +752,9 @@ strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it. Every URL a message quotes keeps no query string, fragment or userinfo (`tools/fetch-live-pack.mjs` `maskProbeErrorUrls`, over `tools/lib/mcp-url-safety.mjs` `safeMcpUrl`), masked before the cut — so the reasons a declared artefact is not checked, a gate log's gaps, a lost run's `error` and a notification built from it carry none either |
+| `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it. Every URL a message quotes keeps no query string, fragment or userinfo (`tools/fetch-live-pack.mjs` `maskProbeErrorUrls`, over `tools/lib/mcp-url-safety.mjs` `safeMcpUrl`); a path quoted without a scheme keeps no query or fragment either (urllib3 and requests name the request so: `Max retries exceeded with url: /api/v1/targets?…`), a `//user:pass@` link no userinfo, and every `name=value` pair whose name says it holds a credential (`credentialParamName`) and every Bearer or Basic value is masked — all before the cut, so the reasons a declared artefact is not checked, a gate log's gaps, a lost run's `error`, its thrown message (the server's 502 body) and a notification built from it carry none either. A not-served answer from a tool the journey saw answer the family reads `<tool>: it answered on <day>; now <the answer>` |
+| `mcp.probeUnsupported.<family>` | JSON `{ reason, since, tools }` | a family whose every candidate's store answered it keeps no such thing (P6): scrape targets answered 400 / 404 / 405 (or a Prometheus `bad_data` / `not_found` envelope), an Alertmanager status object with no configuration key at all. Never for an error, a 503 or a timeout, an answer naming a missing datasource, an empty configuration or one in a shape the reader does not read, nor from a tool the journey saw answer the family — each of those is `failed` |
+| `mcp.probeAnsweredBy.<family>` | comma list of tool names | the tool(s) that answered a family that can read "not served" (`scrape_configs`, `alerting_routes`) with data or an honest empty: a journey's memory of who serves it (`probeMemoryOf`) |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
@@ -1030,7 +1037,7 @@ model's kind (tools/lib/artefact-model.mjs).
 | `pipeline_exporter_metrics` | no scrape target and no metric inventory attested it | same |
 | `dashboard`, `panel` · `burn_rate` · `metric` · `scrape_job` | the family's probe failed or is not offered | `the <family> probe got no answer: <its error>` / `this MCP offers no <family> tool` |
 | `recording_rule`, `sli`, `slo` | no recorded series at all and the rules probe failed or is not offered | same |
-| `alert_route` | the `alerting_routes` probe gave no routes | its failure, or that the status carries no configuration |
+| `alert_route` | the `alerting_routes` probe gave no routes | its failure — an error, an envelope, an answer that is no Alertmanager status, an empty configuration, or one in a shape the reader does not read (Grafana's built-in Alertmanager states it as a JSON object) — or that the status carries no configuration key at all (not served here) |
 | `backend`, `profiling`, `network`, `policy_engine`, `mesh`, `collection` | nothing evidenced any backend | `no version probe, scrape target or product tool answered` |
 
 `chaos` is the exception: the live side never holds an experiment's
@@ -1093,7 +1100,8 @@ an `mcp:` source reads the annotations above into its run record:
 |---|---|
 | `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names); `probes.partial` only when a family answered in part (`mcp.probesPartial`) |
 | `probeErrors.<family>` | `mcp.probeErrors.<family>` |
-| `probeUnsupported.<family>` | `mcp.probeUnsupported.<family>` — `{ reason, since, tools, remembered? }`, only when a family was not served here |
+| `probeUnsupported.<family>` | `mcp.probeUnsupported.<family>` — `{ reason, since, tools }`, only when a family was not served here (an older record's may say `remembered: true`) |
+| `probeAnsweredBy.<family>` | `mcp.probeAnsweredBy.<family>` — the tools that answered a family that can read "not served", only when one answered |
 | `vantage` | derived (`partialLiveEvidence`): `lost` when the probe table says no family returned data — whatever tools/list advertised, an endpoint whose every family answered empty included; `partial` when a family failed or answered in part; else `full` (a family not offered or not served never degrades it); `none` without a live read, or for a live export that recorded no probe table at all (no probe record). `restricted` is no longer produced; an older record that says it reads as `full` |
 | `toolsExposedCount` | `mcp.toolsExposedCount` (`null` when absent) |
 | `scrapeJobsDown` | count of `mcp.discovered.scrape_jobs_down` |
@@ -1110,9 +1118,11 @@ gate:
                                 # refusal with nothing else included) or answered in part, or when
                                 # the vantage is entirely lost; EMPTY and UNSUPPORTED families never
                                 # breach on their own, and a Pack B that is no live read passes
-  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N — and when
-                                # no health family (scrape targets, recording rules, alert rules)
-                                # was read at all, a Pack B that is no live read included
+  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N — when no
+                                # health family (scrape targets, recording rules, alert rules) was
+                                # read at all, a Pack B that is no live read included — and when one
+                                # of them FAILED or answered in part: the count is then a lower
+                                # bound; a family not offered or not served here is no hole
 ```
 
 Every gate key fails closed on an absent figure: `minAlignmentPct` breaches
@@ -1137,15 +1147,28 @@ point shows in the drift history instead of leaving a gap, and never as a
 figure. Configuration errors (missing pack file, unset `authEnv`) never reach
 the wire and leave no record.
 
-A family the endpoint answered it does not serve (`probeUnsupported`) is
-remembered by the journey for its live source: the newest record of the same
-Pack B source that carries a probe table is handed to the next read
-(`probeMemoryOf`, fetchMcp's `probeMemory`). The family is still asked every
-run, and its answer decides — data, an honest empty, a refusal or the
-not-served answer again; only an answer that says nothing of the kind (a 503,
-a timeout) from the same tools keeps it unsupported, `remembered: true`,
-instead of a new failure. The memory is per journey and live source: two
-journeys on one endpoint each learn it from their own first answer.
+"Not served" needs a positive signal, given on the run that reads it: scrape
+targets answered 400 / 404 / 405 (never an answer naming a missing datasource:
+a wrong datasource uid is a failure), or an Alertmanager status object with no
+configuration key at all. The family is asked every run and its answer alone
+decides — data, an honest empty, a refusal, a failure or the not-served answer
+again: a family not served yesterday whose tool answers a 503 or a timeout
+today is a failure (an outage of the store it reads), never kept "not served"
+by the journey's memory. What the journey's records of the same Pack B source
+remember (`probeMemoryOf`, fetchMcp's `probeMemory`): the instant a not-served
+answer was first given (`since`, from the newest record that carries a probe
+table), and the tools each record saw answer a family with data or an honest
+empty (`probeAnsweredBy`; an older record that did not say which tool counts
+for every tool, and only where it answered with data — its empty answers may
+have been an error envelope or a refused read beside an empty fallback). A
+not-served answer from such a tool is a failure whose probe
+error says when it answered (`<tool>: it answered on <day>; now <the answer>`)
+— the store served the family, so the answer is a lost route or a changed
+datasource, not a store that keeps none. The records read are the run's own
+(the newest 25): a store that stopped serving a family for good reads "not
+served" again once its last answer is that old. The memory is per journey and
+live source: two journeys on one endpoint each learn it from their own
+answers.
 
 The journey grades on the same construct as the studio: the requirement-chain
 comparison (`comparePackBranches`) is attached to the diff as
