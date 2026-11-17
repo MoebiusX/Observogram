@@ -1310,6 +1310,17 @@ try {
     let scopeErr = null;
     try { loadJourneyDef('bad-scope'); } catch (e) { scopeErr = e.message; }
     assert(/^journey bad-scope: packB\.mcp\.scope\.metricPrefixes\[0\] "9bad" is not a metric-name prefix/.test(scopeErr || ''), 'a packB.mcp.scope that does not parse is refused at load, naming the field', scopeErr);
+    // A check saved before the exclude patterns' work was bounded still loads and runs (the CronJob's `journey run
+    // --all` included): three wildcards are within the bound and applied; a pattern past it stays in the file, the
+    // live read goes on without it, and the kept live pack says which and why.
+    const Q = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
+    writeFileSync(join(TMP, 'journeys', 'old-scope.journey.yaml'), ['name: old-scope', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: ${fakeUrl}, scope: { metricPrefixes: [shop_], metricExclude: ['^.*:.*:.*$', '${Q}'] } } }`].join('\n'));
+    const to = await runJourney(loadJourneyDef('old-scope'));
+    const oldNote = JSON.parse(readLivePack('old-scope', to)?.metadata?.annotations?.['observogram.live.scope'] || '{}');
+    assert(to.outcome === 'pass' && JSON.stringify(to.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], metricExclude: ['^.*:.*:.*$', Q] })
+      && JSON.stringify(oldNote.metricExclude) === JSON.stringify(['^.*:.*:.*$']) && oldNote.notApplied?.length === 1
+      && oldNote.notApplied[0].startsWith(`exclude pattern "${Q}" not applied — it may be too slow to match`),
+      'a stored scope loads and runs whatever it holds: the bounded pattern applied, the other read without and named', { outcome: to.outcome, record: to.packB.liveScope, oldNote });
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,

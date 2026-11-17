@@ -2881,23 +2881,48 @@ const STAGE_OF_PROBE = Object.freeze({
   scrape_configs: 'scrape_targets', alerting_routes: 'alerting_routes', metric_names: 'metric_names',
 });
 
-// The timed half of the exclude-pattern rule over a normalized scope's
-// `metricExclude` (normalizeScope ran the static half): one sentence per
-// pattern that crawls over an adversarial 256-character name, in the shape of
-// normalizeScope's own errors (`scope.metricExclude[i] "…" is …`), so the
-// server's start route and its configured-scope reader refuse it the same way
-// as any other bad scope value, before a job starts. A pattern the static half
-// refuses is refused with its sentence and never timed (its work has no bound
-// to time within); the rest are timed on names built from the pattern itself
+// Why the exclude-pattern rule refuses `pattern`, or null: the static half
+// (live-fetch.mjs excludeProblem — the work bound, a backreference) before
+// anything is timed, since a pattern past the bound has no bound to time
+// within; then the timed half, on names built from the pattern itself
 // (live-fetch.mjs excludeProbes) beside the four adversarial ids, so a pattern
 // that opens with a literal no id carries is timed doing its work, not nothing.
+// Before the timed half, a pass over the same names that stops at the first
+// one after which the pattern has spent EXCLUDE_STOP_MS on both the wall clock
+// and the process's CPU time: a pattern that slow is refused without the rest,
+// which would only hold the server's thread longer (some thirty names, each
+// within the static bound's steps). Both clocks, so neither a descheduled
+// thread nor another thread's work stops a fast one.
+const EXCLUDE_TIMED_OUT = 'is too slow to match (testing it on 256-character names took more than 50 ms)';
+const EXCLUDE_STOP_MS = 200;
+const cpuNowMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
+function stopsEarly(re, ids) {
+  const wall0 = performance.now();
+  const cpu0 = cpuNowMs();
+  for (const id of ids) {
+    re.test(id);
+    if (performance.now() - wall0 > EXCLUDE_STOP_MS && cpuNowMs() - cpu0 > EXCLUDE_STOP_MS) return true;
+  }
+  return false;
+}
+function excludeRefusal(pattern) {
+  const problem = excludeProblem(pattern);
+  if (problem) return problem;
+  const ids = excludeProbes(pattern);
+  if (stopsEarly(new RegExp(pattern), ids)) return EXCLUDE_TIMED_OUT;
+  return compileBoundedPattern(pattern, { ids }).re ? null : EXCLUDE_TIMED_OUT;
+}
+
+// The exclude-pattern rule over a normalized scope's `metricExclude`: one
+// sentence per pattern it refuses, in the shape of normalizeScope's own errors
+// (`scope.metricExclude[i] "…" …`), so the server's start route, the scope
+// check, PATCH and its configured-scope reader refuse it the same way as any
+// other bad scope value, before a job starts.
 export function timedExcludeErrors(patterns) {
   const errors = [];
   (Array.isArray(patterns) ? patterns : []).forEach((pattern, i) => {
-    const problem = excludeProblem(pattern);
-    if (problem) { errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} ${problem}`); return; }
-    if (compileBoundedPattern(pattern, { ids: excludeProbes(pattern) }).re) return;
-    errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} is too slow to match (it crawls over a 256-character name)`);
+    const why = excludeRefusal(pattern);
+    if (why) errors.push(`scope.metricExclude[${i}] ${JSON.stringify(pattern)} ${why}`);
   });
   return errors;
 }
@@ -2960,25 +2985,32 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   const snapshot = mode === 'snapshot';
   let snapScope = null;
   // The exclude patterns, compiled once through the repository's bounded-regex
-  // rule (the timed half: a pattern that crawls over an adversarial name is
-  // refused here, like any other bad scope value — normalizeScope checked the
-  // static half, and that module imports nothing). The server runs the same
-  // check before it answers a start, so this is the backstop.
+  // rule. New input was refused before a job started (the server runs the same
+  // rule on a start, the scope check and PATCH); a scope that reaches the fetch
+  // was stored — a saved check's, an environment's — and may hold a pattern
+  // saved before its work was bounded. Such a pattern is not applied: the read
+  // goes on without it, the metric stage says which and why, and so does the
+  // pack's observogram.live.scope (`notApplied`).
   const excludeMatchers = [];
+  const excludesNotApplied = [];
   // A draft takes a scope too (a scoped draft — the Services Run's live read of
   // one service): every family the scope narrows is narrowed exactly as a
   // snapshot narrows it, and everything else a draft reads (the stack signals,
   // the chaos feed, the vantage rule) stays as it is. A draft with no scope, or
   // an empty one, reads as it always did: `snapScope` stays null.
-  const draftScope = !snapshot && scope != null ? normalizeScope(scope) : null;
+  const draftScope = !snapshot && scope != null ? normalizeScope(scope, { stored: true }) : null;
   if (draftScope?.errors.length) throw new TypeError(`fetchMcp: ${draftScope.errors.join('; ')}`);
   if (snapshot || (draftScope && !scopeIsEmpty(draftScope.scope))) {
-    const normalized = draftScope || normalizeScope(scope);
+    const normalized = draftScope || normalizeScope(scope, { stored: true });
     if (normalized.errors.length) throw new TypeError(`fetchMcp: ${normalized.errors.join('; ')}`);
-    snapScope = normalized.scope;
-    const slow = timedExcludeErrors(snapScope.metricExclude);
-    if (slow.length) throw new TypeError(`fetchMcp: ${slow.join('; ')}`);
-    for (const pattern of snapScope.metricExclude) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
+    const applying = [];
+    for (const pattern of normalized.scope.metricExclude) {
+      const why = excludeRefusal(pattern);
+      if (why) excludesNotApplied.push(`exclude pattern ${JSON.stringify(pattern)} not applied — it ${why}`);
+      else applying.push(pattern);
+    }
+    snapScope = { ...normalized.scope, metricExclude: applying };
+    for (const pattern of applying) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
   }
   const stageLabel = new Map(stagesFor(mode).map(st => [st.id, st]));
   const report = (stage, state, { counts = null, message = null, gap = null } = {}) => {
@@ -3858,6 +3890,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       const ds = `datasource uid "${snapScope.datasourceUid}" not applied — no advertised tool takes a datasource uid`;
       message = message ? `${ds}; ${message}` : ds;
     }
+    if (excludesNotApplied.length) {
+      const na = excludesNotApplied.join('; ');
+      message = message ? `${na}; ${message}` : na;
+    }
     endProbeStage('metric_names', { listed, kept: adaptedLength('metric_names'), ...(excluded !== null ? { excluded } : {}) }, message);
   }
 
@@ -4255,7 +4291,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       snapshot: {
         scope: snapScope,
         gaps: [...gaps].sort((x, y) => [...stageLabel.keys()].indexOf(x.stage) - [...stageLabel.keys()].indexOf(y.stage)),
-        learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles },
+        learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles, ...(excludesNotApplied.length ? { notApplied: excludesNotApplied } : {}) },
         counts: stageCounts,
         toolsListComplete,
       },
@@ -4263,7 +4299,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // A scoped draft: the scope and what it was applied to (the caller writes
     // scopeAnnotations(scope, learned) on the pack it builds).
     ...(snapScope && !snapshot ? {
-      liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles } },
+      liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles, ...(excludesNotApplied.length ? { notApplied: excludesNotApplied } : {}) } },
     } : {}),
   };
 }
@@ -4334,7 +4370,11 @@ export function buildSnapshotPack(fetched, { refreshedAt = null, origin, endpoin
     origin,
     endpoint: endpoint && endpoint.id != null ? { id: endpoint.id, name: endpoint.name ?? null } : null,
   });
-  Object.assign(annotations, scopeAnnotations(scope ?? snap.scope ?? null, snap.learned || {}));
+  // The scope as the caller sent it, with the exclude patterns the fetch applied: a stored pattern the
+  // rule refuses now was read without, and learned.notApplied says so.
+  const said = scope ?? snap.scope ?? null;
+  const recorded = said && Array.isArray(snap.scope?.metricExclude) ? { ...said, metricExclude: snap.scope.metricExclude } : said;
+  Object.assign(annotations, scopeAnnotations(recorded, snap.learned || {}));
   if (stageGaps.length) {
     annotations['observogram.live.gaps'] = JSON.stringify(stageGaps.map(g => ({ stage: g.stage, reason: g.reason })));
   }

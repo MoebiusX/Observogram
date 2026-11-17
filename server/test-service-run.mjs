@@ -2484,6 +2484,8 @@ test('a host\'s sentence names no one: GitHub\'s rate-limit sentence loses its s
     'Although you appear to have the correct authorization credentials, the `acme` organization has an IP allow list enabled, and <redacted> is not permitted to access this resource.');
   assert.equal(said("TF400813: The user 'someone@example.com' is not authorized to access this resource."), "TF400813: The user '<redacted>' is not authorized to access this resource.");
   assert.equal(said('Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.'), 'Blocked until 05:00:00 by TF400733: request ABCD:1234, build 2.7.', 'a time, a code and a build number stay');
+  // An address with its port (a proxy's, in a URL or alone): the address goes, the port stays.
+  assert.equal(said('Could not reach the proxy at http://10.0.0.1:3128/ or 10.0.0.2:8080.'), 'Could not reach the proxy at http://<redacted>:3128/ or <redacted>:8080.');
   // The remedy a reader asks for keeps the next sentence too, masked the same way.
   assert.equal(said('Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization. More.', { sentences: 2 }),
     'Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization.');
@@ -3201,7 +3203,7 @@ test('POST /api/services/:id/scope-check: what a scope would leave out, from sto
     const SLOW = '^q*q*q*q*q*q*q*q*q*q*q*q*$';
     const t0 = Date.now();
     const slow = await check({ env: 'prod', scope: { metricExclude: [SLOW] } });
-    assert.deepEqual([slow.status, slow.json.error], [400, `liveScopes.prod: scope.metricExclude[0] "${SLOW}" is too slow to match (it crawls over a 256-character name)`]);
+    assert.deepEqual([slow.status, slow.json.error], [400, `liveScopes.prod: scope.metricExclude[0] "${SLOW}" may be too slow to match (testing a 256-character name can take more than 32 million steps)`]);
     assert.ok(Date.now() - t0 < 2000, `answered in ${Date.now() - t0} ms`);
     assert.equal((await call('PATCH', `/api/services/${id}`, { liveScopes: { prod: { metricExclude: [SLOW] } } })).status, 400, 'nor saved');
     // An environment not added yet: the service's own pack, no live read.

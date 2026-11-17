@@ -544,10 +544,10 @@ test('the typed-URL rule and the request checks: operators and the bearer send i
     // by the timed half before any job starts — in the variable and in a request's scope alike.
     process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE = '^a*a*a*a*b$';
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT });
-    assert.deepEqual([r.status, r.json.error], [400, 'the configured snapshot scope does not parse — OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name); fix the variable, or send a scope with the request']);
-    assert.deepEqual((await call('GET', '/api/mcp/jobs', 'oscar')).json.scope.errors, ['OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name)']);
+    assert.deepEqual([r.status, r.json.error], [400, 'the configured snapshot scope does not parse — OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 32 million steps); fix the variable, or send a scope with the request']);
+    assert.deepEqual((await call('GET', '/api/mcp/jobs', 'oscar')).json.scope.errors, ['OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 32 million steps)']);
     r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, scope: { metricExclude: ['^a*a*a*a*b$'] } });
-    assert.deepEqual([r.status, r.json.error], [400, 'scope.metricExclude[0] "^a*a*a*a*b$" is too slow to match (it crawls over a 256-character name)']);
+    assert.deepEqual([r.status, r.json.error], [400, 'scope.metricExclude[0] "^a*a*a*a*b$" may be too slow to match (testing a 256-character name can take more than 32 million steps)']);
     process.env.OBSERVOGRAM_ORG_ACME_SNAPSHOT_METRIC_EXCLUDE = ' ^alertmanager_cluster_  ^go_ ';
     const jobs = await call('GET', '/api/mcp/jobs', 'oscar');
     assert.deepEqual(jobs.json.scope, { defaults: { metricPrefixes: ['alertmanager_', 'up'], folderUids: [], datasourceUid: null, metricExclude: ['^alertmanager_cluster_', '^go_'], ruleGroups: [] }, from: 'org', errors: [] });

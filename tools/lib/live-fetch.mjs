@@ -160,20 +160,34 @@ const checkUid = (what) => (value) => (value.length <= SCOPE_LIMITS.uidLength &&
 // A pattern is matched against every metric name a scope reads, on the
 // server's own thread (the fetcher's filter, the diff's and the scope check's
 // inScope), so its work is bounded too, statically: no backreference, and at
-// most EXCLUDE_WORK_MAX ways to split a name of EXCLUDE_NAME_MAX characters
+// most EXCLUDE_WORK_MAX steps to test a name of EXCLUDE_NAME_MAX characters
 // (excludeWork) — `^q*q*q*q*q*q*q*q*q*q*q*q*$`, which every timed id fails at
-// its first character, crawls for seconds over a 24-character name and is
-// refused here, in the timed half's words. A name longer than EXCLUDE_NAME_MAX
-// is never matched by an exclude pattern (excludedBy).
+// its first character, runs for seconds over a 24-character name and is
+// refused here, before anything is timed. Three unbounded wildcards
+// (`^.*:.*:.*$`, every recording rule's name) take milliseconds and pass; a
+// fourth that can take the same characters does not. A name longer than
+// EXCLUDE_NAME_MAX is never matched by an exclude pattern (excludedBy).
+//
+// A scope already stored — a saved check's, an environment's, a pack's record
+// (normalizeScope's `stored`) — is read under the rule earlier releases had
+// (length, anchored, no quantified group, compiles): loading it never fails on
+// the work bound or a backreference, which came later. Such a pattern is kept
+// as written and not applied: the fetcher reads without it and says so in the
+// metric stage.
 const QUANTIFIED_GROUP = /\)[+*{]/;
 export const EXCLUDE_NAME_MAX = 256;
-const EXCLUDE_WORK_MAX = 1_000_000;
-const EXCLUDE_TOO_SLOW = `is too slow to match (it crawls over a ${EXCLUDE_NAME_MAX}-character name)`;
-const checkExclude = (value) => {
+const EXCLUDE_WORK_MAX = 32_000_000;
+const EXCLUDE_TOO_SLOW = `may be too slow to match (testing a ${EXCLUDE_NAME_MAX}-character name can take more than ${EXCLUDE_WORK_MAX / 1_000_000} million steps)`;
+const checkExcludeStored = (value) => {
   if (value.length > SCOPE_LIMITS.excludeLength) return `is longer than ${SCOPE_LIMITS.excludeLength} characters`;
   if (!value.startsWith('^')) return 'is not anchored (an exclude pattern starts with ^)';
   if (QUANTIFIED_GROUP.test(value)) return 'has a quantified group (nested quantifier)';
   try { new RegExp(value); } catch (e) { return `is not a regular expression (${e.message})`; }
+  return null;
+};
+const checkExclude = (value) => {
+  const problem = checkExcludeStored(value);
+  if (problem) return problem;
   const terms = excludeTerms(value);
   if (terms && hasBackreference(terms)) return 'refers back to a group (a backreference has no bound on its work)';
   if (excludeWork(value) > EXCLUDE_WORK_MAX) return EXCLUDE_TOO_SLOW;
@@ -275,27 +289,35 @@ function excludeTerms(pattern) {
 }
 const hasBackreference = (alts) => alts.some((seq) => seq.some((t) => t.type === 'backref' || (t.type === 'group' && hasBackreference(t.alts))));
 
-// The most work a backtracking matcher does to test `pattern` on a name of `n` characters: the ways
-// it can split the name among the quantified atoms and the alternatives, counted from the end — an
-// atom that can only stop before a character it cannot take, or at the end of the name (`$`, or the
-// end of the pattern, where the test succeeds), costs its own steps once (added); one whose next
-// term can take what it takes is tried once per way the rest can be split (multiplied). The same
-// characters are compared over every ASCII one and every one the pattern writes, so two sets that
-// share a character share one of those. Infinity for what does not read as terms, a backreference,
-// a repeated group, or more than EXCLUDE_WORK_MAX.
+// The most steps a backtracking matcher takes to test `pattern` on a name of `n` characters, counted
+// from the end of each sequence for every number of characters left (0…n): a character term takes
+// what it matches one step each; a quantified one tries every length it can take, and the rest of
+// the pattern after each — but the lengths share one name, so three wildcards split it about n³/6
+// ways, not n³. An atom that can only stop before a character it cannot take, or at the end of the
+// name (`$`, or the end of the pattern, where the test succeeds), runs the rest once (added); one
+// whose next term can take what it takes runs it once per length (summed). A group tries each
+// alternative and the rest after it (a lookaround its alternatives once, apart). Two terms share a
+// character when they share one of every ASCII character and every UTF-16 unit the pattern writes
+// (without the u flag a class matches one unit, so an astral character is two); a term that matches
+// none of those is never apart from another. Where literal characters follow a quantified atom
+// (`.*_seconds_bucket`), the lengths it tries are consecutive starts, and a word starts again only a
+// period of it later — so the run costs each start one step and each further character only where the
+// text so far starts there, and the rest only where the whole run does: the smaller of that and the
+// sum. Infinity for what does not read as terms, a backreference, a repeated group, or more than
+// EXCLUDE_WORK_MAX.
 function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
   const alts = excludeTerms(pattern);
   if (!alts) return Infinity;
   const sample = new Set();
   for (let c = 0; c < 128; c += 1) sample.add(String.fromCharCode(c));
-  for (const ch of pattern) sample.add(ch);
+  for (let k = 0; k < pattern.length; k += 1) sample.add(pattern[k]);
   for (const m of pattern.matchAll(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})/g)) sample.add(String.fromCharCode(parseInt(m[1] ?? m[2], 16)));
   for (const ch of '        　﻿') sample.add(ch);
   const chars = [...sample];
   const setOf = (t) => {
     if (t.set === undefined) {
       let re = null;
-      try { re = new RegExp(`^(?:${t.src})$`); } catch { /* not read alone: never disjoint */ }
+      try { re = new RegExp(`^(?:${t.src})$`); } catch { /* not read alone: never apart */ }
       t.set = re ? chars.filter((ch) => re.test(ch)) : null;
     }
     return t.set;
@@ -303,34 +325,97 @@ function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
   const disjoint = (a, b) => {
     const sa = setOf(a);
     const sb = setOf(b);
-    return !!sa && !!sb && !sa.some((ch) => sb.includes(ch));
+    return !!sa && !!sb && sa.length > 0 && sb.length > 0 && !sa.some((ch) => sb.includes(ch));
   };
   const stops = (t, next, atEnd) => (!next ? atEnd
     : next.type === 'assert' ? next.src === '$'
       : next.type === 'char' && next.min >= 1 && disjoint(t, next));
-  const seqWork = (seq, atEnd) => {
-    let w = 1;
+  const ones = new Array(n + 1).fill(1);
+  // A term that matches one character exactly → that character, else null.
+  const literalOf = (t) => {
+    if (t.type !== 'char' || t.min !== 1 || t.max !== 1) return null;
+    const src = t.src;
+    if (src.length === 1) return '.^$|()[]{}*+?\\'.includes(src) ? null : src;
+    if (src.length === 2 && src[0] === '\\' && !/[A-Za-z0-9]/.test(src[1])) return src[1];
+    if (/^\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4})$/.test(src)) return String.fromCharCode(parseInt(src.slice(2), 16));
+    return null;
+  };
+  // The smallest shift at which a word matches itself (its length when none does).
+  const periodOf = (word) => {
+    for (let p = 1; p < word.length; p += 1) if (word.slice(p) === word.slice(0, word.length - p)) return p;
+    return word.length;
+  };
+  // `after[m]`: the steps of what follows the sequence with m characters left → the same for the
+  // sequence and what follows it; null past the bound or for what has none.
+  const seqSteps = (seq, after, atEnd) => {
+    const vecs = new Array(seq.length + 1);
+    vecs[seq.length] = after;
+    let w = after;
     for (let k = seq.length - 1; k >= 0; k -= 1) {
       const t = seq[k];
-      if (t.type === 'backref') return Infinity;
+      if (t.type === 'backref') return null;
+      if (t.type === 'assert') { vecs[k] = w; continue; }
+      const out = new Array(n + 1).fill(0);
       if (t.type === 'char') {
-        const reps = Math.min(t.max, n) - Math.min(t.min, n) + 1;
-        if (reps > 1) w = stops(t, seq[k + 1], atEnd) ? reps + w : reps * w;
+        const lo = Math.min(t.min, n);
+        const hi = Math.min(t.max, n);
+        let run = '';
+        while (k + 1 + run.length < seq.length && literalOf(seq[k + 1 + run.length]) !== null) run += literalOf(seq[k + 1 + run.length]);
+        const periods = [...run].map((_, j) => periodOf(run.slice(0, j + 1)));
+        const rest = vecs[k + 1 + run.length];
+        for (let m = 0; m <= n; m += 1) {
+          if (m < lo) { out[m] = m + 1; continue; }
+          const top = Math.min(hi, m);
+          if (lo === top) out[m] = lo + w[m - lo];
+          else if (stops(t, seq[k + 1], atEnd)) out[m] = 2 * top - lo + 1 + w[m - lo];
+          else {
+            let sum = top;
+            for (let len = lo; len <= top; len += 1) sum += w[m - len];
+            if (run) {
+              const starts = top - lo + 1;
+              let byRun = top + starts;
+              for (let j = 0; j < run.length - 1; j += 1) byRun += Math.ceil(starts / periods[j]);
+              if (m - lo - run.length >= 0) byRun += Math.ceil(starts / periods[run.length - 1]) * rest[m - lo - run.length];
+              sum = Math.min(sum, byRun);
+            }
+            out[m] = sum;
+          }
+        }
       } else if (t.type === 'group') {
-        if (t.max > 1) return Infinity;
-        let inner = 0;
-        for (const alt of t.alts) inner += seqWork(alt, false);
-        w = t.look ? inner + w : ((t.min === 0 ? 1 : 0) + inner) * w;
+        if (t.max > 1) return null;
+        if (t.look) {
+          let inner = 0;
+          for (const alt of t.alts) {
+            const v = seqSteps(alt, ones, false);
+            if (!v) return null;
+            inner += 1 + v[n];
+          }
+          for (let m = 0; m <= n; m += 1) out[m] = inner + w[m];
+        } else {
+          if (t.min === 0) for (let m = 0; m <= n; m += 1) out[m] = w[m];
+          for (const alt of t.alts) {
+            const v = seqSteps(alt, w, false);
+            if (!v) return null;
+            for (let m = 0; m <= n; m += 1) out[m] += 1 + v[m];
+          }
+        }
       }
-      if (!(w <= EXCLUDE_WORK_MAX)) return Infinity;
+      w = out;
+      vecs[k] = w;
+      if (!(w[n] <= EXCLUDE_WORK_MAX)) return null;   // the most characters left costs the most
     }
     return w;
   };
+  const anchored = (seq) => seq[0]?.type === 'assert' && seq[0].src === '^';
+  const tried = alts.some((seq) => !anchored(seq));   // an unanchored alternative: every start is tried
   let total = 0;
-  for (const seq of alts) total += seqWork(seq, true);
-  const anchored = alts.every((seq) => seq[0]?.type === 'assert' && seq[0].src === '^');
-  const work = anchored ? total : total * (n + 1);
-  return work <= EXCLUDE_WORK_MAX ? work : Infinity;
+  for (const seq of alts) {
+    const v = seqSteps(seq, ones, true);
+    if (!v) return Infinity;
+    if (anchored(seq)) total += v[n] + (tried ? n : 0);
+    else for (let m = 0; m <= n; m += 1) total += v[m];
+  }
+  return total <= EXCLUDE_WORK_MAX ? total : Infinity;
 }
 
 // Names to time an exclude pattern on (the fetcher's timed half), so the clock times the pattern's
@@ -355,7 +440,8 @@ export function excludeProbes(pattern) {
   prefix = prefix.slice(0, n - 2);
   const fills = new Set(['a', '0', '_', ':', '-']);
   for (const ch of pattern) if (!'\\^$|()[]{}*+?.'.includes(ch) && ch.trim()) fills.add(ch);
-  for (const c of [...fills].slice(0, 24)) out.push(`${prefix}${c.repeat(n - prefix.length - 1)}\n`);
+  // Cut to the bound in UTF-16 units: an astral character is two, and a longer name is never matched.
+  for (const c of [...fills].slice(0, 24)) out.push(`${`${prefix}${c.repeat(n)}`.slice(0, n - 1)}\n`);
   return out;
 }
 // A rule group's name as the engine lists it (`ruleGroup` of a Grafana-managed
@@ -375,8 +461,11 @@ const checkGroup = (value) => {
 // values are trimmed and deduplicated in order. `errors` holds one sentence
 // per refused field or value, naming it and the rule; the scope keeps only the
 // values that passed, and a caller refuses the whole scope when `errors` is
-// not empty.
-export function normalizeScope(input) {
+// not empty. `stored`: a scope already saved (a check's, an environment's, a
+// pack's record) — its exclude patterns are read by the rule earlier releases
+// had, so one refused only by the work bound or a backreference is kept as
+// written (the fetcher does not apply it, and says so) and loading never fails.
+export function normalizeScope(input, { stored = false } = {}) {
   const errors = [];
   const scope = { metricPrefixes: [], folderUids: [], datasourceUid: null, metricExclude: [], ruleGroups: [] };
   if (input === undefined || input === null) return { scope, errors };
@@ -396,7 +485,7 @@ export function normalizeScope(input) {
       else scope.datasourceUid = value;
     }
   }
-  scope.metricExclude = normalizeList(input.metricExclude, 'metricExclude', { limit: SCOPE_LIMITS.excludes, check: checkExclude, split: wordsOf }, errors);
+  scope.metricExclude = normalizeList(input.metricExclude, 'metricExclude', { limit: SCOPE_LIMITS.excludes, check: stored ? checkExcludeStored : checkExclude, split: wordsOf }, errors);
   scope.ruleGroups = normalizeList(input.ruleGroups, 'ruleGroups', { limit: SCOPE_LIMITS.groups, check: checkGroup }, errors);
   return { scope, errors };
 }
@@ -441,7 +530,9 @@ const FOLDER_TITLE_CHARS = 100;
 // dashboards when folders are) — `appliedGroups`, the rule families the rule
 // groups were applied to (default none: only the fetcher can tell that every
 // rule named its group), and `folderTitles` ({ <uid>: <title> }, from the
-// dashboard search answers). `observogram.live.scope` is always written (an
+// dashboard search answers) — and `notApplied`, a sentence per exclude pattern
+// the fetch read without (a stored one the rule refuses now), kept in
+// `observogram.live.scope` when there is one. `observogram.live.scope` is always written (an
 // unscoped snapshot says so; `metricExclude`, `ruleGroups` and their
 // `appliesTo` entries appear only when set, so a pack without them reads as
 // before); a family's `observogram.scope.<kind>` only when the scope was
@@ -472,6 +563,8 @@ export function scopeAnnotations(scope, learned = {}) {
       ...(excludes.length ? { metricExclude: excludes } : {}),
       ...(groups.length ? { ruleGroups: groups } : {}),
       appliesTo,
+      ...(Array.isArray(learned.notApplied) && learned.notApplied.length
+        ? { notApplied: learned.notApplied.filter((v) => typeof v === 'string').slice(0, SCOPE_LIMITS.excludes).map((v) => v.slice(0, 400)) } : {}),
     }),
   };
   const metricKinds = new Set([...appliesTo.metricPrefixes, ...(appliesTo.metricExclude || [])]);

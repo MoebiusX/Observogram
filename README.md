@@ -1428,8 +1428,9 @@ compares the service with all of it, and the match says little. `liveScopes`,
 metricExclude, ruleGroups } }` on `POST` and `PATCH /api/services/:id` (the
 whole map; an empty or `null` scope is none; each value checked as a snapshot
 scope is, the exclude patterns' work bound and timing included — a pattern
-whose quantifiers can split a 256-character name more than a million ways is
-refused, so none stalls the server), narrows that environment's
+that can take more than 32 million steps to test a 256-character name is
+refused, so none stalls the server; a scope stored before keeps loading, and a
+pattern it holds that the rule refuses now is read without and named), narrows that environment's
 live read as a snapshot of the same scope narrows it: the metric names its
 prefixes keep and its patterns do not drop, the dashboards and alert rules of
 its folders (pushed down where the tool takes a folder, every engine read),
@@ -2481,7 +2482,7 @@ whole; a plain draft and the refresh never read it, nor does a service's Run —
 | `OBSERVOGRAM_SNAPSHOT_METRIC_PREFIXES` | comma-separated metric-name prefixes a snapshot keeps (`payments_,checkout_`) |
 | `OBSERVOGRAM_SNAPSHOT_FOLDER_UIDS` | comma-separated Grafana folder uids for dashboards and, when every rule names one, alert rules; an alert-rule tool that takes a folder uid (Grafana's) is asked once per folder, so on a Grafana-only estate the other folders never travel; beside an engine that names no folder, or when a folder gets no answer, it is read whole as before and the gate log says so |
 | `OBSERVOGRAM_SNAPSHOT_DATASOURCE_UID` | a datasource uid — named in the gate log as not applied while no advertised tool takes one |
-| `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` | white-space-separated patterns (a pattern cannot contain a space; `\s` works), each anchored (`^app_event_\d+_total$ ^go_`), for metric names a snapshot drops after the prefixes kept them — a backend's names no declaration will ever match; counted in the gate log, and a repository metric they match is *not checked*, never *declared, not live*; a pattern that crawls is refused with the rest |
+| `OBSERVOGRAM_SNAPSHOT_METRIC_EXCLUDE` | white-space-separated patterns (a pattern cannot contain a space; `\s` works), each anchored (`^app_event_\d+_total$ ^go_`), for metric names a snapshot drops after the prefixes kept them — a backend's names no declaration will ever match; counted in the gate log, and a repository metric they match is *not checked*, never *declared, not live*; a pattern that may be too slow to match is refused with the rest |
 | `OBSERVOGRAM_SNAPSHOT_RULE_GROUPS` | comma-separated rule-group names (`payments, checkout:slo`; Grafana's `ruleGroup`, a Prometheus or vmalert `groups[].name`) a snapshot keeps for alert and recording rules, applied only when every rule the engines list names its group (said in the gate log otherwise); a repository rule of another group is *not checked*, never *declared, not live* |
 | `OBSERVOGRAM_ORG_<ORG>_SNAPSHOT_METRIC_PREFIXES`, `…_FOLDER_UIDS`, `…_DATASOURCE_UID`, `…_METRIC_EXCLUDE`, `…_RULE_GROUPS` | the same for one org (read only by the org that owns the name); each field overrides the deployment's |
 | `OBSERVOGRAM_MCP_ORIGINS`, `OBSERVOGRAM_ORG_<ORG>_MCP_ORIGINS` | the MCP origin allowlist, unioned ([Fetch Live From MCP](#fetch-live-from-mcp)) |

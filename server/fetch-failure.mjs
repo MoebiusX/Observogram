@@ -168,7 +168,9 @@ export function hostMessage(body, { sentences = 1 } = {}) {
 // limit exceeded." Anything else that names whoever asked is written
 // <redacted>: an account ID, an e-mail address, a quoted user name (Azure
 // DevOps' "The user '…'"), an IP address (Node's isIP decides, never a time
-// such as 05:00:00 nor a TF code's colon) — what was refused and why stays.
+// such as 05:00:00 nor a TF code's colon; an IPv4 address with a port, as a
+// proxy's 10.0.0.1:3128, loses the address and keeps the port) — what was
+// refused and why stays.
 const RATE_LIMIT_FOR = /(rate limit (?:exceeded|reached))\s+for\s+((?:user|installation|app|account)\s+ID\s+\d+|[0-9a-f.:]+?)(?=\.?(?:\s|$)|[!?,;)])/gi;
 const ADDRESS_LIKE = /(?<![\w:.])[0-9a-f]*[.:][0-9a-f.:]*/gi;
 function withoutIdentities(text) {
@@ -179,7 +181,9 @@ function withoutIdentities(text) {
     .replace(/\b(the user|identity)\s+'[^']*'/gi, "$1 '<redacted>'")
     .replace(ADDRESS_LIKE, (token) => {
       const bare = token.replace(/\.+$/, '');   // a sentence's full stop is no part of it
-      return isIP(bare) ? `<redacted>${token.slice(bare.length)}` : token;
+      if (isIP(bare)) return `<redacted>${token.slice(bare.length)}`;
+      const withPort = /^(.+):(\d{1,5})$/.exec(bare);
+      return withPort && isIP(withPort[1]) === 4 ? `<redacted>:${withPort[2]}${token.slice(bare.length)}` : token;
     });
 }
 

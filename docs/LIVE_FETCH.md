@@ -159,13 +159,17 @@ exporter's malformed mints; the count is in the gate log, the patterns ride in
 metric they match as *not checked*), then a 20 000-name cap, named. A pattern
 is matched on the server's own thread, so its work is bounded where the scope
 is parsed (`tools/lib/live-fetch.mjs` `normalizeScope`): no backreference, and
-at most a million ways to split a 256-character name among its quantifiers and
-alternatives — adjacent quantifiers that take the same characters
-(`^q*q*q*q*q*q*q*q*q*q*q*q*$`, `^.*_.*_.*_total$`) and long chains of optional
-atoms are refused, in the timed half's words, before anything is timed; the
-timed half then times names the pattern itself opens (`excludeProbes`) beside
-the four adversarial ids; and a name longer than 256 characters is never
-dropped by a pattern, by the fetcher and the diff alike (`excludedBy`). Folder
+at most 32 million steps to test a 256-character name — four quantifiers that
+take the same characters (`^q*q*q*q*q*q*q*q*q*q*q*q*$`, `^.*:.*:.*:.*$`) and long
+chains of optional atoms are refused before anything is timed, while three
+wildcards (`^.*:.*:.*$`, `^.*_.*_.*_seconds_bucket$`) pass; the timed half then
+times names the pattern itself opens (`excludeProbes`) beside the four
+adversarial ids, stopping at the first name past 200 ms; and a name longer than
+256 characters is never dropped by a pattern, by the fetcher and the diff alike
+(`excludedBy`). That rule is for new input; a stored scope (a saved check's, an
+environment's) is read by the rule earlier releases had (`{ stored: true }`) and
+always loads — a pattern it holds that the rule refuses now is not applied, and
+the metric stage and `observogram.live.scope` (`notApplied`) say so. Folder
 uids filter dashboards before the detail reads and alert rules when every
 rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,
 through its registry row's `runtimeArgs` slot — is asked once per folder and the

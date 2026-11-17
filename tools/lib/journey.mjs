@@ -309,14 +309,18 @@ export function validateChaosRuns(chaosRuns, journeyName = '?') {
 // positive integer when present.
 // packB.mcp.scope — the live read narrowed to one service (the snapshot
 // scope's fields, tools/lib/live-fetch.mjs normalizeScope) — is a valid scope
-// when present; the fetch applies it as a snapshot does (a scoped draft).
+// when present; the fetch applies it as a snapshot does (a scoped draft). A
+// saved check's scope is read as stored: an exclude pattern refused only by
+// the work bound or a backreference (both later than the rule a check may have
+// been saved under) never stops it loading — the fetch reads without it and
+// says so.
 export function validatePackBMcp(mcp, journeyName = '?') {
   if (!mcp || typeof mcp !== 'object') return;
   if (mcp.endpointId !== undefined && (!Number.isInteger(mcp.endpointId) || mcp.endpointId < 1)) {
     throw new Error(`journey ${journeyName}: packB.mcp.endpointId must be a positive integer (got ${JSON.stringify(mcp.endpointId)})`);
   }
   if (mcp.scope !== undefined && mcp.scope !== null) {
-    const { errors } = normalizeScope(mcp.scope);
+    const { errors } = normalizeScope(mcp.scope, { stored: true });
     if (errors.length) throw new Error(`journey ${journeyName}: packB.mcp.${errors.join('; ')}`);
   }
 }
@@ -325,7 +329,7 @@ export function validatePackBMcp(mcp, journeyName = '?') {
 export function packBScopeOf(def) {
   const raw = def?.packB?.mcp?.scope;
   if (raw === undefined || raw === null || def?.packB?.file) return null;
-  return compactScope(normalizeScope(raw).scope);
+  return compactScope(normalizeScope(raw, { stored: true }).scope);
 }
 
 // Step 5: the notify policy vocabulary, re-exported from the browser-safe

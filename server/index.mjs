@@ -1883,8 +1883,8 @@ app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req,
     let said = null;
     try { said = JSON.parse(bAnn[LIVE_SCOPE_ANNOTATION]); } catch { /* not a scope: none */ }
     if (said && typeof said === 'object' && !Array.isArray(said)) {
-      const { appliesTo: _appliesTo, ...fields } = said;
-      const { scope, errors } = normalizeScope(fields);
+      const { appliesTo: _appliesTo, notApplied: _notApplied, ...fields } = said;
+      const { scope, errors } = normalizeScope(fields, { stored: true });
       const compact = errors.length ? null : compactScope(scope);
       if (compact) live.mcp.scope = compact;
     }
