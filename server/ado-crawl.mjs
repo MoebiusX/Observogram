@@ -20,7 +20,7 @@
 // with versionDescriptor.version=<branch> when the repository names one
 // (else the repository's default branch).
 
-import { readSignal, unreachable } from './fetch-failure.mjs';
+import { hostMessage, hostWaitMs, readSignal, unreachable } from './fetch-failure.mjs';
 
 const SERVICES_HOST = /^(?:dev\.azure\.com|[a-z0-9][a-z0-9-]*\.visualstudio\.com)$/i;
 const SEGMENT = /^[^/?#\s][^/?#]*$/;
@@ -196,11 +196,15 @@ export async function adoFetch(url, { fetchImpl = fetch, token = null, tokenSour
     throw err;
   }
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    let text = body.slice(0, 200);
-    try { text = JSON.parse(body).message || text; } catch { /* keep the raw slice */ }
-    const err = new Error(`Azure DevOps ${res.status}: ${text}`);
+    // What Azure DevOps says (fetch-failure.mjs hostMessage): its JSON `message`'s first sentence
+    // (the TF code and the fact; a further sentence may name an identity) — never an HTML page or a
+    // proxy's text, where the status says it alone.
+    const text = hostMessage(await res.text().catch(() => ''));
+    const err = new Error(`Azure DevOps ${res.status}${text ? `: ${text}` : ''}`);
     err.status = res.status;
+    // The wait it asks for (a 429's Retry-After), for a read that tries again.
+    const wait = hostWaitMs(res.headers);
+    if (wait !== null) err.retryAfterMs = wait;
     throw err;
   }
   // The body: the status was read, so an answer that does not finish or

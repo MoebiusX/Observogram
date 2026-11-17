@@ -2698,14 +2698,21 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   let error = null;
   let need = null;
   let out = null;
-  // The 502's own word for a run it recorded (`vantage-lost`), null otherwise.
+  // The answer's own word for a run it recorded (the 502's `vantage-lost`, the 409's `scan-partial`), null otherwise.
   let outcome = null;
+  // A 409's stopped Run (services-api.mjs servicesRefusal): what its scan read, and the scan the
+  // service keeps ({ id, label }, or null when none is kept; undefined for any other answer).
+  let stoppedScan = null;
+  let stoppedKept;
   // The row's journeys-listing entry before the Run: a Run the server answered with an error but
   // recorded (a live side that gave nothing, a scan that lost files) is the newer record after it.
   const listed = () => (Array.isArray(listFacts.journeys) && row.journey ? listFacts.journeys.find((j) => j?.name === row.journey) || null : null);
   const before = listed();
   try { out = await runServiceRecord(row.serviceId, row.env, { repoAuth: token }); }
-  catch (e) { error = e?.message || String(e); need = e?.repoAuth || null; outcome = typeof e?.outcome === 'string' ? e.outcome : null; }
+  catch (e) {
+    error = e?.message || String(e); need = e?.repoAuth || null; outcome = typeof e?.outcome === 'string' ? e.outcome : null;
+    stoppedScan = e?.scan ?? null; stoppedKept = e?.kept;
+  }
   // A token its host refused is no use for the next Run either.
   if (host && need?.refused) repoTokens.delete(host);
   listRunning = { ...listRunning };
@@ -2716,7 +2723,7 @@ async function runListRow(key, { repoAuth = '' } = {}) {
   // The run finished and was recorded: its reading is the toast, and the row's cell says it — the
   // server's refusal is not repeated beneath the row (it stays there while the listing does not show
   // the record the 502 says it kept).
-  const recorded = error ? runRecordedToast({ name: row.name, env: row.env, before, after: (Array.isArray(listFacts.journeys) ? listFacts.journeys : []).find((j) => j?.name === (row.journey || listRow(key)?.journey)) || null, outcome, error }) : null;
+  const recorded = error ? runRecordedToast({ name: row.name, env: row.env, before, after: (Array.isArray(listFacts.journeys) ? listFacts.journeys : []).find((j) => j?.name === (row.journey || listRow(key)?.journey)) || null, outcome, error, scan: stoppedScan, kept: stoppedKept }) : null;
   if (recorded && !need && !recorded.unlisted) listResults = { ...listResults, [key]: null };
   if (state.mode === 'overview' && overviewScreen === 'list') renderMainView();
   if (recorded) { toast(recorded.text, recorded.tone); return; }

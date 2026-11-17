@@ -325,19 +325,23 @@ test('unreachable: "could not be reached" only when the host was not reached, wi
   }), { status: 200, headers: { 'content-type': 'application/json' } });
   await assert.rejects(adoFetch('https://dev.azure.com/acme/x/_apis/y', { fetchImpl: async () => cutShort(), token: 'pat-SECRET-0000' }),
     (e) => e.status === undefined && e.message === `${DROPPED} (UND_ERR_SOCKET)` && !e.message.includes('pat-SECRET'), 'Azure DevOps: the tree cut short');
-  await assert.rejects(fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, { rawFn: null, fetchFn: async () => cutShort() }),
-    (e) => e.status === undefined && e.message === 'GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET)', 'GitHub: the tree cut short');
+  // A drop is tried again (no wait here): the tree, then each file, four times in all, said so.
+  const NO_WAIT = { backoffMs: 0 };
+  await assert.rejects(fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, { rawFn: null, fetchFn: async () => cutShort(), limits: NO_WAIT }),
+    (e) => e.status === undefined && e.message === 'GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET) — tried 4 times', 'GitHub: the tree cut short');
   // A file cut short is that file's skipped reason, never fatal — from raw without a token, from the API with one.
   const treeOf = (paths) => new Response(JSON.stringify({ tree: paths.map((path) => ({ type: 'blob', path })) }));
   const cutFile = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, {
     fetchFn: async () => treeOf(['alerts/a.rules.yaml', 'alerts/b.rules.yaml']),
     rawFn: async (_o, _r, _ref, path) => (path === 'alerts/b.rules.yaml' ? cutShort() : new Response(`# ${path}`)),
+    limits: NO_WAIT,
   });
-  assert.deepEqual([cutFile.files, cutFile.skipped], [{ 'alerts/a.rules.yaml': '# alerts/a.rules.yaml' }, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://raw.githubusercontent.com was dropped while the answer was read (UND_ERR_SOCKET))' }]]);
+  assert.deepEqual([cutFile.files, cutFile.skipped], [{ 'alerts/a.rules.yaml': '# alerts/a.rules.yaml' }, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://raw.githubusercontent.com was dropped while the answer was read (UND_ERR_SOCKET) — tried 4 times)' }]]);
   const cutViaApi = await fetchGithubFiles({ owner: 'acme', repo: 'shop', ref: 'main' }, {
     rawFn: null, fetchFn: async (path) => (path.includes('/git/trees/') ? treeOf(['alerts/b.rules.yaml']) : cutShort()),
+    limits: NO_WAIT,
   });
-  assert.deepEqual(cutViaApi.skipped, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET))' }]);
+  assert.deepEqual(cutViaApi.skipped, [{ path: 'alerts/b.rules.yaml', why: 'it could not be downloaded (GitHub: the connection to https://api.github.com was dropped while the answer was read (UND_ERR_SOCKET) — tried 4 times)' }]);
   // A 200 whose body stalls past the readers' deadline: the status was read, so the sentence is the answer not
   // finishing, never "did not answer" — through the Azure DevOps tree and a GitHub file alike.
   const stalled = () => new Response(new ReadableStream({
@@ -1385,9 +1389,11 @@ test('a Run names what the scan left out — a file git ignores and a secrets fi
     assert.equal(r.status, 200, r.text);
     const { scan } = r.json;
     assert.deepEqual([scan.skipped, scan.skippedFiles], [2, [
-      { path: 'k8s/values-secrets.yaml', why: SCAN_WHY.secret },
-      { path: 'values-local.yaml', why: SCAN_WHY.gitignored },
+      { path: 'k8s/values-secrets.yaml', why: SCAN_WHY.secret, kind: 'on-purpose' },
+      { path: 'values-local.yaml', why: SCAN_WHY.gitignored, kind: 'on-purpose' },
     ]]);
+    // Left out on purpose: no loss — nothing not read, the scan whole, every candidate read.
+    assert.deepEqual([scan.partial, scan.lost, scan.notRead, scan.candidates], [false, 0, 0, scan.files]);
     assert.ok(scan.unknownFiles.includes('notes/unrelated.json') && scan.unclassified >= 1, JSON.stringify(scan.unknownFiles));
     assert.ok(scan.classified > 0 && Object.keys(scan.byKind).length > 0 && Array.isArray(scan.warnings));
     assert.equal(scan.files, Object.keys(walkRepoFiles(REPO)).length + 1, 'the repository\'s files and the unrecognised one');
@@ -1420,8 +1426,8 @@ test('an upload never keeps a secrets file and keeps what the browser did not re
   const r = await call('POST', `/api/services/${id}/run`, {});
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.json.scan.skippedFiles, [
-    { path: 'operational-alerts/k8s/values-secrets.yaml', why: SCAN_WHY.secret },
-    { path: 'operational-alerts/values-local.yaml', why: SCAN_WHY.gitignored },
+    { path: 'operational-alerts/k8s/values-secrets.yaml', why: SCAN_WHY.secret, kind: 'on-purpose' },
+    { path: 'operational-alerts/values-local.yaml', why: SCAN_WHY.gitignored, kind: 'on-purpose' },
   ]);
   assert.throws(() => parseUpload({ name: 'only', files: { 'secrets.yaml': 'x' } }), { message: UPLOAD_WAYS.none }, 'an upload of a secrets file alone holds nothing');
   const bounded = parseUpload({ name: 'b', files: { 'a.yaml': 'x' }, skipped: [{ path: 'p', why: 'w' }, { path: 7 }, 'x', ...Array.from({ length: UPLOAD_LIMITS.skipped + 5 }, () => ({ path: 'q', why: 'w' }))] });
@@ -2325,7 +2331,7 @@ test('SR1 GET /api/journeys lists what the last run rests on — compared, the f
     // A Run that stopped since: the last check stays the last check, the stop is named beside it.
     drop({ startedAt: '2099-02-03T00:00:00.000Z', outcome: 'scan-partial', error: '49 of 220 files not read: grafana/a.json — it could not be downloaded (HTTP 403)', packA: { source: 'a', scan: { files: 171, candidates: 220, partial: true, notRead: 49, notReadReasons: [{ path: 'grafana/a.json', why: 'it could not be downloaded (HTTP 403)' }] } }, packB: { source: 'b' } });
     j = await listed();
-    assert.deepEqual([j.lastRun.startedAt, j.lastRun.outcome, j.stoppedRun], ['2099-02-02T00:00:00.000Z', 'gate-failed', { startedAt: '2099-02-03T00:00:00.000Z', notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)' }]);
+    assert.deepEqual([j.lastRun.startedAt, j.lastRun.outcome, j.stoppedRun], ['2099-02-02T00:00:00.000Z', 'gate-failed', { startedAt: '2099-02-03T00:00:00.000Z', notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)', kept: true }]);
     // A lost run (C4): no figure, the first probe error; its families answered empty: no data.
     drop({ startedAt: '2099-02-04T00:00:00.000Z', outcome: 'vantage-lost', error: 'no probe family returned data', vantage: 'lost', probes: probes({ attempted: ['alert_rules'], empty: ['alert_rules'] }), probeErrors: {}, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } });
     j = await listed();
@@ -2334,3 +2340,493 @@ test('SR1 GET /api/journeys lists what the last run rests on — compared, the f
     forgetChecks([NAME]);
   }
 });
+
+// ---------- a host that refuses a burst: the read tries again, slows down, and says what it could not read ----------
+//
+// The hosts are stubbed with shapes they document or were measured to answer: GitHub's secondary limit (403
+// with retry-after and a JSON message), its spent quota (403 with x-ratelimit-remaining 0 and a reset), raw's
+// 429 with no header, Azure DevOps's 429 with Retry-After, the downstream's measured burst refusal (a 403 with
+// no header, served on the next try), and undici's two drop shapes.
+
+const { hostWaitMs, retryKind, hostMessage } = await import('./fetch-failure.mjs');
+const { HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS, retryRead } = await import('./github-crawl.mjs');
+
+// Virtual time for a read: `now` advances only when the read sleeps, so its waits cost nothing here.
+const virtualClock = () => {
+  let t = 0;
+  const c = {
+    slept: [],
+    now: () => t,
+    // Waits that overlap end together: a sleep ends at its own start plus its length, never later.
+    sleep: async (ms, signal) => { if (signal?.aborted) throw signal.reason; c.slept.push(ms); const end = t + Math.max(0, ms); await new Promise((r) => setImmediate(r)); t = Math.max(t, end); },
+  };
+  return c;
+};
+const hostError = (status, message, retryAfterMs) => Object.assign(new Error(message), { status, ...(retryAfterMs ? { retryAfterMs } : {}) });
+const dropped = (code = 'UND_ERR_SOCKET') => unreachable('GitHub', 'https://raw.githubusercontent.com/acme/shop/main/a.yaml', new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code }) }), { answered: true });
+
+test('hostWaitMs and retryKind: the wait a host asks for, from its headers alone; what may be tried again, from the status or a cause\'s code, never the words — through the real readers, which keep the status and the wait and quote a host\'s JSON message (its first sentence), never an HTML body', async () => {
+  assert.deepEqual([HOST_READ_ATTEMPTS, HOST_READ_BACKOFF_MS, HOST_READ_MAX_WAIT_MS], [4, 1000, 60_000]);
+  const NOW = Date.parse('2026-11-17T10:00:00Z');
+  assert.equal(hostWaitMs(new Headers({ 'retry-after': '7' }), NOW), 7000);
+  assert.equal(hostWaitMs(new Headers({ 'retry-after': 'Tue, 17 Nov 2026 10:00:30 GMT' }), NOW), 30_000, 'an HTTP date');
+  assert.equal(hostWaitMs(new Headers({ 'retry-after': 'Tue, 17 Nov 2026 09:00:00 GMT' }), NOW), 0, 'never negative');
+  assert.equal(hostWaitMs(new Headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(NOW / 1000 + 3600) }), NOW), 3_600_000, 'a spent quota: its reset');
+  assert.equal(hostWaitMs(new Headers({ 'x-ratelimit-remaining': '12', 'x-ratelimit-reset': String(NOW / 1000 + 3600) }), NOW), null, 'a reset with quota left asks nothing');
+  assert.equal(hostWaitMs(new Headers({ 'retry-after': 'soon' }), NOW), null, 'what does not parse asks nothing');
+  assert.deepEqual([hostWaitMs({ 'Retry-After': '2' }, NOW), hostWaitMs(null, NOW), hostWaitMs(new Headers(), NOW)], [2000, null, null], 'a plain object in any case; no headers');
+  // The message: a JSON body's first sentence, never more, never an HTML page.
+  assert.equal(hostMessage(JSON.stringify({ message: "TF401027: You need the Git 'GenericRead' permission to perform this action. Details: identity 'Build\\\\x', scope 'repository'." })), "TF401027: You need the Git 'GenericRead' permission to perform this action.");
+  assert.equal(hostMessage(JSON.stringify({ message: 'API rate limit exceeded for 203.0.113.9. (But here is the good news: authenticated requests get a higher rate limit.)' })), 'API rate limit exceeded for 203.0.113.9.');
+  assert.deepEqual([hostMessage('<html><body>Throttled</body></html>'), hostMessage(''), hostMessage(JSON.stringify({ message: 'Not Found' })), hostMessage(JSON.stringify({ message: 'x'.repeat(300) })).length], ['', '', 'Not Found', 200]);
+
+  // Through the readers over stubbed answers: the status and the wait kept, the kind from the status.
+  const realFetch = globalThis.fetch;
+  const answer = (status, body = '', headers = {}) => async () => new Response(body, { status, headers });
+  try {
+    const gh = async (status, body, headers) => { globalThis.fetch = answer(status, body, headers); return ghFetch('/repos/acme/shop').catch((e) => e); };
+    const secondary = await gh(403, JSON.stringify({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }), { 'content-type': 'application/json', 'retry-after': '60' });
+    assert.deepEqual([secondary.message, secondary.status, secondary.retryAfterMs, retryKind(secondary)], ['GitHub 403 on /repos/acme/shop: You have exceeded a secondary rate limit.', 403, 60_000, 'refused']);
+    const reset = String(Math.ceil(Date.now() / 1000) + 3600);
+    const spent = await gh(403, JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }), { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset });
+    assert.ok(spent.retryAfterMs > 3_500_000 && retryKind(spent) === 'refused', `a spent quota asks for its reset: ${spent.retryAfterMs}`);
+    const html = await gh(502, '<html><h1>502 Bad Gateway</h1></html>', { 'content-type': 'text/html' });
+    assert.deepEqual([html.message, retryKind(html), 'retryAfterMs' in html], ['GitHub 502 on /repos/acme/shop', 'failed', false], 'an HTML page is never quoted');
+    for (const [status, kind] of [[429, 'refused'], [503, 'refused'], [500, 'failed'], [504, 'failed'], [404, null], [401, null], [422, null]]) {
+      assert.equal(retryKind(await gh(status, '')), kind, String(status));
+    }
+    globalThis.fetch = answer(429);
+    const raw429 = await rawFetch('acme', 'shop', 'main', 'alerts/a.yml').catch((e) => e);
+    assert.deepEqual([raw429.message, raw429.status, retryKind(raw429), 'retryAfterMs' in raw429], ['GitHub 429 on alerts/a.yml', 429, 'refused', false], 'raw: a 429 with no header — a backoff');
+    globalThis.fetch = answer(301, '', { location: 'https://raw.githubusercontent.com/acme/moved/main/alerts/a.yml' });
+    assert.equal(retryKind(await rawFetch('acme', 'shop', 'main', 'alerts/a.yml').catch((e) => e)), null, 'a redirect is never tried again');
+  } finally { globalThis.fetch = realFetch; }
+  const ado = (status, body, headers = {}) => adoFetch('https://dev.azure.com/acme/Shop/_apis/git/repositories/c/items', { fetchImpl: answer(status, body, headers), token: '' }).catch((e) => e);
+  const throttled = await ado(429, JSON.stringify({ message: 'TF400733: The request has been canceled: Request was blocked due to exceeding usage of resource.' }), { 'content-type': 'application/json', 'retry-after': '5' });
+  assert.deepEqual([throttled.status, throttled.retryAfterMs, retryKind(throttled)], [429, 5000, 'refused']);
+  const burst = await ado(403, '<html><body>Forbidden</body></html>', { 'content-type': 'text/html' });
+  assert.deepEqual([burst.message, retryKind(burst)], ['Azure DevOps 403', 'refused'], 'the measured burst refusal: a 403 with no header, its page never quoted');
+  assert.equal(retryKind(await ado(401, '')), null, 'a refusal of the token is never tried again');
+  // The causes: a drop is tried again; the deadline, the budget, a body that cannot be decoded and a host not reached are not.
+  assert.equal(retryKind(dropped()), 'failed');
+  assert.equal(retryKind(dropped('ECONNRESET')), 'failed');
+  assert.equal(retryKind(unreachable('GitHub', 'https://raw.githubusercontent.com', new TypeError('terminated'))), 'failed', 'no code: a drop');
+  assert.equal(retryKind(unreachable('GitHub', 'https://api.github.com', new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }))), 'failed');
+  assert.equal(retryKind(unreachable('GitHub', 'https://api.github.com', new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }))), null);
+  assert.equal(retryKind(dropped('Z_DATA_ERROR')), null, 'a body the decoder could not read');
+  assert.equal(retryKind(unreachable('GitHub', 'https://api.github.com', new DOMException('The operation was aborted due to timeout', 'TimeoutError'))), null, 'the 60 s deadline');
+  assert.equal(retryKind(outOfTime(1000)), null, 'the read\'s budget');
+  assert.deepEqual([retryKind(null), retryKind(new Error('GitHub 403 rate limit')), retryKind('x')], [null, null, null], 'never from the words');
+});
+
+test('downloadFiles tries a refused or dropped file again — after the host\'s wait, else a backoff, four tries in all — a 404 once; a host that asks for more than the read has left is asked nothing more; the budget during a wait is said; every reason names the tries', async () => {
+  const one = async (fetchText, opts = {}) => { const c = virtualClock(); const texts = await downloadFiles([{ path: 'a.yaml' }], fetchText, { now: c.now, sleep: c.sleep, random: () => 1, ...opts }); return { got: texts.get('a.yaml'), slept: c.slept }; };
+  let calls = 0;
+  // Refused twice with the host's own wait, then read: the waits are the host's, one call per try.
+  let r = await one(async () => { calls++; if (calls <= 2) throw hostError(403, 'GitHub 403 on a.yaml: secondary rate limit', 2000); return 'text'; });
+  assert.deepEqual([r.got, calls, r.slept], [{ text: 'text' }, 3, [2000, 2000]]);
+  // A server error twice, then read: the backoff, 1 s then 2 s (the jitter at its top here).
+  calls = 0;
+  r = await one(async () => { calls++; if (calls <= 2) throw hostError(502, 'GitHub 502 on a.yaml'); return 'text'; });
+  assert.deepEqual([r.got, calls, r.slept], [{ text: 'text' }, 3, [1000, 2000]]);
+  // A drop every time: four tries, then the drop's sentence, said tried four times.
+  calls = 0;
+  r = await one(async () => { calls++; throw dropped(); });
+  assert.deepEqual([calls, r.got, r.slept], [4, { error: `${dropped().message} — tried 4 times`, attempts: 4 }, [1000, 2000, 4000]]);
+  // A 404 once: no try again.
+  calls = 0;
+  r = await one(async () => { calls++; throw hostError(404, 'GitHub 404 on a.yaml'); });
+  assert.deepEqual([calls, r.got], [1, { error: 'GitHub 404 on a.yaml', status: 404 }]);
+  // A wait that would end past the read's budget: not tried again, and said.
+  calls = 0;
+  r = await one(async () => { calls++; throw hostError(502, 'GitHub 502 on a.yaml'); }, { budgetMs: 1000, backoffMs: 5000 });
+  assert.deepEqual([calls, r.got], [1, { error: 'GitHub 502 on a.yaml — the read\'s 1 s for its files ran out before it was tried again', status: 502 }]);
+  // attempts: 1 is today's read: one call, the sentence as it was.
+  calls = 0;
+  r = await one(async () => { calls++; throw hostError(403, 'Azure DevOps 403'); }, { attempts: 1 });
+  assert.deepEqual([calls, r.got], [1, { error: 'Azure DevOps 403', status: 403 }]);
+
+  // A spent quota (the reset an hour away): every request in flight is refused, and nothing more is asked of the host.
+  {
+    const c = virtualClock();
+    const files = Array.from({ length: 40 }, (_, i) => ({ path: `f${String(i).padStart(2, '0')}.yaml` }));
+    let asked = 0;
+    const texts = await downloadFiles(files, async () => { asked++; await new Promise((ok) => setImmediate(ok)); throw hostError(403, 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded for user ID 1.', 3_600_000); }, { now: c.now, sleep: c.sleep });
+    assert.equal(asked, HOST_READ_PARALLEL, 'the first eight, in flight together; none after');
+    const says = [...texts.values()];
+    assert.equal(says.filter((v) => v.error === 'GitHub 403 on /repos/acme/shop/contents/x: API rate limit exceeded for user ID 1. — the host asked to wait 3600 s, more than the read had left').length, 8);
+    assert.equal(says.filter((v) => v.error === 'not tried: the host refused f00.yaml (403) and asked to wait 3600 s, more than the read had left' && v.status === 403).length, 32, 'the rest not tried, said why');
+    assert.deepEqual(c.slept, [], 'no wait at all');
+  }
+  // retryRead: one read (a tree) tried again as a file is; still failing, it throws, said tried; a long wait is not waited.
+  {
+    const c = virtualClock();
+    let n = 0;
+    assert.equal(await retryRead(async () => { n++; if (n === 1) throw hostError(429, 'Azure DevOps 429: TF400733: blocked.', 5000); return 'tree'; }, { sleep: c.sleep }), 'tree');
+    assert.deepEqual([n, c.slept], [2, [5000]]);
+    n = 0;
+    await assert.rejects(retryRead(async () => { n++; throw dropped(); }, { sleep: c.sleep, backoffMs: 0 }), (e) => e.message === `${dropped().message} — tried 4 times` && n === 4);
+    n = 0;
+    await assert.rejects(retryRead(async () => { n++; throw hostError(403, 'GitHub 403 on /repos/a/b: API rate limit exceeded for user ID 1.', 3_600_000); }, { sleep: c.sleep }), (e) => e.status === 403 && n === 1 && !/tried/.test(e.message), 'an hour away: not waited, not tried again');
+  }
+});
+
+test('a host that refuses bursts: the read slows down for every file — the pool halved once for a burst, grown back by one, never past eight — and every file is read; read once each, as before, the same host costs files', async () => {
+  // The downstream's measured case: a host that refuses (403, no header) any request made while more than 4 are in flight.
+  const burstHost = () => {
+    const h = { inFlight: 0, peak: 0, refused: 0, calls: 0, afterFirstRefusal: [] };
+    h.fetchText = async (node) => {
+      h.calls++;
+      h.inFlight++;
+      h.peak = Math.max(h.peak, h.inFlight);
+      const seen = h.inFlight;
+      if (h.refused) h.afterFirstRefusal.push(seen);
+      try {
+        await new Promise((ok) => setTimeout(ok, 2));
+        if (seen > 4) { h.refused++; throw hostError(403, 'Azure DevOps 403'); }
+        return `# ${node.path}`;
+      } finally { h.inFlight--; }
+    };
+    return h;
+  };
+  const files = Array.from({ length: 60 }, (_, i) => ({ path: `alerts/${String(i).padStart(2, '0')}.rules.yaml` }));
+  const c = virtualClock();
+  const h = burstHost();
+  const texts = await downloadFiles(files, h.fetchText, { now: c.now, sleep: c.sleep });
+  const read = [...texts.values()].filter((v) => typeof v.text === 'string').length;
+  assert.equal(read, 60, `every file read: ${JSON.stringify([...texts].filter(([, v]) => v.error).slice(0, 3))}`);
+  assert.ok(h.refused >= 1 && h.peak <= HOST_READ_PARALLEL, `the burst was refused (${h.refused}), and nothing ever ran past eight (${h.peak})`);
+  assert.ok(Math.max(...h.afterFirstRefusal) <= 5, `after the first refusal the read stays at the host's pace: at most one over it while it grows back (${Math.max(...h.afterFirstRefusal)})`);
+  assert.ok(h.calls <= 60 + h.refused && h.refused <= 20, `a burst is no flood of retries: ${h.calls} calls, ${h.refused} refused`);
+  // Today's read (one try each) on the same host: files lost.
+  const today = burstHost();
+  const once = await downloadFiles(files, today.fetchText, { attempts: 1 });
+  assert.ok([...once.values()].filter((v) => v.error).length > 0, 'one try each loses the refused files');
+});
+
+test('fetchRepositoryFiles reads a whole repository from a host that refuses on first sight — Azure DevOps\' 403 burst (49 of the files) and its 429 with Retry-After, the tree itself throttled once; GitHub raw\'s 429 with no header — where one try each lost those files', async () => {
+  const names = Array.from({ length: 220 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
+  const tree = names.map((path) => ({ type: 'blob', path }));
+  const selected = planCrawlerFetch(tree, HOST_READ_CAPS).selected.map((n) => n.path);
+  const refuseOnce = new Set(selected.slice(0, 49));
+  const throttle = selected[100];
+  const adoHost = ({ treeThrottled = true } = {}) => {
+    const seen = new Set();
+    let treeCalls = 0;
+    return async (url) => {
+      if (isAdoTreeCall(url)) {
+        treeCalls++;
+        if (treeThrottled && treeCalls === 1) return new Response(JSON.stringify({ message: 'TF400733: The request has been canceled.' }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '5' } });
+        return adoTreeOf(tree);
+      }
+      const file = itemsPathOf(url);
+      const first = !seen.has(file);
+      seen.add(file);
+      if (first && refuseOnce.has(file)) return new Response('<html>Forbidden</html>', { status: 403, headers: { 'content-type': 'text/html' } });
+      if (first && file === throttle) return new Response(JSON.stringify({ message: 'TF400733: blocked.' }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '30' } });
+      return answerJson({ content: `# ${file}` });
+    };
+  };
+  const c = virtualClock();
+  const ado = await fetchRepositoryFiles(ADO_REPO, { fetchImpl: adoHost(), limits: { now: c.now, sleep: c.sleep } });
+  assert.deepEqual([Object.keys(ado.files).length, ado.skipped, ado.candidates, ado.capped, ado.cappedFiles.length, ado.fileCap], [200, [], 220, 20, 20, 200], 'every file under the cap read; the cap\'s files named');
+  assert.ok(c.slept.includes(5000) && c.slept.includes(30_000), `the tree waited the host's 5 s, the file its 30 s: ${c.slept.filter((x) => x >= 5000)}`);
+  const once = await fetchRepositoryFiles(ADO_REPO, { fetchImpl: adoHost({ treeThrottled: false }), limits: { attempts: 1 } });
+  assert.equal(once.skipped.length, 50, 'one try each: the 49 refused and the throttled one lost, as the downstream saw');
+  assert.deepEqual(once.skipped[0], { path: selected[0], why: 'it could not be downloaded (Azure DevOps 403)' });
+  // GitHub from raw: a 429 with no header on first sight for one file in four.
+  const rawSeen = new Set();
+  const rawFn = async (_o, _r, _ref, path) => {
+    const first = !rawSeen.has(path);
+    rawSeen.add(path);
+    if (first && names.indexOf(path) % 4 === 0) { const err = new Error(`GitHub 429 on ${path}`); err.status = 429; throw err; }
+    return new Response(`# ${path}`);
+  };
+  const c2 = virtualClock();
+  const gh = await fetchGithubFiles(GH_REPO, { fetchFn: async () => ghTreeOf(tree), rawFn, limits: { now: c2.now, sleep: c2.sleep } });
+  assert.deepEqual([Object.keys(gh.files).length, gh.skipped, gh.capped], [200, [], 20], 'raw\'s 429s waited out with a backoff');
+});
+
+// ---------- a scan that lost files is no scan: the Run stops, the service keeps its last complete one ----------
+
+// GitHub, stubbed in this process: each repository's default branch, its tree and its files through the contents
+// API (the person's own token) — `refuse(path)` answers a file in its place, or null.
+const RULE = (i) => `groups:\n  - name: g${i}\n    rules:\n      - alert: Rule${i}Down\n        expr: up{job="r${i}"} == 0\n`;
+const RULE_FILES = Array.from({ length: 220 }, (_, i) => `alerts/${String(i).padStart(3, '0')}.rules.yaml`);
+// The quota spent, as GitHub's REST API answers it: 403, x-ratelimit-remaining 0, the reset an hour away.
+const quotaSpent = () => new Response(JSON.stringify({ message: 'API rate limit exceeded for user ID 1.' }), {
+  status: 403, headers: { 'content-type': 'application/json', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3600) },
+});
+function githubRepos(passThrough, repos) {
+  return async (url, init = {}) => {
+    const u = String(url);
+    if (!u.startsWith('https://api.github.com/') && !u.startsWith('https://raw.githubusercontent.com/')) return passThrough(url, init);
+    for (const [slug, r] of Object.entries(repos)) {
+      if (u.endsWith(`/repos/${slug}`)) return new Response(JSON.stringify({ default_branch: 'main' }));
+      if (u.includes(`/repos/${slug}/git/trees/`)) return new Response(JSON.stringify({ tree: r.paths.map((path) => ({ type: 'blob', path, size: 64 })) }));
+      const file = u.startsWith(`https://api.github.com/repos/${slug}/contents/`) ? decodeURIComponent(u.slice(`https://api.github.com/repos/${slug}/contents/`.length).split('?')[0]) : null;
+      if (file) return (r.refuse?.(file) ?? null) || new Response(r.text ? r.text(file) : RULE(RULE_FILES.indexOf(file)));
+    }
+    return new Response('', { status: 404 });
+  };
+}
+// The last 49 of the 200 files a read takes, in its order: refused, after 151 files read whole.
+const LAST_49 = new Set(planCrawlerFetch(RULE_FILES.map((path) => ({ type: 'blob', path })), HOST_READ_CAPS).selected.slice(151).map((n) => n.path));
+const MINE_PARTIAL = 'ghp_MadeUpTokenForThePartialReads01';
+
+test('a Run whose scan lost files while the service keeps a complete scan of the same repository stops: 409 with the sentence and the way out, the pack and the check as they were, no live call, a scan-partial record and its row; Check now grades the kept pack on its complete scan; OBSERVOGRAM_PARTIAL_SCAN=check checks the partial scan instead, failed and not comparable, and the next whole scan is not comparable with it', async () => {
+  const created = await call('POST', '/api/services', { name: 'Partial Shop', repository: { kind: 'github', location: 'acme/partial-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'partial-shop.prod';
+  const journeyFile = join(WORKSPACE, 'journeys', `${NAME}.journey.yaml`);
+  const repo = { paths: RULE_FILES, refuse: () => null };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = githubRepos(realFetch, { 'acme/partial-shop': repo });
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const run = () => call('POST', `${P}/run`, { repoAuth: MINE_PARTIAL });
+    const whole = await run();
+    assert.equal(whole.status, 200, whole.text);
+    assert.deepEqual([whole.json.scan.partial, whole.json.scan.lost, whole.json.scan.notRead, whole.json.scan.capped, whole.json.scan.candidates], [false, 0, 20, 20, 220], 'a whole read: 20 past the file cap are not read, none lost');
+    assert.equal(whole.json.scan.cappedFiles.length, 20);
+    assert.equal(whole.json.record.outcome === 'pass' || whole.json.record.outcome === 'gate-failed', true);
+    assert.ok(!whole.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'), 'a capped scan is no partial one: no scanComplete breach');
+    const keptId = whole.json.pack.id;
+    const { loadJourneyDef } = await import('../tools/lib/journey.mjs');
+    const checkOf = () => { const { __source: _s, ...d } = runWithOrg('default', () => loadJourneyDef(NAME)); return d; };
+    const checkBefore = checkOf();
+    assert.ok(readFileSync(journeyFile, 'utf8').includes(`${keptId}.pack.yaml`));
+    const callsBefore = fake.calls.length;
+    // This check's journey.run rows, newest first.
+    const runRows = () => runWithOrg('default', () => listAudit(currentStore(), { action: 'journey.run', targetId: NAME })).map((r) => r.detail);
+    const runsBefore = runRows().length;
+
+    // The journeys listing's entry before the stop (the Run's toast compares it with the one after).
+    const listedOf = async () => (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === NAME) || null;
+    const listedBefore = await listedOf();
+
+    // The host's quota spent on the last 49 files the read takes.
+    repo.refuse = (path) => (LAST_49.has(path) ? quotaSpent() : null);
+    const stopped = await run();
+    assert.equal(stopped.status, 409, stopped.text);
+    assert.equal(stopped.json.outcome, 'scan-partial');
+    assert.match(stopped.json.error, /^49 of 220 files could not be read: alerts\/151\.rules\.yaml — it could not be downloaded \(GitHub 403 on \/repos\/acme\/partial-shop\/contents\/alerts\/151\.rules\.yaml\?ref=main: API rate limit exceeded for user ID 1\. — the host asked to wait 3600 s, more than the read had left\) \(20 more not read: 20 past the file cap\) — the Run stopped: the service keeps its last complete scan of this repository; run it again \(an operator can have a partial scan checked instead: OBSERVOGRAM_PARTIAL_SCAN=check\)$/);
+    assert.deepEqual(stopped.json.kept, { id: keptId, label: 'Partial Shop · prod · repository' });
+    assert.deepEqual([stopped.json.scan.partial, stopped.json.scan.lost, stopped.json.scan.notRead], [true, 49, 69]);
+    assert.ok(!stopped.text.includes(MINE_PARTIAL), 'the token is in no answer');
+    const rec = stopped.json.record;
+    assert.deepEqual([rec.journey, rec.outcome, rec.packB.source.startsWith('mcp:'), rec.gate.breaches], [NAME, 'scan-partial', true, []]);
+    assert.ok(rec.packA.source.endsWith(`${keptId}.pack.yaml`), 'the record names the pack the service keeps');
+    assert.ok(!('grade' in rec) && !('drift' in rec), 'nothing was compared');
+    assert.equal(rec.error, stopped.json.error.split(' — the Run stopped')[0]);
+    assert.equal(fake.calls.length, callsBefore, 'no live call');
+    assert.deepEqual(checkOf(), checkBefore, 'the check as it was — saved again as it stands, its Pack A the kept pack');
+    const svc = (await call('GET', P)).json.service;
+    assert.deepEqual(svc.packs.filter((p) => p.role === 'primary').map((p) => p.id), [keptId], 'the stored pack untouched');
+    assert.ok(packFileOf(keptId), 'and its file still there');
+    assert.equal(runRows().length, runsBefore + 1, 'one journey.run row');
+    assert.deepEqual(runRows()[0], { startedAt: rec.startedAt, outcome: 'scan-partial', alignmentPct: null, gradeScore: null, gradePass: null, breaches: null, tookMs: rec.tookMs });
+    const runs = (await call('GET', `/api/journeys/${NAME}/runs?limit=2`)).json.runs;
+    assert.deepEqual(runs.map((r) => r.outcome)[0], 'scan-partial', 'the stopped Run is in the history');
+    // The listing reads the record the Run wrote (A9): the last check stays the complete Run, the stop is named beside it —
+    // its counts, its first reason (the first file it could not read) and that the complete scan is kept.
+    const listedStop = await listedOf();
+    assert.deepEqual([listedStop.lastRun.startedAt, listedStop.lastRun.outcome, listedStop.lastRun.scan.partial], [whole.json.record.startedAt, whole.json.record.outcome, false], 'the last check, never the stop');
+    const { startedAt: stopAt, notRead: stopNotRead, candidates: stopOf, firstReason, kept: stopKept } = listedStop.stoppedRun;
+    assert.deepEqual([stopAt, stopNotRead, stopOf, stopKept], [rec.startedAt, 69, 220, true]);
+    assert.ok(firstReason.startsWith('alerts/151.rules.yaml — it could not be downloaded (GitHub 403 on /repos/acme/partial-shop/contents/alerts/151.rules.yaml') && firstReason.length <= 200, firstReason);
+    // The studio over the real 409 and the refreshed listing: the error carries the outcome, the scan and the kept pack; the toast
+    // and the row's note say the stop and the pack kept.
+    const { servicesRefusal } = await import('../studio/services-api.mjs');
+    const { runRecordedToast, stoppedNote, loadOverviewFacts } = { ...(await import('../studio/overview-model.mjs')), ...(await import('../studio/overview-api.mjs')) };
+    const refusal = servicesRefusal(409, stopped.text);
+    assert.deepEqual([refusal.outcome, refusal.kept, refusal.scan.notRead, refusal.scan.lost], ['scan-partial', { id: keptId, label: 'Partial Shop · prod · repository' }, 69, 49]);
+    assert.deepEqual(runRecordedToast({ name: 'Partial Shop', env: 'prod', before: listedBefore, after: listedStop, outcome: refusal.outcome, error: refusal.message, scan: refusal.scan, kept: refusal.kept }),
+      { text: 'Partial Shop · prod: Partial scan — 69 of 220 files not read; the previous pack is kept.', tone: 'error' });
+    assert.equal(stoppedNote(listedStop.stoppedRun), 'Last Run stopped: partial scan — 69 of 220 files not read; the previous pack is kept.');
+    // The board's loader over the server's own answers: the run it grades is the complete Run's, the stop beside it.
+    const facts = await loadOverviewFacts({ journeyFor: (list) => list.find((j) => j?.name === NAME) || null, fetchFn: async (path) => { const r = await call('GET', path); if (r.status !== 200) throw new Error(`${r.status}: ${r.text}`); return r.json; } });
+    assert.deepEqual([facts.run?.startedAt, facts.stopped?.startedAt, facts.runError], [whole.json.record.startedAt, rec.startedAt, null]);
+    // Check now runs on the kept pack and keeps its complete scan.
+    const check = await call('POST', `/api/journeys/${NAME}/run`, {});
+    assert.equal(check.status, 200, check.text);
+    assert.deepEqual(check.json.record.packA.scan, whole.json.scan, 'the complete scan, never the stopped one\'s');
+    assert.ok(!('comparable' in check.json.record));
+
+    // OBSERVOGRAM_PARTIAL_SCAN=check: the partial scan checked, marked partial — its gate failed, not comparable.
+    process.env.OBSERVOGRAM_PARTIAL_SCAN = 'check';
+    let checked;
+    try { checked = await run(); } finally { delete process.env.OBSERVOGRAM_PARTIAL_SCAN; }
+    assert.equal(checked.status, 200, checked.text);
+    assert.notEqual(checked.json.pack.id, keptId, 'the partial scan registered');
+    assert.equal(checked.json.record.outcome, 'gate-failed');
+    assert.ok(checked.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete' && /^49 of 220 files could not be read: .* — a check on part of the repository cannot pass$/.test(b.detail)), JSON.stringify(checked.json.record.gate.breaches));
+    assert.deepEqual(checked.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 220 files' });
+    assert.equal(checked.json.record.packA.scan.partial, true);
+    // The next whole scan: its figures are not set beside the partial one's.
+    repo.refuse = () => null;
+    const after = await run();
+    assert.equal(after.status, 200, after.text);
+    assert.deepEqual(after.json.record.comparable, { withPrevious: false, reason: "the previous run's scan could not read 49 of 220 files" });
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});
+
+test('a partial scan with no complete scan of this repository to keep is checked, marked partial: the first Run of a service, and the first after its repository changed — never another repository\'s pack kept as this one\'s', async () => {
+  const created = await call('POST', '/api/services', { name: 'Fresh Shop', repository: { kind: 'github', location: 'acme/fresh-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'fresh-shop.prod';
+  const fresh = { paths: RULE_FILES, refuse: (path) => (LAST_49.has(path) ? quotaSpent() : null) };
+  const moved = { paths: RULE_FILES, refuse: () => null };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = githubRepos(realFetch, { 'acme/fresh-shop': fresh, 'acme/fresh-shop-v2': moved });
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const run = () => call('POST', `${P}/run`, { repoAuth: MINE_PARTIAL });
+    // The first Run, its scan partial: nothing to keep, so checked — and said.
+    const first = await run();
+    assert.equal(first.status, 200, first.text);
+    assert.equal(first.json.record.outcome, 'gate-failed');
+    assert.ok(first.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'));
+    assert.deepEqual(first.json.record.comparable, { withPrevious: false, reason: 'this scan could not read 49 of 220 files' });
+    // Another repository: a whole scan of it, then one that loses files — the pack of the repository before is no scan of this one.
+    fresh.refuse = () => null;
+    assert.equal((await run()).status, 200, 'a whole scan of acme/fresh-shop');
+    assert.equal((await call('PATCH', P, { repository: { kind: 'github', location: 'acme/fresh-shop-v2' } })).status, 200);
+    moved.refuse = (path) => (LAST_49.has(path) ? quotaSpent() : null);
+    const other = await run();
+    assert.equal(other.status, 200, `checked, not stopped on the old repository's pack: ${other.text.slice(0, 300)}`);
+    assert.equal(other.json.scan.source, 'acme/fresh-shop-v2 on GitHub');
+    assert.ok(other.json.record.gate.breaches.some((b) => b.criterion === 'scanComplete'));
+    const primary = (await call('GET', P)).json.service.packs.filter((p) => p.role === 'primary').map((p) => p.id);
+    assert.deepEqual(primary, [other.json.pack.id], 'the scan of this repository is the service\'s pack');
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});
+
+test('a Run that could read no file of its repository stops with no complete scan of it kept: 409 kept null, a record that names no pack, no live call; the Run\'s toast reads the 409 itself and the listing says none is kept — never "the previous pack is kept"', async () => {
+  const created = await call('POST', '/api/services', { name: 'Unread Shop', repository: { kind: 'github', location: 'acme/unread-shop' } });
+  assert.equal(created.status, 201, created.text);
+  const P = `/api/services/${created.json.service.id}`;
+  assert.equal((await call('POST', `${P}/environments`, { name: 'prod', mcpEndpointId: ids.endpoint })).status, 201);
+  const NAME = 'unread-shop.prod';
+  const FILES = RULE_FILES.slice(0, 3);
+  const unread = { paths: FILES, refuse: () => quotaSpent() };
+  const whole = { paths: FILES, refuse: () => null };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = githubRepos(realFetch, { 'acme/unread-shop': unread, 'acme/unread-shop-v2': whole });
+  delete process.env.GITHUB_TOKEN;
+  const { servicesRefusal } = await import('../studio/services-api.mjs');
+  const { runRecordedToast, stoppedNote } = await import('../studio/overview-model.mjs');
+  const listedOf = async () => (await call('GET', '/api/journeys')).json.journeys.find((x) => x.name === NAME) || null;
+  try {
+    const run = () => call('POST', `${P}/run`, { repoAuth: MINE_PARTIAL });
+    // The first Run: every file refused, nothing kept — stopped all the same (nothing to check), and no check saved.
+    const callsBefore = fake.calls.length;
+    const first = await run();
+    assert.equal(first.status, 409, first.text);
+    assert.deepEqual([first.json.outcome, first.json.kept, first.json.scan.files, first.json.scan.lost, first.json.record.packA.source], ['scan-partial', null, 0, 3, null]);
+    assert.match(first.json.error, /^3 of 3 files not read: .* — the Run stopped: no file of the repository could be read; run it again$/);
+    assert.equal(fake.calls.length, callsBefore, 'no live call');
+    assert.equal(await listedOf(), null, 'no check saved: the listing does not show it');
+    const refusal = servicesRefusal(409, first.text);
+    assert.deepEqual(runRecordedToast({ name: 'Unread Shop', env: 'prod', before: null, after: null, outcome: refusal.outcome, error: refusal.message, scan: refusal.scan, kept: refusal.kept }),
+      { text: 'Unread Shop · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error', unlisted: true }, 'the 409 alone, never "the run did not finish"');
+    // A whole scan of another repository, then a Run of this one that reads nothing: the check exists, its pack is the other
+    // repository's — so nothing of this one is kept, and the listing and the toast say so.
+    assert.equal((await call('PATCH', P, { repository: { kind: 'github', location: 'acme/unread-shop-v2' } })).status, 200);
+    const checked = await run();
+    assert.equal(checked.status, 200, checked.text);
+    assert.equal((await call('PATCH', P, { repository: { kind: 'github', location: 'acme/unread-shop' } })).status, 200);
+    const listedBefore = await listedOf();
+    const again = await run();
+    assert.equal(again.status, 409, again.text);
+    assert.deepEqual([again.json.kept, again.json.record.packA.source], [null, null], 'another repository\'s pack is no scan of this one');
+    const listed = await listedOf();
+    assert.deepEqual([listed.lastRun.startedAt, listed.stoppedRun.kept, listed.stoppedRun.notRead, listed.stoppedRun.candidates], [checked.json.record.startedAt, false, 3, 3]);
+    assert.equal(stoppedNote(listed.stoppedRun), 'Last Run stopped: partial scan — 3 of 3 files not read; no complete scan of this repository is kept.');
+    const again409 = servicesRefusal(409, again.text);
+    assert.deepEqual(runRecordedToast({ name: 'Unread Shop', env: 'prod', before: listedBefore, after: listed, outcome: again409.outcome, error: again409.message, scan: again409.scan, kept: again409.kept }),
+      { text: 'Unread Shop · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error' });
+  } finally {
+    globalThis.fetch = realFetch;
+    await call('DELETE', P);
+    forgetChecks([NAME]);
+  }
+});
+
+// A repository whose root is a Helm chart, with a compose file beside it: every environment reads every file.
+const ROOT_CHART_REPO = {
+  'Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+  'values.yaml': 'replicaCount: 2\nimage:\n  repository: example/shop\n  tag: 1.0.0\n',
+  'values-eks.yaml': 'replicaCount: 4\n',
+  'templates/prometheusrule.yaml': `apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: shop\nspec:\n${RULE(1).replace(/^/gm, '  ')}`,
+  'files/alerts.rules.yaml': RULE(2),
+  'files/collector.yaml': 'receivers:\n  otlp:\n    protocols: { http: {} }\nexporters:\n  prometheus:\n    endpoint: 0.0.0.0:8889\nservice:\n  pipelines:\n    metrics: { receivers: [otlp], exporters: [prometheus] }\n',
+  'dashboards/shop.json': JSON.stringify({ title: 'Shop', uid: 'shop', schemaVersion: 41, panels: [{ title: 'Up', type: 'stat', targets: [{ expr: 'up{job="r1"}' }] }] }),
+  'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n',
+};
+
+test('every environment of a service reads the same files — an environment named prod and one named staging scan a root-chart repository alike and declare the same; a deployment surface set per environment (envSurfaces on POST, PATCH and GET; a bad one refused, nothing written; a rename moves it, a deletion takes it, another repository keeps it) reads that surface alone, and says how many files it left out', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'observogram-service-run-chart-'));
+  for (const [rel, text] of Object.entries(ROOT_CHART_REPO)) {
+    mkdirSync(dirname(join(folder, rel)), { recursive: true });
+    writeFileSync(join(folder, rel), text);
+  }
+  const created = await call('POST', '/api/services', { name: 'Chart Shop', repository: { kind: 'path', location: folder } });
+  assert.equal(created.status, 201, created.text);
+  assert.deepEqual(created.json.service.envSurfaces, {}, 'none by default');
+  const P = `/api/services/${created.json.service.id}`;
+  try {
+    for (const name of ['prod', 'staging']) assert.equal((await call('POST', `${P}/environments`, { name, mcpEndpointId: ids.endpoint })).status, 201);
+    const runOf = async (env) => { const r = await call('POST', `${P}/run`, { env }); assert.equal(r.status, 200, r.text); return r.json; };
+    const [prod, staging] = [await runOf('prod'), await runOf('staging')];
+    assert.deepEqual(prod.scan.byKind, staging.scan.byKind, 'the same files, by kind, whatever the environment is called');
+    assert.ok(prod.scan.byKind['prometheus-rules'] === 2 && prod.scan.byKind['grafana-dashboard'] === 1 && prod.scan.byKind['docker-compose'] === 1, JSON.stringify(prod.scan.byKind));
+    assert.deepEqual([prod.scan.filter, prod.scan.excludedMost, staging.scan.filter], [{ surface: null, excluded: 0 }, false, { surface: null, excluded: 0 }]);
+    const specOf = (id) => parseYaml(readFileSync(packFileOf(id), 'utf8')).spec;
+    assert.deepEqual(specOf(prod.pack.id), specOf(staging.pack.id), 'the same declared spec on both environments');
+    assert.equal(prod.record.drift.declaredNotLive, staging.record.drift.declaredNotLive, 'the same declared count compared against the same live');
+
+    // A deployment surface for prod: refused when unknown, kept when known.
+    const before = auditRows('service.update').length;
+    const bad = await call('PATCH', P, { envSurfaces: { prod: 'helm' } });
+    assert.deepEqual([bad.status, bad.json.error], [400, WAYS.envSurface('prod', 'helm')]);
+    assert.equal(auditRows('service.update').length, before, 'a refusal writes nothing');
+    const set = await call('PATCH', P, { envSurfaces: { prod: 'kubernetes' } });
+    assert.deepEqual([set.status, set.json.changed, set.json.service.envSurfaces], [200, ['envSurfaces'], { prod: 'kubernetes' }]);
+    assert.deepEqual((await call('GET', P)).json.service.envSurfaces, { prod: 'kubernetes' });
+    const narrowed = await runOf('prod');
+    assert.deepEqual(narrowed.scan.filter, { surface: 'kubernetes', excluded: 2 }, 'the EKS overlay and the compose file left out, said');
+    assert.deepEqual(narrowed.scan.environment.excludedFiles, ['docker-compose.yml', 'values-eks.yaml']);
+    assert.deepEqual(narrowed.record.comparable, { withPrevious: false, reason: 'the previous run read every file; this one reads only the Kubernetes and Helm files (2 left out)' });
+    assert.deepEqual((await runOf('staging')).scan.filter, { surface: null, excluded: 0 }, 'staging still reads every file');
+    // A rename takes it along; another repository keeps it; a deletion takes it.
+    const prodEnv = (await call('GET', P)).json.service.environments.find((e) => e.name === 'prod');
+    assert.equal((await call('PATCH', `/api/environments/${prodEnv.id}`, { name: 'production' })).status, 200);
+    assert.deepEqual((await call('GET', P)).json.service.envSurfaces, { production: 'kubernetes' });
+    assert.equal((await call('PATCH', P, { repository: { kind: 'github', location: 'acme/chart-shop' } })).status, 200);
+    assert.deepEqual((await call('GET', P)).json.service.envSurfaces, { production: 'kubernetes' }, 'a surface is how the environment deploys: it stays');
+    assert.equal((await call('DELETE', `/api/environments/${prodEnv.id}`)).status, 200);
+    assert.deepEqual((await call('GET', P)).json.service.envSurfaces, {});
+    // Named on a create too.
+    const made = await call('POST', '/api/services', { name: 'Compose Shop', envSurfaces: { dev: 'compose' } });
+    assert.deepEqual([made.status, made.json.service.envSurfaces], [201, { dev: 'compose' }]);
+    await call('DELETE', `/api/services/${made.json.service.id}`);
+  } finally {
+    await call('DELETE', P);
+    forgetChecks(['chart-shop.prod', 'chart-shop.staging', 'chart-shop.production']);
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+

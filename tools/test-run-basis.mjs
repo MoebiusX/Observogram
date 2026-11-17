@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as rb from './lib/run-basis.mjs';
 import { credentialParamName } from './lib/mcp-url-safety.mjs';
+import { DEPLOYMENT_SURFACES } from './lib/crawler.mjs';
 import * as om from '../studio/overview-model.mjs';
 import { healthPctOf, historyAlignmentPct } from '../studio/verdict-ui.mjs';
 
@@ -122,6 +123,10 @@ test('RB5 runBasis over the request\'s seven situations: unreachable with the fi
   assert.deepEqual(t(R.noData), ['unreachable', 'Live returned no data']);
   assert.deepEqual(t(R.thrown), ['unreachable', 'Live did not answer — connect ECONNREFUSED https://***@mcp.example.test/mcp']);
   assert.deepEqual(t(R.stopped), ['scan-partial', 'Partial scan — 49 of 220 files not read; the previous pack is kept'], 'defect 4: the previous pack is kept');
+  // A Run that read no file of a repository it keeps no complete scan of stops with none (packA.source null): never "kept".
+  const none = { ...R.stopped, packA: { source: null, scan: { files: 0, candidates: 3, partial: true, notRead: 3 } } };
+  assert.deepEqual(t(none), ['scan-partial', 'Partial scan — 3 of 3 files not read; no complete scan of this repository is kept']);
+  assert.equal(om.scanPartialReading(none.packA.scan, { kept: false }), rb.scanPartialReading(none.packA.scan, { kept: false }), 'the studio\'s copy says it alike');
   assert.deepEqual(t(R.partialScan), ['partial', '54% match — 49 of 220 files not read']);
   assert.deepEqual(t(R.emptyNew), ['nothing', 'Nothing compared — Neither side had anything this check could compare']);
   assert.deepEqual(t(R.emptyOld), ['nothing', 'Nothing compared — Neither side had anything this check could compare'], 'an older record\'s 100 over an empty union');
@@ -159,12 +164,24 @@ test('RB6 basisSummary: what GET /api/journeys lists of the last run — the fig
   assert.deepEqual([rb.basisSummary(R.emptyOld).alignmentPct, rb.basisSummary(R.emptyOld).compared], [null, 0], 'an older record\'s 100 over an empty union lists no figure');
   assert.deepEqual([rb.basisSummary(R.noData).liveLoss, rb.basisSummary(R.defect1New).liveLoss], ['no-data', 'error']);
   const old = rb.basisSummary({ packA: { scan: { files: 3, candidates: 17, environment: { profile: 'prod', excluded: 14 } } } });
-  assert.deepEqual(old.scan.filter, { surface: 'prod', excluded: 14 }, 'a scan before C7: its environment scope is its filter');
+  assert.deepEqual(old.scan.filter, { surface: 'kubernetes', excluded: 14 }, 'a scan before C7: its environment scope is its filter, named by the surface its profile stood for — never "prod"');
+  // Every profile of the crawler's surfaces reads as its surface, in run-basis and in the studio's copy alike; anything else as given.
+  for (const [surface, profile] of Object.entries(DEPLOYMENT_SURFACES)) {
+    const scan = { files: 1, candidates: 2, environment: { profile, excluded: 1 } };
+    assert.deepEqual([rb.scanFactsOf(scan).filter, om.scanFactsOf(scan).filter], [{ surface, excluded: 1 }, { surface, excluded: 1 }], profile);
+  }
+  assert.equal(rb.scanFactsOf({ environment: { profile: 'custom', excluded: 2 } }).filter.surface, 'custom');
   const huge = rb.basisSummary({ outcome: 'gate-failed', probes: probes({ attempted: ['x'], succeeded: ['y'], failed: Array.from({ length: 12 }, (_, i) => `f${i}${'z'.repeat(60)}`) }) });
   assert.ok(huge.probesFailed.length === 8 && huge.probesFailed.every((f) => f.length <= 40), 'at most eight families, each at most 40 characters');
   assert.ok(!JSON.stringify(rb.basisSummary(R.thrown)).includes('pw@'), 'no userinfo rides along');
   // A stopped Run, as the listing names it beside the last check (A9).
-  assert.deepEqual(rb.stoppedSummary(R.stopped), { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)' });
+  assert.deepEqual(rb.stoppedSummary(R.stopped), { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220, firstReason: 'grafana/a.json — it could not be downloaded (HTTP 403)', kept: true });
+  assert.equal(rb.stoppedSummary({ ...R.stopped, packA: { ...R.stopped.packA, source: null } }).kept, false, 'a stop that kept no complete scan says so');
+  // The row's note over the listing's entry and over the record itself (the board's stop).
+  assert.equal(om.stoppedNote(rb.stoppedSummary(R.stopped)), 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.');
+  assert.equal(om.stoppedNote({ ...rb.stoppedSummary(R.stopped), kept: false }), 'Last Run stopped: partial scan — 49 of 220 files not read; no complete scan of this repository is kept.');
+  assert.equal(om.stoppedNote({ ...R.stopped, packA: { ...R.stopped.packA, source: null } }), 'Last Run stopped: partial scan — 49 of 220 files not read; no complete scan of this repository is kept.', 'the record itself');
+  assert.equal(om.stoppedNote({ startedAt: 't', notRead: 49, candidates: 220 }), 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.', 'an older server\'s entry, which says nothing of it');
   assert.equal(rb.stoppedSummary(R.checked), null);
 });
 

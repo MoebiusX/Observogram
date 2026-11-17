@@ -1660,7 +1660,7 @@ test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a
   const worst = { record: { ...whole.record, vantage: 'partial', probes: { attempted: ['alert_rules', 'dashboards'], succeeded: ['alert_rules'], empty: [], failed: ['dashboards'], unsupported: [] }, grade: { letter: 'C' }, drift: { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 }, packB: { liveScope: { metricPrefixes: ['shop_'] } }, comparable: { withPrevious: false, reason: 'x' } },
     scan: { files: 171, candidates: 220, source: 'acme/checkout', partial: true, skipped: 49, excludedMost: true, filter: { surface: 'kubernetes', excluded: 120 } } };
   const mx = keep(runToastModel(row, worst));
-  assert.deepEqual([runToastText(mx), mx.tone], ['Checkout · prod checked: 171 of 220 files from acme/checkout (49 not read) — a partial scan, live read scoped to 1 prefix, grade C, nothing compared, live answered in part (its dashboards not read), not comparable with the check before, the kubernetes filter excluded more than half of the files the scan recognised.', '']);
+  assert.deepEqual([runToastText(mx), mx.tone], ['Checkout · prod checked: 171 of 220 files from acme/checkout (49 not read) — a partial scan, live read scoped to 1 prefix, grade C, nothing compared, live answered in part (its dashboards not read), not comparable with the check before, the Kubernetes and Helm filter excluded more than half of the files the scan recognised.', '']);
   // A 200 from a server that still graded a live side that gave nothing: no grade, no figure.
   const lost = { record: { ...whole.record, probes: { attempted: ['alert_rules'], succeeded: [], empty: [], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500' }, drift: { alignmentPct: 100, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 } }, scan: null };
   const ml = keep(runToastModel(row, lost));
@@ -1671,6 +1671,16 @@ test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a
     { text: 'Checkout · prod: Live did not answer — alert_rules_list: HTTP 500.', tone: 'error' });
   assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220 } } }),
     { text: 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'error' });
+  // A Run stopped on a partial scan (the 409, services-api.mjs servicesRefusal's scan and kept): whether a complete scan is kept is
+  // the 409's answer, else the listing's; a stop the listing does not show yet (a first Run that kept none) reads from the 409's scan.
+  const stopNoneKept = { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 3, candidates: 3, kept: false } };
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: stopNoneKept }),
+    { text: 'Checkout · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error' }, 'the listing: none kept');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: { ...before, stoppedRun: { startedAt: '2026-11-16T10:00:00.000Z', notRead: 49, candidates: 220, kept: true } }, outcome: 'scan-partial', scan: { notRead: 69, candidates: 220 }, kept: { id: 'p1', label: 'Checkout · prod · repository' } }).text,
+    'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.', 'listed: the listing\'s counts, the 409\'s kept');
+  assert.deepEqual(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: null, outcome: 'scan-partial', error: '409: 3 of 3 files not read: a.yaml — it could not be downloaded (HTTP 403) — the Run stopped: no file of the repository could be read; run it again', scan: { notRead: 3, candidates: 3 }, kept: null }),
+    { text: 'Checkout · prod: Partial scan — 3 of 3 files not read; no complete scan of this repository is kept.', tone: 'error', unlisted: true }, 'not listed yet: the 409 alone, never "the run did not finish"');
+  assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: null, outcome: 'scan-partial', scan: { notRead: 49, candidates: 220 }, kept: { id: 'p1', label: 'x' } }).text, 'Checkout · prod: Partial scan — 49 of 220 files not read; the previous pack is kept.');
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before, after: before }), null, 'nothing new recorded: the run did not finish');
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: { lastRun: { startedAt: 't', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: null, liveLoss: 'no-data' } } }).text, 'Checkout · prod: Live returned no data.', 'a first Run');
 });
@@ -2018,9 +2028,9 @@ test('OM1 the service list\'s five states from the listing: never; unreachable (
   assert.deepEqual(pick(last.nothingUnread), ['nothing', 'Nothing compared', 'Nothing compared', '7 declared things not read live', 'C', null, 'fail', 'Checked 2 hours ago']);
   assert.deepEqual(pick(last.livePart), ['partial', 'Checked (partial) 2 hours ago', '', 'Live answered in part: dashboards not read', 'B', 78, 'fail', 'Checked 2 hours ago']);
   assert.deepEqual(pick(last.partialScan), ['partial', 'Checked (partial) 2 hours ago', '', '49 of 220 files not read', 'C', 54, 'fail', 'Checked 2 hours ago']);
-  assert.deepEqual(last.partialScan.notes, [{ text: '12 files excluded by the kubernetes filter', tone: 'neutral' }, { text: 'Not comparable with the check before: this scan could not read 49 of 220 files', tone: 'warn' }]);
+  assert.deepEqual(last.partialScan.notes, [{ text: '12 files excluded by the Kubernetes and Helm filter', tone: 'neutral' }, { text: 'Not comparable with the check before: this scan could not read 49 of 220 files', tone: 'warn' }]);
   assert.deepEqual(pick(last.capped), ['checked', 'Checked 2 hours ago', '', '194 of 394 files not read', 'A', 92, 'pass', 'Checked 2 hours ago'], 'a capped scan is not partial: its files not read are said beside the figure');
-  assert.deepEqual(last.capped.notes, [{ text: '30 files excluded by the compose filter — more than half of the files the scan recognised', tone: 'warn' }]);
+  assert.deepEqual(last.capped.notes, [{ text: '30 files excluded by the Docker Compose filter — more than half of the files the scan recognised', tone: 'warn' }]);
   assert.deepEqual(pick(last.checked), ['checked', 'Checked 2 hours ago', '', '', 'A', 92, 'pass', 'Checked 2 hours ago']);
   assert.deepEqual(last.checked.notes, [{ text: 'Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.', tone: 'warn' }], 'after a stopped Run: the last check, and the stop beside it');
   // Every record but one that compared something has no gate pass; no percentage in a string.
@@ -2047,8 +2057,8 @@ test('OM2 renderServiceList: each state\'s cell — the match only over a compar
   assert.ok(html.includes('<b>Live returned no data</b></span><span class="ov-mx__when'), 'no data: no error to name');
   assert.ok(html.includes('<b title="Nothing compared — Neither side had anything this check could compare">Nothing compared</b></span><span class="ov-mx__why">Neither side had anything this check could compare</span>'));
   assert.ok(html.includes('<b title="78% match — Live answered in part: dashboards not read">78% match</b></span><span class="ov-mx__why">Live answered in part: dashboards not read</span>'), 'what was not read, beside the figure');
-  assert.ok(html.includes('<span class="ov-mx__note">12 files excluded by the kubernetes filter</span><span class="ov-mx__note ov-mx__note--warn">Not comparable with the check before: this scan could not read 49 of 220 files</span>'));
-  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">30 files excluded by the compose filter — more than half of the files the scan recognised</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note">12 files excluded by the Kubernetes and Helm filter</span><span class="ov-mx__note ov-mx__note--warn">Not comparable with the check before: this scan could not read 49 of 220 files</span>'));
+  assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">30 files excluded by the Docker Compose filter — more than half of the files the scan recognised</span>'));
   assert.ok(html.includes('<span class="ov-mx__note ov-mx__note--warn">Last Run stopped: partial scan — 49 of 220 files not read; the previous pack is kept.</span>'));
   assert.ok(html.includes('No live scope — the server default no longer applies here; set one</span>') && !html.includes('scoped: null'), 'an environment the server default no longer scopes says so');
   assert.ok(!/100% match|null%|undefined%/.test(html), 'no figure over nothing');
@@ -2212,7 +2222,7 @@ test('the form: opened blank or on a row; typing keeps its values; what is missi
   const services = [svcRow()];
   // Opened blank: prod, GitHub, the one endpoint chosen; none → a new one; several → choose.
   const blank = formOpened(services, { endpoints: [EP] });
-  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '', scopePrefixes: '', scopeFolders: '', scopeExclude: '', scopeGroups: '', scopeDatasource: '' }], 'a new service starts on the recommended targets');
+  assert.deepEqual([blank.open, blank.mode, blank.envFixed, blank.values], [true, 'add', false, { name: '', env: 'prod', kind: 'github', location: '', ref: '', endpointId: '7', epName: '', epUrl: '', epToken: '', targetProfile: 'lab', targetMttd: '', targetMttr: '', scopePrefixes: '', scopeFolders: '', scopeExclude: '', scopeGroups: '', scopeDatasource: '', surface: '' }], 'a new service starts on the recommended targets');
   assert.equal(formOpened(services, { endpoints: [] }).values.endpointId, NEW_ENDPOINT);
   assert.equal(formOpened(services, { endpoints: [EP, { ...EP, id: 8 }] }).values.endpointId, '');
   // Opened on a row: its service and environment, the environment fixed.
@@ -2704,6 +2714,87 @@ test('a live scope per environment: the five answers and the compact scope; the 
   assert.equal(rowOf([row()], null), null);
 });
 
+test('the deployment surface an environment reads alone: off by default — the form opens on the environment\'s own; five choices and what each means; not for a pack file, nor on a server that keeps none; a save sends the service\'s map only when this environment\'s entry changes; chosen with another environment; a draft keeps a known one; the row names it; the form draws the select', () => {
+  const two = [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }, { id: 12, serviceId: 1, name: 'stg', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin } }];
+  const row = (envSurfaces = {}) => svcRow({ envSurfaces, environments: two });
+  // Off by default, the key last; an Add of an environment starts off too.
+  const off = formOpened([row()], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.equal(Object.keys(off.values).at(-1), 'surface');
+  assert.equal(off.values.surface, '');
+  const fm = formModel(off, { endpoints: [EP] }).surface;
+  assert.deepEqual([fm.shown, fm.label, fm.options.map((o) => [o.id, o.selected])], [true, 'Read only this deployment surface', [['', true], ['kubernetes', false], ['eks', false], ['local-kubernetes', false], ['compose', false]]]);
+  assert.equal(fm.hint, 'Off: every environment of Checkout reads the same files. Chosen, prod reads only that surface\'s files, and its row says how many the filter left out.');
+  // Its own, said; another environment chosen on the service's Change loads its own.
+  const own = formOpened([row({ prod: 'kubernetes' })], { serviceId: 1, env: 'prod', endpoints: [EP] });
+  assert.equal(own.values.surface, 'kubernetes');
+  assert.equal(formModel(own, { endpoints: [EP] }).surface.hint, 'prod reads only the Kubernetes and Helm files; its row says how many the filter left out.');
+  const picked = formOpened([row({ prod: 'kubernetes', stg: 'compose' })], { serviceId: 1, env: 'prod', endpoints: [EP], pick: true });
+  assert.equal(formInput(picked, 'env', 'stg').values.surface, 'compose');
+  assert.equal(formOpened([row({ prod: 'kubernetes' })], { serviceId: 1, endpoints: [EP], addEnv: true }).values.surface, '', 'a new environment starts off');
+  // Not drawn for a pack file (no scan), nor on a server whose views carry no envSurfaces (an older one would drop it).
+  assert.equal(formModel(formInput(own, 'kind', 'pack'), { endpoints: [EP], uploads: true }).surface.shown, false);
+  assert.equal(formModel(formOpened([svcRow()], { serviceId: 1, env: 'prod', endpoints: [EP] }), { endpoints: [EP] }).surface.shown, false, 'no envSurfaces on the view: not offered');
+  assert.equal(formModel(formOpened([row()], { endpoints: [EP] }), { endpoints: [EP] }).surface.shown, true, 'a new service on a server that keeps them: offered');
+  // The save: nothing when unchanged; the whole map when chosen; the entry gone when set back to every file.
+  assert.equal(savePlan(own.values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, null);
+  assert.deepEqual(savePlan(formInput(off, 'surface', 'eks').values, { services: [row({ stg: 'compose' })], serviceId: 1 }).service.patch, { envSurfaces: { stg: 'compose', prod: 'eks' } });
+  assert.deepEqual(savePlan(formInput(own, 'surface', '').values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, { envSurfaces: {} });
+  assert.equal(savePlan(formInput(formInput(own, 'kind', 'pack'), 'surface', '').values, { services: [row({ prod: 'kubernetes' })], serviceId: 1 }).service.patch, null, 'a pack file leaves the setting as it is');
+  const fresh = formInput(formInput(formOpened([row()], { endpoints: [EP] }), 'name', 'Basket'), 'surface', 'compose');
+  assert.deepEqual(savePlan({ ...fresh.values, location: 'acme/basket' }, { services: [] }).service.create.envSurfaces, { prod: 'compose' }, 'a new service is created with it');
+  const named = formInput(formOpened([row({ prod: 'kubernetes' })], { endpoints: [EP] }), 'name', 'Checkout');
+  assert.equal(savePlan({ ...named.values, location: 'https://github.com/acme/checkout' }, { services: [row({ prod: 'kubernetes' })], scopeKnown: false }).service.patch?.envSurfaces, undefined, 'a blank Add naming the service never takes away one it did not draw');
+  // A draft: a known surface comes back, an unknown one does not.
+  const draft = formDraft(formInput(off, 'surface', 'eks'), { now: NOW });
+  assert.equal(formRestored([row()], draft, { endpoints: [EP], now: NOW }).values.surface, 'eks');
+  assert.equal(formRestored([row()], { ...draft, values: { ...draft.values, surface: 'helm' } }, { endpoints: [EP], now: NOW }).values.surface, '');
+  // The row says which surface an environment reads alone.
+  const rows = serviceListModel({ services: [row({ prod: 'kubernetes' })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }).rows;
+  assert.deepEqual(rows.map((r) => [r.env, r.surface]), [['prod', { id: 'kubernetes', label: 'Kubernetes and Helm' }], ['stg', null]]);
+  // The form draws the select, its choices and its hint.
+  const c = overviewContainer();
+  renderServiceList(c, serviceListModel({ services: [row({ prod: 'kubernetes' })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW }), formModel(own, { endpoints: [EP] }), { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<span class="ov-form__l">Read only this deployment surface</span><select class="og-input" data-field="surface" aria-describedby="ov-form-surface-hint">'), 'the select, wired as every answer is');
+  assert.ok(html.includes('<option value="kubernetes" selected>Kubernetes and Helm</option>') && html.includes('<option value="">No — every file the scan reads (default)</option>'));
+  assert.ok(html.includes('id="ov-form-surface-hint">prod reads only the Kubernetes and Helm files; its row says how many the filter left out.</span>'));
+});
+
+test('a Run stopped on a scan that lost files: the refusal keeps what the scan read and the scan kept, never anything for another 409; the board reads the newest run that checked something and the stop after it — reading further back only when the newest is a stop', async () => {
+  const body = { ok: false, outcome: 'scan-partial', error: '49 of 220 files could not be read: a.yaml — it could not be downloaded (Azure DevOps 403 — tried 4 times) — the Run stopped: …', scan: { files: 151, notRead: 69, lost: 49, candidates: 220 }, kept: { id: 'uploaded-shop-1', label: 'Shop · prod · repository' }, record: {} };
+  const err = servicesRefusal(409, JSON.stringify(body));
+  assert.deepEqual([err.status, err.message.startsWith('409: 49 of 220 files could not be read'), err.outcome, err.scan, err.kept], [409, true, 'scan-partial', body.scan, body.kept]);
+  assert.equal(servicesRefusal(409, { ...body, kept: null }).kept, null, 'no scan kept: null');
+  const other = servicesRefusal(409, { ok: false, error: 'Shop names no repository yet' });
+  assert.ok(!('outcome' in other) && !('scan' in other) && !('kept' in other), 'another 409 carries none of it');
+
+  const { loadOverviewFacts } = await import('../studio/overview-api.mjs');
+  const checked = { startedAt: '2026-11-17T09:00:00.000Z', outcome: 'pass', grade: { letter: 'B' } };
+  const stop = { startedAt: '2026-11-17T10:00:00.000Z', outcome: 'scan-partial', error: 'x' };
+  const asked = [];
+  // The listing as the server gives it (GET /api/journeys): lastRun is the last check, never a stop; a newer stop is stoppedRun.
+  const listedOf = (runs) => {
+    const check = runs.find((r) => r.outcome !== 'scan-partial');
+    return { name: 'shop.prod', lastRun: check ? { startedAt: check.startedAt, outcome: check.outcome } : null, stoppedRun: runs[0]?.outcome === 'scan-partial' ? { startedAt: runs[0].startedAt } : null };
+  };
+  const facts = (runs) => loadOverviewFacts({
+    journeyFor: (list) => list[0],
+    fetchFn: async (path) => {
+      asked.push(path);
+      if (path === '/api/journeys') return { journeys: [listedOf(runs)] };
+      const limit = Number(/limit=(\d+)/.exec(path)[1]);
+      return { runs: runs.slice(0, limit) };
+    },
+  });
+  const plain = await facts([checked]);
+  assert.deepEqual([plain.run, plain.stopped, asked.filter((p) => p.includes('/runs')).length], [checked, null, 1], 'the newest run alone, read once, as before');
+  asked.length = 0;
+  const afterStop = await facts([stop, stop, checked]);
+  assert.deepEqual([afterStop.run, afterStop.stopped], [checked, stop], 'the stop is not the check: the board keeps the check of the pack the service kept, and the stop beside it');
+  assert.deepEqual(asked.filter((p) => p.includes('/runs')), ['/api/journeys/shop.prod/runs?limit=1', '/api/journeys/shop.prod/runs?limit=25']);
+  assert.deepEqual([(await facts([stop])).run, (await facts([stop])).stopped], [null, stop], 'only stops: nothing checked yet');
+});
+
 test('renderServiceList: the live scope under the endpoint — five fields with their values, the hint — and "scoped: …" in the matrix cell', () => {
   const own = { metricPrefixes: ['checkout_'], folderUids: ['f1', 'f2'] };
   const services = [svcRow({ liveScopes: { prod: own }, environments: [{ id: 11, serviceId: 1, name: 'prod', mcpEndpoint: { id: EP.id, name: EP.name, origin: EP.origin }, liveScope: own }] })];
@@ -2833,7 +2924,7 @@ test('the form offers the person\'s own token where a row would — GitHub (opti
   assert.equal(authOf('github', { heldTokens: undefined }), null, 'a host that passes no heldTokens takes no token from the form: no field');
   assert.equal(formModel(open('github'), { endpoints: [EP] }).auth, null);
   // The form's values never hold it: nothing typed there is drawn back.
-  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource']);
+  assert.deepEqual(Object.keys(open('github').values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource', 'surface']);
   const opened = open('github');
   assert.equal(formInput(opened, 'repoAuth', 'made-up-token'), opened, 'and typing never reaches them: the field is no form value');
 });
@@ -2965,7 +3056,7 @@ test('the form offers Sign in to … before the token where the host offers it, 
   const draft = formDraft(form, { now: NOW });
   assert.deepEqual(draft, { v: 1, at: NOW, serviceId: null, env: null, values: form.values, targetsTouched: false });
   assert.notEqual(draft.values, form.values, 'a copy');
-  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource'], 'the form holds no token, so the draft cannot');
+  assert.deepEqual(Object.keys(draft.values), ['name', 'env', 'kind', 'location', 'ref', 'endpointId', 'epName', 'epUrl', 'epToken', 'targetProfile', 'targetMttd', 'targetMttr', 'scopePrefixes', 'scopeFolders', 'scopeExclude', 'scopeGroups', 'scopeDatasource', 'surface'], 'the form holds no token, so the draft cannot');
   assert.equal(formDraft(FORM_CLOSED), null);
   const back = formRestored(services, JSON.parse(JSON.stringify(draft)), { endpoints: [EP], now: NOW + 60_000 });
   assert.deepEqual([back.open, back.mode, back.serviceId, back.saving, back.error, back.values], [true, 'add', null, false, null, form.values]);

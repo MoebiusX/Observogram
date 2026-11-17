@@ -121,12 +121,19 @@ export function readingOutcome(x) {
 
 const oneLine = (v, max) => (typeof v === 'string' && v.trim() ? safeErrorText(v, max) : null);
 
-// packA.scan (C7) as a reader needs it, or null; an older record's environment scope reads as its filter.
+// The deployment surface an older record's environment scope stood for, by the crawler's profile
+// names (tools/lib/crawler.mjs DEPLOYMENT_SURFACES, inverted; tools/test-run-basis.mjs pins the two):
+// a filter is named by its surface, never by an environment's name.
+const SURFACE_OF_PROFILE = Object.freeze({ prod: 'kubernetes', eks: 'eks', 'local-k8s': 'local-kubernetes', 'local-docker': 'compose' });
+const surfaceOfProfile = (profile) => (profile && Object.hasOwn(SURFACE_OF_PROFILE, profile) ? SURFACE_OF_PROFILE[profile] : profile);
+
+// packA.scan (C7) as a reader needs it, or null; an older record's environment scope reads as its
+// filter, by the surface its profile stood for.
 export function scanFactsOf(scan) {
   if (!isObj(scan)) return null;
   let filter = null;
   if (isObj(scan.filter) && oneLine(scan.filter.surface, 40)) filter = { surface: oneLine(scan.filter.surface, 40), excluded: count(scan.filter.excluded) ?? 0 };
-  else if (isObj(scan.environment) && (count(scan.environment.excluded) ?? 0) > 0) filter = { surface: oneLine(scan.environment.profile, 40), excluded: count(scan.environment.excluded) };
+  else if (isObj(scan.environment) && (count(scan.environment.excluded) ?? 0) > 0) filter = { surface: surfaceOfProfile(oneLine(scan.environment.profile, 40)), excluded: count(scan.environment.excluded) };
   return {
     partial: scan.partial === true, notRead: count(scan.notRead), candidates: count(scan.candidates), files: count(scan.files),
     treeTruncated: scan.treeTruncated === true || scan.truncated === true, filter, excludedMost: scan.excludedMost === true,
@@ -142,12 +149,18 @@ export function filesNotReadWords(s) {
   return head && cut ? `${head}; ${cut}` : head || (cut ? `${cut[0].toUpperCase()}${cut.slice(1)}` : '');
 }
 
-// A stopped Run's reading (C10).
-export function scanPartialReading(scan) {
+// Whether a stopped Run kept a complete scan: its record names the kept pack (packA.source). A Run
+// that read no file of a repository it holds no complete scan of stops with none (packA.source null).
+export const stoppedRunKept = (record) => isObj(record?.packA) && typeof record.packA.source === 'string' && record.packA.source !== '';
+
+// A stopped Run's reading (C10). `kept: false` (a Run that kept no complete scan) says so in place of
+// "the previous pack is kept".
+export function scanPartialReading(scan, { kept = true } = {}) {
   const s = scanFactsOf(scan);
+  const tail = kept === false ? 'no complete scan of this repository is kept' : 'the previous pack is kept';
   return s && s.notRead !== null && s.candidates !== null
-    ? `Partial scan — ${s.notRead} of ${s.candidates} files not read; the previous pack is kept`
-    : 'Partial scan — the previous pack is kept';
+    ? `Partial scan — ${s.notRead} of ${s.candidates} files not read; ${tail}`
+    : `Partial scan — ${tail}`;
 }
 
 // ---------- what a run rests on ----------
@@ -199,7 +212,7 @@ export function partialParts(facts, vantage) {
 export function runBasis(record) {
   if (!isObj(record)) return { state: 'never', reading: null, compared: null, alignmentPct: null, firstProbeError: null, text: 'Never checked' };
   const base = { reading: readingOutcome(record), compared: comparedOf(record.drift), alignmentPct: matchPctOf(record), firstProbeError: firstProbeErrorOf(record) };
-  if (record.outcome === 'scan-partial') return { ...base, state: 'scan-partial', text: scanPartialReading(record.packA?.scan) };
+  if (record.outcome === 'scan-partial') return { ...base, state: 'scan-partial', text: scanPartialReading(record.packA?.scan, { kept: stoppedRunKept(record) }) };
   if (base.reading === 'vantage-lost' || base.reading === 'error') {
     const loss = liveLossOf(record);
     return { ...base, state: 'unreachable', text: loss.error ? `Live did not answer — ${loss.error}` : loss.cause === 'no-data' ? 'Live returned no data' : 'Live did not answer' };
@@ -243,11 +256,12 @@ export function basisSummary(record) {
   };
 }
 
-// A stopped Run (outcome scan-partial, C8) as the listing names it beside the last check (A9).
+// A stopped Run (outcome scan-partial, C8) as the listing names it beside the last check (A9):
+// { startedAt, notRead, candidates, firstReason, kept } — `kept`, whether it kept a complete scan.
 export function stoppedSummary(record) {
   if (!isObj(record) || record.outcome !== 'scan-partial') return null;
   const s = scanFactsOf(record.packA?.scan);
   const first = Array.isArray(record.packA?.scan?.notReadReasons) ? record.packA.scan.notReadReasons.find(isObj) : null;
   const firstReason = first ? oneLine(`${first.path ?? '?'} — ${first.why ?? '?'}`, 200) : oneLine(record.error, 200);
-  return { startedAt: typeof record.startedAt === 'string' ? record.startedAt : null, notRead: s?.notRead ?? null, candidates: s?.candidates ?? null, firstReason };
+  return { startedAt: typeof record.startedAt === 'string' ? record.startedAt : null, notRead: s?.notRead ?? null, candidates: s?.candidates ?? null, firstReason, kept: stoppedRunKept(record) };
 }

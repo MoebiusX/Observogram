@@ -113,7 +113,7 @@ import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
-import { crawlFiles, scanReport } from './crawler.mjs';
+import { crawlFiles, scanReport, notReadSentence, DEPLOYMENT_SURFACE_LABELS } from './crawler.mjs';
 import { readRepoFolder } from './repo-folder.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { isTransportHookError } from './mcp-client.mjs';
@@ -137,7 +137,7 @@ import { storedTargetsError, withStudioTargets } from '../../studio/mttx-targets
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 // The report's reading of a run's figure (renderJourneyMarkdown): the match only over a comparison.
-import { comparedOf, firstProbeErrorOf, liveLossOf, matchPctOf, scanFactsOf, scanPartialReading, filesNotReadWords } from './run-basis.mjs';
+import { comparedOf, firstProbeErrorOf, liveLossOf, matchPctOf, scanFactsOf, scanPartialReading, filesNotReadWords, stoppedRunKept } from './run-basis.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -498,8 +498,10 @@ export async function postNotification({ url, headers = {}, body = '', timeoutMs
 // The one-line summary a notification leads with:
 // `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>` —
 // `nothing compared` before the chain line for a run whose comparison held
-// nothing (drift.compared 0: no match figure).
+// nothing (drift.compared 0: no match figure); a Run stopped on a partial
+// scan is `<journey>: scan-partial · <the scan's loss> — the Run stopped`.
 function notifyTextLine(record) {
+  if (record.outcome === SCAN_PARTIAL_OUTCOME) return `${record.journey}: ${record.outcome} · ${redactUrlCredentials(record.error || 'the scan lost files')} — the Run stopped`;
   const bits = [`${record.journey}: ${record.outcome}`];
   if (record.outcome === 'vantage-lost') bits.push(redactUrlCredentials(record.error || 'live source unreachable'));
   else {
@@ -1396,6 +1398,111 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
     .sort();
 }
 
+// ---------- the scan behind Pack A ----------
+//
+// A service's Run scans its repository and checks the scan (packA.scan,
+// tools/lib/crawler.mjs scanReport). A scan that LOST files (scan.partial: a
+// host refused or dropped them, the read's budget ran out) is no basis for a
+// figure: under the server's default policy (server/repo-sources.mjs
+// partialScanPolicy) the Run stops and the service keeps its last complete
+// scan of the same repository — a record with outcome SCAN_PARTIAL_OUTCOME,
+// no grade and no drift (writeStoppedRun); otherwise the check runs, fails its
+// gate (scanGateBreaches: `scanComplete`) and says its figures are not
+// comparable with the run before (scanComparability, the record's
+// `comparable`). A stopped Run made no pack, so its scan is never one a later
+// run inherits (inheritedScan).
+export const SCAN_PARTIAL_OUTCOME = 'scan-partial';
+
+const isRecord = (r) => !!r && typeof r === 'object';
+// The records of `records` (newest first) that checked something — never a stopped Run.
+const checkedRecords = (records) => (Array.isArray(records) ? records : []).filter((r) => isRecord(r) && r.outcome !== SCAN_PARTIAL_OUTCOME);
+
+// The newest record of `records` (newest first) that checked something — a
+// stopped Run checked nothing — or null: the run a run is compared against
+// (runJourney's previous run: transitions, causes, notify, the snapshot
+// decision; a lost run's notification too) and the journeys listing's last
+// check (server/index.mjs GET /api/journeys). One rule for both.
+export function lastCheckedRun(records) {
+  return checkedRecords(records)[0] || null;
+}
+
+// The scan of the newest record of Pack A `source` that carries one — a Check
+// now on the last scan keeps the scan that made its file — never a stopped Run's. Or null.
+export function inheritedScan(records, source) {
+  const r = checkedRecords(records).find((x) => x.packA?.source === source && isRecord(x.packA.scan));
+  return r ? r.packA.scan : null;
+}
+
+// Which files a scan read, as { surface, excluded } — the deployment surface whose files alone it read
+// (null: every file) — from its filter, or for a record written before it, its environment's profile.
+const SURFACE_OF_PROFILE = { prod: 'kubernetes', eks: 'eks', 'local-k8s': 'local-kubernetes', 'local-docker': 'compose' };
+function filesReadBy(scan) {
+  if (!isRecord(scan)) return null;
+  const excluded = Number(scan.filter?.excluded ?? scan.environment?.excluded) || 0;
+  const surface = isRecord(scan.filter) ? scan.filter.surface : (SURFACE_OF_PROFILE[scan.environment?.profile] ?? null);
+  return { surface: excluded > 0 ? surface || 'environment' : null, excluded };
+}
+const filesReadWords = (read) => (read.surface ? `only the ${DEPLOYMENT_SURFACE_LABELS[read.surface] || read.surface} files (${read.excluded} left out)` : 'every file');
+const lostWords = (scan) => `${Number(scan.lost) || 0} of ${Number(scan.candidates) || 0} files`;
+
+// Whether this run's figures can be set beside the last graded run's, from the scans behind them:
+// null when they can (or nothing says otherwise), else { withPrevious: false, reason } — this scan
+// lost files; the previous graded run's scan did; or the two read other files (a deployment surface
+// applied in one and not the other, or another one).
+export function scanComparability(scan, records) {
+  if (!isRecord(scan)) return null;
+  if (scan.partial === true) return { withPrevious: false, reason: `this scan could not read ${lostWords(scan)}` };
+  const previous = checkedRecords(records).find((r) => isRecord(r.grade));
+  const before = previous?.packA?.scan;
+  if (!isRecord(before)) return null;
+  if (before.partial === true) return { withPrevious: false, reason: `the previous run's scan could not read ${lostWords(before)}` };
+  const was = filesReadBy(before);
+  const now = filesReadBy(scan);
+  if (was && now && was.surface !== now.surface) return { withPrevious: false, reason: `the previous run read ${filesReadWords(was)}; this one reads ${filesReadWords(now)}` };
+  return null;
+}
+
+// The gate breach a scan that lost files makes, whatever the check's thresholds: a check on part
+// of the repository cannot pass. [] for a whole scan, or none.
+export function scanGateBreaches(scan) {
+  if (!isRecord(scan) || scan.partial !== true) return [];
+  return [{ criterion: 'scanComplete', detail: `${notReadSentence(scan) || `this scan could not read ${lostWords(scan)}`} — a check on part of the repository cannot pass` }];
+}
+
+// A stopped Run's record (server/index.mjs POST /api/services/:id/run, a
+// scan that lost files while a complete scan of the same repository is kept):
+//   { journey, startedAt, tookMs, outcome: 'scan-partial', error (the scan's
+//     loss in one sentence), packA: { source (the kept pack's, or null), scan },
+//     packB: { source }, scope, gate: { thresholds, breaches: [] }, notify }
+// — no grade, no drift, no vantage: nothing was compared. Written as any run
+// is (the same stem and retention; write → post → rewrite). A notify block
+// posts it as any run that did not pass; the run before it is the newest
+// record whatever it holds, so a stop after a stop is no news under
+// `transitions`. → the record (historyError when the write failed).
+export async function writeStoppedRun(def, { kept = null, scan, startedAt = new Date().toISOString(), tookMs = 0, notifyTarget = null, notifier = postNotification } = {}) {
+  const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
+  const base = def.__baseDir || (def.__source ? dirname(def.__source) : journeysDir());
+  const packB = def.packB?.mcp ? `mcp:${packBSourceUrl(def.packB.mcp.url)}` : def.packB?.file ? resolve(base, def.packB.file) : null;
+  const record = {
+    journey: def.name,
+    startedAt,
+    tookMs,
+    outcome: SCAN_PARTIAL_OUTCOME,
+    error: notReadSentence(scan) || 'the scan lost files',
+    packA: { source: typeof kept?.source === 'string' ? kept.source : null, scan },
+    packB: { source: packB },
+    scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
+    gate: { thresholds: def.gate || {}, breaches: [] },
+  };
+  if (!notifyTarget) record.notify = null;
+  writeRunRecord(def.name, startedAt, record);
+  if (notifyTarget) {
+    record.notify = await deliverNotification(def, notifyTarget, record, previousRun, notifier);
+    writeRunRecord(def.name, startedAt, record);
+  }
+  return record;
+}
+
 // ---------- the run ----------
 
 // The first probe error a record carries (tools/lib/live-fetch.mjs, the one
@@ -1490,7 +1597,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // The run this one is compared against — transitions, causes, notify and
   // the snapshot decision: the newest that checked something (a Run stopped
   // on a partial scan checked nothing).
-  const previousRun = recent.find((r) => r?.outcome !== 'scan-partial') || null;
+  const previousRun = lastCheckedRun(recent);
+  // packA.scan only when a scan is known: the Run's, a crawl: source's, else the newest record's of
+  // the same Pack A file (never a stopped Run's) — on a lost run's record as on any other.
+  const packAScan = a.scan || scan || inheritedScan(recent, a.source) || null;
   let b;
   let liveTarget = null;   // a live Pack B's target (liveTargetOf), never persisted
   try {
@@ -1504,7 +1614,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
     if (liveTarget && e?.vantageLost && !e.vantageRecorded) {
-      await recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource: `mcp:${liveTarget.safeUrl}`, liveTarget, live: null, error: String(e.message || e), err: e, notifyTarget, notifier });
+      await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: `mcp:${liveTarget.safeUrl}`, liveTarget, live: null, error: String(e.message || e), err: e, notifyTarget, notifier });
       if (e && typeof e === 'object') e.vantageRecorded = true;
     }
     throw e;
@@ -1518,7 +1628,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   if (live.vantage === 'lost') {
     const err = new Error(firstProbeError(live)?.error || NO_PROBE_DATA);
     err.vantageLost = true;
-    await recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource: b.source, liveTarget, live, error: err.message, err, notifyTarget, notifier });
+    await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: b.source, liveTarget, live, error: err.message, err, notifyTarget, notifier });
     err.vantageRecorded = true;
     throw err;
   }
@@ -1596,7 +1706,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     ...live,
     inventory,
   };
-  const breaches = evaluateGate(def.gate, facts);
+  // A scan that lost files (packAScan, above) fails the gate whatever it asks, and its figures are not
+  // set beside the last graded run's (`recent`, the history read once above).
+  const comparable = scanComparability(packAScan, recent);
+  const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)];
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
 
@@ -1612,9 +1725,6 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // previous run" nor compares against nothing.
   const branches = branchRecordsFromGraph(engineDiff.traceabilityGraph);
   const chains = chainSummary({ branches });
-  const packAScan = a.scan || scan
-    || recent.find((r) => r?.packA?.source === a.source && r.packA.scan && typeof r.packA.scan === 'object')?.packA.scan
-    || null;
   const baseline = recent.find(r => r && typeof r === 'object' && Array.isArray(r.branches)) || null;
   const skipped = (baseline ? recent.slice(0, recent.indexOf(baseline)) : recent)
     .slice(0, TRANSITION_SKIPPED_CAP)
@@ -1643,6 +1753,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // Workstream D gate-contract fields. This is VERIFICATION evidence.
     // packA.scan only when a scan is known (above): what it read, skipped and set aside.
     packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null, ...(packAScan ? { scan: packAScan } : {}) },
+    // Only when this run's figures cannot be set beside the last graded run's (scanComparability).
+    ...(comparable ? { comparable } : {}),
     // packB.unobserved: the artefact families Pack B says it had no way to
     // look at (its observogram.unobserved.<kind> annotations), sorted, so a
     // reader of the record alone (the Overview's "Why this grade") can say
@@ -2021,9 +2133,11 @@ export function renderJourneyMarkdown(r) {
       ...notifyLines(r),
     ].join('\n');
   }
-  // A Run that stopped on a partial scan: nothing was compared, the previous pack is kept.
+  // A Run that stopped on a partial scan: nothing was compared, the previous pack is kept — or, a Run
+  // that read no file of a repository it keeps no complete scan of (packA.source null), none is.
   if (r.outcome === 'scan-partial') {
     const sc = scanFactsOf(r.packA?.scan);
+    const kept = stoppedRunKept(r);
     const reasons = Array.isArray(r.packA?.scan?.notReadReasons) ? r.packA.scan.notReadReasons.filter((x) => x && typeof x === 'object').slice(0, 5) : [];
     return [
       `## ⚠️ Journey \`${r.journey}\` — PARTIAL SCAN`,
@@ -2032,11 +2146,13 @@ export function renderJourneyMarkdown(r) {
       `|---|---|`,
       `| Declared (A) | ${r.packA?.source ? mdCell(r.packA.source) : 'no pack kept yet'} |`,
       `| Live (B) | ${mdCell(r.packB?.source || '?')} — **not read** |`,
-      `| Scan | ${mdCell(scanPartialReading(r.packA?.scan))}${sc?.files !== null && sc?.files !== undefined ? ` (${sc.files} read)` : ''} |`,
+      `| Scan | ${mdCell(scanPartialReading(r.packA?.scan, { kept }))}${sc?.files !== null && sc?.files !== undefined ? ` (${sc.files} read)` : ''} |`,
+      // The Run's own sentence (writeStoppedRun: what stopped it — the files it could not read first — and why).
+      ...(typeof r.error === 'string' && r.error.trim() ? [`| Error | ${mdCell(`Partial scan: ${r.error}`)} |`] : []),
       ...(reasons.length ? [`| Not read first | ${reasons.map((x) => mdCell(`${x.path ?? '?'} — ${x.why ?? '?'}`)).join('; ')} |`] : []),
       `| Took | ${r.tookMs ?? '?'}ms |`,
       '',
-      '_No verdict: the repository was read in part, so the run stopped before comparing anything; the previous pack is kept._',
+      `_No verdict: the repository was read in part, so the run stopped before comparing anything; ${kept ? 'the previous pack is kept' : 'no complete scan of this repository is kept'}._`,
       ...notifyLines(r),
     ].join('\n');
   }

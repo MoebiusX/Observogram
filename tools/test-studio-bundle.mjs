@@ -362,7 +362,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 7,012,000 since the live engine and its readers merged (2026-11-17: the two-pack bundle measured
   // 6,996,709 with both — the engine's null figures and probe outcomes in the studio's modules, the
   // readers' copy of the rule, the Run's toast reading a 502's outcome; no dependency), about 15 KB over.
-  assert.ok(built.bytes < 7_012_000, `the two-pack bundle is under 7,012,000 bytes (${built.bytes})`);
+  // 7,049,000 since the repository scan merged with them (2026-11-17: the two-pack bundle measured
+  // 7,033,697 — the service form's deployment surface, the board's scan line by kind, a stopped Run's
+  // 409 read by the toast and the board's loader; no dependency), about 15 KB over.
+  assert.ok(built.bytes < 7_049_000, `the two-pack bundle is under 7,049,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

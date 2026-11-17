@@ -1089,6 +1089,11 @@ try {
     try { mdStopped = renderJourneyMarkdown(stopped); } catch (e) { mdStopped = `threw ${e.message}`; }
     assert(/— PARTIAL SCAN/.test(mdStopped) && /\| Scan \| Partial scan — 49 of 220 files not read; the previous pack is kept \(171 read\) \|/.test(mdStopped) && /\| Not read first \| grafana\/a\.json — it could not be downloaded \(HTTP 403\) \|/.test(mdStopped),
            'the report over a stopped Run: PARTIAL SCAN, its counts and the first files not read', mdStopped.split('\n').slice(0, 12));
+    assert(/\| Error \| Partial scan: 49 of 220 files not read: grafana\/a\.json — it could not be downloaded \(HTTP 403\) \|/.test(mdStopped) && /the previous pack is kept\._$/m.test(mdStopped),
+           'the report gives the stopped Run\'s own sentence', mdStopped.split('\n').slice(0, 12));
+    const mdNoneKept = renderJourneyMarkdown({ ...stopped, packA: { ...stopped.packA, source: null } });
+    assert(/\| Declared \(A\) \| no pack kept yet \|/.test(mdNoneKept) && /\| Scan \| Partial scan — 49 of 220 files not read; no complete scan of this repository is kept \(171 read\) \|/.test(mdNoneKept)
+           && /no complete scan of this repository is kept\._$/m.test(mdNoneKept) && !/previous pack is kept/.test(mdNoneKept), 'a stop that kept no complete scan never says the previous pack is kept', mdNoneKept.split('\n').slice(0, 14));
     // A lost run (C4): the first probe error, the probe table; one whose families answered empty: no data.
     const lost = { journey: 'shop.prod', startedAt: '2026-11-16T11:00:00.000Z', tookMs: 4, outcome: 'vantage-lost', error: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500', packA: { source: 'a', name: 'shop', version: '1' }, packB: { source: 'mcp:https://mcp.example.test/mcp' }, vantage: 'lost',
       probes: { attempted: ['alert_rules', 'dashboards'], succeeded: [], empty: ['dashboards'], failed: ['alert_rules'], unsupported: [] }, probeErrors: { alert_rules: 'alert_rules_list: HTTP 500: no backend session · ruler_rules: HTTP 500' }, gate: { thresholds: {}, breaches: [{ criterion: 'vantage', detail: 'vantage lost' }] } };

@@ -338,11 +338,20 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    read, a Folder, an Upload, the CLI, Expert's folder, drop and .zip — reads
    files by the crawler's one rule. The local doors honour the folder's
    `.gitignore` files. No door reads a YAML or JSON file whose name holds
-   `secret`; each names it instead. A Run keeps its scan report in the run
-   record (`packA.scan`); the Run's toast counts what was not read, what fell
-   past the file cap, what the environment's scope left out and what was
-   recognised as nothing, and the board lists those files with why. A grade
-   never rests on files nobody was told were missing.
+   `secret`; each names it instead — a file left out on purpose, never a
+   loss. A Run keeps its scan report in the run record (`packA.scan`); the
+   Run's toast counts what could not be read, what was over the scan's
+   limits, what fell past the file cap, what a deployment surface left out
+   and what was recognised as nothing, and the board lists those files with
+   why. A host that refuses a burst or drops a connection is asked again
+   (after the wait it asks for, the read slowing down for every file), so it
+   costs no file; a scan that still lost files is no scan: while the service
+   keeps a complete scan of the same repository, the Run stops and keeps it
+   (*… files could not be read … — the Run stopped: the service keeps its last
+   complete scan of this repository; run it again*), and otherwise it is
+   checked and its gate fails. Every environment of a service reads the same
+   files, unless its own deployment surface is set. A grade never rests on
+   files nobody was told were missing.
 
 5. **The board never claims what nobody checked.** Numbers are withheld with
    the reason, never drawn as zeros: when nothing live was checked, when the
@@ -380,7 +389,8 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    gate never reads as passed over nothing. A Run that stopped on a partial
    scan leaves the last check as it was and says so beside it (*Last Run
    stopped: partial scan — 49 of 220 files not read; the previous pack is
-   kept.*). No sentence the model returns carries a percentage, a layer code,
+   kept.*; a Run that could read no file of a repository it keeps no
+   complete scan of says *no complete scan of this repository is kept*). No sentence the model returns carries a percentage, a layer code,
    an artefact id or an engine state word (declared only, scaffold,
    candidate, recorded live); a number is drawn as a picture — the ring, the
    bars — and the renderer puts the sign on it. At most one primary button
@@ -470,7 +480,7 @@ Belongs here:
   compared* with why; what a reading leaves out beside the figure (*Live
   answered in part: dashboards not read*, *49 of 220 files not read*); its
   notes — a Run that stopped since, the files a deployment-surface filter
-  excluded (*12 files excluded by the kubernetes filter*, a warning past
+  excluded (*12 files excluded by the Kubernetes and Helm filter*, a warning past
   half), *Not comparable with the check before: …*; *Checked 2 hours ago*
   (*Tried 2 hours ago* when the live side gave nothing); **Run**, **Open** (the board, offered when the service has
   a pack of its own or a check) and **Change** (that environment's form) —
@@ -514,6 +524,12 @@ Belongs here:
   the kept copy again; **Pack file**, *Choose a pack file* — a pack exported
   from the repository (YAML or JSON), checked by the server when Save sends
   it and used by each Run as it is, with no scan;
+- under the repository, *Read only this deployment surface*: *No — every
+  file the scan reads (default)*, *Kubernetes and Helm*, *Kubernetes on
+  Amazon EKS*, *A local Kubernetes cluster (kind, minikube)* or *Docker
+  Compose* (*Off: every environment of checkout reads the same files.
+  Chosen, prod reads only that surface's files, and its row says how many the
+  filter left out.*); not offered for a pack file;
 - under the endpoint, *Live scope — what of the estate is this service's*:
   metric prefixes, dashboard / rule folder uids, exclude patterns, rule
   groups and the datasource uid, prefilled from the environment's own scope
@@ -532,7 +548,8 @@ Belongs here:
   filter excluded more than half of the files the scan recognised*); a Run
   the server answered with an error but recorded says its reading (*Live did
   not answer — <first probe error>.*, *Partial scan — 49 of 220 files not
-  read; the previous pack is kept.*);
+  read; the previous pack is kept.* — the 409's own scan and kept pack while
+  the listing does not show the stop yet);
 - a missing answer marked where it goes once a save was tried; the server's
   refusal shown as its sentence; a Run that did not finish says why on its
   row, in the server's words;
@@ -666,12 +683,16 @@ Belongs here:
     lit where the repository declares that kind and carrying the count, a
     pill such as *7 of 10 kinds* — and the coverage (*Coverage reaches 35 in
     100 across the four layers.*) with what found no layer;
-  - the scan line, *Read 200 of 396 files from … — 196 past the file cap, …*,
-    amber when files the rule takes were lost, and behind it each group:
-    *Not read* with each file and why, *Past the file cap* (a count: the read
-    takes the likely artefacts first), *The host cut its file list short*
-    when it did, *Left out by the prod scope* and *Read, recognised as
-    nothing* with their files, and the scan's warnings;
+  - the scan line, *Read 200 of 396 files from … — 3 could not be read, 196
+    past the file cap, …*, amber when files the rule takes were not read or a
+    deployment surface left out most of the repository — never for a file
+    left out on purpose — and behind it each group: *Could not be read* (the
+    host or the disk failed these; run it again), *Not read — over what a scan
+    reads*, *Past the file cap* (the read takes the likely artefacts first;
+    the first of them named), *The host cut its file list short* when it did,
+    *Skipped on purpose* (a secrets file, one git ignores), *Left out by the
+    Kubernetes and Helm filter* and *Read, recognised as nothing* with their
+    files, and the scan's warnings (an older record reads as before);
   - **Open in Discover**;
 - **Diagnose**:
   - one status strip for the column (*Graded against live · checked 2 hours

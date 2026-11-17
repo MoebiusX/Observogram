@@ -833,6 +833,109 @@ assert(togProdProducts.has('prometheus'),
 assert(togProdProducts.has('victoriametrics'),
   'prod scan still reads base-values backends');
 
+// ---------- every file, unless a deployment surface is chosen; a chart is a chart wherever it is ----------
+// A service environment's Run passes `surface` (its setting, null for none): the environment's name chooses
+// nothing. A repository whose root holds Chart.yaml is a chart: its templates, files, dashboards, CRDs and
+// values schema are the Kubernetes surface (they were dropped as "another surface" under prod).
+process.stdout.write('\n--- deployment surfaces and the chart root ---\n');
+{
+  const rules = 'groups:\n  - name: shop\n    rules:\n      - alert: ShopDown\n        expr: up{job="shop"} == 0\n        for: 5m\n        labels: { severity: critical }\n';
+  const ROOT_CHART = {
+    'Chart.yaml': 'apiVersion: v2\nname: shop\nversion: 0.1.0\n',
+    'values.yaml': 'replicaCount: 2\nimage:\n  repository: example/shop\n  tag: 1.0.0\n',
+    'values-eks.yaml': 'replicaCount: 4\n',
+    'values.schema.json': '{"type":"object"}',
+    'templates/deployment.yaml': 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: shop\nspec:\n  template:\n    spec:\n      containers:\n        - name: shop\n          image: example/shop:1.0.0\n',
+    'templates/prometheusrule.yaml': `apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: shop\nspec:\n${rules.replace(/^/gm, '  ')}`,
+    'files/alerts.rules.yaml': rules,
+    'files/collector.yaml': 'receivers:\n  otlp:\n    protocols: { http: {} }\nexporters:\n  prometheus:\n    endpoint: 0.0.0.0:8889\nservice:\n  pipelines:\n    metrics: { receivers: [otlp], exporters: [prometheus] }\n',
+    'crds/shop.yaml': 'apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: shops.example.com\n',
+    'dashboards/shop.json': JSON.stringify({ title: 'Shop', uid: 'shop', schemaVersion: 41, panels: [{ title: 'Up', type: 'stat', targets: [{ expr: 'up{job="shop"}' }] }] }),
+    'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n',
+    'src/metrics.ts': "import { Counter } from 'prom-client';\nexport const c = new Counter({ name: 'shop_orders_total', help: 'orders' });\n",
+  };
+  const NOW = '2026-06-05T00:00:00.000Z';
+  const crawl = (files, opts) => crawlFiles(files, { repoName: 'shop', now: NOW, ...opts });
+  const kept = (out, files) => Object.keys(files).filter((p) => !out.summary.environment.excluded.includes(p));
+  // Under prod (the name's profile, the command line's default) the chart is read whole: only the EKS overlay
+  // and the compose file are another surface's.
+  const prodRoot = crawl(ROOT_CHART, { environment: 'prod' });
+  assert(JSON.stringify(prodRoot.summary.environment.excluded) === JSON.stringify(['values-eks.yaml', 'docker-compose.yml']),
+    'a root chart under prod keeps its templates, files, dashboards, CRDs and values schema; the EKS overlay and the compose file are left out', prodRoot.summary.environment.excluded);
+  assert(prodRoot.summary.files.byKind['prometheus-rules'] === 2 && prodRoot.summary.files.byKind['grafana-dashboard'] === 1 && prodRoot.summary.files.byKind['otel-collector'] === 1,
+    'the chart\'s rules, dashboard and collector config are read under prod', prodRoot.summary.files.byKind);
+  assert(prodRoot.summary.environment.excludedMost === false && prodRoot.summary.environment.surface === 'kubernetes',
+    'two of the ten recognised files left out is not most of them; the filter is the Kubernetes surface', prodRoot.summary.environment);
+  // The same chart in a folder no keyword names (deploy/chart/): the same reading.
+  const nested = Object.fromEntries(Object.entries(ROOT_CHART).map(([p, t]) => [p === 'docker-compose.yml' || p.startsWith('src/') ? p : `deploy/chart/${p}`, t]));
+  assert(JSON.stringify(crawl(nested, { environment: 'prod' }).summary.environment.excluded) === JSON.stringify(['deploy/chart/values-eks.yaml', 'docker-compose.yml']),
+    'a chart under deploy/chart/ is read as one too', crawl(nested, { environment: 'prod' }).summary.environment.excluded);
+  // An explicit surface: the same filter, said by its label.
+  const k8s = crawl(ROOT_CHART, { environment: 'prod', surface: 'kubernetes' });
+  assert(JSON.stringify(k8s.summary.environment.excluded) === JSON.stringify(prodRoot.summary.environment.excluded)
+    && k8s.summary.warnings.includes('The Kubernetes and Helm filter excluded 2 file(s) from other deployment surfaces.'),
+    'surface kubernetes reads as the prod profile, the warning naming the surface by its label', k8s.summary.warnings);
+  const eks = crawl(ROOT_CHART, { environment: 'qa', surface: 'eks' });
+  assert(JSON.stringify(eks.summary.environment.excluded) === JSON.stringify(['docker-compose.yml']) && eks.summary.environment.surface === 'eks',
+    'surface eks keeps the EKS overlay with the chart, whatever the environment is called', eks.summary.environment);
+  const compose = crawl(ROOT_CHART, { environment: 'prod', surface: 'compose' });
+  assert(kept(compose, ROOT_CHART).join(',') === 'docker-compose.yml,src/metrics.ts' && compose.summary.environment.excludedMost === true,
+    'surface compose leaves the chart out — files/collector.yaml is the chart\'s, no root Docker config — and that is most of what the scan recognises', kept(compose, ROOT_CHART));
+  assert(compose.summary.warnings.some((w) => /^The Docker Compose filter left out 8 of the 10 files the scan recognises — more than half of them\. An environment with no deployment surface set reads every file\.$/.test(w)),
+    'and the warning says so', compose.summary.warnings);
+  // surface given: the name filters nothing — prod, staging and no name read the same files and declare the same spec.
+  const everyOf = (environment) => crawl(ROOT_CHART, { environment, surface: null });
+  const [p0, s0, n0] = [everyOf('prod'), everyOf('staging'), everyOf(undefined)];
+  assert(p0.summary.files.included === 12 && p0.summary.files.excludedByEnvironment === 0 && p0.summary.environment.surface === null && p0.summary.environment.scoped === false,
+    'surface null reads every file, whatever the environment is called', p0.summary.environment);
+  assert(JSON.stringify(p0.canonical.spec) === JSON.stringify(s0.canonical.spec) && JSON.stringify(p0.canonical.spec) === JSON.stringify(n0.canonical.spec),
+    'prod, staging and none declare the same spec when no surface is chosen');
+  const unknown = crawl(ROOT_CHART, { environment: 'prod', surface: 'helm' });
+  assert(unknown.summary.files.included === 12 && unknown.summary.warnings.includes('deployment surface "helm" is not one the scan knows (kubernetes, eks, local-kubernetes, compose); every file was read.'),
+    'an unknown surface reads every file and says so', unknown.summary.warnings);
+  // Absent, the name filters as before (the command line, Expert's panel, crawl: sources).
+  assert(crawl(ROOT_CHART, { environment: 'prod' }).summary.environment.scoped === true && crawl(ROOT_CHART, {}).summary.environment.profile === 'prod',
+    'without `surface` the name chooses the profile, prod by default');
+  // A filter that would leave nothing reads every file and counts nothing left out (it named every file before).
+  const nothingLeft = { 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n', 'k8s/eks/values.yaml': 'a: 1\n' };
+  const emptiedName = crawl(nothingLeft, { environment: 'prod' });
+  assert(emptiedName.summary.files.excludedByEnvironment === 0 && emptiedName.summary.environment.excluded.length === 0 && emptiedName.summary.environment.surface === null
+    && !emptiedName.summary.warnings.some((w) => /Environment scope/.test(w)),
+    'a prod filter that would leave nothing excludes none and warns of none', emptiedName.summary);
+  const emptiedSurface = crawl(nothingLeft, { environment: 'prod', surface: 'kubernetes' });
+  assert(emptiedSurface.summary.environment.surface === null && emptiedSurface.summary.environment.asked === 'kubernetes' && emptiedSurface.summary.files.excludedByEnvironment === 0
+    && emptiedSurface.summary.warnings.includes('The Kubernetes and Helm filter would leave no file, so every file was read.'),
+    'a chosen surface that would leave nothing is said, never applied', emptiedSurface.summary.environment);
+  // excludedMost: more than half the recognised files — exactly half is not.
+  const half = { 'docker-compose.yml': 'services:\n  prometheus:\n    image: prom/prometheus:v2.51.0\n', 'k8s/charts/x/values.yaml': 'grafana:\n  image:\n    repository: grafana/grafana\n' };
+  assert(crawl(half, { surface: 'compose' }).summary.environment.excludedMost === false, 'one of two recognised files left out is not most of them');
+  const most = { ...half, 'k8s/charts/x/values-prod.yaml': 'loki:\n  image:\n    repository: grafana/loki\n' };
+  assert(crawl(most, { surface: 'compose' }).summary.environment.excludedMost === true, 'two of three is');
+  // A scan report carries the filter.
+  const { scanReport } = await import('./lib/crawler.mjs');
+  const report = scanReport({ files: ROOT_CHART }, k8s.summary);
+  assert(JSON.stringify(report.filter) === JSON.stringify({ surface: 'kubernetes', excluded: 2 }) && report.excludedMost === false,
+    'scanReport: the surface read alone and how many it left out', report.filter);
+  assert(JSON.stringify(scanReport({ files: nothingLeft }, emptiedSurface.summary).filter) === JSON.stringify({ surface: null, excluded: 0, asked: 'kubernetes' }),
+    'and a surface asked for that read every file');
+}
+
+// ---------- every file read: a Helm overlay's switch is one environment's, never every one's ----------
+// With no surface chosen, an overlay (values-eks.yaml) that switches a component off must not take it
+// away from the environments that run it: only the base values decide, and the overlay is named.
+{
+  const none = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'prod', surface: null, now: '2026-06-05T00:00:00.000Z' });
+  assert(products(none).has('prometheus') && !(none.summary.discovered.disabledComponents || []).length,
+    'every file read: the base values switch prometheus on, and it is declared', none.summary.discovered.disabledComponents);
+  assert(none.summary.warnings.some((w) => w.startsWith('Every file is read, so only the base Helm values decide what is deployed: k8s/charts/app/values-eks.yaml switches prometheus off.')),
+    'the overlay that would switch it off is named in one warning', none.summary.warnings);
+  const eksOnly = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'prod', surface: 'eks', now: '2026-06-05T00:00:00.000Z' });
+  assert(!products(eksOnly).has('prometheus') && (eksOnly.summary.discovered.disabledComponents || []).includes('prometheus'),
+    'the EKS surface applies its overlay: prometheus switched off', eksOnly.summary.discovered.disabledComponents);
+  const staging = crawlFiles(ENV_TOGGLE, { repoName: 'app', environment: 'staging', now: '2026-06-05T00:00:00.000Z' });
+  assert(products(staging).has('prometheus'), 'a name that maps to no profile reads every file, so the base values decide there too');
+}
+
 // ---------- unresolved ${VAR} placeholders in alerting channels ----------
 //
 // Regression for the 2026-06-10 finding: a webhook whose entire value is a

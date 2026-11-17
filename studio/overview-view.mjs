@@ -964,6 +964,15 @@ function scopeHtml(f, v) {
           </div>`;
 }
 
+// The deployment surface this environment reads alone (formModel's `surface`): the choices, off by
+// default, and what the choice means. A select with data-field is wired as every answer is.
+function surfaceHtml(f) {
+  const s = f.surface;
+  return `
+            <label class="ov-form__f ov-form__surface"><span class="ov-form__l">${escapeHtml(s.label)}</span><select class="og-input" data-field="surface" aria-describedby="ov-form-surface-hint">${s.options.map((o) => `<option value="${attr(o.id)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select>
+              <span class="ov-form__hint og-muted" id="ov-form-surface-hint">${escapeHtml(s.hint)}</span></label>`;
+}
+
 // A pack file in place of either side (side 'repo': an export of the declared pack; 'live': an
 // export of live): Choose a pack file, the state as the model words it (packs[side]).
 function packFileHtml(f, side) {
@@ -1153,7 +1162,7 @@ function svcFormHtml(f) {
               ${f.kind.kind === 'path' ? browseBtnHtml(f) : `<input class="og-input ov-form__ref" data-field="ref" value="${attr(v.ref)}" placeholder="${attr(f.branch?.placeholder || 'branch (default)')}" aria-label="Branch" autocomplete="off" spellcheck="false">`}
             </div>`}${f.browse?.panel ? folderPanelHtml(f.browse.panel) : ''}
             <span class="ov-form__hint og-muted">${escapeHtml(f.browse?.hint || f.kind.hint)}</span>${fieldErr(f, 'kind', shown)}${fieldErr(f, 'location', shown)}
-            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' && f.kind.kind !== 'pack' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}
+            ${f.branch?.note && f.kind.kind !== 'path' && f.kind.kind !== 'upload' && f.kind.kind !== 'pack' ? `<span class="ov-form__hint og-muted">${escapeHtml(f.branch.note)}</span>` : ''}${f.surface?.shown ? surfaceHtml(f) : ''}
             ${f.sourcesNote ? `<span class="ov-form__hint og-muted">${escapeHtml(f.sourcesNote)}</span>` : ''}${auth}
           </div>
         </li>

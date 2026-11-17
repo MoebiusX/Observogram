@@ -26,7 +26,7 @@ what each word means for each command.
 | The whole repository, run as your product | this runbook |
 | Some `tools/lib` modules | [DOWNSTREAM.md](DOWNSTREAM.md) §3 to §6 |
 | Engine and studio files inside a studio of your own | [VENDORING.md](VENDORING.md), *Staying current* |
-| The Overview board inside an app of your own | [VENDORING.md](VENDORING.md), *The Overview board*. Import its files from the copy, so they refresh with it |
+| The Overview board inside an app of your own | [VENDORING.md](VENDORING.md), *The Overview board*. Import its files from the copy, so they refresh with it — never a board older than the server: an older board reads a record it does not know (a stopped Run's `scan-partial`) as a check that matched |
 
 ## The aim: a copy you replace, never merge
 

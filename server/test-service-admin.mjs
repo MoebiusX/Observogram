@@ -554,7 +554,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'liveScopes', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.equal(payView.targets, null, 'no targets until they are set');
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
@@ -1036,6 +1036,58 @@ test('updateServiceFromApi { setAside }: the whole list replaces the record\'s �
       assert.throws(() => admin.updateServiceFromApi(db, 'bob', acme.id, { setAside: [] }), missing(`no service ${acme.id}`));
     });
     assert.deepEqual(rows(db, 'bravo'), [], 'and bravo wrote no row');
+  } finally {
+    close();
+  }
+});
+
+// The deployment surface each environment's Run reads alone (envSurfaces): off by default — every environment of
+// a service reads the same files — a known surface per environment, kept beside the row, moved by a rename, taken
+// by a deletion, and kept when the repository changes (a surface is how the environment deploys).
+test('envSurfaces: the whole map — known surfaces only, blank or null for none, by name; envSurfaceOf reads the environment\'s own; the store keeps it beside the row, a rename moves it, a deletion takes it, another repository keeps it; every refusal writes nothing', async () => {
+  const { DEPLOYMENT_SURFACES } = await import('../tools/lib/crawler.mjs');
+  assert.deepEqual(admin.parseEnvSurfaces({ stg: 'compose', prod: ' kubernetes ', qa: '', dev: null }), { prod: 'kubernetes', stg: 'compose' }, 'trimmed, by name; blank and null are none');
+  assert.deepEqual(admin.parseEnvSurfaces({}), {});
+  assert.equal(admin.WAYS.envSurfaces, `envSurfaces is the deployment surface each environment's Run reads alone — { [environment name]: ${Object.keys(DEPLOYMENT_SURFACES).join(' | ')} }, {} for none (every file), at most 50`);
+  for (const [value, text] of [
+    [['prod'], admin.WAYS.envSurfaces], ['kubernetes', admin.WAYS.envSurfaces], [null, admin.WAYS.envSurfaces],
+    [{ prod: 'helm' }, admin.WAYS.envSurface('prod', 'helm')], [{ prod: 'prod' }, admin.WAYS.envSurface('prod', 'prod')], [{ prod: 7 }, admin.WAYS.envSurface('prod', 7)],
+    [{ [' ']: 'eks' }, admin.WAYS.envSurfaces], [{ ['x'.repeat(201)]: 'eks' }, admin.WAYS.envSurfaces],
+    [Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`e${i}`, 'eks'])), admin.WAYS.envSurfaces],
+  ]) assert.throws(() => admin.parseEnvSurfaces(value), invalid(text), JSON.stringify(value)?.slice(0, 60));
+  assert.equal(admin.WAYS.envSurface('prod', 'helm'), 'the deployment surface for "prod" is one of kubernetes, eks, local-kubernetes, compose — or blank for every file — not "helm"');
+  const svc = { repository: { kind: 'path', location: '/srv/shop' }, envSurfaces: { prod: 'kubernetes', stg: 'not-one' } };
+  assert.deepEqual([admin.envSurfaceOf(svc, 'prod'), admin.envSurfaceOf(svc, 'stg'), admin.envSurfaceOf(svc, 'qa'), admin.envSurfaceOf(svc, 'constructor'), admin.envSurfaceOf({}, 'prod')], ['kubernetes', null, null, null, null],
+    'its own entry, a surface the crawler knows — any kind of repository; never an inherited name');
+
+  const { db, close } = await freshStore('env-surfaces');
+  try {
+    runWithOrg('acme', () => {
+      const made = admin.createServiceFromApi(db, 'oscar', { name: 'Shop', repository: null, envSurfaces: { prod: 'kubernetes' } });
+      assert.deepEqual(made.envSurfaces, { prod: 'kubernetes' });
+      assert.deepEqual(rows(db, 'acme', 'service.create').at(-1)[3], { envSurfaces: { prod: 'kubernetes' } }, 'the create row names them');
+      for (const name of ['prod', 'qa']) admin.createEnvironmentFromApi(db, 'oscar', made.id, { name });
+      const held = services.getService(db, made.id);
+      const count = rows(db, 'acme', 'service.update').length;
+      assert.throws(() => admin.updateServiceFromApi(db, 'ada', made.id, { name: 'Never', envSurfaces: { qa: 'helm' } }), invalid(admin.WAYS.envSurface('qa', 'helm')));
+      assert.deepEqual([services.getService(db, made.id), rows(db, 'acme', 'service.update').length], [held, count], 'a refusal writes nothing');
+      const set = admin.updateServiceFromApi(db, 'ada', made.id, { envSurfaces: { prod: 'kubernetes', qa: 'compose' } });
+      assert.deepEqual([set.changed, set.service.envSurfaces], [['envSurfaces'], { prod: 'kubernetes', qa: 'compose' }]);
+      assert.deepEqual(rows(db, 'acme', 'service.update').at(-1)[3], { fields: ['envSurfaces'], envSurfaces: { prod: 'kubernetes', qa: 'compose' } }, 'the row names the surfaces');
+      assert.deepEqual(admin.updateServiceFromApi(db, 'ada', made.id, { envSurfaces: { qa: 'compose', prod: 'kubernetes' } }).changed, [], 'the same map: nothing changes');
+      assert.deepEqual(admin.serviceViewOf(db, services.getService(db, made.id)).envSurfaces, { prod: 'kubernetes', qa: 'compose' }, 'the view carries them');
+      // A rename takes the surface along; a deletion takes it away; another repository keeps them.
+      const qa = environments.getEnvironmentByName(db, made.id, 'qa');
+      admin.updateEnvironmentFromApi(db, 'ada', qa.id, { name: 'uat' });
+      assert.deepEqual(services.getService(db, made.id).envSurfaces, { prod: 'kubernetes', uat: 'compose' });
+      admin.deleteEnvironmentFromApi(db, 'ada', qa.id);
+      assert.deepEqual(services.getService(db, made.id).envSurfaces, { prod: 'kubernetes' });
+      const moved = admin.updateServiceFromApi(db, 'ada', made.id, { repository: { kind: 'github', location: 'acme/shop' } });
+      assert.deepEqual([moved.changed, moved.service.envSurfaces], [['repository'], { prod: 'kubernetes' }], 'another repository: the surfaces stay');
+      assert.deepEqual(admin.updateServiceFromApi(db, 'ada', made.id, { envSurfaces: {} }).service.envSurfaces, {}, '{} reads every file again');
+      assert.deepEqual(admin.deleteServiceFromApi(db, 'ada', made.id).service.envSurfaces, {});
+      assert.deepEqual(admin.createServiceFromApi(db, 'oscar', { name: 'Shop' }).envSurfaces, {}, 'a reused id starts with none');
+    });
   } finally {
     close();
   }
