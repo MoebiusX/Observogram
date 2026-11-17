@@ -55,7 +55,12 @@
 //                  stores (`observogram.unread.<kind>`: no Grafana alert-rule
 //                  tool answered, no ruler did, no tool reads Loki or
 //                  Grafana-managed recording rules) parks an unmatched
-//                  artefact of a store it did not read, with that reason.
+//                  artefact of a store it did not read, with that reason —
+//                  a burn-rate entry by the stores of the alerting rules it
+//                  was read from (all of them unread). A burn-rate pair one
+//                  side of which was read from a rule the other read did not
+//                  cover is not compared on its windows: the pair says which
+//                  rule (`unobserved` { field: 'windows', side, rule }).
 //   summary.jaccard and summary.alignment are null when the union is empty:
 //   nothing compared is no match (never 1).
 //
@@ -300,6 +305,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     }
 
     for (const pair of renamed) bucket.inBoth.push(uidPair(pair));
+    // A burn-rate pair read from a rule the other side's read did not cover is compared on the rest.
+    for (const entry of bucket.inBoth) noteUnreadSourceRules(entry, aUnread, bUnread);
     pairDeclaredFamilies(aFamilies, bFamilies, bucket);
     noteOtherCover(aClaims, bItems);
     noteOtherCover(bClaims, aItems);
@@ -795,13 +802,55 @@ function ruleStoreOf(kind, artefact) {
 }
 
 // The notObserved reason when the other pack's read did not cover the store
-// every artefact of this group lives in (unreadStores), else null.
+// every artefact of this group lives in (unreadStores), else null. A
+// burn-rate entry lives where the alerting rules it was read from do
+// (sourceRuleStores): parked only when every one of its rules sits in a store
+// the other read did not cover, under the alert-rule family's reasons.
 function unreadByEngine(kind, group, otherUnread) {
+  if (kind === 'burn_rate') {
+    const stores = otherUnread.get('alert_rule');
+    if (!stores) return null;
+    const of = group.map(sourceRuleStores);
+    if (!of.length || of.some((rules) => !rules || rules.some(({ store }) => !stores[store]))) return null;
+    return stores[of[0][0].store];
+  }
   const stores = otherUnread.get(kind);
   if (!stores) return null;
   const of = group.map((artefact) => ruleStoreOf(kind, artefact));
   if (!of.length || of.some((store) => store === null || !stores[store])) return null;
   return stores[of[0]];
+}
+
+// The stores of the alerting rules a burn-rate entry was read from (its
+// `sourceRules`, the adapter's reading of observogram.source_rules.<symbol>),
+// each with its rule's name: a rule that states `engine: grafana` lives in
+// Grafana's store, any other in a ruler's. Null when the entry states none.
+function sourceRuleStores(artefact) {
+  const list = artefact?.sourceRules;
+  if (!Array.isArray(list) || !list.length) return null;
+  return list.map((r) => ({ name: typeof r?.name === 'string' ? r.name : '', store: r?.engine === 'grafana' ? 'grafana' : 'ruler' }));
+}
+
+// A burn-rate pair one side of which was read from a rule the other side's
+// read did not cover (a Grafana-managed rule against a read whose Grafana
+// alert-rule tool gave no answer): the windows that side states rest on a
+// rule the other could not see, and the other derived its own from fewer, so
+// the windows are not compared — never a difference the unread rule made. The
+// pair says which rule went unread (`unobserved` { field: 'windows', side —
+// the one that did not see it — keys: [], rule }) and counts in
+// partlyCompared; the rules both sides read are held to each other as before.
+function noteUnreadSourceRules(entry, aUnread, bUnread) {
+  if (!entry.key.startsWith('burn_rate::')) return;
+  const unseen = (artefact, otherUnread, side) => {
+    const stores = otherUnread.get('alert_rule');
+    return stores ? (sourceRuleStores(artefact) || []).filter(({ store }) => stores[store]).map(({ name }) => ({ field: 'windows', side, keys: [], rule: name })) : [];
+  };
+  const notes = [...unseen(entry.a, bUnread, 'b'), ...unseen(entry.b, aUnread, 'a')];
+  if (!notes.length) return;
+  // The entry's own windows; a rule's terms carry their `rule`.
+  entry.deltas = entry.deltas.filter((d) => !(d.field === 'windows' && d.rule === undefined));
+  entry.match = entry.deltas.length ? 'drifted' : 'aligned';
+  entry.unobserved = [...(entry.unobserved || []), ...notes];
 }
 
 // Alert rules renamed on one side: for each Grafana uid stated by exactly one

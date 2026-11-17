@@ -207,8 +207,23 @@ tool answered, no Prometheus-compatible ruler did, no tool reads a Loki
 ruler or Grafana-managed recording rules. An unmatched artefact every one of
 whose rules lives in a store so named — a declared rule's `engine` (absent,
 `prometheus`, `mimir`, `thanos`, `victoriametrics` → a ruler; `grafana`;
-`loki`), a recording rule that states Grafana's facts — goes to `notObserved`
-with that reason; a scope's own reason, more specific, comes first.
+`loki`), a recording rule that states Grafana's facts, a burn-rate entry
+every rule of which it was read from sits in such a store (its source rules,
+below: `engine: grafana` is Grafana's store, any other a ruler's) — goes to
+`notObserved` with that reason; a scope's own reason, more specific, comes
+first. A rule is `loki` only where its own source says so — a pack that
+states it, or a scanned rule whose expression is LogQL by a pipeline stage
+PromQL has no operator for (`|=`, `|~`, `!~`, `| json`, …) — never by the path
+a rule file ships under nor by a selector PromQL also has (`rate({app="x"}[5m])`,
+`x{job="y"} != 1`): a mixin's PromQL alert on `loki_*` series under `loki/`
+is a Prometheus rule, and missing live it reads *declared, not live*. A
+burn-rate **pair** one side of which was read from a rule in a store the
+other side's read did not cover (an SLO guarded by a Prometheus rule and a
+Grafana-managed one, against a read whose Grafana tool gave no answer) is
+not compared on its `windows` — the other side derived its own from fewer
+rules — and says so, `unobserved: [{ field: 'windows', side, keys: [], rule }]`
+(counted in `partlyCompared`); the rules both sides read are compared as
+below.
 
 **A Grafana-managed rule** states beside the spec what the closed AlertRule
 cannot hold (`observogram.grafana_rule.alerting.rules[<i>]`, the adapter's
@@ -218,7 +233,9 @@ its recovery threshold, a reduce, math, classic conditions), the other
 queries, the condition reference and `paused`, as one text both readers
 derive the same way — is part of its behaviour: a threshold raised in Grafana
 reads drifted on `condition`. A side that states none (a listing that does
-not show it) is no difference: the pair carries `unobserved: [{ field:
+not show it; a repository whose threshold, or any node of it, is a value a
+Helm chart fills in at deploy time or a `${VAR}` — no number the repository
+states) is no difference: the pair carries `unobserved: [{ field:
 'condition', side, keys: [] }]` and counts in `partlyCompared`. Its `uid`
 pairs a rule renamed on one side: when both sides state one uid under two
 names and neither name has a counterpart, the two are one `inBoth` entry,
@@ -273,7 +290,10 @@ info`) read *aligned*.
 
 So each entry says, beside it, the rules it was read from:
 `observogram.source_rules.policy.burn_rate_alerts.<slo id>` = a JSON list of
-`{ name, expr, for?, severity?, labels?, partial? }`, the rules' terms as an
+`{ name, expr, for?, severity?, labels?, condition?, engine?, partial? }`
+(`condition`: a Grafana-managed rule's threshold and other steps;
+`engine: grafana`: its store, read only against the stores the other side's
+read did not cover), the rules' terms as an
 operational rule's are read (`sourceRuleTerms`, tools/lib/sli-inference.mjs
 — the repository scan and the live fetch write the statement through that
 one function, over every rule whose expression references a recorded series

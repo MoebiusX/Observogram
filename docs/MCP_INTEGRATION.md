@@ -126,11 +126,13 @@ dashboards (folder uids, before the detail reads), alert rules (folder
 uids, when every rule names its folder; an engine whose tool takes a folder
 uid is asked once per folder) and alert and recording rules by rule group
 (when every rule the engines list names its group); every advertised alert-rule engine is read — by a draft too — and
-the rules unioned by store (Grafana's by uid, a ruler's by name), Grafana-managed rules read from the provisioning
-shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles), each stating its
+the rules unioned by store (Grafana's by uid, a ruler's by name; one Grafana rule two tools list is one, by its
+uid or its exact terms, never by name alone), Grafana-managed rules read from the provisioning
+shape (`title`, `data[]`, `folderUID`) and the ruler's (`grafana_alert` under folder titles, whatever the titles), each stating its
 uid, folder, group and condition in `observogram.grafana_rule.*`; what the read could not cover in
-`observogram.unread.alert_rule` / `.recording_rule`, an engine that errored beside one that answered in
-`mcp.probesPartial`, the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
+`observogram.unread.alert_rule` / `.recording_rule`, a store no engine read (one errored or was refused) beside
+one that answered in `mcp.probesPartial` — an engine whose store has no rules API (400 / 404 / 405) is not served
+and never counts — the rule groups listed in `mcp.discovered.rule_groups`; a dashboard's id is its obs-pack-id tag, else the
 crawler's `dashboardSpecId`, so a uid pairs with a crawled repository.
 `buildSnapshotPack` writes `mcp.url` as the origin and the
 `observogram.live.*`, `observogram.scope.<kind>` and
@@ -753,8 +755,8 @@ strings at 200 chars.
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
 | `mcp.probeErrors.<family>` | string | every failed candidate's message in the order tried, each named (`<tool>: <message>`) and trimmed to 200 chars, joined with ` · `; written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`). The first entry is the cause: the cascade reached the later ones because of it. Every URL a message quotes keeps no query string, fragment or userinfo (`tools/fetch-live-pack.mjs` `maskProbeErrorUrls`, over `tools/lib/mcp-url-safety.mjs` `safeMcpUrl`); a path quoted without a scheme keeps no query or fragment either (urllib3 and requests name the request so: `Max retries exceeded with url: /api/v1/targets?…`), a `//user:pass@` link no userinfo, and every `name=value` pair whose name says it holds a credential (`credentialParamName`) and every Bearer or Basic value is masked — all before the cut, so the reasons a declared artefact is not checked, a gate log's gaps, a lost run's `error`, its thrown message (the server's 502 body) and a notification built from it carry none either. A not-served answer from a tool the journey saw answer the family reads `<tool>: it answered on <day>; now <the answer>` |
-| `mcp.probeUnsupported.<family>` | JSON `{ reason, since, tools }` | a family whose every candidate's store answered it keeps no such thing (P6): scrape targets answered 400 / 404 / 405 (or a Prometheus `bad_data` / `not_found` envelope), an Alertmanager status object with no configuration key at all. Never for an error, a 503 or a timeout, an answer naming a missing datasource, an empty configuration or one in a shape the reader does not read, nor from a tool the journey saw answer the family — each of those is `failed` |
-| `mcp.probeAnsweredBy.<family>` | comma list of tool names | the tool(s) that answered a family that can read "not served" (`scrape_configs`, `alerting_routes`) with data or an honest empty: a journey's memory of who serves it (`probeMemoryOf`) |
+| `mcp.probeUnsupported.<family>` | JSON `{ reason, since, tools }` | a family whose every candidate's store answered it keeps no such thing (P6): scrape targets answered 400 / 404 / 405 (or a Prometheus `bad_data` / `not_found` envelope), an Alertmanager status object with no configuration key at all, every alert-rule engine asked answering 400 / 404 / 405. Never for an error, a 503 or a timeout, an answer naming a missing datasource, an empty configuration or one in a shape the reader does not read, nor from a tool the journey saw answer the family — each of those is `failed` |
+| `mcp.probeAnsweredBy.<family>` | comma list of tool names | the tool(s) that answered a family that can read "not served" (`scrape_configs`, `alerting_routes`; for `alert_rules` the engines that answered with rules, or the one that answered empty) with data or an honest empty: a journey's memory of who serves it (`probeMemoryOf`) |
 | `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
@@ -775,7 +777,7 @@ strings at 200 chars.
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
 | `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
-| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part. The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
+| `observogram.source_rules.policy.burn_rate_alerts.<slo>` | JSON `[{name, expr, for?, severity?, labels?, condition?, engine?, partial?}]` | the alerting rules that burn-rate entry was read from, each with its own terms — every listed rule whose expression references a recorded series of the SLO, read as an operational rule is (`sourceRuleTerms`); `partial` is what the listing showed of a rule's labels only in part; `condition` a Grafana-managed rule's threshold and other steps, `engine: grafana` its store (a comparison parks the entry, or leaves its windows uncompared, where the other side's read did not cover it). The entry itself holds only `{slo, windows}`, so this is what the comparison holds a repository's rule to (docs/DIFF.md, *The rules a burn-rate entry was read from*). A rule the listing gave no expression cannot be placed on an SLO and is in no list |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `observogram.partial.alerting.rules[<i>]` | `labels=<keys>` | an alert rule whose listing gave no `labels` object: of its labels, the keys the listing did show — `labels=severity`, written for every rule of a listing in which no rule carries a labels map and at least one carries a flat `severity`. The comparison holds the rule to those keys (docs/DIFF.md) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
@@ -1149,8 +1151,9 @@ the wire and leave no record.
 
 "Not served" needs a positive signal, given on the run that reads it: scrape
 targets answered 400 / 404 / 405 (never an answer naming a missing datasource:
-a wrong datasource uid is a failure), or an Alertmanager status object with no
-configuration key at all. The family is asked every run and its answer alone
+a wrong datasource uid is a failure), an Alertmanager status object with no
+configuration key at all, or an alert-rule engine answered 400 / 404 / 405
+(its store has no rules API). The family is asked every run and its answer alone
 decides — data, an honest empty, a refusal, a failure or the not-served answer
 again: a family not served yesterday whose tool answers a 503 or a timeout
 today is a failure (an outage of the store it reads), never kept "not served"
@@ -1160,7 +1163,9 @@ answer was first given (`since`, from the newest record that carries a probe
 table), and the tools each record saw answer a family with data or an honest
 empty (`probeAnsweredBy`; an older record that did not say which tool counts
 for every tool, and only where it answered with data — its empty answers may
-have been an error envelope or a refused read beside an empty fallback). A
+have been an error envelope or a refused read beside an empty fallback — but
+for no alert-rule engine: the union reads several stores, and such a record
+cannot say which served). A
 not-served answer from such a tool is a failure whose probe
 error says when it answered (`<tool>: it answered on <day>; now <the answer>`)
 — the store served the family, so the answer is a lost route or a changed

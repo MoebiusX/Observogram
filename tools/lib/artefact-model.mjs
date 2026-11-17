@@ -172,11 +172,14 @@ export function parseGrafanaRuleAnnotation(value) {
 // severity are in no field of the entry, and its wait only as a window. The
 // pack says them beside it, per SLO (docs/DIFF.md):
 //   observogram.source_rules.policy.burn_rate_alerts.<slo id> = <JSON list>
-// of { name, expr, for?, severity?, labels?, partial? } — a rule's terms as
-// operationalAlertRule reads them (sli-inference.mjs sourceRuleTerms, the
-// one function both readers write it through); `partial` is what the reader
-// was shown of the rule only in part, as an artefact's `partial` says it
-// ({ labels: [keys shown] }). The adapter puts the list on the burn-rate
+// of { name, expr, for?, severity?, labels?, condition?, engine?, partial? } —
+// a rule's terms as operationalAlertRule reads them (sli-inference.mjs
+// sourceRuleTerms, the one function both readers write it through);
+// `partial` is what the reader was shown of the rule only in part, as an
+// artefact's `partial` says it ({ labels: [keys shown] }); `engine: grafana`
+// says a Grafana-managed rule's store, which the comparison reads against the
+// stores the other side's read did not cover (diff.mjs), never as a term.
+// The adapter puts the list on the burn-rate
 // artefact as `sourceRules`, beside `spec` (the entry is closed, and `spec`
 // may be copied back into a pack). When BOTH artefacts of a pair state it,
 // each rule is also held to its counterpart of the same name, as an
@@ -207,6 +210,10 @@ export function parseSourceRulesAnnotation(value) {
     if (typeof r.for === 'string' && r.for) terms.for = r.for;
     if (typeof r.severity === 'string' && r.severity) terms.severity = r.severity;
     if (typeof r.condition === 'string' && r.condition) terms.condition = r.condition;
+    // A Grafana-managed rule's store (`engine: grafana`): what the comparison reads against the stores
+    // the other side's read did not cover (diff.mjs), never a term it holds; any other engine is a
+    // ruler's, so it is not kept.
+    if (r.engine === 'grafana') terms.engine = 'grafana';
     if (r.labels && typeof r.labels === 'object' && !Array.isArray(r.labels)) {
       const labels = {};
       for (const k of Object.keys(r.labels)) if (k !== '__proto__' && typeof r.labels[k] === 'string') labels[k] = r.labels[k];

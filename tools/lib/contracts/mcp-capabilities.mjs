@@ -104,6 +104,12 @@ export const CAPABILITIES = Object.freeze({
     // slot once per folder and reads only those rules (the answer is the same
     // provisioning shape, folder by folder); the draft leaves it empty and
     // the call is argless, as before.
+    // A tool whose store has no rules API behind it (a datasource proxy in
+    // front of a store that runs no ruler) answers 400 / 404 / 405: that
+    // engine is not served here, never a failure, so it never makes the
+    // union's read partial — the scrape targets' rule
+    // (tools/fetch-live-pack.mjs notServedStatus), remembered the same way.
+    unsupportedOnHttpStatus: Object.freeze([400, 404, 405]),
     candidates: [
       { tool: 'vmalert_rules', attests: 'vmalert' },
       { tool: 'metrics_alerts' },

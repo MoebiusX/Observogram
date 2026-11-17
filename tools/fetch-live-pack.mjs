@@ -1320,14 +1320,17 @@ export function routesFromLiveAlertmanager(configText) {
 }
 
 // What a live read of the rule families states beside the probe outcomes:
-//   mcp.probesPartial + mcp.probeErrors.alert_rules  an alert-rule engine that
-//       errored beside one that answered with rules (unionAlertRules): the rules
-//       stand, the family was read in part (C3 reads it as a partial vantage)
+//   mcp.probesPartial + mcp.probeErrors.alert_rules  an alert-rule store no
+//       engine read (one errored or was refused, and no other engine of that
+//       store read it) beside one that answered with rules (unionAlertRules):
+//       the rules stand, the family was read in part (C3 reads it as a partial
+//       vantage)
 //   observogram.unread.alert_rule     { grafana?, ruler?, loki: why } — the
 //       stores the alert-rule read did not cover while the family answered:
 //       a declared rule of that store is not checked (diff.mjs)
 //   observogram.unread.recording_rule { grafana: why } — no recording-rule
-//       tool reads Grafana's own store
+//       tool reads Grafana's own store (a Grafana alert-rule answer is read
+//       for its alert rules alone; the reason says which)
 //   mcp.discovered.rule_groups(_count) the rule groups the read listed, before
 //       a rule-group scope narrowed them (the studio's scope check)
 const RULE_GROUPS_RECORDED = 500;
@@ -1348,7 +1351,13 @@ function ruleReadAnnotations(probeResults, ruleGroups) {
   }
   const recording = probeResults?.recording_rules;
   if (recording?.outcome === 'data' || recording?.outcome === 'empty') {
-    out['observogram.unread.recording_rule'] = JSON.stringify({ grafana: 'no recording-rule tool reads Grafana-managed recording rules, so they were not read' });
+    // Grafana's store, which no recording-rule tool reads. When a Grafana alert-rule tool answered, its
+    // answer may hold them, but the reading takes its alert rules alone: they are not compared, and the
+    // reason says that — never that they were not read.
+    const grafanaRead = (alert?.outcome === 'data' || alert?.outcome === 'empty') && alert.unread && typeof alert.unread === 'object' && !alert.unread.grafana;
+    out['observogram.unread.recording_rule'] = JSON.stringify({ grafana: grafanaRead
+      ? 'Grafana-managed recording rules are not compared: no recording-rule tool reads them, and the Grafana alert-rule answer is read for its alert rules alone, so they were not checked'
+      : 'no recording-rule tool reads Grafana-managed recording rules, so they were not read' });
   }
   if (Array.isArray(ruleGroups) && ruleGroups.length) {
     out['mcp.discovered.rule_groups'] = annotationJson(ruleGroups.slice(0, RULE_GROUPS_RECORDED));
@@ -2556,12 +2565,15 @@ export function adaptProvisionedAlertRules(response) {
 // folder): an object keyed by folder TITLE, each a list of rule groups
 // ({ name, interval, rules }), each rule `{ for, labels, annotations,
 // grafana_alert: { title, uid, namespace_uid, rule_group, condition, data, … } }`.
-// Only Grafana's own ruler: every rule carries `grafana_alert`.
+// Only Grafana's own ruler: every rule carries `grafana_alert`. Told by that
+// shape alone, whatever the keys: a folder is any title an operator gave it
+// (`data`, `groups`, `rules`, `status` among them), and a listing's own
+// `groups` / `rules` / `data` / `status` never hold groups of `grafana_alert`
+// rules, so they never read as one (an empty one reads empty either way).
 function isRulerShape(response) {
   if (!response || typeof response !== 'object' || Array.isArray(response)) return false;
   const keys = Object.keys(response);
-  if (!keys.length || keys.some(k => ['groups', 'rules', 'data', 'status'].includes(k))) return false;
-  return keys.every(k => Array.isArray(response[k]) && response[k].every(g => g && typeof g === 'object' && typeof g.name === 'string'
+  return keys.length > 0 && keys.every(k => Array.isArray(response[k]) && response[k].every(g => g && typeof g === 'object' && typeof g.name === 'string'
     && Array.isArray(g.rules) && g.rules.every(r => r && typeof r === 'object' && r.grafana_alert && typeof r.grafana_alert === 'object')));
 }
 // One ruler rule, flat, as a listing's rule reads: the title as its name, the
@@ -2597,7 +2609,27 @@ function flatRules(response) {
     return Object.entries(response).flatMap(([folder, groups]) => groups.flatMap(g => g.rules.map(r => flatRulerRule(r, g, folder))));
   }
   const groups = response?.groups || response?.data?.groups || [];
-  return response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval })));
+  return response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval, _file: g.file, _groupFolderUid: g.folderUid })));
+}
+
+// What a listing of names and queries states beside a rule that is no Grafana-managed rule's own
+// reading: a uid (Grafana's Prometheus-compatible listing gives each rule its Grafana uid) and the
+// folder its group names — `file`, a folder title in Grafana's listing and a rule file's path in a
+// ruler's, and a folder uid. Kept beside the rule the alert-rule reader returns (LISTED_FACTS),
+// never on it: the union reads it to tell one Grafana rule two tools list (unionAlertRules), and
+// it never enters the pack or the reading's shape. Null when the listing states none of it.
+const LISTED_FACTS = new WeakMap();
+function listedFactsOf(r) {
+  if (!r || typeof r !== 'object' || r.grafana) return null;
+  const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const facts = {};
+  const uid = text(r.uid);
+  const folder = text(r._file);
+  const folderUid = text(r.folderUid) ?? text(r._groupFolderUid);
+  if (uid) facts.uid = uid;
+  if (folder) facts.folder = folder;
+  if (folderUid) facts.folderUid = folderUid;
+  return Object.keys(facts).length ? facts : null;
 }
 // A snapshot's reading of one flat rule: the draft's reading, then the group
 // its listing names — positionally, so a name that sits in two groups carries
@@ -2714,7 +2746,10 @@ export const PROBES = [
     adaptSnapshot(response) {
       if (provisionedRuleList(response)) return adaptProvisionedAlertRules(response);
       const listing = flatRules(response);
-      return readAlertRules(listing.filter(this.isRule), r => withGroup(this.read(r), r), listing);
+      const listed = listing.filter(this.isRule);
+      const read = readAlertRules(listed, r => withGroup(this.read(r), r), listing);
+      read.forEach((rule, i) => { const facts = listedFactsOf(listed[i]); if (facts) LISTED_FACTS.set(rule, facts); });
+      return read;
     },
   },
   {
@@ -3261,7 +3296,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // answers stand only when every folder answered and every rule came from
   // the folder asked for; a folder that got no answer, or a tool that ignored
   // the argument, makes the engine read whole instead (the argless call it
-  // always got), and the folder scope then applies client-side as before. And
+  // always got) — and that read is what the engine is judged by, never a
+  // folder's answer — and the folder scope then applies client-side as before. And
   // when another engine's rules name no folder — so the folder scope cannot
   // narrow the family — a per-folder engine is read whole too: the pack never
   // holds half an engine under an annotation that says the family was whole.
@@ -3270,16 +3306,24 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
   // was refused or errored, the family FAILED — an empty answer from another
   // engine is no honest zero beside a hole nobody can size — and a refusal is
   // kept as one (`refused`). When one answered with rules beside an engine that
-  // was refused or errored, the rules stand, the error is kept (`partial`,
-  // written as mcp.probeErrors.alert_rules) and the family is listed in
-  // mcp.probesPartial. An engine whose store answered it keeps no such thing
-  // (the family's unsupportedOnHttpStatus — the cascade's rule) is neither: when
-  // every engine asked said so, the family is unsupported. An answer in no alert-rule shape this
+  // was refused or errored, the rules stand; when that engine's store is a hole
+  // — no other engine of it answered, or it was refused and none answered with
+  // rules (each store read as the cascade reads one family's candidates) — the
+  // error is kept (`partial`, written as mcp.probeErrors.alert_rules) and the
+  // family is listed in mcp.probesPartial; a tool failing beside another that
+  // read its store is no hole. An engine whose store answered it keeps no such
+  // thing (the family's unsupportedOnHttpStatus, 400 / 404 / 405 — the
+  // cascade's rule, notServedStatus) is neither, unless the journey's records
+  // saw that tool answer the family (probeMemory's `answered`: then it is a
+  // failure that says so); a remembered "not served" never absorbs a later
+  // error. When every engine asked was not served, the family is
+  // unsupported. An answer in no alert-rule shape this
   // reader knows, or one listing rules without their expressions, is no answer
   // either. The Alertmanager candidate lists firing alerts, not declarations:
   // never a failure of the family. What a store could not read rides on the
   // result as `unread` ({ grafana?, ruler?, loki? }: why), so a declared rule
-  // of that store is not checked rather than "declared, not live".
+  // of that store is not checked rather than "declared, not live". One
+  // Grafana-managed rule two tools list is one rule (withoutGrafanaCopies).
   const unionAlertRules = async (probe, candidates) => {
     const attempted = [];
     const perEngine = [];   // { name, adapted, perFolder, store }
@@ -3297,12 +3341,30 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // evidence and a tool that is not there are none of them.
     const notServedCodes = notServedStatusesOf(probe.name);
     const notServedEngines = [];   // { name, store, reason }
+    // The journey's memory (P6, probeMemory), read as the cascade reads it. An engine remembered as
+    // not served is asked again and its answer alone decides: a 503 or a timeout now is a failure (a
+    // remembered "not served" never absorbs an outage), and the memory keeps only the instant the
+    // not-served answer was first given (`since`). An engine the journey's records saw answer this
+    // family by name (`answered`, E2) reads a store that serves it: its 400 / 404 / 405 now is a lost
+    // route or a changed datasource, a failure that says so, never "not served". A record that did
+    // not say which tool answered (`anyTool`) counts for no engine here: the union reads several
+    // stores, and such a record cannot say which of them served.
+    const memo = notServedCodes.length ? memoryOf(probe.name) : null;
+    const answered = notServedCodes.length ? answeredOf(probe.name) : null;
     const gaveNoAnswer = (name, store) => {
       const why = probeFailures[name];
       if (evidenceOnly(name) || notThere(name) || !why) return;
+      const refused = isProbeRefusal(why);
       const code = notServedStatus(why, notServedCodes);
-      if (code !== null) notServedEngines.push({ name, store, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
-      else failedEngines.push({ name, store, refused: isProbeRefusal(why) });
+      if (code !== null && !answered?.tools.includes(name)) {
+        notServedEngines.push({ name, store, reason: `${name}: HTTP ${code}${HTTP_REASON_PHRASES[code] ? ` ${HTTP_REASON_PHRASES[code]}` : ''}` });
+        return;
+      }
+      if (code !== null && !why.startsWith(`${name}: it answered `)) {
+        const bare = why.startsWith(`${name}: `) ? why.slice(name.length + 2) : why;
+        probeFailures[name] = `${name}: it answered ${answered.at ? `on ${answered.at.slice(0, 10)}` : 'before'}; now ${bare}`;
+      }
+      failedEngines.push({ name, store, refused });
     };
     // The reading of one answer, or null (no answer, or none this reader can use; the reason kept).
     const adaptedOf = (response, name) => {
@@ -3322,6 +3384,63 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
         return null;
       }
       return adapted;
+    };
+    // One Grafana-managed rule read by two tools is one rule. A copy that names no Grafana uid of its
+    // own reading — a listing of names and queries, as Grafana's Prometheus-compatible one is (`query`,
+    // `duration`, the group; no `data[]`) — is the rule another tool read with its uid when the listing
+    // states that uid beside it (LISTED_FACTS), or else when every term both readings state is the
+    // same: the name, the query, the wait, the labels (those the listing shows) and the group — and the
+    // folder the listing's group names does not contradict the rule's (a ruler's rule file is no
+    // Grafana folder). Never by name alone: a ruler's rule of the same title is another rule, and a
+    // tool that attests another product (vmalert, Mimir) never lists Grafana's. The copy with the uid
+    // stays — it states the condition, so a threshold raised in Grafana reads drifted, and it pairs a
+    // rename — and each held rule takes one copy of a tool. A tool every rule of which was such a copy
+    // read Grafana's store, not a ruler's (`listedGrafanaOnly`). `rules` carry `_store`, `_engine` (the
+    // perEngine entry) and `_listed` (the listing's facts) here.
+    const withoutGrafanaCopies = (rules) => {
+      const uidOf = (r) => (typeof r?.grafana?.uid === 'string' && r.grafana.uid ? r.grafana.uid : null);
+      const held = rules.filter(r => r._store === 'grafana' && uidOf(r));
+      if (!held.length) return rules;
+      // A held rule's folder: its uid, and its title as it or another held rule of that folder states it.
+      const titleByUid = new Map();
+      for (const h of held) if (h.grafana.folderUid && h.grafana.folder && !titleByUid.has(h.grafana.folderUid)) titleByUid.set(h.grafana.folderUid, h.grafana.folder);
+      const folderOf = (h) => {
+        const uid = h.grafana.folderUid ?? (typeof h.folderUid === 'string' && h.folderUid ? h.folderUid : null);
+        return { uid, title: h.grafana.folder ?? (uid ? titleByUid.get(uid) : null) ?? null };
+      };
+      const termsOf = (r) => {
+        const read = operationalAlertRule(r);
+        return read && { name: read.name, expr: read.expr.replace(/\s+/g, ' ').trim(), for: read.for ?? null, labels: read.labels ?? {} };
+      };
+      const isCopyOf = (copy, rule) => {
+        const listed = copy._listed || {};
+        if (listed.uid) return listed.uid === uidOf(rule);
+        const a = termsOf(copy);
+        const b = termsOf(rule);
+        if (!a || !b || a.name !== b.name || a.expr !== b.expr || a.for !== b.for) return false;
+        if (typeof copy.group !== 'string' || copy.group !== rule.group) return false;
+        const folder = folderOf(rule);
+        if (listed.folderUid && folder.uid && listed.folderUid !== folder.uid) return false;
+        if (listed.folder && folder.title && listed.folder !== folder.title) return false;
+        const keys = Array.isArray(copy.labelsObserved) ? copy.labelsObserved : [...new Set([...Object.keys(a.labels), ...Object.keys(b.labels)])];
+        return keys.every(k => a.labels[k] === b.labels[k]);
+      };
+      const copies = new Set();
+      for (const e of perEngine) {
+        const attests = productAttestedByTool(e.name);
+        if (attests && attests !== 'grafana') continue;
+        const mine = rules.filter(r => r._engine === e && !uidOf(r));
+        const taken = new Set();
+        for (const copy of mine) {
+          const rule = held.find(h => h._engine !== e && !taken.has(h) && isCopyOf(copy, h));
+          if (rule) { taken.add(rule); copies.add(copy); }
+        }
+        if (e.store === 'ruler' && mine.length && mine.length === e.adapted.filter(Boolean).length && mine.every(c => copies.has(c))) {
+          e.store = 'grafana';
+          e.listedGrafanaOnly = true;
+        }
+      }
+      return copies.size ? rules.filter(r => !copies.has(r)) : rules;
     };
     // Unscoped, the loop awaits exactly one call per candidate, as it always
     // did: the probes race under Promise.all and the pack records the order
@@ -3348,6 +3467,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
           all.push(...one);
         }
         if (!why) { adapted = all; perFolder = true; }
+        // The whole read decides now: what a folder answered (a folder the store does not know, 404)
+        // says nothing of whether the store has a rules API, so the engine is not judged by it.
+        else delete probeFailures[name];
       }
       if (!adapted) {
         adapted = adaptedOf(await cachedCall(name, candArgs(candidate)), name);
@@ -3375,7 +3497,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       }
     }
     pushedDown.push(...perEngine.filter(e => e.perFolder).map(e => engineOf(e.name)));
-    const rules = [];
+    let rules = [];
     const engines = [];
     let listed = 0;
     const heldKey = (store, r) => `${store}\u0000${store === 'grafana' && typeof r?.grafana?.uid === 'string' && r.grafana.uid ? `uid:${r.grafana.uid}` : r?.name}`;
@@ -3384,11 +3506,26 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       listed += e.adapted.length;
       const held = new Set(rules.map(r => heldKey(r._store, r)));
       const observedBy = e.store === 'grafana' ? 'grafana' : productAttestedByTool(e.name);
-      for (const r of e.adapted) if (r && !held.has(heldKey(e.store, r))) rules.push({ ...r, observedBy, _store: e.store });
+      for (const r of e.adapted) if (r && !held.has(heldKey(e.store, r))) rules.push({ ...r, observedBy, _store: e.store, _engine: e, _listed: LISTED_FACTS.get(r) ?? null });
       engines.push(e.name);
     }
-    for (const r of rules) delete r._store;
-    const failedText = failedEngines.length ? probeFailureText(failedEngines.map(e => e.name), probeFailures) : null;
+    rules = withoutGrafanaCopies(rules);
+    for (const r of rules) { delete r._store; delete r._engine; delete r._listed; }
+    // Each store as the cascade reads one family's candidates (C6): its rules stand when an engine
+    // answered it with rules, whatever another of its engines did — that one's failure is no hole (two
+    // tools of one store read one store, as `unread` below has it); with none, a refusal is a hole
+    // nobody can size (an honest zero needs a read that was allowed), an honest empty from another of
+    // its engines answers for it otherwise, and a store none of whose engines answered is a hole when
+    // one of them failed. The family is read in part (`partial`) only for a hole beside rules.
+    const storeRead = (store) => {
+      const answered = perEngine.filter(e => e.store === store);
+      const failed = failedEngines.filter(e => e.store === store);
+      if (answered.some(e => e.adapted.length > 0)) return 'rules';
+      if (failed.length && (failed.some(e => e.refused) || !answered.length)) return 'hole';
+      return answered.length ? 'empty' : 'unread';
+    };
+    const holes = failedEngines.filter(e => storeRead(e.store) === 'hole');
+    const failedText = holes.length ? probeFailureText(holes.map(e => e.name), probeFailures) : null;
     if (engines.length) {
       probeResults[probe.name] = { tool: engines.join('+'), attempted, adapted: rules, rawSize: JSON.stringify(rules).length, outcome: 'data', ...(failedText ? { partial: failedText } : {}) };
       observedAt[probe.name] = new Date().toISOString();
@@ -3398,9 +3535,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     } else if (!perEngine.length && !failedEngines.length && notServedEngines.length) {
       // P6, as the cascade has it: every engine asked answered that its store keeps no such rules —
       // unsupported here, never failed (`since` the first time the journey saw it).
+      const tools = [...new Set(notServedEngines.map(e => e.name))];
       probeResults[probe.name] = {
         tool: null, attempted, adapted: null, outcome: 'unsupported',
-        notServed: { reason: notServedEngines[0].reason, since: memoryOf(probe.name)?.since ?? new Date().toISOString(), tools: [...new Set(notServedEngines.map(e => e.name))] },
+        notServed: { reason: notServedEngines[0].reason, since: memo?.since ?? new Date().toISOString(), tools },
       };
     } else {
       // C6: no engine with rules beside a refused or failed one — a hole nobody can size. A refusal
@@ -3411,18 +3549,23 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     // What a store could not read while the family answered: a declared rule of that store is not checked.
     if (perEngine.length && probeResults[probe.name].outcome !== 'failed') {
       const unread = {};
-      const answeredStore = (store) => perEngine.some(e => e.store === store);
       for (const [store, what, tool] of [
         ['grafana', 'Grafana-managed rules', 'Grafana alert-rule tool'],
         ['ruler', 'rules a Prometheus-compatible ruler evaluates', 'Prometheus-compatible rule tools'],
       ]) {
-        if (answeredStore(store)) continue;
-        const tried = [...failedEngines, ...notServedEngines].filter(e => e.store === store).map(e => e.name);
+        const read = storeRead(store);
+        if (read === 'rules' || read === 'empty') continue;
+        const failed = failedEngines.filter(e => e.store === store).map(e => e.name);
+        const notServed = notServedEngines.filter(e => e.store === store);
+        const grafanaOnly = store === 'ruler' ? perEngine.filter(e => e.listedGrafanaOnly).map(e => e.name) : [];
         const offered = probe.candidates.some(c => storeOf(candName(c)) === store && (!listedTools || discoveredToolNames.has(candName(c))));
-        unread[store] = tried.length
-          ? `the ${tool} got no answer: ${probeFailureText(tried, probeFailures)}, so ${what} were not read`
-          : !offered ? `this MCP offers no ${store === 'grafana' ? 'Grafana alert-rule tool' : 'Prometheus-compatible rule tool'}, so ${what} were not read`
-            : `no ${tool} answered, so ${what} were not read`;
+        // A not-served engine's reason is its tool and status (P6), never the answer's text.
+        unread[store] = failed.length
+          ? `the ${tool} got no answer: ${probeFailureText(failed, probeFailures)}, so ${what} were not read`
+          : notServed.length ? `the ${tool} answered that its store serves none here (${[...new Set(notServed.map(e => trimError(e.reason)))].join(PROBE_FAILURE_SEPARATOR)}), so ${what} were not read`
+            : grafanaOnly.length ? `the ${tool} listed Grafana-managed rules only (${grafanaOnly.join(', ')}), so ${what} were not read`
+              : !offered ? `this MCP offers no ${store === 'grafana' ? 'Grafana alert-rule tool' : 'Prometheus-compatible rule tool'}, so ${what} were not read`
+                : `no ${tool} answered, so ${what} were not read`;
       }
       probeResults[probe.name].unread = unread;
     }
