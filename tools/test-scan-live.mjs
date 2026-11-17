@@ -734,4 +734,60 @@ const liveRule = (rules, name, at = 0) => rules.groups[0].rules.filter(r => r.na
   }
 }
 
+{
+  // OpenSearch read through the elasticsearch_exporter: a job named for that exporter reads both products alike, so
+  // which runs is not known — not compared, with why; a job named for either product still says which.
+  const exporter = '  exporter:\n    image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0\n';
+  const stacks = {
+    opensearch: 'services:\n  search:\n    image: opensearchproject/opensearch:2.16.0\n' + exporter,
+    elasticsearch: 'services:\n  search:\n    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0\n' + exporter,
+  };
+  const liveOf = (jobs) => buildCanonicalPack({
+    refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.example.test/mcp', packName: 'production-live',
+    health: { services: [{ name: 'shop' }] }, topology: { dependencies: [] }, capabilities: null,
+    probeResults: { scrape_configs: { tool: 'metrics_targets', outcome: 'data', adapted: jobs.map((job) => ({ job, targets: [{ instance: `${job}:9090`, health: 'up' }] })) } },
+    probeFailures: {},
+  });
+  const product = (e) => JSON.parse(e.key.slice('backend::'.length).replace(/#\d+$/, '')).product;
+  const searchOf = (stack, jobs, scopeMode) => {
+    const repo = crawlFiles({ 'docker-compose.yml': stacks[stack] }, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+    const d = diffPacks(adapt(repo, { environment: 'prod' }), adapt(liveOf(jobs), {}), scopeMode ? { scopeMode } : {});
+    const out = {};
+    for (const bucket of ['inBoth', 'onlyInA', 'onlyInB', 'outOfScope', 'notObserved']) {
+      const found = Object.values(d.layers).flatMap((l) => l[bucket] || []).filter((e) => e.key.startsWith('backend::') && /search/.test(product(e)));
+      if (found.length) out[bucket] = found.map((e) => (e.reason ? `${product(e)}: ${e.reason}` : product(e)));
+    }
+    return out;
+  };
+  const unknown = 'opensearch: the live evidence (scrape job elasticsearch-exporter) reads elasticsearch and opensearch alike, so which of them runs is not known';
+  for (const [stack, jobs, scopeMode, want] of [
+    ['opensearch', ['elasticsearch-exporter', 'prometheus'], undefined, { notObserved: [unknown] }],
+    ['opensearch', ['elasticsearch-exporter', 'prometheus'], 'family', { notObserved: [unknown] }],
+    ['opensearch', ['opensearch', 'prometheus'], undefined, { inBoth: ['opensearch'] }],
+    ['opensearch', ['elasticsearch', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
+    ['elasticsearch', ['elasticsearch-exporter', 'prometheus'], undefined, { inBoth: ['elasticsearch'] }],
+    // A job named for the product says which runs, whichever job the listing gives first.
+    ['opensearch', ['elasticsearch-exporter', 'elasticsearch', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
+    ['opensearch', ['elasticsearch', 'elasticsearch-exporter', 'prometheus'], 'family', { onlyInA: ['opensearch'], onlyInB: ['elasticsearch'] }],
+  ]) {
+    const got = searchOf(stack, jobs, scopeMode);
+    assert(JSON.stringify(got) === JSON.stringify(want), `${stack}, live jobs ${jobs.join(' + ')}${scopeMode ? ` (${scopeMode} scope)` : ''}: ${JSON.stringify(want)}`, got);
+  }
+  // Under a name or an id the backends never pair by product: the live one keeps its own product.
+  for (const identity of ['name', 'id']) {
+    const repo = crawlFiles({ 'docker-compose.yml': stacks.opensearch }, { repoName: 'shop', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+    const d = diffPacks(adapt(repo, { environment: 'prod' }), adapt(liveOf(['elasticsearch-exporter', 'prometheus']), {}), { identity, scopeMode: 'all' });
+    const liveSide = Object.values(d.layers).flatMap((l) => [...(l.onlyInB || []), ...(l.outOfScope || [])]).map((e) => e.artefact).filter((x) => /search/.test(String(x?.spec?.product ?? '')));
+    assert(JSON.stringify(liveSide.map((x) => x.spec.product)) === JSON.stringify(['elasticsearch']), `identity ${identity}: the live search backend keeps its product`, liveSide.map((x) => x.spec));
+  }
+  // A long service name gives the live draft's availability guess a valid id.
+  const longService = buildCanonicalPack({
+    refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.example.test/mcp', packName: 'production-live',
+    health: { services: [{ name: 'payments-settlement-reconciliation-batch-worker-eu' }] }, topology: { dependencies: [] }, capabilities: null,
+    probeResults: {}, probeFailures: {},
+  });
+  assert(validateCanonical(longService, SCHEMA).length === 0 && (longService.spec.slos || []).every((s) => s.id.length <= 64 && s.id === `${s.sli}_99`),
+    'a long service name gives a valid live pack, its SLO id its SLI id and _99', [(longService.spec.slos || []).map((s) => s.id), validateCanonical(longService, SCHEMA).slice(0, 2)]);
+}
+
 report('scan-vs-live', 'a repository scan and the live draft of the same system match.');

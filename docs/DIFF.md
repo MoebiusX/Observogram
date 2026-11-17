@@ -78,8 +78,11 @@ last-write-wins `Map`.
 Within each identity group it:
 
 1. Pairs exact behavioural matches first.
-2. Pairs remaining same-identity artefacts as drifted, choosing the closest
-   remaining contract.
+2. Pairs remaining same-identity artefacts as drifted, the closest pair over
+   all of them first — the fewest fields apart, ties in declared order — so
+   an artefact declared first cannot take the counterpart of a closer one.
+   The requirement chain pairs the same way (`pairClosestFirst`,
+   tools/lib/artefact-model.mjs), so the chain and the diff hold one form.
 3. Leaves surplus controls visible as `onlyInA` or `onlyInB`.
 
 Duplicate entries receive stable occurrence suffixes such as
@@ -143,7 +146,10 @@ Normalisation rules:
   tightened (unary/binary ambiguity) and keyword operators (`and`, `or`,
   `unless`, `bool`, `offset`, `by`, `on`, …) keep the space that bounds
   them. Anything that fails to parse falls back to whitespace collapse only
-  — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`.
+  — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`. A
+  comment (`#` to the end of a line, outside a string) is dropped first,
+  parsed or not: a ruler lists the query re-printed without it. A pipeline's
+  token (`#{Name}#`, `#{Name}`) is no comment, and what follows it is kept.
   Explicit non-goals (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B):
   no algebraic rewrites, no binary-expression or vector-matching
   reordering, no regex equivalence, no histogram folding.
@@ -171,7 +177,7 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
 | `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
-| `notObserved` | one pack holds it, in a family the OTHER pack says it had no way to observe — unchecked, never counted; entries carry `side`, `artefact` and the other side's `reason` |
+| `notObserved` | one pack holds it, in a family the OTHER pack says it had no way to observe, or a backend only a shared exporter's job attests (below) — unchecked, never counted; entries carry `side`, `artefact` and the other side's `reason` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
@@ -201,6 +207,20 @@ fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
 look at*); a pack without them behaves exactly as before.
 `summary.notObserved` counts the entries; they are outside the union.
 
+A backend the live side has only from a scrape job named for an exporter
+that reads more than one product — the elasticsearch_exporter reads
+Elasticsearch and OpenSearch alike (`productsAScrapeJobServes`,
+tools/lib/backend-products.mjs) — cannot say which of them runs. Where the
+other pack declares the look-alike and nothing else live attests it, the
+pair goes to `notObserved` with that reason (`the live evidence (scrape job
+elasticsearch-exporter) reads elasticsearch and opensearch alike, …`),
+neither *in both* nor *declared, not live*. The live side's own
+`mcp.backends.evidence` annotation says which job attested each backend; a
+job named for either product still says which runs, whichever job the
+listing gives first (the live fetch keeps such a job's evidence over the
+exporter's). Only the comparison's own key pairs backends by product: under
+a name or an id the live backend keeps its product and is never set aside.
+
 The same holds one level down, for a **field a producer was shown only in
 part**. A live rule listing that gives each alert rule a flat `severity` and
 no `labels` object showed that one label and no other; the rule's `service`
@@ -219,9 +239,143 @@ one that did not see the keys the other states (`unobservedOf`) — and
 absent when there is none; a run record carries it as
 `drift.partlyCompared`). A pair compared whole has no such key, and a listing
 that does give each rule its labels object is compared in full: there a
-missing label is drift. One field uses it, an alert rule's labels — an
-operational rule's, and those of the rules a burn-rate entry was read from
-(below); the live fetcher writes the statement (docs/MCP_INTEGRATION.md).
+missing label is drift. One family uses it, the alert rule — an operational
+rule's labels, and those of the rules a burn-rate entry was read from
+(below); the live fetcher writes the statement (docs/MCP_INTEGRATION.md), and
+the scan does for a rule a chart's include gives labels it does not read
+(*Where the scan reads a rule*, below). The scan also states an operational
+rule's `expr` and `for` with no keys (`expr=`, `for=`) where a chart or a
+deploy step fills them in (*A value the chart fills in*, below): a field one
+side was shown none of is not compared against the other, and the pair's
+`unobserved` names it (`{ field: 'for', side: 'a', keys: [] }`) whether the
+other side states it or not; where both sides list it — two readings of the
+repository — their texts are compared where the pack keeps them, which is
+the expression's: a wait or a label value a deploy step fills in is left out
+on both sides, so two readings that fill it differently read alike.
+`labels.filled=<keys>` names the label
+keys written with a value filled in: each is named uncompared, unless the
+other side fills it in too.
+
+**Where the scan reads a rule.** A rule file, a ConfigMap a Helm chart
+renders (each data key a rule file), and a Prometheus Operator
+`PrometheusRule` resource (0.8.42): its `spec.groups` are read as a rule
+file's `groups` — in a file of its own, in any document of a manifest
+(whatever else the file holds, whatever it is called), and in a chart's
+template, there from its `apiVersion` (or one the chart fills in), `kind`
+and `spec` alone, since its name and labels are mostly the chart's includes
+and its rules need none of them. The operator hands those groups to a
+Prometheus (or a Thanos Ruler) as they are written, so a resource's rule is
+the `prometheus` engine's whatever its path — but for a rule in LogQL, which
+a Loki ruler runs (Grafana Alloy loads PrometheusRule resources into one).
+The operator can also be told to add a namespace label to every rule and
+matcher (`enforcedNamespaceLabel` on the Prometheus resource), which the
+scan cannot see: there a resource's rules read as different on those labels
+and expressions.
+
+In a chart's template, a line holding only template actions does not end a
+ConfigMap's data map or block (Helm renders control flow to nothing, an
+include to YAML indented by the action itself). In a rules file — a
+ConfigMap's or a PrometheusRule's — a line that holds only an include
+(`{{ toYaml .Values.extraLabels | indent 12 }}`, kube-prometheus-stack's way;
+`{{- include "x.labels" . | nindent 8 }}`) renders YAML from the chart's
+values or helpers, which the scan does not read. The scan leaves it out, and
+its column — its `indent`/`nindent` argument; where the chart computes the
+indent, the line above it, or under a key with nothing after it that map's
+own keys; else where it stands; never deeper than the text reaches — says
+what it renders into. Into a rule's labels, or a rule or a group that writes
+no labels of its own (a group's keys after an indented rules list too): that
+rule is held to the labels it writes (a *field a producer was shown only in
+part*, above): the operational rule carries
+`observogram.partial.alerting.rules[i]`, an SLO's stated rule `partial`, and
+a label the rendered rule adds reads uncompared, never as a difference. A
+`labels:` the chart fills in whole is read so too. Beside a labels map the
+rule writes, it cannot add to it: that rule is whole. Into the rules list or
+the groups (more rules, more groups from values, an indentless list's too —
+the include right after `rules:`, or the list's first item in the key's own
+column): the rules written around it are whole. Written at the margin with
+an indent the chart computes, closing a ConfigMap's block, it is read as
+extending the block's last rule (where it renders the ConfigMap's next data
+key instead, that rule is held to the labels it writes). Right after a block
+scalar, at the scalar's key or left of it, it ends the scalar. An action that
+prints a scalar — a threshold on the line below its expression, a value on
+the line below its key — is the chart's value there, never YAML (*A value the
+chart fills in*, below). A bare rules template whose include stands in a
+rule's labels is read as a rules file.
+
+Another config (a scrape config, an Alertmanager's, a collector's) ending in
+the chart's extra-config hook is read whole, as it always was: the hook
+renders after it. One with such a line inside it keeps the line, which the
+reader cannot place: that block is not read, and the scan says so. A data
+key the chart fills in whole (`{{ .Files.Get "dashboards/x.json" | indent 4
+}}`) states nothing of its own and is not read. Where the reader stops in a
+template, the scan says where, in the template's own lines.
+
+Both branches of an `{{- if }} … {{- else }}` that writes a rule twice are
+read: each form is declared. A rule a `range` renders several times under
+one name is declared once.
+
+**A rule named at deploy time** — by a chart's values (`- alert: {{
+.Values.prefix }}Down`, a `range` over names) or by a deploy step's variable
+in a rule file (`- alert: ${SERVICE}Down`) — is not declared: no ruler lists
+that name, so it would pair with nothing and read *declared, not live*
+beside each rendered rule's *live, not declared*. The scan names it, and the
+metrics its expression reads stay in the inventory. A repository whose
+recording rules are all named so records series all the same: its other
+alerts stay operational rules, never SLOs read from their names.
+
+**One rule in several files.** A rule written the same in several places —
+a rule file and the PrometheusRule that wraps it, a chart's ConfigMap and
+its PrometheusRule behind a values switch — is one rule where one of them is
+deployed. The scan reads a rule as the comparison does — its name, its
+expression with spacing and matcher order aside, its wait in any unit (a
+zero wait no wait), its labels (an empty one no label) and a Grafana-managed
+rule's uid, never its annotations or a recording group's interval. It
+declares the rule as often as one place holds it and names the places. The
+place a copy is left out of still speaks for it in a lifecycle block. Two
+rule files one ruler loads that write a rule the same are read as one too
+(the scan does not read which files a ruler loads): the listing's second
+copy reads *live, not declared*. PrometheusRule resources named alike in
+several files that write a rule, recording or alerting, differently — a
+kustomize base and its overlay, which the scan does not merge, or two apps
+that share a name — declare and state every form, and the scan says so. Each
+live rule is held to the closest form — the one differing from it in the
+fewest fields, the form declared first on a tie — an SLO's stated rules and
+its operational rules alike; the others read *declared, not live*, the form
+that runs too where it differs from the ruler in as many fields as an
+earlier form or more (an overlay whose patched threshold the ruler changed
+again leaves the base held). An SLO's burn-rate windows are read from its first form's rules. Rules
+of one name in files that are no such resources — a page and a ticket rule
+in two rule files, two services' alerts — all run, and are all stated.
+
+**A value the chart fills in** inside a rule — not a whole line — reaches it
+as the placeholder stripGoTemplate leaves (`up{job="helmvalue"}`, `for:
+helmvalue` from kube-prometheus-stack's `dig … .Values.customRules`), or as
+a variable a deploy step substitutes — any `${…}` (`${VAR}`, Flux's
+`${var:=default}`), a bare `$NAME` in capitals, or a pipeline's token
+(Azure DevOps' `#{Name}#`, Octopus Deploy's `#{Name}`, an Azure Pipelines
+macro `$(Name)`, read in linear time, never one a comment names), never a capture group (`$1`, `$host` naming a group the
+expression's regex defines), text PromQL holds itself (`/odata/$metadata`),
+a comment, or the ruler's own templating. A label key a deploy step names is
+no key written: the rule is held to the labels it writes. An unquoted token
+after a space is a YAML comment, so the value reads only up to it
+(`for: #{PageFor}#` as no wait, `expr: x > #{Threshold}#` as an expression
+cut there); a quoted value, a block scalar, or a token with no space before
+it reads whole.
+It is no statement of the repository's: an operational rule is held to the
+rest of what it writes (`observogram.partial.alerting.rules[i]` = `expr=`,
+`for=`, `labels=<keys written>`, `labels.filled=<keys filled in>`), and the
+comparison does not compare what one side lists with no keys. A wait that is
+no spec Duration is left out and said (the scan's `omitted.ruleWaits`, the
+chart's value shown as `…`), so the pack stays valid — in an SLO's burn-rate
+rule too, whose window it no longer gives; a severity is never read from
+such a value. Against the rendered rule live runs, the rule aligns on what
+the chart writes, and the pair names the rest, a wait or a label key the
+ruler lists none of included. Comparing the expression with the placeholder
+as a wildcard is not done here. An SLO's rules holding one state nothing
+(below), so none of them is compared, and the scan's warning says so for a
+wait it left out; a wait that is no spec Duration, whatever writes it
+(`__PageFor__`), makes its SLO state nothing too, and an SLO's rule whose
+comment names a variable still states its rules.
 
 Two alert rules that **share a name** — a warning and a critical threshold
 under one alert — are two rules on both sides: a rule file keeps both and
@@ -285,9 +439,11 @@ Not stated, so compared as before:
 - an SLO any of whose rules the repository does not state as the ruler
   will list it: a value a Helm chart or another template engine fills in at
   deploy time, or a `${VAR}` / `$VAR` a deploy step substitutes, in its
-  name, expression, wait or labels (a capture group's `$1` and the ruler's
-  own `{{ $labels.x }}` in a label are the rule's text); a labels map filled
-  in whole, on the rule or on its group, or given as an alias or a merge
+  expression, wait or labels (a capture group's `$1` and the ruler's own
+  `{{ $labels.x }}` in a label are the rule's text; a rule named so is not
+  declared at all, above); a labels map a deploy step fills in whole, on the
+  rule or on its group (one a chart's include fills in is held to the labels
+  the rule writes, above), or given as an alias or a merge
   key the file does not resolve (an anchor it does not define, a merge key
   with its mapping written in place); group labels past the scan's copy
   budget (250,000 in one scan, with a warning). Held against what live
@@ -496,7 +652,8 @@ pack without one keeps its bytes. The studio shows the count wherever it shows
   staging stack is compared for `prod`.
 - With several environments in a pack and none picked, the adapter reads the first.
 - Only what the crawl reads can speak for a series. A `PrometheusRule` custom resource
-  (`spec.groups`) is not walked, so a rule in one does not keep a series visible.
+  is walked (0.8.42), and a block at the top of its file covers its rules as a rule
+  file's does.
 
 ## Addresses a source does not state
 

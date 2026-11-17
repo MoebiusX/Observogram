@@ -1935,7 +1935,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       </tfoot>
     </table>
     ${totScaffold ? `<p class="drift-oos-note">${totScaffold} template placeholder${totScaffold === 1 ? '' : 's'} (scaffold) had no source evidence in the selected environment. Shown in the pack, not counted as differences.</p>` : ''}
-    ${digest.totals.notObserved ? `<p class="drift-oos-note">${plural(digest.totals.notObserved, 'artefact')} could not be checked: the other pack had no way to observe ${digest.totals.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Not counted as differences; Compare lists each with the reason.</p>` : ''}
+    ${digest.totals.notObserved ? `<p class="drift-oos-note">${plural(digest.totals.notObserved, 'artefact')} could not be checked by the other pack: a family it had no way to observe (no tool for it, or its probe failed), or a backend its evidence cannot tell from a look-alike. Not counted as differences; Compare lists each with the reason.</p>` : ''}
     ${digest.totals.declaredAhead ? `<p class="drift-oos-note">${digest.totals.declaredAhead} artefact${digest.totals.declaredAhead === 1 ? '' : 's'} declared ahead of the environment compared: ${digest.totals.declaredAhead === 1 ? 'its file states' : 'their files state'} ${digest.totals.declaredAhead === 1 ? 'it is' : 'they are'} not deployed there yet. Neither missing nor matched, and not counted, so check the statement still holds. Compare lists each with the reason.</p>` : ''}
     ${totOOS ? `<p class="drift-oos-note">${totOOS} live artefact${totOOS === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.
       <button type="button" class="ctrl-link drift-oos-widen" title="Switch the live scope to 'All live' so the parked inventory is classified instead of parked">show them — widen scope</button></p>` : ''}
@@ -3774,7 +3774,7 @@ function renderCompareLayerColumn(side, L, items, sets) {
   const titles = {
     both: ['In both', `In both packs, matched by ${sets.pairing?.matchedBy || DEFAULT_PAIRING}. The same order on both sides.`],
     only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${other}.`],
-    unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} had no way to observe ${groups.unchecked.length === 1 ? 'this family' : 'these families'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
+    unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} could not check ${groups.unchecked.length === 1 ? 'it' : 'them'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
     ahead: ['Declared ahead', `In Pack ${letter}, whose file states ${groups.ahead.length === 1 ? 'it is' : 'they are'} not deployed in the environment compared yet. Neither matched nor missing, and not counted, so check the statement still holds.`],
     rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
   };
@@ -3858,7 +3858,7 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   else if (isUnchecked) {
     const otherLetter = side === 'a' ? 'B' : 'A';
     const why = compareUncheckedReason(side, def.id, artefact, sets);
-    statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} had no way to observe this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
+    statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} could not check this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
   } else if (isAhead) {
     statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`${compareUncheckedReason(side, def.id, artefact, sets)} Not counted as a difference.`)}">declared ahead</span>`;
   }
@@ -3971,7 +3971,7 @@ function renderCompareSummary(digest, matchedBy = DEFAULT_PAIRING) {
   // a family the other had no way to observe. They are outside the union,
   // so they do not lower the match.
   const unchecked = t.notObserved
-    ? `<div class="compare-cell c-unchecked" title="Held by one pack in a family the other had no way to observe (no tool for it, or its probe failed). Neither matched nor missing; outside the union."><div class="c-key">not checked</div><div class="c-val">${t.notObserved}</div></div>`
+    ? `<div class="compare-cell c-unchecked" title="Held by one pack that the other could not check: a family it had no way to observe (no tool for it, or its probe failed), or a backend its evidence cannot tell from a look-alike. Neither matched nor missing; outside the union."><div class="c-key">not checked</div><div class="c-val">${t.notObserved}</div></div>`
     : '';
   const ahead = t.declaredAhead
     ? `<div class="compare-cell c-unchecked" title="Held by one pack, whose file states it is not deployed in the environment compared yet. Neither matched nor missing; outside the union."><div class="c-key">declared ahead</div><div class="c-val">${t.declaredAhead}</div></div>`
@@ -4796,7 +4796,7 @@ function compareSummaryHtml(digest, cmp, ctx) {
   // Unchecked is said as plainly as missing would be: how many, and that
   // the other pack had no way to look — Side by side prints each reason.
   if (t.declaredAhead) sItems.push(`<li class="ux-tone-warn">${t.declaredAhead} artefact${t.declaredAhead === 1 ? '' : 's'} declared ahead of the environment compared: ${t.declaredAhead === 1 ? 'its file states' : 'their files state'} ${t.declaredAhead === 1 ? 'it is' : 'they are'} not deployed there yet. Neither missing nor matched, and not counted, so check the statement still holds.</li>`);
-  if (t.notObserved) sItems.push(`<li class="ux-tone-warn"><strong>${t.notObserved}</strong> artefact${s(t.notObserved)} could not be checked — the other pack had no way to observe ${t.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Neither matched nor missing, not counted</li>`);
+  if (t.notObserved) sItems.push(`<li class="ux-tone-warn"><strong>${t.notObserved}</strong> artefact${s(t.notObserved)} could not be checked by the other pack — a family it had no way to observe (no tool for it, or its probe failed), or a backend its evidence cannot tell from a look-alike. Neither matched nor missing, not counted</li>`);
   const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : null;
   const structuralPanel = `
       <section class="compare-panel ux-tone-info" aria-labelledby="compare-structural-title">

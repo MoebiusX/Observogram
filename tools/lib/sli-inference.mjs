@@ -48,17 +48,47 @@ export const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$
 // per SLO) share the metric segment `errorbudget`; it is reserved and never an SLI.
 const POLICY_SEGMENT = 'errorbudget';
 
+// An id a recorded name derives is a spec Slug (`$defs.Slug`, at most 64
+// characters). An SLI id is cut to 61, so its SLO id, `<sli>_99`, fits
+// too: every reader that strips the `_99` to find the SLI (the deploy
+// verifier, chain history, lifecycle blocks) keeps working. An id cut
+// ends in a fingerprint of the whole name (FNV-1a, 8 hex, as compile.mjs's
+// grafanaUid does), so recorded bases that share their first characters
+// (the mixins' `<labels>:<metric>_bucket|_sum|_count:*`) never become one
+// id. kube-prometheus-stack's `node_namespace_pod_container:
+// container_cpu_usage_seconds_total:*` gave a 65-character SLO id, a pack
+// the schema refuses. The live fetch derives its ids with the same
+// functions, so both sides agree; an id that fits is unchanged.
+const SLI_ID_MAX = 61;
+// Never all digits: those readers strip every trailing digit group (`_99_9`),
+// so an all-digit hash's first digit is spelt as a letter past hex (0 → g).
+const fingerprint = (s) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  const hex = h.toString(16).padStart(8, '0');
+  return /^\d+$/.test(hex) ? `${'ghijklmnop'[hex[0]]}${hex.slice(1)}` : hex;
+};
+/** An SLI id from its text: a spec Slug with room for its SLO's `_99`, cut with a fingerprint when it is longer. */
+export function sliSlug(text) {
+  const id = String(text ?? '').toLowerCase();
+  return id.length <= SLI_ID_MAX
+    ? id.replace(/[^a-z0-9]+$/, '')
+    : `${id.slice(0, SLI_ID_MAX - 9).replace(/[^a-z0-9]+$/, '')}_${fingerprint(id)}`;
+}
+const sliIdOf = (service, metric) => sliSlug(`${service}_${metric}`);
+const sloIdOf = (sliId) => `${sliId}_99`;
+
 /** Canonical SLI id contributed by a recording rule, or null. */
 export function ruleNameToSliId(name) {
   const m = RULE_NAME_RE.exec(typeof name === 'string' ? name : '');
   if (!m || m[2] === POLICY_SEGMENT) return null;
-  return `${m[1]}_${m[2]}`.toLowerCase();
+  return sliIdOf(m[1], m[2]);
 }
 
 /** Canonical SLO id (`<sliId>_99`) a recording rule contributes to, or null. */
 export function ruleNameToSloId(name) {
   const sliId = ruleNameToSliId(name);
-  return sliId ? `${sliId}_99` : null;
+  return sliId ? sloIdOf(sliId) : null;
 }
 
 // Parse Prometheus-convention recording rules into SLI / SLO pairs.
@@ -84,7 +114,7 @@ export function inferSlisFromRecordingRules(rules) {
   }
   const out = [];
   for (const { service, metric, ops } of byBase.values()) {
-    const sliId = `${service}_${metric}`.toLowerCase();
+    const sliId = sliIdOf(service, metric);
     let sli, slo;
     // Every choice below is made over the op names in SORTED order, never in
     // the order the rules arrived. A repository lists its rules in file
@@ -151,7 +181,7 @@ export function inferSlisFromRecordingRules(rules) {
       };
     }
     slo = {
-      id: `${sliId}_99`,
+      id: sloIdOf(sliId),
       sli: sliId,
       objective: 0.99,
       window: '30d',
@@ -218,7 +248,11 @@ export function alertRuleWindows(rule) {
   const sev = rule?.labels?.severity?.toString()?.toUpperCase();
   const severity = /^SEV[123]$/.test(sev) ? sev : 'SEV2';
   const wait = canonicalRuleDuration(rule?.for);
-  if (wait) out.push({ short: wait, long: '6h', factor: 6, severity });
+  // A wait that is no spec Duration — a value a chart or a deploy step fills
+  // in (`for: {{ .Values.pageFor }}`, `${PAGE_FOR}`) — gives no window: the
+  // caller fills the rest (defaultBurnWindows) and the scan says it left the
+  // wait out (summary.omitted.ruleWaits). A live wait is a number of seconds.
+  if (wait && SPEC_DURATION_RE.test(wait)) out.push({ short: wait, long: '6h', factor: 6, severity });
   return out;
 }
 

@@ -660,7 +660,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
       const driftBreakdown = `${weighted.driftedBreakdown.decision} decision-bearing, ${weighted.driftedBreakdown.default} default, ${weighted.driftedBreakdown.cosmetic} cosmetic`;
       const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
-        + (notObserved ? `; ${notObserved} not checked (the live side could not observe them)` : '')
+        + (notObserved ? `; ${notObserved} not checked (the live side could not check them)` : '')
         + aheadNote + asideNote;
       driftDetail = driftFree
         ? `weighted live-fidelity ${weighted.healthPct}% - declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`
