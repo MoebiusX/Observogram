@@ -713,7 +713,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         onlyInB: liveShadow,
       });
       const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
-        + (notObserved ? `; ${notObserved} not checked (the live side could not observe them)` : '')
+        + (notObserved ? `; ${notObserved} not checked (the live side could not check them)` : '')
         + aheadNote + asideNote;
       if (weighted.health === null) {
         // Only placeholders were left to weigh: nothing concrete was compared.

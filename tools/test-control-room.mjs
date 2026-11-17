@@ -14,6 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parse } from './lib/mini-yaml.mjs';
+import { crawlFiles } from './lib/crawler.mjs';
 import { CONTROL_ROOM_FAMILIES, CONTROL_ROOM_UNITS } from './lib/contracts/control-room-families.mjs';
 import {
   CONTROL_ROOM_LIMITS, normaliseSeverity, statusWord, judgeValue, jobsRegex, cleanError,
@@ -575,6 +576,13 @@ test('slosOfPack: each SLO\'s recorded SLI and budget by name (the scan\'s namin
     ['finops_cpu_99', 'default', 'finops:cpu:usage_per_pod_5m', '', null, null],
     ['unrecorded_99_9', 'repository', null, null, null, null],
   ], 'a budget first, then a known direction (the shortest window), then a rate read as it is, then none recorded');
+  // A recorded name long enough that the scan cuts its SLI id (ending in a fingerprint): the series is still its SLO's.
+  const longScan = crawlFiles({ 'rules/slo.rules.yml': ['groups:', '  - name: orders', '    rules:',
+    '      - record: order_fulfillment_orchestrator:http_server_request_duration_seconds:p99_5m',
+    '        expr: histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket[5m])))'].join('\n') + '\n' },
+  { repoName: 'orders', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+  assert.deepEqual(slosOfPack(longScan).map((x) => [x.id.length <= 64, x.series?.name ?? null, x.series?.unit ?? null]),
+    [[true, 'order_fulfillment_orchestrator:http_server_request_duration_seconds:p99_5m', 'seconds']], 'a cut SLI id keeps its recorded series, read in seconds as its name says');
   assert.deepEqual(seriesSense('p99_5m', { durationish: true }), { kind: 'sli', unit: 'seconds', better: 'lower', role: 'latency', window: '5m' });
   // The halves of a ratio are event rates, never a share; an error-named op that is no ratio is read as it is.
   for (const op of ['good_5m', 'total_5m', 'bad_1h', 'requests_5m', 'errors_total_rate5m']) assert.deepEqual([seriesSense(op).unit, seriesSense(op).better, seriesSense(op).role], ['', null, 'value'], op);

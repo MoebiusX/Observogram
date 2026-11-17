@@ -13,9 +13,11 @@ import {
   classify,
   deltasOf,
   identityKeyOf,
+  pairClosestFirst,
 } from './artefact-model.mjs';
 import { extractPromqlMetricNames, parsePromqlDependencies } from './promql-lezer.mjs';
 import { blastRadiusIndex } from './blast-radius.mjs';
+import { ruleNameToSliId } from './sli-inference.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -377,18 +379,15 @@ function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB
       .filter(({ index }) => !usedA.has(index));
     const remainingB = bNodes.filter((node) => !usedB.has(node.key) && canSatisfyLiveEvidence(node, liveGraph));
 
-    while (remainingA.length && remainingB.length) {
-      const { node: aNode } = remainingA.shift();
-      let best = 0;
-      let bestDeltas = deltasOf(aNode.artefact, remainingB[0].artefact);
-      for (let i = 1; i < remainingB.length; i++) {
-        const d = deltasOf(aNode.artefact, remainingB[i].artefact);
-        if (d.length < bestDeltas.length) {
-          best = i;
-          bestDeltas = d;
-        }
-      }
-      const [bNode] = remainingB.splice(best, 1);
+    // The closest remaining A and B pair first, over every pair, ties in
+    // declared order — as the flat diff pairs them (diff.mjs matchGroups), so
+    // the chain holds the form the diff holds.
+    const counts = remainingA.map(({ node: aNode }) => Uint32Array.from(remainingB, (bNode) => deltasOf(aNode.artefact, bNode.artefact).length));
+    const pairedA = pairClosestFirst(remainingA.length, remainingB.length, (ia, ib) => counts[ia][ib]);
+    for (const [ia, { node: aNode }] of remainingA.entries()) {
+      if (!pairedA.has(ia)) continue;
+      const bNode = remainingB[pairedA.get(ia)];
+      const bestDeltas = deltasOf(aNode.artefact, bNode.artefact);
       usedB.add(bNode.key);
       const verdict = nodeVerdict('drifted', aNode, bNode, bestDeltas, radiusFor(radiusA, aNode), ladderFor('drifted', aNode, bNode, liveness));
       nodeVerdicts.push(verdict);
@@ -401,7 +400,7 @@ function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB
       ladderAchieved += w * Math.min(driftCredit(bestDeltas), ladderCredit(verdict.ladder));
     }
 
-    for (const { node: aNode } of remainingA) {
+    for (const { node: aNode } of remainingA.filter((_, ia) => !pairedA.has(ia))) {
       const verifiable = canVerifyKind(aNode.kind, liveGraph);
       const status = verifiable ? 'declared_only' : 'unverifiable';
       const verdict = nodeVerdict(status, aNode, null, [], radiusFor(radiusA, aNode), ladderFor(status, aNode, null, liveness));
@@ -563,13 +562,17 @@ function resolveRecordingRuleEdges(graph) {
 
     const ruleMetrics = new Set(extractPromqlMetricNames([rule.artefact?.spec?.name, rule.artefact?.spec?.expr]));
     const ruleNeedle = compact(`${rule.artefact?.title || ''} ${rule.artefact?.spec?.name || ''}`);
+    // The SLI the rule's name derives (sli-inference.mjs, the scan's and the
+    // live fetch's own reading): a long name's id ends in a fingerprint no
+    // needle finds in the name.
+    const ruleSliId = ruleNameToSliId(rule.artefact?.spec?.name);
     for (const sliKey of sliKeys) {
       const sli = graph.nodes.get(sliKey);
       const sliMetrics = new Set(metricsFromArtefact(sli.artefact));
       const sliNeedle = compact(labelOf(sli));
       if (intersects(ruleMetrics, sliMetrics)) {
         addEdge(graph, ruleKey, sliKey, 'materialises', 'derived-promql');
-      } else if (sliNeedle && ruleNeedle.includes(sliNeedle)) {
+      } else if ((sliNeedle && ruleNeedle.includes(sliNeedle)) || (ruleSliId && ruleSliId === sli.artefact?.spec?.id)) {
         addEdge(graph, ruleKey, sliKey, 'materialises', 'inferred');
       }
     }

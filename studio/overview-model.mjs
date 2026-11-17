@@ -1520,9 +1520,10 @@ export function rulesModel(conformance, { error = null } = {}) {
 //              not running live · live only, the run's drift counts
 //   chains     { total, intact, partial, broken, integrityPct, sentence } | null
 //   note       beside the numbers: the probe families that could not be read,
-//              the rules compared on part of what they say (labels or a Grafana
-//              rule's condition the live side does not show), and a reading
-//              older than a day, which the engine does not trust
+//              the rules compared in part (labels or a Grafana rule's condition
+//              the live side does not show, values a chart or a deploy step
+//              fills in), and a reading older than a day, which the engine
+//              does not trust
 //   partial    what of the live side was not read, in the strip's words: the
 //              failed probe families, and "rule labels or conditions" when the
 //              run compared rules on part of them (drift.partlyCompared)
@@ -1570,13 +1571,14 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const failed = Array.isArray(run.probes?.failed) ? run.probes.failed.map(familyWord) : [];
   const notes = [];
   if (failed.length) notes.push(`The live side answered only in part: its ${listWords(failed)} could not be read.`);
-  // Rules matched on what the live listing showed of them: a listing that
-  // gives a severity and no other label never showed the rest, and one that
-  // gives a Grafana-managed rule's query without its condition (its
-  // threshold) never showed that — so "match" says nothing about those parts,
-  // and the board says that (drift.partlyCompared counts both).
+  // Rules matched on what each side showed of them: a listing that gives a
+  // severity and no other label never showed the rest, one that gives a
+  // Grafana-managed rule's query without its condition (its threshold) never
+  // showed that, and a chart that fills in a value never showed it — so
+  // "match" says nothing about those parts, and the board says that
+  // (drift.partlyCompared counts them all).
   const partly = n(d.partlyCompared);
-  if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared on part of what ${partly === 1 ? 'it says' : 'they say'}: the live side does not show all ${partly === 1 ? 'its' : 'their'} labels or ${partly === 1 ? 'its condition' : 'their conditions'}.`);
+  if (partly) notes.push(`${partly} alert ${partly === 1 ? 'rule was' : 'rules were'} compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.`);
   const startedMs = Date.parse(run.startedAt || '');
   if (Number.isFinite(startedMs) && now - startedMs > FRESH_WINDOW_MS) notes.push(`Counted ${agoText(run.startedAt, now)}; readings older than a day are not trusted.`);
   return { ...base, known: true, alignmentPct: Number.isFinite(pct) ? pct : null, tiles, chains, note: notes.join(' '), partial: [...failed, ...(partly ? ['rule labels or conditions'] : [])], chain: chainLive(run) };

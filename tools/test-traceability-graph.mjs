@@ -15,6 +15,8 @@ import {
   requirementRoots,
 } from './lib/traceability-graph.mjs';
 import { DEFAULT_WEIGHTS, blastRadiusOf } from './lib/blast-radius.mjs';
+import { crawlFiles } from './lib/crawler.mjs';
+import { buildCanonicalPack, PROBES } from './fetch-live-pack.mjs';
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, report } = createHarness();
@@ -883,6 +885,42 @@ process.stdout.write('\n--- studio chain reading ---\n');
          codes.filter((c) => !TRACE_ISSUES[c]), []);
   assert(traceIssueLabel('missing_widget_evidence') === 'Missing widget evidence',
          'an unknown code is humanised, never dropped', traceIssueLabel('missing_widget_evidence'));
+}
+
+{
+  // A long service's ratio set: its SLI id is cut, ending in a fingerprint no rule name holds, and the ratio record,
+  // which reads only recorded series, stays in its SLO's branch — its drift live still counts there.
+  const svc = 'payments_settlement_reconciliation_service';
+  const rules = [
+    { record: `${svc}:transaction_success:good_5m`, expr: 'sum(rate(ledger_transactions_total{outcome="ok"}[5m]))' },
+    { record: `${svc}:transaction_success:total_5m`, expr: 'sum(rate(ledger_transactions_total[5m]))' },
+    { record: `${svc}:transaction_success:ratio_5m`, expr: `${svc}:transaction_success:good_5m / ${svc}:transaction_success:total_5m` },
+  ];
+  const yaml = ['groups:', '  - name: slo', '    rules:', ...rules.flatMap((r) => [`      - record: ${r.record}`, `        expr: ${r.expr}`])].join('\n') + '\n';
+  const scanned = crawlFiles({ 'rules/slo.yml': yaml }, { repoName: 'ledger', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+  const drifted = `${svc}:transaction_success:good_5m / ${svc}:transaction_success:good_5m`;
+  const listing = { groups: [{ name: 'slo', interval: 30, rules: rules.map((r) => ({ name: r.record, type: 'recording', health: 'ok', query: `${r.record.endsWith(':ratio_5m') ? drifted : r.expr}\n` })) }] };
+  const live = buildCanonicalPack({
+    refreshedAt: '2026-11-16T00:00:00Z', mcpUrl: 'https://mcp.ledger.example/mcp', packName: 'production-live',
+    health: { services: [] }, topology: { dependencies: [] }, capabilities: null,
+    probeResults: { recording_rules: { tool: 'vmalert_rules', outcome: 'data', adapted: PROBES.find((p) => p.name === 'recording_rules').adapt(listing) } },
+    probeFailures: {},
+  });
+  const chains = comparePackBranches(adapt(scanned, { environment: 'prod' }), adapt(live, {}));
+  const sloId = (scanned.spec.slos || [])[0]?.id ?? '';
+  const branch = chains.branches.find((b) => b.title === sloId);
+  const recs = (branch?.nodes || []).filter((n) => n.kind === 'recording_rule').map((n) => `${n.label.split(':').pop()}=${n.status}`).sort();
+  assert(sloId.length <= 64 && /_[0-9a-z]{8}_99$/.test(sloId) && recs.includes('ratio_5m=drifted'),
+    'a cut SLI id keeps the ratio record in its SLO\'s branch, its drift counted', [sloId, recs]);
+  // The requirement traceability the adapter reads lists it too, the rules in either order.
+  for (const order of ['written', 'reversed']) {
+    const list = order === 'written' ? rules : [...rules].reverse();
+    const text = ['groups:', '  - name: slo', '    rules:', ...list.flatMap((r) => [`      - record: ${r.record}`, `        expr: ${r.expr}`])].join('\n') + '\n';
+    const pack = crawlFiles({ 'rules/slo.yml': text }, { repoName: 'ledger', environment: 'prod', now: '2026-11-16T00:00:00.000Z' }).canonical;
+    const chainsOf = adapt(pack, { environment: 'prod' }).traceability?.chains || [];
+    const listed = (Array.isArray(chainsOf) ? chainsOf : Object.values(chainsOf)).flatMap((c) => (c.recordingRules || c.ruleNames || c.rules || []).map((x) => (typeof x === 'string' ? x : x.name)));
+    assert(listed.some((n) => n.endsWith(':ratio_5m')), `requirement traceability lists the ratio record of a cut SLI id (${order})`, listed);
+  }
 }
 
 report('traceability graph');

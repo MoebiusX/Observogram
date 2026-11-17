@@ -94,14 +94,16 @@ const T = {
 };
 const SEARCH = synthetic('grafana_dashboards_search.json');
 const DETAIL = synthetic('grafana_dashboard_get.json');
-// A service name too long for an id, and no recorded rules to infer SLOs
-// from instead: the built pack fails the schema.
-const state = { longService: false };
+// A ruler listing an alert rule whose name is longer than the spec allows
+// (190 characters): the built pack fails the schema.
+const state = { overlongRule: false };
 const ANSWERS = {
-  [T.health]: () => ({ services: state.longService ? [{ name: 'a'.repeat(300) }] : [] }),
+  [T.health]: () => ({ services: [] }),
   [T.topology]: () => ({ dependencies: [] }),
-  [T.vmalert]: () => (state.longService ? { data: { groups: [] } } : recorded('vmalert_rules.json')),
-  [T.metricNames]: () => (state.longService ? { data: [] } : recorded('metrics_label_values.json')),
+  [T.vmalert]: () => (state.overlongRule
+    ? { data: { groups: [{ name: 'overlong', rules: [{ name: 'A'.repeat(200), type: 'alerting', health: 'ok', state: 'inactive', query: 'up == 0', duration: 0 }] }] } }
+    : recorded('vmalert_rules.json')),
+  [T.metricNames]: () => (state.overlongRule ? { data: [] } : recorded('metrics_label_values.json')),
   [T.targets]: () => recorded('metrics_targets.json'),
   [T.amStatus]: () => recorded('alertmanager_status.json'),
   [T.search]: () => ({ count: SEARCH.count, results: SEARCH.results }),
@@ -400,7 +402,7 @@ test('cancel mid-dashboards: cancelled, nothing registered, a live.fetch row say
 
 test('a snapshot that fails the schema: failed, the count named, nothing registered, a row', async () => {
   const packs = (await packsOf()).length;
-  state.longService = true;
+  state.overlongRule = true;
   try {
     const r = await startJob('oscar', { kind: 'snapshot', mcpEndpointId: ENDPOINT, label: 'invalid run' });
     const end = await settle('oscar', r.json.job.id);
@@ -412,7 +414,7 @@ test('a snapshot that fails the schema: failed, the count named, nothing registe
     assert.equal(end.records.findLast((x) => x.stage === 'build').state, 'failed');
     assert.equal((await packsOf()).length, packs);
     assert.equal(rowsOf().at(0).detail.outcome, 'failed');
-  } finally { state.longService = false; }
+  } finally { state.overlongRule = false; }
 });
 
 test('a member demoted to viewer during the job: failed, "your access changed", nothing registered', async () => {

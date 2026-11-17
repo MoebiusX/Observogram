@@ -105,7 +105,7 @@ state the supported subset in the module header. A user feeding
 hand-written YAML should get "unsupported YAML feature at line N", not a
 silently different value.
 
-*Status (0.8.41):* the reader now reads what YAML readers read in the files a
+*Status (0.8.42):* the reader now reads what YAML readers read in the files a
 scan meets — values over several lines (plain, quoted, flow), folded
 scalars, anchors, aliases, merge keys naming aliases, `- - item`, quotes and
 brackets only where a node starts — and agrees with PyYAML on the tracked
@@ -118,7 +118,9 @@ complex key or a document that is one flow collection throws, a tag on a
 scalar reads as text, and a line the reader cannot place stops reading where
 it stands (a tag on a block collection or a misplaced deeper line ends the
 document; a flow's content line in its key's column ends the flow, and is read
-as the next key when it holds one).
+as the next key when it holds one). It is no longer silent: `onStop` hears of
+each document so ended, with its line, and the scan warns, naming the file
+and the line; an error's line counts from the top of the text.
 
 ## 8. `drawer.mjs` repeated builders
 

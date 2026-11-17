@@ -355,4 +355,34 @@ for (const [label, yaml, want] of [
     'a read apart from the shared budget has its own; back inside, the shared one is still spent, and says so', outcome);
 }
 
+process.stdout.write('\n--- where the reader stops: onStop ---\n');
+{
+  // Each document the reader ends at a line it cannot place, by that line's number in the whole text.
+  const read = (text, fn = parseAll) => {
+    const lines = [];
+    let value;
+    try { value = fn(text, { onStop: (line) => lines.push(line) }); } catch (e) { value = `THROWS ${e.message}`; }
+    return { lines, value };
+  };
+  const plain = (text) => { try { return parseAll(text); } catch (e) { return `THROWS ${e.message}`; } };
+  for (const [label, text, want] of [
+    ['a document read to its end reports nothing', 'a: 1\nb:\n  c: 2\n', []],
+    ['a deeper key under a value stops the document there', 'a: 1\n  b: 2\nc: 3\n', [2]],
+    ['a tag on a block mapping: the reader stops at the line below it', 'a: !!map\n  b: 1\nc: 2\n', [2]],
+    ['a document that starts indented stops at the first line left of it', '  a: 1\nb: 2\n', [2]],
+    ['the count runs over the whole text, `---` and comments too', 'a: 1\n---\n# c\nb: 1\n    x: 2\nc: 3\n', [5]],
+    ['one report for each document that stops', 'a: 1\n  b: 2\n---\nc: 1\n  d: 2\n', [2, 5]],
+    ['a byte-order mark and CRLF line ends do not move the count', '﻿a: 1\r\n  b: 2\r\nc: 3\r\n', [2]],
+    ['a document that throws reports nothing more', 'a: 1\nnot a pair\n', []],
+  ]) {
+    const got = read(text);
+    assert(same(got.lines, want), `onStop: ${label}`, got.lines, want);
+    assert(same(read(text, parse).lines, want), `onStop through parse(): ${label}`, read(text, parse).lines, want);
+    assert(same(got.value, plain(text)), `onStop changes nothing read: ${label}`, got.value, plain(text));
+  }
+  // An error names its line in the whole text as well, not in its document.
+  const second = plain('a: 1\n---\nb: 1\nnot a pair\n');
+  assert(/^THROWS yaml line 4: expected "key: value"/.test(second), 'an error in a second document names its line in the text', second);
+}
+
 report('mini-yaml round-trip');

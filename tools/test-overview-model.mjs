@@ -1066,9 +1066,9 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   // Rules compared on part of what they say (a live listing that shows severities only, or a Grafana rule's
   // query without its condition — drift.partlyCompared counts both): said beside the numbers and on the strip.
   const partly = keep(fidelityModel({ run: { ...run, drift: { ...run.drift, partlyCompared: 58 } }, journey, pack: krystalinePack, now: NOW }));
-  assert.deepEqual([partly.note, partly.partial], ['The live side answered only in part: its dashboards could not be read. 58 alert rules were compared on part of what they say: the live side does not show all their labels or their conditions.', ['dashboards', 'rule labels or conditions']]);
+  assert.deepEqual([partly.note, partly.partial], ['The live side answered only in part: its dashboards could not be read. 58 alert rules were compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.', ['dashboards', 'rule labels or conditions']]);
   const one = keep(fidelityModel({ run: { ...run, probes: { failed: [] }, drift: { ...run.drift, partlyCompared: 1 } }, journey, pack: krystalinePack, now: NOW }));
-  assert.deepEqual([one.note, one.partial], ['1 alert rule was compared on part of what it says: the live side does not show all its labels or its condition.', ['rule labels or conditions']]);
+  assert.deepEqual([one.note, one.partial], ['1 alert rule was compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.', ['rule labels or conditions']]);
   assert.deepEqual(f.partial, ['dashboards'], 'no such count in the record: the strip names the failed families alone');
   assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.

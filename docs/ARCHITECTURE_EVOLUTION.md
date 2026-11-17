@@ -37,7 +37,8 @@ per-commit and end-of-turn bar every slice ships under).
    (REFACTORING_PLAN item 7) — input-side correctness risk at the front door.
    Narrowed in 0.8.41: values over several lines, anchors, aliases and
    merge keys are read as YAML readers read them; tags and block chomping
-   are not.
+   are not. In 0.8.42 a line it cannot place no longer ends a document
+   silently: the reader says where (`onStop`), and the scan warns.
 8. **The upgrade flow is manual steps with no umbrella.** `sync-spec:check`,
    `drift:profiles`, validator pinning and golden updates are separate
    commands a human must remember in order.

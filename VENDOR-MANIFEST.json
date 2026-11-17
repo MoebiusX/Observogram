@@ -78,8 +78,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "700506f2e41de9c00240f1dabf682b9a08f6acb85a90fe08f9f756cad1045747",
-      "bytes": 43297,
+      "sha256": "99718ac0ad877cf2c08aaa7e91628c1f066d3353b009253aaa96806acc5327e1",
+      "bytes": 46838,
       "exports": [
         "GRAFANA_RULE_ANNOTATION_PREFIX",
         "PARTIAL_ANNOTATION_PREFIX",
@@ -96,6 +96,7 @@
         "isWithheldValue",
         "metricFamilyResolver",
         "modelOf",
+        "pairClosestFirst",
         "parseGrafanaRuleAnnotation",
         "parsePartialAnnotation",
         "parseSourceRulesAnnotation",
@@ -170,12 +171,14 @@
       "changedSinceRelease": false
     },
     "tools/lib/backend-products.mjs": {
-      "sha256": "f63099877b804e06c90520df63afce5e6ca72ee938b6fdda9da2f1ae7631783e",
-      "bytes": 8470,
+      "sha256": "eb64b834dc42ecab672e5cee064bb134829e76b20a22dc3dcc7bb09d2ec80ce3",
+      "bytes": 12497,
       "exports": [
         "BACKEND_PATTERNS",
         "backendForScrapeJob",
-        "knownBackendProduct"
+        "isImageReference",
+        "knownBackendProduct",
+        "productsAScrapeJobServes"
       ],
       "imports": [],
       "npm": [],
@@ -474,8 +477,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/control-room.mjs": {
-      "sha256": "47980c9b0988d7d8e53a677924b7ef7b9b14435482c3173e5738df7da1412505",
-      "bytes": 61387,
+      "sha256": "c166c4a1a0a82ea599b4a1e12745d774f1281584d1c7bf8ae3cb4528574cec93",
+      "bytes": 61796,
       "exports": [
         "CONTROL_ROOM_LIMITS",
         "cleanError",
@@ -500,14 +503,15 @@
         "tools/lib/contracts/control-room-families.mjs",
         "tools/lib/contracts/mcp-capabilities.mjs",
         "tools/lib/good-when.mjs",
-        "tools/lib/mcp-client.mjs"
+        "tools/lib/mcp-client.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "1e591e83829266f81794ebfe1f136ab89983432d720fe7590811f4c198e1b205",
-      "bytes": 206754,
+      "sha256": "d891a6e49ab3a062aa2c7be3d4d33a939e3eb883cef078c07bbe53932c1885e6",
+      "bytes": 266681,
       "exports": [
         "DEPLOYMENT_SURFACES",
         "DEPLOYMENT_SURFACE_LABELS",
@@ -546,6 +550,7 @@
         "tools/lib/l2x.mjs",
         "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
+        "tools/lib/promql-canon.mjs",
         "tools/lib/promql.mjs",
         "tools/lib/repo-pack.mjs",
         "tools/lib/sli-inference.mjs",
@@ -644,8 +649,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "e94a467f7545de86cf2501299eb430f31b462838bb8ac686518435c4d4a30611",
-      "bytes": 54837,
+      "sha256": "e83ca10a2b1c78f79dca424814c901fd49e6a5c4a9bdaefe40f6f5170f16eaf7",
+      "bytes": 58353,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -654,6 +659,7 @@
       ],
       "imports": [
         "tools/lib/artefact-model.mjs",
+        "tools/lib/backend-products.mjs",
         "tools/lib/exporter-metrics.mjs",
         "tools/lib/identity-modes.mjs",
         "tools/lib/lifecycle.mjs",
@@ -988,8 +994,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/mini-yaml.mjs": {
-      "sha256": "e6f4d08936b9b0273fcbfd34763dfa6f5921ebf8f3053debc2e9d079b1fcfee0",
-      "bytes": 48869,
+      "sha256": "04b2371d2b4352a30e8667314d0a75861e80bd6028b58a23004807c7c1325579",
+      "bytes": 49853,
       "exports": [
         "apartFromAliasBudget",
         "emit",
@@ -1123,10 +1129,11 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-canon.mjs": {
-      "sha256": "80c29d3865c61c9527ee1b589e66b5891041a305ab7c068d38e3a850ffc496f5",
-      "bytes": 9134,
+      "sha256": "df9d22c5e2f24aafa55fb8179a81101820b774ed8780ebb3959ad978b33a966f",
+      "bytes": 10373,
       "exports": [
-        "canonicalizePromql"
+        "canonicalizePromql",
+        "withoutPromqlComments"
       ],
       "imports": [
         "tools/lib/promql.mjs"
@@ -1204,8 +1211,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/repo-pack.mjs": {
-      "sha256": "8bc67b42d2e81ab5893f244747fe75cf97e6b9e22793c218d2dc98c20c9252c4",
-      "bytes": 5517,
+      "sha256": "4b8f5a7134bca50362ed688beff6b42a8ba76a2c235d8014212348118a168a5b",
+      "bytes": 5937,
       "exports": [
         "baselinesErrors",
         "isRepoPackPath",
@@ -1405,8 +1412,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "dcf1276f8e12844acbef32cf4fe584868b6340fea042cef9e1b3f9481f69fff8",
-      "bytes": 32101,
+      "sha256": "17c6a6bc662f54e0dd77fcae6415ee61232007d5f0e01d90802151f0ed921321",
+      "bytes": 34132,
       "exports": [
         "SPEC_DURATION_RE",
         "SPEC_RECORDING_RULE_NAME_RE",
@@ -1427,6 +1434,7 @@
         "recordedSloForExpr",
         "ruleNameToSliId",
         "ruleNameToSloId",
+        "sliSlug",
         "sourceRuleTerms"
       ],
       "imports": [
@@ -1495,8 +1503,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/traceability-graph.mjs": {
-      "sha256": "631f1ebe78a85e83aad1b55a6eeac3527b426d86b73c5137ffe562ab8d2549da",
-      "bytes": 63731,
+      "sha256": "97cbfbc675911b0bed2266d0d094975ae5b9f2633eed5087ccce3d6cf1653a9b",
+      "bytes": 64349,
       "exports": [
         "buildBranch",
         "buildDependencyGraph",
@@ -1508,21 +1516,23 @@
       "imports": [
         "tools/lib/artefact-model.mjs",
         "tools/lib/blast-radius.mjs",
-        "tools/lib/promql-lezer.mjs"
+        "tools/lib/promql-lezer.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false
     },
     "tools/lib/traceability.mjs": {
-      "sha256": "1c236a6173f8a2b817a25308249c6d75174438460d595927b894b8cfc9de4371",
-      "bytes": 18481,
+      "sha256": "c487a5d792d32b8c45829a126256d91ecbd5b297f9f7228fabbd43624cb60685",
+      "bytes": 18699,
       "exports": [
         "annotationList",
         "buildRequirementTraceability",
         "extractMetricNames"
       ],
       "imports": [
-        "tools/lib/promql.mjs"
+        "tools/lib/promql.mjs",
+        "tools/lib/sli-inference.mjs"
       ],
       "npm": [],
       "changedSinceRelease": false

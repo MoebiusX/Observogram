@@ -62,6 +62,7 @@
 import { createMcpClient, MCP_PROTOCOL_VERSION } from './mcp-client.mjs';
 import { capabilityTool } from './contracts/mcp-capabilities.mjs';
 import { goodWhen } from './good-when.mjs';
+import { ruleNameToSliId } from './sli-inference.mjs';
 import { CONTROL_ROOM_FAMILIES, CONTROL_ROOM_UNITS, CONTROL_ROOM_LAYERS } from './contracts/control-room-families.mjs';
 
 export const CONTROL_ROOM_LIMITS = Object.freeze({
@@ -515,8 +516,11 @@ export function slosOfPack(canonical) {
         return { name, kind: 'sli', unit: '', better: null, role: 'value', window };
       }
       const at = name.lastIndexOf(':');
-      if (at <= 0 || slugOf(name.slice(0, at)) !== sliId) return null;
-      return { name, ...seriesSense(name.slice(at + 1), { durationish }) };
+      // The SLI a recorded name gives, as the scan derived it (a long name is
+      // cut with a fingerprint, sli-inference.mjs), or its base slugged.
+      if (at <= 0 || (ruleNameToSliId(name) !== sliId && slugOf(name.slice(0, at)) !== sliId)) return null;
+      // A cut id may have lost the words: the recorded name still says them.
+      return { name, ...seriesSense(name.slice(at + 1), { durationish: durationish || /duration|latency|seconds|time/.test(name.slice(0, at).toLowerCase()) }) };
     }).filter(Boolean);
     // A budget series is recorded against one objective; with several SLOs on this SLI it is no one row's.
     const budget = (slosPerSli.get(sliId) || 0) > 1 ? null : mine.find((x) => x.kind === 'budget') || null;

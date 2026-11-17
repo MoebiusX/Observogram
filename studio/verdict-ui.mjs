@@ -486,7 +486,7 @@ export function scaffoldOosNotes(model) {
   }
   if (model.totals.notObserved) {
     const n = model.totals.notObserved;
-    bits.push(`<p class="drift-oos-note">Not checked: ${n} artefact${n === 1 ? '' : 's'} in ${n === 1 ? 'a family' : 'families'} the other pack had no way to observe (no tool for it, or its probe failed). Neither missing nor matched — excluded from drift badness. The Compare screen lists each with the reason.</p>`);
+    bits.push(`<p class="drift-oos-note">Not checked: ${n} artefact${n === 1 ? '' : 's'} the other pack could not check: a family it had no way to observe (no tool for it, or its probe failed), or a backend its evidence cannot tell from a look-alike. Neither missing nor matched — excluded from drift badness. The Compare screen lists each with the reason.</p>`);
   }
   return bits.join('');
 }
