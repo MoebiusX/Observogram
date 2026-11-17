@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.42 — 2026-11-17
+
 **The scan reads PrometheusRule resources, tells an exporter's image from a backend's, and says where it stopped reading a file.** A Prometheus Operator `PrometheusRule` resource, the way a Kubernetes repository most often ships its alerts, was read by no scan: its rules went uncompared, and its file read as nothing, or as a workload when one came first. An image whose name only held a backend's (an exporter's `…/mq_prometheus:v6`, `prometheus-community/windows-exporter`, a plugin's `fluent-plugin-loki`) was drafted as that backend, a second Prometheus beside the real one. Where the YAML reader met a line it cannot place, it ended the document there without a word, and the rules after it were lost. Now the scan reads the resources, names a backend by the last segment of an image's path, and warns with the file and the line where reading stopped.
 
 ### Fixed
@@ -99,6 +101,7 @@
   - `parse` reporting as `parseAll`, with nothing read changed;
   - an error in a second document naming its line in the text.
 - `tools/test-studio-bundle.mjs`: the two-pack bundle's ceiling from 6,950,000 to 7,100,000 bytes (the bundle reached 6,957,524 with the crawler and the reader it carries; no dependency).
+- Cut as 0.8.42: package.json and its lock, the image tags, the footer fallback and VENDOR-MANIFEST.json regenerated.
 - Suite total 1950 → 1954.
 - **Downstream:** none — tests only.
 
