@@ -1309,11 +1309,26 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
 // ---------- a backend's image is named by the last segment of its path ----------
 {
   const productOf = (ref) => BACKEND_PATTERNS.find((p) => p.match.test(ref))?.product ?? null;
+  const sha = `sha256:${'0123456789abcdef'.repeat(4)}`;
   const cases = {
     // Under any registry or namespace, tagged, untagged or by digest, and behind a mirror's prefix.
     'prom/prometheus': 'prometheus', 'prom/prometheus:v2.55.1': 'prometheus', 'quay.io/prometheus/prometheus:v2.53.0': 'prometheus',
     'quay.io/prometheus/prometheus': 'prometheus', 'docker.io/bitnami/prometheus:2.53.0-debian-12-r0': 'prometheus',
-    'prom/prometheus@sha256:0123456789abcdef': 'prometheus', 'localhost:5000/prometheus:v3': 'prometheus',
+    [`prom/prometheus@${sha}`]: 'prometheus', [`quay.io/prometheus/prometheus@${sha}`]: 'prometheus', [`prometheus@${sha}`]: 'prometheus',
+    [`grafana/loki:3.0.0@${sha}`]: 'loki', 'localhost:5000/prometheus:v3': 'prometheus',
+    // Docker Hardened Images, and a mirror that flattens the product's own organisation into the name.
+    'acme/dhi-prometheus:3.5.0': 'prometheus', 'acme/dhi-alertmanager:0.28.1': 'alertmanager', 'acme/dhi-grafana:12.1.0': 'grafana', 'acme/dhi-loki:3.5.0': 'loki',
+    'quay.io/acme/prometheus-prometheus:v2.53.0': 'prometheus', 'quay.io/acme/thanos-thanos:v0.35.1': 'thanos',
+    'quay.io/acme/elasticsearch-elasticsearch:8.15.0': 'elasticsearch', 'quay.io/acme/timberio-vector:0.40.0-alpine': 'vector',
+    'quay.io/acme/cilium-cilium:v1.15.0': 'cilium', 'acme/jaegertracing-jaeger:2.0.0': 'jaeger', 'acme/grafana-promtail:3.0.0': 'promtail',
+    // No URL, address or short digest is an image: an `@` starts a digest, `@<algorithm>:<hex>`, at the end.
+    'https://github.com/grafana/loki': null, 'grafana@alerts.example.com': null, 'git@github.com:grafana/loki': null,
+    'prom/prometheus@sha256:0123456789abcdef': null, 'oci://registry.example/charts/prometheus:25.0.0': null,
+    // A project's own build named for the product it builds on is the project's image, and an organisation's
+    // prefix that is not the product's own is another image's — an exporter, a gateway, a controller.
+    'shop-prometheus:latest': null, 'krystaline-grafana:dev': null, 'acme/ibmmq-prometheus:1.0': null, 'acme/flask-prometheus:1.0': null,
+    'acme/prometheus-prometheus-exporter:1.0': null, 'acme/dhi-prometheus-pushgateway:1.10.0': null, 'acme/elasticsearch-exporter:1.7.0': null,
+    'acme/thanos-receive-controller:0.1.0': null, 'acme/grafana-image-renderer-proxy:1.0': null,
     '${REGISTRY:-docker.io}/prom/prometheus:v2.53.0': 'prometheus', 'rancher/mirrored-prometheus-prometheus:v2.42.0': 'prometheus',
     'grafana/loki:3.0.0': 'loki', 'bitnami/grafana-loki:3.0.0': 'loki', 'grafana/tempo:2.4.0': 'tempo', 'bitnami/grafana-tempo:2.5.0': 'tempo',
     'grafana/mimir:2.13.0': 'mimir', 'bitnami/grafana-mimir:2.13.0': 'mimir', 'grafana/grafana:12.0.0': 'grafana',
@@ -1350,15 +1365,112 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   const valuesScan = crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/values.yaml': values }, { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
   const fromValues = (valuesScan.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`);
   assert(JSON.stringify(fromValues) === JSON.stringify(['grafana:11.2.0']), 'names in a values file draft no backend; the image does, with its tag', fromValues);
-  // A compose image as `docker compose config` resolves it, and a tag read after the last `:` no `/` follows.
+  // A compose image as `docker compose config` resolves it with no variable set, and a tag read after the last `:`
+  // no `/` follows. A version a variable's default gives is what runs where nothing sets it: declared, and said,
+  // since a `.env` (no scan reads one) or the environment may set another.
   const compose = [
     'services:', '  prometheus:', '    image: ${REGISTRY}prometheus:v2.53.0', '  grafana:', '    image: ${GRAFANA_IMAGE:-grafana/grafana}:${GRAFANA_TAG:-11.2.0}',
-    '  alertmanager:', '    image: registry.example:5000/prom/alertmanager', '  tempo:', '    image: grafana/tempo:2.4.0@sha256:0123456789abcdef',
+    '  alertmanager:', '    image: registry.example:5000/prom/alertmanager', '  tempo:', `    image: grafana/tempo:2.4.0@${sha}`,
+    '  loki:', '    image: grafana/loki:${LOKI_TAG:-3.0.0}', '  vector:', '    image: ${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}',
   ].join('\n') + '\n';
   const composeScan = crawlFiles({ 'docker-compose.yml': compose }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
   const resolved = (composeScan.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).sort();
-  assert(JSON.stringify(resolved) === JSON.stringify(['alertmanager:-', 'grafana:11.2.0', 'prometheus:2.53.0', 'tempo:2.4.0']),
+  assert(JSON.stringify(resolved) === JSON.stringify(['alertmanager:-', 'grafana:11.2.0', 'loki:3.0.0', 'prometheus:2.53.0', 'tempo:2.4.0', 'vector:0.40.0-alpine']),
     'compose images resolved as compose resolves them; a registry port or a digest is no version', resolved);
+  const defaulted = composeScan.summary.warnings.filter((w) => /is the default its image names/.test(w));
+  assert(JSON.stringify(defaulted) === JSON.stringify([
+    'docker-compose.yml: the version 11.2.0 of grafana is the default its image names (${GRAFANA_IMAGE:-grafana/grafana}:${GRAFANA_TAG:-11.2.0}); a .env or the environment may set another, which the scan does not read.',
+    'docker-compose.yml: the version 3.0.0 of loki is the default its image names (grafana/loki:${LOKI_TAG:-3.0.0}); a .env or the environment may set another, which the scan does not read.',
+    'docker-compose.yml: the version 0.40.0-alpine of vector is the default its image names (${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}); a .env or the environment may set another, which the scan does not read.',
+  ]), 'a version a variable\'s default gives is said; one the file writes out is not', defaulted);
+  // A field that holds only an image reads a bare name as that image: a compose service's, a container's, a
+  // values file's `image:` or image object; a values file's `name:` keeps it a word.
+  const bare = crawlFiles({
+    'docker-compose.yml': 'services:\n  prometheus:\n    build: ./prometheus\n    image: prometheus\n  dashboards:\n    image: grafana\n',
+  }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  assert(JSON.stringify((bare.canonical.spec.telemetry?.backends || []).map((b) => b.product).sort()) === JSON.stringify(['grafana', 'prometheus']),
+    'a compose service\'s bare image name is that image', (bare.canonical.spec.telemetry?.backends || []).map((b) => b.product));
+  const workload = (img) => ['apiVersion: apps/v1', 'kind: Deployment', 'metadata:', '  name: obs', 'spec:', '  template:', '    spec:', '      containers:', '        - name: c', `          image: ${img}`].join('\n') + '\n';
+  for (const [img, want, said] of [['grafana', 'grafana:-', false], ['${REGISTRY}prometheus:v2.53.0', 'prometheus:2.53.0', false], ['${REGISTRY:-harbor.example}/library/prometheus:${TAG:-v2.53.0}', 'prometheus:2.53.0', true]]) {
+    const out = crawlFiles({ 'k8s/obs.yaml': workload(img) }, { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+    const got = (out.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`);
+    assert(JSON.stringify(got) === JSON.stringify([want]) && out.summary.warnings.some((w) => /is the default its image names/.test(w)) === said,
+      `a container image ${img}: ${want}${said ? ', the default said' : ''}`, [got, out.summary.warnings]);
+  }
+  const valuesImages = (doc) => (crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/values.yaml': doc }, { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' })
+    .canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).sort();
+  for (const [doc, want] of [
+    ['search:\n  image: elasticsearch\n  imageTag: 8.15.0\n', ['elasticsearch:-']],
+    ['prometheus:\n  image:\n    registry: harbor.corp.example\n    repository: prometheus\n    tag: ""\n', ['prometheus:-']],
+    [`prometheus:\n  image:\n    repository: prometheus\n    digest: ${sha}\n`, ['prometheus:-']],
+    ['loki:\n  image:\n    registry: docker.io\n    repository: grafana/loki\n    tag: 3.0.0\n', ['loki:3.0.0']],
+    ['sources:\n  - repo: https://github.com/grafana/loki\n  - repo: git@github.com:grafana/tempo\nalerting:\n  contact:\n    name: grafana@alerts.example.com\n', []],
+    ['datasources:\n  - name: Loki\n  - name: prometheus\n', []],
+    // A registry joined to a row anchored at its namespace, and a digest given as its hex alone, keep the version.
+    ['alloy:\n  image:\n    registry: docker.io\n    repository: grafana/alloy\n    tag: v1.4.2\n', ['alloy:1.4.2']],
+    [`grafana:\n  image:\n    repository: grafana/grafana\n    tag: 11.2.0\n    digest: ${'0123456789abcdef'.repeat(4)}\n`, ['grafana:11.2.0']],
+  ]) assert(JSON.stringify(valuesImages(doc)) === JSON.stringify(want), `values ${JSON.stringify(doc.split('\n')[1].trim())}: ${JSON.stringify(want)}`, valuesImages(doc));
+  // A tag or a digest a deploy step fills in leaves the name the image's, with no version: compose's `$VAR`, an
+  // Azure DevOps `#{Token}#`, a variable before a fixed suffix, a digest from a variable.
+  const filled = crawlFiles({ 'docker-compose.yml': [
+    'services:', '  prometheus:', '    image: quay.io/prometheus/prometheus:$PROMETHEUS_VERSION', '  alertmanager:', '    image: quay.io/prometheus/alertmanager:#{AlertmanagerVersion}#',
+    '  loki:', '    image: docker.io/bitnami/grafana-loki:${LOKI_VERSION}-debian-12-r3', '  grafana:', '    image: grafana/grafana@sha256:${GRAFANA_DIGEST}',
+    '  dashboards:', '    image: ${GRAFANA_IMAGE}',
+  ].join('\n') + '\n' }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  assert(JSON.stringify((filled.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).sort()) === JSON.stringify(['alertmanager:-', 'grafana:-', 'loki:-', 'prometheus:-'])
+    && filled.summary.warnings.includes('docker-compose.yml: the image of dashboards is a variable (${GRAFANA_IMAGE}) a .env or the environment sets, which the scan does not read; no backend is drafted from it.'),
+  'a tag or a digest a deploy step fills in drafts the product with no version; an image that is wholly a variable is said', [(filled.canonical.spec.telemetry?.backends || []).map((b) => b.product), filled.summary.warnings]);
+  // A version whose numbers the file writes out is not called a default; an OpenShift build's tag is the
+  // platform's release; a tag the chart fills in after its numbers gives those numbers.
+  const variants = crawlFiles({ 'docker-compose.yml': 'services:\n  grafana:\n    image: grafana/grafana:11.2.0${GRAFANA_VARIANT}\n  prometheus:\n    image: registry.redhat.io/openshift4/ose-prometheus:v4.12\n' },
+    { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  assert(JSON.stringify((variants.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).sort()) === JSON.stringify(['grafana:11.2.0', 'prometheus:-'])
+    && !variants.summary.warnings.some((w) => /is the default its image names/.test(w))
+    && variants.summary.warnings.includes('docker-compose.yml: registry.redhat.io/openshift4/ose-prometheus:v4.12 is an OpenShift build of prometheus: its tag v4.12 is the platform\'s release, not prometheus\'s, so no version is declared.'),
+  'a version written out before a variable suffix is the file\'s; an OpenShift build declares no version, and says why', variants.summary.warnings);
+  const chartDigest = crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/templates/deploy.yaml': workload('"quay.io/prometheus/prometheus@sha256:{{ .Values.prometheus.digest }}"') },
+    { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  assert(JSON.stringify((chartDigest.canonical.spec.telemetry?.backends || []).map((b) => b.product)) === JSON.stringify(['prometheus']), 'a digest the chart fills in leaves the image its product', chartDigest.summary.warnings);
+  const chartTag = crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/templates/deploy.yaml': workload('"grafana/grafana:11.2.0-{{ .Values.grafana.variant }}"') },
+    { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  assert(JSON.stringify((chartTag.canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`)) === JSON.stringify(['grafana:11.2.0']),
+    'a tag the chart fills in after its numbers gives those numbers', (chartTag.canonical.spec.telemetry?.backends || []).map((b) => b.version));
+  // OpenSearch is its own product, and the official images of the rows anchored at a namespace are named under a registry.
+  const scannedProduct = (ref) => { const out = crawlFiles({ 'docker-compose.yml': `services:\n  x:\n    image: "${ref}"\n` }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' }); return (out.canonical.spec.telemetry?.backends || []).map((b) => b.product).join(',') || null; };
+  for (const [ref, want] of [
+    ['opensearchproject/opensearch:2.16.0', 'opensearch'], ['opensearchproject/opensearch-dashboards:2.16.0', null], ['opensearchproject/data-prepper:2.8.0', null],
+    ['quay.io/prometheus/node-exporter:v1.8.2', 'node-exporter'], ['docker.io/grafana/alloy:v1.4.2', 'alloy'], ['docker.io/library/traefik:v3.1.2', 'traefik'],
+    ['rancher/mirrored-library-traefik:2.10.7', 'traefik'], ['docker.io/envoyproxy/envoy:distroless-v1.31.0', 'envoy'], ['docker.io/hashicorp/consul:1.19.0', 'consul'],
+    ['docker.io/openpolicyagent/opa:0.67.1', 'opa'], ['rancher/mirrored-cilium-cilium-envoy:v1.29.7', null],
+    // The vendors' own product images by name under a registry or a pull-through cache, and none of their companions.
+    ['docker.io/kong/kong-gateway:3.9.0.1', 'kong'], ['123456789012.dkr.ecr.eu-west-1.amazonaws.com/docker-hub/kong/kong-gateway:3.9.0.1', 'kong'],
+    ['docker.io/hashicorp/consul-enterprise:1.19.2-ent', 'consul'], ['docker.io/envoyproxy/envoy-contrib:v1.31.0', 'envoy'],
+    ['harbor.corp.example/dockerhub/envoyproxy/envoy-distroless:v1.24.0', 'envoy'], ['kong/kong:3.9', 'kong'],
+    ['hashicorp/consul-k8s-control-plane:1.5.0', null], ['hashicorp/consul-dataplane:1.5.0', null], ['envoyproxy/envoy-build-ubuntu:f94a38f62220a2b017878b790b6ea98a0f6c5f9c', null],
+    ['grafana/alloy-operator:0.3.0', null], ['kong/kubernetes-ingress-controller:3.3', null],
+  ]) assert(scannedProduct(ref) === want, `scanned image ${ref}: ${want ?? 'no backend'}`, scannedProduct(ref));
+  // A tag a chart or a deploy step fills in after its numbers gives those numbers; one that continues them, none.
+  const chartVersion = (tag) => (crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/templates/deploy.yaml': workload(`"quay.io/prometheus/prometheus:${tag}"`) },
+    { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' }).canonical.spec.telemetry?.backends || []).map((b) => `${b.product}:${b.version?.declared ?? '-'}`).join(',');
+  for (const [tag, want] of [['v2.39.1{{ .Values.suffix }}', 'prometheus:2.39.1'], ['v2.39.1-#{Distro}#', 'prometheus:2.39.1'], ['v2.{{ .Values.minor }}', 'prometheus:-'], ['{{ .Values.image.tag }}', 'prometheus:-']]) {
+    assert(chartVersion(tag) === want, `a chart's tag ${tag}: ${want}`, chartVersion(tag));
+  }
+  // An OpenShift build under a registry the chart fills in is said with the chart's value as `…`.
+  const openshift = crawlFiles({ 'charts/obs/Chart.yaml': 'name: obs\nversion: 0.1.0\n', 'charts/obs/templates/deploy.yaml': workload('"{{ .Values.global.imageRegistry }}/openshift4/ose-prometheus:v4.12"') },
+    { repoName: 'obs', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  assert(openshift.summary.warnings.includes('charts/obs/templates/deploy.yaml: …/openshift4/ose-prometheus:v4.12 is an OpenShift build of prometheus: its tag v4.12 is the platform\'s release, not prometheus\'s, so no version is declared.')
+    && !JSON.stringify(openshift.summary.warnings).includes('helmvalue'), 'an OpenShift build is said with the value the chart fills in shown as …', openshift.summary.warnings);
+  // An image whose variables leave it no name is said like a wholly variable one; a service compose builds is not.
+  const nameless = crawlFiles({ 'docker-compose.yml': [
+    'services:', '  a:', '    image: ${REGISTRY}/${GRAFANA_IMAGE}:${GRAFANA_TAG}', '  b:', '    image: ${GRAFANA_REPO}:${GRAFANA_TAG:-11.2.0}', '  c:', '    image: $REGISTRY/$IMAGE:$TAG',
+    '  app:', '    build: ./app', '    image: ${IMAGE_NAME}:${DEMO_VERSION}-frontend', '  built:', '    build: .', '    image: ${APP_IMAGE}',
+  ].join('\n') + '\n' }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  const saidOf = (out) => out.summary.warnings.filter((w) => /is a variable \(/.test(w)).map((w) => /the image of (\S+) is/.exec(w)[1]);
+  assert(JSON.stringify(saidOf(nameless)) === JSON.stringify(['a', 'b', 'c']), 'an image the variables leave no name is said; a service compose builds is not', nameless.summary.warnings);
+  // Image reading stays linear in a value's length.
+  const t0 = Date.now();
+  crawlFiles({ 'docker-compose.yml': `services:\n  x:\n    image: "${':'.repeat(200000)}x"\n  y:\n    image: "\${${'A'.repeat(200000)}"\n` }, { repoName: 'lab', environment: 'dev', now: '2026-11-16T00:00:00.000Z' });
+  assert(Date.now() - t0 < 2000, `image values of 200,000 characters read in ${Date.now() - t0} ms`, Date.now() - t0);
 }
 
 // ---------- a Prometheus Operator PrometheusRule is read as a rule file is ----------
@@ -1430,21 +1542,83 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify(rulesOf(bom)) === JSON.stringify(want), 'a template with a byte-order mark is read', rulesOf(bom));
   const templatedApi = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('apiVersion: monitoring.coreos.com/v1', 'apiVersion: {{ include "checkout.prometheusRule.apiVersion" . }}') });
   assert(JSON.stringify(rulesOf(templatedApi)) === JSON.stringify(want), 'a template whose apiVersion the chart fills in is read', rulesOf(templatedApi));
-  // A template whose rule holds an include alone on a line (at the margin, the kube-prometheus-stack way): what
-  // precedes the rule it stands in is read, that rule and what follows are not, and the scan says where.
-  const margin = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('        labels:\n            severity: critical',
-    '        labels:\n{{ toYaml .Values.extraLabels | indent 10 }}\n            severity: critical') });
-  // (the SLO the recording rule gives keeps the default burn-rate pair the scan synthesizes when it reads no alert on it)
-  assert(JSON.stringify(rulesOf(margin)) === JSON.stringify(['policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'])
-    && margin.summary.warnings.some((w) => w === 'charts/checkout/templates/prometheusrule.yaml: the scan stopped reading at line 17, a line the YAML reader cannot place; the rest of that document was not read.')
-    && !margin.summary.warnings.some((w) => /Failed to parse/.test(w)),
-    'a PrometheusRule template with an include alone on a line: the rules before the rule it stands in, and the line', [rulesOf(margin), margin.summary.warnings]);
-  // The same include indented under the rule's labels (the `nindent` way): the same reading.
-  const indented = read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': resource().replace('        labels:\n            severity: critical',
-    '        labels:\n            {{- toYaml .Values.extraLabels | nindent 12 }}\n            severity: critical') });
-  assert(JSON.stringify(rulesOf(indented)) === JSON.stringify(['policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'])
-    && indented.summary.warnings.some((w) => /prometheusrule\.yaml: the scan stopped reading at line 17,/.test(w)),
-    'a PrometheusRule template with an indented include in a rule: the same', [rulesOf(indented), indented.summary.warnings]);
+  // A rule a chart's include gives more labels (an include alone on a line): the include is not read, the rule is,
+  // held to the labels it writes — `observogram.partial` on the operational rule, `partial` on the SLO's rule.
+  const template = (text) => read({ ...chart, 'charts/checkout/templates/prometheusrule.yaml': text });
+  const partialOf = (out) => [
+    out.canonical.metadata.annotations['observogram.partial.alerting.rules[0]'] ?? null,
+    JSON.parse(out.canonical.metadata.annotations['observogram.source_rules.policy.burn_rate_alerts.checkout_errors_99'] ?? '[]').map((r) => r.partial ?? null),
+  ];
+  const quiet = (out) => !out.summary.warnings.some((w) => /stopped reading|Failed to parse|not declared/.test(w));
+  const withLabels = (burn, operational) => resource()
+    .replace('          labels:\n            severity: critical', `          labels:\n            severity: critical\n${burn}`)
+    .replace('            severity: warning', `            severity: warning\n${operational}`);
+  for (const [what, text] of [
+    // kube-prometheus-stack's way: at the margin, behind a switch, its column its `indent` argument.
+    ['at the margin, its column its indent', withLabels('{{- if .Values.extraLabels }}\n{{ toYaml .Values.extraLabels | indent 12 }}\n{{- end }}',
+      '{{- if .Values.extraLabels }}\n{{ toYaml .Values.extraLabels | indent 12 }}\n{{- end }}')],
+    // The `nindent` way, before the labels it writes, or on one line with its switch.
+    ['indented, before the labels written', resource()
+      .replace('          labels:\n            severity: critical', '          labels:\n            {{- toYaml .Values.extraLabels | nindent 12 }}\n            severity: critical')
+      .replace('          labels:\n            severity: warning', '          labels:\n            {{- toYaml .Values.extraLabels | nindent 12 }}\n            severity: warning')],
+    ['on one line with its switch', withLabels('            {{- with .Values.extraLabels }}{{ toYaml . | nindent 12 }}{{- end }}', '            {{- with .Values.extraLabels }}{{ toYaml . | nindent 12 }}{{- end }}')],
+  ]) {
+    const out = template(text);
+    assert(JSON.stringify(rulesOf(out)) === JSON.stringify(want) && quiet(out)
+      && JSON.stringify(partialOf(out)) === JSON.stringify(['labels=severity', [{ labels: ['severity'] }]]),
+    `a PrometheusRule template whose rules' labels an include extends (${what}): every rule read, held to the labels it writes`, [rulesOf(out), partialOf(out), out.summary.warnings]);
+  }
+  // An include in a rule's own keys, or deeper than the scalar above it: its labels are not known at all, its wait is.
+  const ruleKeys = template(resource().replace('          labels:\n            severity: warning', '          {{- include "checkout.ruleLabels" . | nindent 10 }}'));
+  assert(JSON.stringify(rulesOf(ruleKeys)) === JSON.stringify(want) && quiet(ruleKeys) && partialOf(ruleKeys)[0] === 'labels=',
+    'an include among a rule\'s keys: the rule read, held to no labels', [rulesOf(ruleKeys), partialOf(ruleKeys), ruleKeys.summary.warnings]);
+  const deeper = template(resource().replace('        for: 5m', '        for: 5m\n              {{- include "checkout.ruleExtras" . | nindent 14 }}'));
+  const burnRule = JSON.parse(deeper.canonical.metadata.annotations['observogram.source_rules.policy.burn_rate_alerts.checkout_errors_99'] ?? '[]')[0];
+  // (beside the rule's keys, where it cannot add to the labels map the rule writes: the rule is whole)
+  assert(quiet(deeper) && burnRule?.for === '5m' && burnRule?.severity === 'SEV1' && burnRule?.partial === undefined,
+    'an include deeper than the scalar above it: that scalar as written, the rule\'s own labels whole', [burnRule, deeper.summary.warnings]);
+  // An include that renders more rules (a list's items) or more groups: the rules written around it are whole.
+  const moreRules = template(resource().replace('            severity: warning', '            severity: warning\n        {{- with .Values.additionalRules }}{{ toYaml . | nindent 8 }}{{- end }}\n{{ toYaml .Values.additionalGroups | indent 4 }}'));
+  assert(JSON.stringify(rulesOf(moreRules)) === JSON.stringify(want) && quiet(moreRules) && JSON.stringify(partialOf(moreRules)) === JSON.stringify([null, [null]]),
+    'an include that renders more rules or groups: the rules written are read whole', [rulesOf(moreRules), partialOf(moreRules), moreRules.summary.warnings]);
+  // A rule the chart names from its values is not declared: which rules it renders is not known; the scan says so.
+  const named = template(resource().replace('- alert: CheckoutPodRestarting', '- alert: {{ .Values.prefix }}PodRestarting'));
+  assert(JSON.stringify(rulesOf(named)) === JSON.stringify(['policy:checkout_errors_99', 'record:checkout:errors:ratio_5m'])
+    && named.summary.warnings.includes('1 rule(s) are not declared: each takes its name from a value filled in at deploy time (a chart\'s values, a deploy step\'s variable), so which rules it renders is not known here — …PodRestarting (charts/checkout/templates/prometheusrule.yaml).'),
+    'a rule the chart names from its values is not declared, and said', [rulesOf(named), named.summary.warnings]);
+  // ...and the metrics its expression reads stay in the inventory.
+  assert(JSON.stringify(named.canonical).includes('kube_pod_container_status_restarts_total'), 'a chart-named rule\'s metrics stay in the inventory');
+  // Where every recording rule is named so, the repository records series all the same: its alerts stay operational rules.
+  const recordNamed = template(resource().replace('- record: checkout:errors:ratio_5m', '- record: {{ .Values.prefix }}:errors:ratio_5m'));
+  assert(JSON.stringify((recordNamed.canonical.spec.alerting?.rules || []).map((r) => r.name).sort()) === JSON.stringify(['CheckoutErrorsHigh', 'CheckoutPodRestarting'])
+    && !(recordNamed.canonical.spec.policy?.burn_rate_alerts || []).some((e) => /checkout/.test(e.slo)),
+  'where every recording rule is named at deploy time, the alerts stay operational, no SLO read from their names', [rulesOf(recordNamed), recordNamed.summary.warnings]);
+  // A template action that prints a scalar is the placeholder, never a key: the rest of a plain scalar (a threshold on
+  // the line below), or a key's value below it.
+  const threshold = template(resource().replace('          expr: checkout:errors:ratio_5m > 0.01', '          expr: checkout:errors:ratio_5m >\n            {{ .Values.slo.threshold }}'));
+  assert(JSON.stringify(rulesOf(threshold)) === JSON.stringify(want) && quiet(threshold) && stated(threshold).length === 0,
+    'a threshold on the line below its expression continues it: the SLO\'s rule holds the chart\'s value, and states no rules', [rulesOf(threshold), stated(threshold)]);
+  const below = template(resource().replace('            severity: warning', '            severity:\n              {{ .Values.alerts.severity }}'));
+  assert(!JSON.stringify(below.canonical).includes('observogram.include') && JSON.stringify(rulesOf(below)) === JSON.stringify(want)
+    && below.canonical.spec.alerting.rules[0].severity === undefined && below.canonical.metadata.annotations['observogram.partial.alerting.rules[0]'] === 'labels.filled=severity;labels=',
+  'a value printed below its key is the chart\'s: no severity invented, no mark in the pack', [below.canonical.spec.alerting.rules, below.canonical.metadata.annotations['observogram.partial.alerting.rules[0]']]);
+  // An include right after a block scalar, at the rule's keys, ends the scalar.
+  const afterScalar = template(resource().replace('          expr: rate(kube_pod_container_status_restarts_total{container="checkout"}[15m]) > 0',
+    '          expr: |\n            rate(kube_pod_container_status_restarts_total{container="checkout"}[15m]) > 0\n          {{- include "checkout.ruleExtras" . | nindent 10 }}'));
+  assert(JSON.stringify(rulesOf(afterScalar)) === JSON.stringify(want) && quiet(afterScalar), 'an include after a block scalar ends it: every rule read', [rulesOf(afterScalar), afterScalar.summary.warnings]);
+  // An indentless list (`rules:` and its items in one column) with a hook before its first item.
+  const indentless = template(['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: checkout', 'spec:', '  groups:', '  - name: checkout', '    rules:',
+    '    {{- with .Values.additionalRules }}{{ toYaml . | nindent 4 }}{{- end }}', '    - alert: CheckoutDown', '      expr: up{job="checkout"} == 0', '    - alert: CheckoutSlow', '      expr: checkout_latency_seconds > 1'].join('\n') + '\n');
+  assert(JSON.stringify(rulesOf(indentless)) === JSON.stringify(['policy:checkoutdown', 'policy:checkoutslow']) && quiet(indentless), 'an indentless list with a hook first: every rule read', [rulesOf(indentless), indentless.summary.warnings]);
+  // A bare rules template (no ConfigMap, no resource) whose include sits in a rule's labels.
+  const bare = read({ ...chart, 'charts/checkout/templates/rules.yaml': ['groups:', '  - name: checkout', '    rules:', '      - alert: CheckoutDown', '        expr: up{job="checkout"} == 0', '        labels:', '          severity: critical', '          {{- include "checkout.labels" . | nindent 10 }}'].join('\n') + '\n' });
+  assert(JSON.stringify(rulesOf(bare)) === JSON.stringify(['policy:checkoutdown']), 'a bare rules template with an include in its labels is read', [rulesOf(bare), bare.summary.warnings]);
+  // An indent the chart computes renders beside the line above it; an indent past any line of the text is bounded.
+  const computed = template(resource().replace('            severity: warning', '            severity: warning\n{{ toYaml .Values.extraLabels | indent (int .Values.labelIndent) }}'));
+  assert(partialOf(computed)[0] === 'labels=severity', 'an include with a computed indent extends the labels above it', partialOf(computed));
+  const t0 = Date.now();
+  const huge = template(resource().replace('            severity: warning', '            severity: warning\n            {{- toYaml .Values.extraLabels | nindent 107000000 }}'));
+  assert(Date.now() - t0 < 2000 && partialOf(huge)[0] === 'labels=severity', `an indent of a hundred million columns reads in ${Date.now() - t0} ms`, partialOf(huge));
   // A lifecycle block at the top of a manifest covers the rules of its resource, the manifest's first document a workload.
   const planned = read({ 'deploy/app.yaml': `# observogram-lifecycle:\n#   deployment:\n#     prod: planned\n${deployment}---\n${resource()}` });
   const lifecycle = JSON.parse(planned.canonical.metadata.annotations['observogram.lifecycle'] ?? '[]');
@@ -1472,6 +1646,29 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     'a Grafana-managed rule and a Prometheus rule of one name are both declared, neither a copy of the other', [declared, out.summary.warnings]);
 }
 
+// ---------- copies the comparison reads the same are one rule; resources that write a rule differently are said ----------
+{
+  const scanOf = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const ruleFile = (alert, interval = '') => ['groups:', '  - name: shop', ...(interval ? [`    interval: ${interval}`] : []), '    rules:',
+    '      - record: shop:checkout:error_ratio_5m', '        expr: sum(rate(e[5m])) / sum(rate(t[5m]))', ...alert].join('\n') + '\n';
+  const wrap = (text) => ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', 'spec:', ...text.trimEnd().split('\n').map((l) => `  ${l}`)].join('\n') + '\n';
+  const disk = ['      - alert: DiskAlmostFull', '        expr: node_filesystem_avail_bytes < 1', '        labels:', '          severity: warning'];
+  for (const [what, other] of [
+    ['a zero wait', ruleFile([...disk.slice(0, 2), '        for: 0s', ...disk.slice(2)])],
+    ['an empty label', ruleFile([...disk, '          team: ""'])],
+    ['a group interval', ruleFile(disk, '1m')],
+  ]) {
+    const out = scanOf({ 'prometheus/shop.rules.yml': ruleFile(disk), 'k8s/prometheusrule.yaml': wrap(other) });
+    assert(JSON.stringify((out.canonical.spec.alerting?.rules || []).map((r) => r.name)) === JSON.stringify(['DiskAlmostFull'])
+      && JSON.stringify(out.canonical.spec.queries.recording_rules.map((r) => r.name)) === JSON.stringify(['shop:checkout:error_ratio_5m']),
+    `a copy differing only in ${what} is one rule`, [(out.canonical.spec.alerting?.rules || []).map((r) => r.name), out.summary.warnings]);
+  }
+  // A kustomize overlay that rewrites a recording rule is said, as one that rewrites an alert is.
+  const overlay = scanOf({ 'k8s/base/prometheusrule.yaml': wrap(ruleFile(disk)), 'k8s/overlays/prod/prometheusrule.yaml': wrap(ruleFile(disk).replace('sum(rate(t[5m]))', 'sum(rate(t{env="prod"}[5m]))')) });
+  assert(overlay.summary.warnings.some((w) => /^1 PrometheusRule resource\(s\) named alike in more than one file hold rules written differently .*: shop \(k8s\/base\/prometheusrule\.yaml, k8s\/overlays\/prod\/prometheusrule\.yaml: shop:checkout:error_ratio_5m\)\.$/.test(w)),
+    'resources that write a recording rule differently are said', overlay.summary.warnings);
+}
+
 // ---------- not covered: a chart's rule holding a value the chart fills in is declared with the placeholder ----------
 {
   const template = (inConfigMap) => (inConfigMap ? [
@@ -1495,6 +1692,82 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
     const declared = (out.canonical.spec.alerting?.rules || []).map((r) => `${r.name}: ${r.expr}`);
     assert(JSON.stringify(declared) === JSON.stringify(['ShopDown: up{job="helmvalue"} == 0', 'ShopDiskFull: node_filesystem_avail_bytes < 1']),
       `${where}: a rule whose expression the chart fills in is declared with the placeholder, the rest as written`, declared);
+  }
+}
+
+// ---------- what a deploy step fills in, what PromQL writes itself, where an include renders ----------
+{
+  const scan = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const recording = ['groups:', '  - name: rec', '    rules:', '      - record: shop:checkout:error_ratio_5m', '        expr: sum(rate(e[5m])) / sum(rate(t[5m]))'].join('\n') + '\n';
+  const chart = { 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'prometheus/rules/recording.yml': recording };
+  const partialOf = (out) => Object.fromEntries((out.canonical.spec.alerting?.rules || []).map((r, i) => [r.name, out.canonical.metadata.annotations[`observogram.partial.alerting.rules[${i}]`] ?? null]));
+  const alert = (name, expr, labels = ['severity: warning']) => [`      - alert: ${name}`, `        expr: ${expr}`, '        labels:', ...labels.map((l) => `          ${l}`)];
+  // PromQL's own `$` — a named group's reference in label_replace, a literal route or class name, a comment — is
+  // compared, as the ruler's templating in a label is; a deploy step's variable (`${NAMESPACE}`, `$NAMESPACE`,
+  // Flux's `${namespace:=apps}`) is not, and a rule named with one is not declared.
+  const dollars = scan({ 'prometheus/rules/recording.yml': recording, 'prometheus/rules/shop.rules.yml': ['groups:', '  - name: shop', '    rules:',
+    ...alert('HostDown', 'label_replace(up{job="node"}, "host", "$host", "instance", "(?P<host>[^:]+):.*") == 0'),
+    ...alert('HostDownBraced', 'label_replace(up{job="node"}, "host", "${host}", "instance", "(?P<host>[^:]+):.*") == 0'),
+    ...alert('ODataErrors', 'rate(http_requests_total{route="/odata/$metadata",code=~"5.."}[5m]) > 1'),
+    ...alert('RetryErrors', 'rate(errors_total{class="PaymentClient$Retry"}[5m]) > 0'),
+    '      - alert: Commented', '        expr: |', '          # paged by $TEAM', '          up{job="api"} == 0', '        labels:', '          severity: warning',
+    ...alert('NodeNamed', 'up{job="node"} == 0', ['severity: warning', 'node_name: \'{{ reReplaceAll ":[0-9]{2,5}" "" $labels.instance }}\'']),
+    ...alert('NamespaceDown', 'up{namespace="${NAMESPACE}"} == 0'),
+    ...alert('NamespaceEnvDown', 'up{namespace="$NAMESPACE"} == 0'),
+    ...alert('FluxDown', 'up{namespace="${namespace:=apps}"} == 0', ['severity: warning', 'cluster: ${cluster_name:-dev}']),
+    ...alert('${app_name:=api}Down', 'up == 0'),
+  ].join('\n') + '\n' });
+  assert(JSON.stringify(partialOf(dollars)) === JSON.stringify({
+    HostDown: null, HostDownBraced: null, ODataErrors: null, RetryErrors: null, Commented: null, NodeNamed: null,
+    NamespaceDown: 'expr=', NamespaceEnvDown: 'expr=', FluxDown: 'expr=;labels.filled=cluster;labels=severity',
+  }) && (dollars.canonical.spec.alerting.rules.find((r) => r.name === 'NodeNamed')?.labels?.node_name ?? '').includes('reReplaceAll')
+    && dollars.summary.warnings.some((w) => /rule\(s\) are not declared: each takes its name from a value filled in at deploy time .*\$\{app_name:=api\}Down/.test(w)),
+  'PromQL\'s own $ is compared; a deploy step\'s variable, Flux\'s default form too, is not, and names no rule', [partialOf(dollars), dollars.summary.warnings]);
+  // An SLO's page rule whose wait a deploy step or the chart fills in, beside a ticket rule writing its own: no
+  // window from it, said (the chart's value as …), and the pack stays valid.
+  const sloRules = (pageFor) => ['groups:', '  - name: shop-slo', '    rules:',
+    '      - alert: ShopBudgetBurnPage', '        expr: shop:checkout:error_ratio_5m > 0.0144', `        for: ${pageFor}`, '        labels:', '          severity: critical',
+    '      - alert: ShopBudgetBurnTicket', '        expr: shop:checkout:error_ratio_5m > 0.006', '        for: 1h', '        labels:', '          severity: warning'];
+  const prometheusRule = (lines) => ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '  name: shop', 'spec:', ...lines.map((l) => `  ${l}`)].join('\n') + '\n';
+  for (const [where, files, shown] of [
+    ['a deploy step', { 'prometheus/rules/recording.yml': recording, 'prometheus/rules/slo.rules.yml': sloRules('${SLO_PAGE_FOR}').join('\n') + '\n' }, '${SLO_PAGE_FOR}'],
+    ['the chart', { ...chart, 'charts/shop/templates/slo.yaml': prometheusRule(sloRules('{{ .Values.slo.pageFor | default "2m" }}')) }, '…'],
+  ]) {
+    const out = scan(files);
+    const errors = validateCanonical(out.canonical, SCHEMA);
+    assert(errors.length === 0 && !/\$|helmvalue/.test(JSON.stringify(out.canonical.spec.policy?.burn_rate_alerts ?? []))
+      && JSON.stringify(out.summary.omitted.ruleWaits.map((o) => [o.rule, o.value])) === JSON.stringify([['ShopBudgetBurnPage', shown]])
+      && out.summary.warnings.some((w) => w.includes(`ShopBudgetBurnPage=${shown} (`)),
+    `an SLO rule's wait ${where} fills in gives no window, is said, and the pack stays valid`, [errors.slice(0, 2), out.canonical.spec.policy?.burn_rate_alerts, out.summary.omitted.ruleWaits]);
+  }
+  // An SLO id a long recorded name derives is cut to a spec Slug (kube-prometheus-stack's container CPU rules).
+  const longNames = scan({ 'prometheus/rules/k8s.rules.yml': ['groups:', '  - name: k8s.rules.container_cpu_usage_seconds_total', '    rules:',
+    '      - record: node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate', '        expr: sum by (namespace, pod, container) (irate(container_cpu_usage_seconds_total{job="kubelet"}[5m]))',
+    '      - record: node_namespace_pod_container:container_cpu_usage_seconds_total:sum_rate5m', '        expr: sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{job="kubelet"}[5m]))'].join('\n') + '\n' });
+  assert(validateCanonical(longNames.canonical, SCHEMA).length === 0 && (longNames.canonical.spec.slos || []).length > 0 && longNames.canonical.spec.slos.every((s) => s.id.length <= 64),
+    'an SLO id a long recorded name derives is cut to a spec Slug', [(longNames.canonical.spec.slos || []).map((s) => s.id), validateCanonical(longNames.canonical, SCHEMA).slice(0, 2)]);
+  // The chart's values in a group's name, its interval and a recording rule's name never reach the pack or the summary
+  // as the placeholder.
+  const groupValues = scan({ ...chart, 'charts/shop/templates/rules.yaml': prometheusRule(['groups:', '  - name: {{ .Values.prefix }}.rules', '    interval: {{ .Values.interval }}', '    rules:',
+    '      - record: {{ .Values.prefix }}:queue:depth', '        expr: sum(rabbitmq_queue_messages_ready)', '      - record: shop:queue:unacked', '        expr: sum(rabbitmq_queue_messages_unacked)', ...alert('QueueStuck', 'rabbitmq_queue_messages_ready > 1000')]) });
+  assert(!JSON.stringify(groupValues.canonical).includes('helmvalue') && !JSON.stringify(groupValues.summary).includes('helmvalue')
+    && groupValues.summary.omitted.ruleIntervals.some((o) => o.value === '…') && JSON.stringify(groupValues.canonical).includes('rabbitmq_queue_messages_ready'),
+  'a value the chart fills in shows as … in the sources, the intervals left out and the inventory', [groupValues.summary.omitted, groupValues.summary.warnings]);
+  // An include whose indent the chart computes renders at the column of the map's own keys (a chart written four
+  // columns deep), and inside a ConfigMap's block where it stands there; one after an indented rules list renders
+  // the group's keys: each rule held to the labels it writes.
+  const computedFour = scan({ ...chart, 'charts/shop/templates/rules.yaml': ['apiVersion: monitoring.coreos.com/v1', 'kind: PrometheusRule', 'metadata:', '    name: shop', 'spec:',
+    '    groups:', '        - name: shop', '          rules:', '              - alert: ApiPanics', '                expr: rate(panics_total[5m]) > 0', '                labels:',
+    '                    {{- with .Values.extraLabels }}{{ toYaml . | nindent $labelIndent }}{{- end }}', '                    severity: critical'].join('\n') + '\n' });
+  const computedLast = scan({ ...chart, 'charts/shop/templates/rules.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-rules', 'data:', '  alerts.rules.yaml: |',
+    '    groups:', '      - name: shop', '        rules:', '          - alert: ApiPanics', '            expr: rate(panics_total[5m]) > 0', '            labels:', '              severity: critical',
+    '              {{- with .Values.extraLabels }}{{ toYaml . | nindent (int .Values.labelIndent) }}{{- end }}'].join('\n') + '\n' });
+  const afterRules = scan({ ...chart, 'charts/shop/templates/rules.yaml': prometheusRule(['groups:', '  - name: shop', '    rules:', ...alert('ApiDown', 'up{job="api"} == 0', ['severity: critical']).map((l) => `  ${l}`),
+    '    {{- with .Values.prometheusRule.groupFields }}{{- toYaml . | nindent 6 }}{{- end }}']) });
+  for (const [what, out] of [['a computed indent four columns deep', computedFour], ['a computed indent closing a ConfigMap\'s block', computedLast], ['an include after an indented rules list', afterRules]]) {
+    const rules = out.canonical.spec.alerting?.rules || [];
+    assert(rules.length === 1 && rules[0].severity === 'SEV1' && Object.values(partialOf(out))[0] === 'labels=severity' && !out.summary.warnings.some((w) => /stopped reading/.test(w)),
+      `${what}: the rule is held to the labels it writes`, [rules, partialOf(out), out.summary.warnings]);
   }
 }
 
@@ -1537,19 +1810,56 @@ process.stdout.write('\n--- grafana alert provisioning ---\n');
   assert(JSON.stringify(stopsOf(many)) === JSON.stringify(['k8s/app.yaml: the scan stopped reading at lines 9 and 20, lines the YAML reader cannot place; the rest of each of those documents was not read.']),
     'one warning for a file stopped in twice; none for a file the scan does not read', many.summary.warnings);
   // A ConfigMap's block runs on over template lines at the margin: control flow is read through, and an include
-  // alone on a line stops the reading there (the rule it stands in left out), said in the template's lines.
-  const cm = (inner) => ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-rules', 'data:', '  alerts.rules.yaml: |', '    groups:', '      - name: shop', '        rules:',
-    '          - alert: ShopDown', '            expr: up{job="shop"} == 0', ...inner, '          - alert: ShopCertExpiry', '            expr: probe_ssl_earliest_cert_expiry - time() < 86400'].join('\n') + '\n';
+  // alone on a line is not read — its column (its `indent` argument, the block's de-indent taken off) says where
+  // it renders: into the rule above it, or the block's next rules.
+  const cm = (inner, { head = [], tail = [] } = {}) => ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-rules', 'data:', ...head, '  alerts.rules.yaml: |', '    groups:', '      - name: shop', '        rules:',
+    '          - alert: ShopDown', '            expr: up{job="shop"} == 0', ...inner, '          - alert: ShopCertExpiry', '            expr: probe_ssl_earliest_cert_expiry - time() < 86400', ...tail].join('\n') + '\n';
   const chartOf = (template) => read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/rules.yaml': template });
   const policyOf = (out) => (out.canonical.spec.policy?.burn_rate_alerts || []).map((e) => e.slo).sort();
+  const quiet = (out) => !out.summary.warnings.some((w) => /stopped reading|Failed to parse|not declared/.test(w));
   const gated = chartOf(cm(['{{- if .Values.alerts.disk }}', '          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{- end }}']));
   assert(JSON.stringify(policyOf(gated)) === JSON.stringify(['shopcertexpiry', 'shopdiskfull', 'shopdown']) && !stopsOf(gated).length,
     'control flow at the margin of a ConfigMap\'s block is read through', [policyOf(gated), gated.summary.warnings]);
-  const included = chartOf(cm(['          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{ toYaml .Values.extraFields | indent 12 }}']));
-  assert(JSON.stringify(policyOf(included)) === JSON.stringify(['shopdown'])
-    && JSON.stringify(stopsOf(included)) === JSON.stringify(['charts/shop/templates/rules.yaml: the scan stopped reading at line 14, a line the YAML reader cannot place; the rest of that document was not read.'])
-    && !included.summary.warnings.some((w) => /Failed to parse/.test(w)),
-    'an include at the margin of a ConfigMap\'s block: the rules before the one it stands in, and the line', [policyOf(included), included.summary.warnings]);
+  for (const [what, inner, tail] of [
+    ['at the margin, into the rule above it', ['          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{ toYaml .Values.extraFields | indent 12 }}'], []],
+    ['at the margin, its rules from values', ['          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1', '{{- with .Values.extraRules }}', '{{ toYaml . | indent 10 }}', '{{- end }}'], []],
+    ['the block\'s last line, into its last rule', ['          - alert: ShopDiskFull', '            expr: node_filesystem_avail_bytes < 1'], ['            {{- include "shop.ruleLabels" . | nindent 12 }}', '{{- end }}']],
+  ]) {
+    const out = chartOf(cm(inner, { tail }));
+    assert(JSON.stringify(policyOf(out)) === JSON.stringify(['shopcertexpiry', 'shopdiskfull', 'shopdown']) && quiet(out),
+      `an include in a ConfigMap's block (${what}): every rule read`, [policyOf(out), out.summary.warnings]);
+  }
+  // A data key the chart fills in whole (`{{ .Files.Get … | indent 4 }}`) states nothing of its own: not read, as before.
+  const filesGet = read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/dashboards.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-dashboards', 'data:',
+    '  overview.json: |-', '{{ .Files.Get "dashboards/overview.json" | indent 4 }}', '  rules.yaml: |-', '{{ toYaml .Values.rules | indent 4 }}'].join('\n') + '\n' });
+  assert(!filesGet.summary.warnings.some((w) => /Failed to parse|stopped reading/.test(w)), 'a data key the chart fills in whole is not read, and nothing is said of it', filesGet.summary.warnings);
+  // A switch at the margin directly under `data:` keeps the data map open.
+  const dataGate = chartOf(cm([], { head: ['{{- if .Values.alerts.enabled }}'], tail: ['{{- end }}'] }));
+  assert(JSON.stringify(policyOf(dataGate)) === JSON.stringify(['shopcertexpiry', 'shopdown']) && quiet(dataGate),
+    'a switch at the margin under data: does not end the data map', [policyOf(dataGate), dataGate.summary.warnings]);
+  // A rule a `range` names from its values: not declared, said; the rules after it read.
+  const ranged = chartOf(cm(['{{- range $name, $url := .Values.probes }}', '          - alert: ShopEndpointDown{{ $name | title }}', '            expr: probe_success{instance="{{ $url }}"} == 0', '{{- end }}']));
+  assert(JSON.stringify(policyOf(ranged)) === JSON.stringify(['shopcertexpiry', 'shopdown'])
+    && ranged.summary.warnings.includes('1 rule(s) are not declared: each takes its name from a value filled in at deploy time (a chart\'s values, a deploy step\'s variable), so which rules it renders is not known here — ShopEndpointDown… (charts/shop/templates/rules.yaml#alerts.rules.yaml).'),
+    'a rule a range names from its values is not declared, and said', [policyOf(ranged), ranged.summary.warnings]);
+  // A rule file a deploy step fills in (envsubst): a name holding its variable is not declared either.
+  const substituted = read({ 'rules/alerts.yml': ['groups:', '  - name: shop', '    rules:', '      - alert: ${SERVICE}Down', '        expr: up{job="${SERVICE}"} == 0',
+    '      - alert: ShopDiskFull', '        expr: node_filesystem_avail_bytes < 1'].join('\n') + '\n' });
+  assert(JSON.stringify(policyOf(substituted)) === JSON.stringify(['shopdiskfull'])
+    && substituted.summary.warnings.includes('1 rule(s) are not declared: each takes its name from a value filled in at deploy time (a chart\'s values, a deploy step\'s variable), so which rules it renders is not known here — ${SERVICE}Down (rules/alerts.yml).'),
+    'a rule named by a deploy step\'s variable is not declared, and said', [policyOf(substituted), substituted.summary.warnings]);
+  // Another config than rules keeps its include: the reader cannot place it, and the block is not read, as before.
+  const routes = read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/alertmanager.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-am', 'data:', '  alertmanager.yml: |',
+    '    route:', '      receiver: default', '{{ toYaml .Values.extraRoute | indent 6 }}', '    receivers:', '      - name: default', '        webhook_configs:', '          - url: https://hooks.example/a'].join('\n') + '\n' });
+  assert(routes.summary.warnings.some((w) => /^Failed to parse charts\/shop\/templates\/alertmanager\.yaml#alertmanager\.yml: yaml line 9:/.test(w)),
+    'an include in another config than rules: not read, said', routes.summary.warnings);
+  // But a config that ends in the chart's extra-config hook is read whole, as it always was: the hook renders after it.
+  const hooked = read({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/config.yaml': ['apiVersion: v1', 'kind: ConfigMap', 'metadata:', '  name: shop-config', 'data:',
+    '  prometheus.yml: |', '    scrape_configs:', '      - job_name: shop', '        static_configs:', '          - targets: ["shop:8080"]', '{{- with .Values.extraScrapeConfigs }}', '{{ toYaml . | indent 6 }}', '{{- end }}',
+    '  alertmanager.yml: |', '    route:', '      receiver: default', '    receivers:', '      - name: default', '        webhook_configs:', '          - url: https://hooks.example/a', '{{- if .Values.extraReceivers }}', '{{ toYaml .Values.extraReceivers | indent 6 }}', '{{- end }}',
+  ].join('\n') + '\n' });
+  assert(hooked.summary.discovered.scrapeJobs === 1 && hooked.summary.discovered.alertingRoutes >= 1 && !hooked.summary.warnings.some((w) => /Failed to parse|stopped reading/.test(w)),
+  'a config that ends in an extra-config hook is read whole', [hooked.summary.discovered, hooked.summary.warnings]);
   // A manifest the reader stops in before anything the scan reads: not read, and said.
   const early = read({ 'deploy/monitoring.yaml': 'apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: !!map\n  name: shop\nspec:\n  groups: []\n' });
   assert(early.summary.warnings.includes('deploy/monitoring.yaml was not read: the YAML reader stopped at line 4, a line it cannot place, before anything the scan reads there.'),

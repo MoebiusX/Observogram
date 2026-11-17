@@ -118,8 +118,48 @@ import {
 import { scopeOf, inScope, scopeReason } from './live-fetch.mjs';
 import { identityMode, DEFAULT_IDENTITY_MODE } from './identity-modes.mjs';
 import { DYNAMIC_FAMILY_LIMITS, GENERIC_METRIC_PREFIXES, compileMetricFamilyPattern, metricFamilyPrefix } from './exporter-metrics.mjs';
+import { productsAScrapeJobServes } from './backend-products.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
+
+// A live backend that only an exporter's scrape job attests, where that
+// exporter reads more than one product (the elasticsearch_exporter reads
+// Elasticsearch and OpenSearch alike), cannot tell the product the other pack
+// declares from its look-alike: the pair is not compared, and says why —
+// neither "declared, not live" nor "in both". `live` is a pack whose
+// `mcp.backends.evidence` names what attested each backend; `declared` the
+// other pack. Only where nothing else live attests the declared product.
+const SHARED_EXPORTER = Symbol('sharedExporter');
+function withSharedExporterBackends(declared, live) {
+  const evidence = String(live?.meta?.annotations?.['mcp.backends.evidence'] || '');
+  if (!evidence) return live;
+  const byId = new Map(evidence.split('|').map((e) => { const i = e.indexOf('='); return [e.slice(0, i), e.slice(i + 1)]; }));
+  const keyOfBackend = (x) => `${String(x.spec?.product || '').toLowerCase()}|${String(x.spec?.signal || '').toLowerCase()}`;
+  const backendsOf = (layered) => (layered?.layers?.L2 || []).filter((x) => classify(x) === 'backend');
+  const stated = new Set(backendsOf(declared).map(keyOfBackend));
+  const attested = new Set(backendsOf(live).map(keyOfBackend));
+  let changed = false;
+  const L2 = (live?.layers?.L2 || []).map((x) => {
+    if (classify(x) !== 'backend' || stated.has(keyOfBackend(x))) return x;
+    const job = /^scrape job (.+)$/.exec(byId.get(x.spec?.id) || '')?.[1];
+    const serves = productsAScrapeJobServes(job);
+    const signal = String(x.spec?.signal || '').toLowerCase();
+    const product = serves.find((p) => stated.has(`${p}|${signal}`) && !attested.has(`${p}|${signal}`));
+    if (!product) return x;
+    changed = true;
+    return { ...x, spec: { ...x.spec, product }, [SHARED_EXPORTER]: `the live evidence (scrape job ${job}) reads ${serves.join(' and ')} alike, so which of them runs is not known` };
+  });
+  return changed ? { ...live, layers: { ...live.layers, L2 } } : live;
+}
+function settleSharedExporterPairs(bucket) {
+  for (let i = bucket.inBoth.length - 1; i >= 0; i--) {
+    const { key, a, b } = bucket.inBoth[i];
+    const reason = b?.[SHARED_EXPORTER] || a?.[SHARED_EXPORTER];
+    if (!reason) continue;
+    bucket.inBoth.splice(i, 1);
+    bucket.notObserved.push(b?.[SHARED_EXPORTER] ? { key, side: 'a', artefact: a, reason } : { key, side: 'b', artefact: b, reason });
+  }
+}
 
 // Behavioural identity key for pairing A↔B. Delegates to the artefact model so
 // matching is driven by what an artefact does, never by its name or position.
@@ -188,6 +228,8 @@ function prefixChecked(fn) {
 
 export function diffPacks(aLayered, bLayered, opts = {}) {
   if (!aLayered || !bLayered) throw new Error('diffPacks: both packs required');
+  bLayered = withSharedExporterBackends(aLayered, bLayered);
+  aLayered = withSharedExporterBackends(bLayered, aLayered);
 
   const identity = resolveIdentity(opts.identity);
   const pairKey = identity ? identity.keyOf : keyOf;
@@ -282,6 +324,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     }
 
     pairDeclaredFamilies(aFamilies, bFamilies, bucket);
+    settleSharedExporterPairs(bucket);
     noteOtherCover(aClaims, bItems);
     noteOtherCover(bClaims, aItems);
 
@@ -974,36 +1017,42 @@ function matchGroups(baseKey, aGroup, bGroup, bucket) {
     .map((a, i) => ({ a, i }))
     .filter(({ i }) => !usedA.has(i));
 
-  // Remaining items share identity but not the same contract. Pair each A with
-  // the closest remaining B, then leave surplus controls visible as onlyInA/B.
-  while (unusedA.length && unusedB.length) {
-    const { a } = unusedA.shift();
-    let best = 0;
-    let bestDeltas = deltasOf(a, unusedB[0].b);
-    for (let i = 1; i < unusedB.length; i++) {
-      const d = deltasOf(a, unusedB[i].b);
-      if (d.length < bestDeltas.length) {
-        best = i;
-        bestDeltas = d;
-      }
-    }
-    const [{ b }] = unusedB.splice(best, 1);
+  // Remaining items share identity but not the same contract. The closest
+  // remaining A and B pair first — over every pair, not each A in turn, so a
+  // form declared first cannot take the counterpart of a closer one (a
+  // kustomize base before the overlay that runs) — ties in declared order;
+  // then surplus controls stay visible as onlyInA/B. Pairs are reported in
+  // A's declared order.
+  const closeness = [];
+  unusedA.forEach(({ a }, ia) => unusedB.forEach(({ b }, ib) => closeness.push([deltasOf(a, b).length, ia, ib])));
+  closeness.sort((x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2]);
+  const pairedA = new Map();
+  const pairedB = new Set();
+  for (const [, ia, ib] of closeness) {
+    if (pairedA.size === Math.min(unusedA.length, unusedB.length)) break;
+    if (pairedA.has(ia) || pairedB.has(ib)) continue;
+    pairedA.set(ia, ib);
+    pairedB.add(ib);
+  }
+  unusedA.forEach(({ a }, ia) => {
+    if (!pairedA.has(ia)) return;
+    const { b } = unusedB[pairedA.get(ia)];
     bucket.inBoth.push({
       key: occurrenceKey(baseKey, seq++, suffix),
       a,
       b,
       match: 'drifted',
-      deltas: bestDeltas,
+      deltas: deltasOf(a, b),
       ...unobservedNote(a, b),
     });
-  }
+  });
 
-  for (const { a } of unusedA) {
-    bucket.onlyInA.push({ key: occurrenceKey(baseKey, seq++, suffix), artefact: a });
-  }
-  for (const { b } of unusedB) {
-    bucket.onlyInB.push({ key: occurrenceKey(baseKey, seq++, suffix), artefact: b });
-  }
+  unusedA.forEach(({ a }, ia) => {
+    if (!pairedA.has(ia)) bucket.onlyInA.push({ key: occurrenceKey(baseKey, seq++, suffix), artefact: a });
+  });
+  unusedB.forEach(({ b }, ib) => {
+    if (!pairedB.has(ib)) bucket.onlyInB.push({ key: occurrenceKey(baseKey, seq++, suffix), artefact: b });
+  });
 }
 
 function pushUnmatched(target, baseKey, group) {

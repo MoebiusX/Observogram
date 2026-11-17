@@ -675,44 +675,149 @@ test('a PrometheusRule resource is read as the ruler it is given to lists it: on
   }
 });
 
-test('rules read from several files: written the same, one rule that aligns; written differently, the SLO states no rules and the scan says why', () => {
+test('rules read from several places: a copy is declared as often as one place holds it; a kustomize base and overlay that differ state every form; rules that all run are all stated', () => {
   const rule = { ...ERRORS_HIGH, labels: { severity: 'critical' } };
   const scanOf = (files) => crawlFiles(files, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const loosened = { ...rule, expr: 'shop:checkout:error_ratio_5m > 0.5', for: '1h' };
   // A rule file (the one promtool tests) beside the PrometheusRule that wraps it: the ruler is given one of them.
-  const twins = scanOf({ 'prometheus/shop.rules.yml': `${ruleGroups().join('\n')}\n`, 'k8s/prometheusrule.yaml': resource() });
+  // A copy that differs only in what the comparison does not read (an annotation, an expression's layout, a wait
+  // written in seconds) is the same rule.
+  const wrapped = resource().replace('          labels:\n            severity: critical',
+    '          annotations:\n            runbook_url: https://runbooks.example/shop\n          labels:\n            severity: critical')
+    .replace('expr: shop:checkout:error_ratio_5m > 0.01', 'expr: >-\n            shop:checkout:error_ratio_5m\n            > 0.01').replace('for: 5m', 'for: 300s');
+  const twins = scanOf({ 'prometheus/shop.rules.yml': `${ruleGroups().join('\n')}\n`, 'k8s/prometheusrule.yaml': wrapped });
   assert.deepEqual(stated(twins.canonical), [{ name: 'ShopCheckoutErrorsHigh', expr: 'shop:checkout:error_ratio_5m > 0.01', for: '5m', severity: 'SEV1', labels: { severity: 'critical' } }], 'the SLO\'s rule stated once');
   assert.deepEqual(twins.canonical.spec.alerting.rules.map((r) => r.name), ['DiskAlmostFull'], 'the operational rule declared once');
   assert.deepEqual(twins.canonical.spec.queries.recording_rules.map((r) => r.name), ['shop:checkout:good_5m', 'shop:checkout:total_5m', 'shop:checkout:error_ratio_5m']);
-  assert.ok(twins.summary.warnings.some((w) => /^5 rule\(s\) are written the same in more than one file and are declared once .*: shop:checkout:good_5m \(prometheus\/shop\.rules\.yml, k8s\/prometheusrule\.yaml\)/.test(w)), 'and said, naming the files');
+  assert.ok(twins.summary.warnings.some((w) => /^5 rule\(s\) are written the same in more than one place and declared as often as one place holds them .*: shop:checkout:good_5m \(prometheus\/shop\.rules\.yml, k8s\/prometheusrule\.yaml\)/.test(w)), 'and said, naming the places');
   for (const shape of ['labels', 'projection']) {
     const same = compare(twins.canonical, live([rule, DISK], { shape }));
     assert.equal(same.pair.match, 'aligned', `aligned against the ruler (${shape})`);
     const keys = Object.values(same.diff.layers).flatMap((l) => [...l.inBoth, ...l.onlyInA]).map((e) => e.key);
     assert.ok(!keys.some((k) => k.includes('#02')), `no second copy reads declared, not live (${shape}): ${keys.filter((k) => k.includes('#'))}`);
+    assert.equal(compare(twins.canonical, live([loosened, DISK], { shape })).pair.match, 'drifted', `a threshold loosened live still reads drifted (${shape})`);
   }
-  // A kustomize base and its prod overlay, written differently: live runs the base's looser rule. Held against it,
-  // the closest copy would answer for the overlay's; the SLO states no rules instead, and the scan says why.
+  // A kustomize base and its prod overlay — one resource name, written differently: which runs is not known here.
+  // Every form is stated, and the comparison holds the rule live runs to the closest: either form reads aligned,
+  // a rule loosened past both reads drifted. The scan says the forms differ.
   const overlay = scanOf({
     'k8s/base/prometheusrule.yaml': resource({ threshold: '0.05', wait: '10m' }),
     'k8s/overlays/prod/prometheusrule.yaml': resource(),
   });
-  assert.equal(stated(overlay.canonical), null, 'no statement from copies that differ');
-  assert.ok(overlay.summary.warnings.some((w) => /^1 rule name\(s\) are written differently in more than one file, and each form is declared .*: ShopCheckoutErrorsHigh \(k8s\/base\/prometheusrule\.yaml, k8s\/overlays\/prod\/prometheusrule\.yaml\)\.$/.test(w)),
-    'said, naming the files', overlay.summary.warnings);
-  const looser = compare(overlay.canonical, live([{ ...rule, expr: 'shop:checkout:error_ratio_5m > 0.05', for: '10m' }, DISK]));
-  assert.deepEqual(looser.pair.deltas.filter((d) => d.rule), [], 'no rule is held to the one live runs');
+  assert.deepEqual(stated(overlay.canonical)?.map((r) => `${r.expr} for ${r.for}`), ['shop:checkout:error_ratio_5m > 0.01 for 5m', 'shop:checkout:error_ratio_5m > 0.05 for 10m'], 'both forms stated');
+  assert.ok(overlay.summary.warnings.some((w) => /^1 PrometheusRule resource\(s\) named alike in more than one file hold rules written differently .*: every form is declared and stated, and each live rule is held to the closest form: one no ruler runs reads declared, not live, and so may one that runs, where it has drifted further from the ruler than another: shop \(k8s\/base\/prometheusrule\.yaml, k8s\/overlays\/prod\/prometheusrule\.yaml: ShopCheckoutErrorsHigh\)\.$/.test(w)),
+    'said, naming the resource and the files', overlay.summary.warnings);
+  for (const [form, which] of [[{ expr: 'shop:checkout:error_ratio_5m > 0.05', for: '10m' }, 'the base'], [{}, 'the overlay']]) {
+    assert.equal(compare(overlay.canonical, live([{ ...rule, ...form }, DISK])).pair.match, 'aligned', `live runs ${which}: aligned`);
+  }
+  assert.equal(compare(overlay.canonical, live([loosened, DISK])).pair.match, 'drifted', 'a rule loosened past both forms reads drifted');
+  // An operational rule the base and the overlay write differently, the overlay's threshold changed live: the
+  // closest form (the overlay) is held to the ruler, with that one change, and the base reads declared, not live —
+  // the base, declared first, does not take the ruler's rule for itself.
+  const disk = (text, { threshold, severity, wait }) => text
+    .replace('node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', `node_filesystem_avail_bytes / node_filesystem_size_bytes < ${threshold}`)
+    .replace('            severity: warning', `            severity: ${severity}`)
+    .replace('        - alert: DiskAlmostFull', `        - alert: DiskAlmostFull\n          for: ${wait}`);
+  const forms = scanOf({
+    'k8s/base/prometheusrule.yaml': disk(resource(), { threshold: '0.2', severity: 'info', wait: '30m' }),
+    'k8s/overlays/prod/prometheusrule.yaml': resource(),
+  });
+  const ran = compare(forms.canonical, live([rule, { ...DISK, expr: 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.05' }])).diff;
+  const diskOf = (bucket) => Object.values(ran.layers).flatMap((l) => l[bucket]).filter((e) => e.key.startsWith('alert_rule::{"name":"diskalmostfull"}'));
+  assert.deepEqual(diskOf('inBoth').map((e) => [e.match, fieldsOf(e.deltas), e.a.spec.expr]),
+    [['drifted', ['-:expr'], 'node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1']], 'the overlay is held to the ruler, with the one change');
+  assert.deepEqual(diskOf('onlyInA').map((e) => e.artefact.spec.expr), ['node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.2'], 'the base reads declared, not live');
+  // Rules of one name in two rule files that one ruler loads (a page and a ticket rule): both run, both are stated,
+  // and the one loosened live reads drifted.
+  const page = ruleGroups().join('\n');
+  const ticket = ['groups:', '  - name: shop-tickets', '    rules:', '      - alert: ShopCheckoutErrorsHigh', '        expr: shop:checkout:error_ratio_5m > 0.001', '        for: 2h', '        labels:', '          severity: warning'].join('\n');
+  const both = scanOf({ 'prometheus/rules/page.rules.yml': `${page}\n`, 'prometheus/rules/ticket.rules.yml': `${ticket}\n` });
+  assert.deepEqual(stated(both.canonical)?.map((r) => r.expr), ['shop:checkout:error_ratio_5m > 0.001', 'shop:checkout:error_ratio_5m > 0.01'], 'both rules stated');
+  const ticketRule = { name: 'ShopCheckoutErrorsHigh', expr: 'shop:checkout:error_ratio_5m > 0.001', for: '2h', labels: { severity: 'warning' } };
+  assert.equal(compare(both.canonical, live([rule, ticketRule, DISK], { shape: 'labels' })).pair.match, 'aligned');
+  assert.deepEqual(fieldsOf(compare(both.canonical, live([loosened, ticketRule, DISK], { shape: 'labels' })).pair.deltas), ['ShopCheckoutErrorsHigh:expr', 'ShopCheckoutErrorsHigh:for'],
+    'the page rule loosened live is a difference');
+  assert.ok(!both.summary.warnings.some((w) => /written the same|written differently/.test(w)), 'nothing said of copies');
 });
 
-test('not covered: a chart\'s rule whose expression the chart fills in is declared with the placeholder, and reads as different on it', () => {
+test('a chart\'s include that gives rules more labels: each rule held to the labels it writes, the rest said uncompared', () => {
+  // kube-prometheus-stack's way: `{{ toYaml .Values.extraLabels | indent 12 }}` at the margin, behind a switch,
+  // under each rule's labels. The scan does not read the chart's values: the include is left out, and the rule
+  // says its labels are written only in part — the operational rule in observogram.partial, the SLO's in `partial`.
+  const extra = (severity) => `            severity: ${severity}\n{{- if .Values.extraLabels }}\n{{ toYaml .Values.extraLabels | indent 12 }}\n{{- end }}`;
+  const template = resource().replace('            severity: critical', extra('critical')).replace('            severity: warning', extra('warning'));
+  const out = crawlFiles({ 'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n', 'charts/shop/templates/prometheusrule.yaml': template },
+    { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
+  const repoPack = out.canonical;
+  assert.deepEqual(validateCanonical(repoPack, SCHEMA), []);
+  assert.ok(!out.summary.warnings.some((w) => /stopped reading|Failed to parse/.test(w)), 'read whole, nothing to warn about');
+  assert.deepEqual(stated(repoPack), [{ name: 'ShopCheckoutErrorsHigh', expr: 'shop:checkout:error_ratio_5m > 0.01', for: '5m', severity: 'SEV1', labels: { severity: 'critical' }, partial: { labels: ['severity'] } }]);
+  assert.deepEqual(repoPack.spec.alerting.rules.map((r) => r.name), ['DiskAlmostFull']);
+  assert.equal(repoPack.metadata.annotations['observogram.partial.alerting.rules[0]'], 'labels=severity');
+  // The ruler lists the rendered rules, the values' labels added: aligned, and the labels the chart added are said uncompared.
+  const values = { team: 'shop', cluster: 'prod-eu' };
+  const rendered = [{ ...ERRORS_HIGH, labels: { severity: 'critical', ...values } }, { ...DISK, labels: { ...DISK.labels, ...values } }];
+  const same = compare(repoPack, live(rendered, { shape: 'labels' }));
+  assert.equal(same.pair.match, 'aligned');
+  assert.deepEqual(same.pair.deltas, []);
+  assert.deepEqual(same.pair.unobserved, [{ field: 'labels', side: 'a', keys: ['cluster', 'team'], rule: 'ShopCheckoutErrorsHigh' }], 'the SLO\'s rule: the labels the chart added, uncompared');
+  const disk = alertPairOf(same.diff, 'DiskAlmostFull');
+  assert.equal(disk?.match, 'aligned', 'the operational rule matches');
+  assert.deepEqual(disk?.unobserved, [{ field: 'labels', side: 'a', keys: ['cluster', 'team'] }], 'the operational rule: the labels the chart added, uncompared');
+  assert.equal(compare(repoPack, live(rendered)).pair.match, 'aligned', 'a listing that shows only the severity: aligned too');
+  // What the chart writes is still held: a threshold loosened live, a severity changed live.
+  const loose = compare(repoPack, live([{ ...rendered[0], expr: 'shop:checkout:error_ratio_5m > 0.5' }, rendered[1]], { shape: 'labels' }));
+  assert.equal(loose.pair.match, 'drifted');
+  assert.deepEqual(fieldsOf(loose.pair.deltas), ['ShopCheckoutErrorsHigh:expr']);
+  assert.equal(loose.node.status, 'drifted', 'the chain agrees');
+  const quieter = compare(repoPack, live([rendered[0], { ...rendered[1], labels: { ...rendered[1].labels, severity: 'info' } }], { shape: 'labels' }));
+  assert.equal(alertPairOf(quieter.diff, 'DiskAlmostFull')?.match, 'drifted', 'a severity the chart writes, changed live, is a difference');
+});
+
+test('a chart\'s rule whose expression, wait or severity the chart fills in: held to what it writes, the pack valid, the rest said uncompared', () => {
+  // kube-prometheus-stack's way: the job from an include, `for` and `severity` from `dig … .Values.customRules`.
   const chart = {
     'charts/shop/Chart.yaml': 'name: shop\nversion: 0.1.0\n',
-    'charts/shop/templates/prometheusrule.yaml': resource().replace('node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', 'up{job="{{ include "shop.fullname" . }}"} == 0'),
+    'charts/shop/templates/prometheusrule.yaml': resource()
+      .replace('node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1', 'up{job="{{ include "shop.fullname" . }}"} == 0')
+      .replace('            severity: warning', '            severity: {{ dig "DiskAlmostFull" "severity" "warning" .Values.customRules }}\n            team: storage')
+      .replace('        - alert: DiskAlmostFull', '        - alert: DiskAlmostFull\n          for: {{ dig "DiskAlmostFull" "for" "10m" .Values.customRules }}'),
   };
   const out = crawlFiles(chart, { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' });
-  assert.deepEqual((out.canonical.spec.alerting?.rules || []).map((r) => [r.name, r.expr]), [['DiskAlmostFull', 'up{job="helmvalue"} == 0']], 'declared, as a chart\'s ConfigMap rule always was');
-  const against = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, { ...DISK, expr: 'up{job="shop-api"} == 0' }]));
-  assert.deepEqual(alertPairOf(against.diff, 'DiskAlmostFull')?.deltas?.map((d) => d.field), ['expr'], 'the filled-in selector is a difference on the expression');
-  assert.equal(against.pair.match, 'aligned', 'the SLO\'s own rule, stated as written, still compares');
+  assert.deepEqual(validateCanonical(out.canonical, SCHEMA), [], 'the pack stays valid: no placeholder in a Duration field');
+  assert.deepEqual((out.canonical.spec.alerting?.rules || []).map((r) => [r.name, r.expr, r.for ?? null, r.severity ?? null, r.labels ?? null]),
+    [['DiskAlmostFull', 'up{job="helmvalue"} == 0', null, null, { team: 'storage' }]], 'declared with what the chart writes, no wait or severity invented');
+  assert.equal(out.canonical.metadata.annotations['observogram.partial.alerting.rules[0]'], 'expr=;for=;labels.filled=severity;labels=team',
+    'the label keys whose values the chart fills in are named beside the keys it writes');
+  assert.ok(out.summary.warnings.some((w) => /^1 alert rule wait\(s\) are filled in at deploy time or are no spec Duration, and are left out .*: DiskAlmostFull=… \(/.test(w)), 'the wait left out is said, the chart\'s value shown as …');
+  assert.ok(!JSON.stringify(out.summary).includes('helmvalue'), 'no placeholder in the summary');
+  const rendered = { ...DISK, expr: 'up{job="shop-api"} == 0', for: '10m', labels: { severity: 'warning', team: 'storage' } };
+  for (const shape of ['labels', 'projection']) {
+    const against = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, rendered], { shape }));
+    const disk = alertPairOf(against.diff, 'DiskAlmostFull');
+    assert.equal(disk?.match, 'aligned', `held to what the chart writes (${shape})`);
+    assert.deepEqual(disk?.unobserved?.filter((u) => u.side === 'a').map((u) => u.field).sort(), ['expr', 'for', 'labels'], `what the chart fills in is said uncompared (${shape})`);
+    assert.equal(against.pair.match, 'aligned', `the SLO's own rule, stated as written, still compares (${shape})`);
+  }
+  // A wait and a severity the chart writes, missing live: still said uncompared, never compared whole.
+  const { for: _wait, ...waitless } = rendered;
+  const bare = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, { ...waitless, labels: { team: 'storage' } }], { shape: 'labels' }));
+  const gone = alertPairOf(bare.diff, 'DiskAlmostFull');
+  assert.equal(gone?.match, 'aligned', 'a filled wait or severity the ruler lists none of is no difference');
+  assert.deepEqual(gone?.unobserved?.filter((u) => u.side === 'a').map((u) => [u.field, u.keys]).sort(), [['expr', []], ['for', []], ['labels', ['severity']]],
+    'and it is said uncompared: the wait and the label key the chart writes');
+  // Two readings of the chart (two versions, two branches): what both write is compared on its text.
+  const reread = (edit) => crawlFiles({ ...chart, 'charts/shop/templates/prometheusrule.yaml': edit(chart['charts/shop/templates/prometheusrule.yaml']) },
+    { repoName: 'shop', environment: 'all', now: '2026-11-16T00:00:00.000Z' }).canonical;
+  const itself = alertPairOf(compare(out.canonical, reread((t) => t)).diff, 'DiskAlmostFull');
+  assert.equal(itself?.match, 'aligned', 'a chart read twice is aligned');
+  assert.equal(itself?.unobserved, undefined, 'and compared whole: both sides hold the same placeholders');
+  const looser = alertPairOf(compare(out.canonical, reread((t) => t.replace('"} == 0', '"} == 1'))).diff, 'DiskAlmostFull');
+  assert.equal(looser?.match, 'drifted', 'a threshold loosened in an expression that holds the chart\'s value is a difference between two readings');
+  assert.deepEqual(fieldsOf(looser?.deltas || []), ['-:expr']);
+  // What the chart writes is still held: a label it writes, changed live.
+  const moved = compare(out.canonical, live([{ ...ERRORS_HIGH, labels: { severity: 'critical' } }, { ...rendered, labels: { ...rendered.labels, team: 'payments' } }], { shape: 'labels' }));
+  assert.equal(alertPairOf(moved.diff, 'DiskAlmostFull')?.match, 'drifted', 'a label the chart writes, changed live, is a difference');
 });
 
 test('not covered: a rule whose alert name an earlier rule took leaves its SLO without an entry live, so nothing there states it', () => {

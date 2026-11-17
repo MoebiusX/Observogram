@@ -107,8 +107,13 @@ export function isWithheldValue(value) {
 // `partial: { <field>: [keys] }`, and the comparison holds the artefact to
 // those keys: a key it was never shown cannot contradict what the other pack
 // states, so it is never a difference on its own (deltasOf), and the pair
-// says which keys went uncompared (unobservedOf). Today one field of one
-// family uses it: an alert rule's `labels`.
+// says which keys went uncompared (unobservedOf). One family uses it, the
+// alert rule: its `labels` (a listing that shows the severity alone, a rule a
+// chart's include gives labels), and its `expr` and `for` where a chart or a
+// deploy step fills them in — a field with no keys, shown none of (`for=`),
+// which the comparison does not compare against a side that states it (two
+// sides that both list it are compared on their texts). `labels.filled=<keys>`
+// names the label keys written with a value filled in: not compared, named.
 export const PARTIAL_ANNOTATION_PREFIX = 'observogram.partial.';
 
 /** `{ labels: ['severity'] }` → `labels=severity`, fields and keys sorted. */
@@ -462,6 +467,12 @@ function behaviourDeltas(kind, ba, bb, a, b) {
     }
     // The pack's severity is read from the severity label: not shown, not compared.
     if (shown && f === 'severity' && !shown.includes('severity')) continue;
+    // A field other than labels ONE side was shown none of (a value filled in
+    // at deploy time): not compared. Where both sides list it — two readings
+    // of repository text, each holding the placeholder where the chart or the
+    // deploy step fills in — their texts are compared, as two reference-only
+    // expressions are: what differs is what the repository writes.
+    if (kind === 'alert_rule' && f !== 'labels' && [a, b].filter((x) => Array.isArray(x?.partial?.[f])).length === 1) continue;
     deltas.push({ field: f, a: ba[f] ?? null, b: bb[f] ?? null });
   }
   return deltas;
@@ -484,7 +495,14 @@ export function unobservedOf(a, b) {
 
 function ruleUnobserved(a, b, ba, bb) {
   const out = [];
-  for (const [side, self, stated] of [['a', a, bb || {}], ['b', b, ba || {}]]) {
+  for (const [side, self, other, stated] of [['a', a, b, bb || {}], ['b', b, a, ba || {}]]) {
+    // A field this side was shown none of went uncompared, whatever the other
+    // side states there — a wait a chart fills in, against a ruler that lists
+    // none — unless the other side was shown none of it either: then their
+    // texts are compared (behaviourDeltas).
+    for (const f of Object.keys(self?.partial || {}).filter((k) => k !== 'labels' && k !== FILLED_LABELS_FIELD).sort()) {
+      if (!partialKeysOf(other, f)) out.push({ field: f, side, keys: [] });
+    }
     const seen = partialKeysOf(self, 'labels');
     if (!seen) continue;
     const labels = stated.labels && typeof stated.labels === 'object' && !Array.isArray(stated.labels) ? stated.labels : {};
@@ -492,11 +510,23 @@ function ruleUnobserved(a, b, ba, bb) {
     // without the label, it went uncompared all the same.
     const named = new Set(Object.keys(labels));
     if (stated.severity != null) named.add('severity');
+    // A label this side writes with a value filled in at deploy time went
+    // uncompared, whether the other side lists it or not — unless the other
+    // side fills it in too.
+    const filledThere = partialKeysOf(other, FILLED_LABELS_FIELD) || [];
+    for (const k of partialKeysOf(self, FILLED_LABELS_FIELD) || []) if (!filledThere.includes(k)) named.add(k);
     const keys = [...named].filter((k) => !seen.includes(k)).sort();
     if (keys.length) out.push({ field: 'labels', side, keys });
   }
   return out;
 }
+
+// Of an alert rule's labels, the keys a producer saw written with a value
+// filled in at deploy time (`labels.filled=severity`): the key is the
+// repository's, its value was never shown. Beside `labels=<keys shown>`. The
+// crawler mirrors the name (crawlFiles); tools/test-source-rules.mjs holds the
+// two together.
+const FILLED_LABELS_FIELD = 'labels.filled';
 
 function partialKeysOf(artefact, field) {
   const keys = artefact?.partial?.[field];

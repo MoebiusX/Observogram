@@ -78,8 +78,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "d7394de96b3c67e190ab6f891ec337acf369e8df728d92f5c71b1f9c66ba5499",
-      "bytes": 40151,
+      "sha256": "ca748c283c7e1524a4598a7acecda01365195dbcd71e802dd73e79db28e35874",
+      "bytes": 42325,
       "exports": [
         "PARTIAL_ANNOTATION_PREFIX",
         "REDACTED_CHANNEL_VALUE",
@@ -168,16 +168,23 @@
       "changedSinceRelease": false
     },
     "tools/lib/backend-products.mjs": {
-      "sha256": "306d1b64e8c3cd9f4ac72a15102966eaaa9339dc068a9459d56f8db16fa7e091",
-      "bytes": 9839,
+      "sha256": "e29b3bda7f084db6b214540baa78dfe910729a9e63eaa0c5eca1e22ae05a057a",
+      "bytes": 12285,
       "exports": [
         "BACKEND_PATTERNS",
         "backendForScrapeJob",
-        "knownBackendProduct"
+        "isImageReference",
+        "knownBackendProduct",
+        "productsAScrapeJobServes"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "BACKEND_PATTERNS",
+        "backendForScrapeJob",
+        "knownBackendProduct"
+      ]
     },
     "tools/lib/blackbox.mjs": {
       "sha256": "d16338aa5788c64d8736d14f65641395f9b8ef4da7541eca6c6b2ada1c773a19",
@@ -504,8 +511,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "73ab8f9c57b1e49ef7ec7d421610c3d88897f921d6b4847b1225f423fa6caba0",
-      "bytes": 188946,
+      "sha256": "90595bbed167737f66c68b29eb69ab242b27ef9c09bcf26d3b9639e793336f24",
+      "bytes": 225220,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",
@@ -537,6 +544,7 @@
         "tools/lib/l2x.mjs",
         "tools/lib/lifecycle.mjs",
         "tools/lib/mini-yaml.mjs",
+        "tools/lib/promql-canon.mjs",
         "tools/lib/promql.mjs",
         "tools/lib/repo-pack.mjs",
         "tools/lib/sli-inference.mjs",
@@ -635,8 +643,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/diff.mjs": {
-      "sha256": "54309c563c25d2ba3e1a56429816512389c001e0289f8ca3ee3806ba1776b7db",
-      "bytes": 46255,
+      "sha256": "0a5f7c473de5e84969d04dde0bb431edb4aaaf794f205e64c957d60874e045bf",
+      "bytes": 49399,
       "exports": [
         "deltasOf",
         "diffPacks",
@@ -645,6 +653,7 @@
       ],
       "imports": [
         "tools/lib/artefact-model.mjs",
+        "tools/lib/backend-products.mjs",
         "tools/lib/exporter-metrics.mjs",
         "tools/lib/identity-modes.mjs",
         "tools/lib/lifecycle.mjs",
@@ -1105,16 +1114,20 @@
       "changedSinceRelease": false
     },
     "tools/lib/promql-canon.mjs": {
-      "sha256": "80c29d3865c61c9527ee1b589e66b5891041a305ab7c068d38e3a850ffc496f5",
-      "bytes": 9134,
+      "sha256": "3b12d40dfa3c032c78c590e8f5684678a77e1e7e7e0b4110a483a243e2d00170",
+      "bytes": 9919,
       "exports": [
-        "canonicalizePromql"
+        "canonicalizePromql",
+        "withoutPromqlComments"
       ],
       "imports": [
         "tools/lib/promql.mjs"
       ],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "canonicalizePromql"
+      ]
     },
     "tools/lib/promql-lezer.mjs": {
       "sha256": "b198d17f75ba19bfe47547d5f17c3c8ad5533c892bafcbb53b91f99f57f65c46",
@@ -1355,8 +1368,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/sli-inference.mjs": {
-      "sha256": "f20bdad84cb20bf9ada0154873b72248f645112ded71607d9ddd89904251286b",
-      "bytes": 21947,
+      "sha256": "bb0ba90dcdb8c59a01cf102e228211ab96aef1a631efdc3f4dae2c64950718d1",
+      "bytes": 22935,
       "exports": [
         "SPEC_DURATION_RE",
         "SPEC_RECORDING_RULE_NAME_RE",

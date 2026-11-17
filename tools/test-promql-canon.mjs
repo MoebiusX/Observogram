@@ -28,6 +28,12 @@ assert(equiv('sum without (instance, pod) (x)', 'sum without (pod, instance) (x)
   'without label order is canonicalized too');
 assert(equiv('http_requests_total{code="200",job="api"}', 'http_requests_total{job="api", code="200"}'),
   'selector matcher order is canonicalized');
+// A comment is no part of what the ruler runs: it lists the query re-printed without it.
+assert(equiv('# page when the ratio passes $THRESHOLD\nsum(rate(errors_total[5m])) # the errors\n  / sum(rate(requests_total[5m])) > 0.01',
+  'sum(rate(errors_total[5m])) / sum(rate(requests_total[5m])) > 0.01'), 'a PromQL comment is dropped');
+assert(canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes('"/api/#/.*"') && canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes("'a # b'")
+  && !canon('up{path=~"/api/#/.*",note=\'a # b\'} == 0 # down').includes('down'), 'a # inside a string is the string\'s, not a comment');
+assert(!equiv('# down\nup == 0', '# down\nup == 1'), 'what a comment leaves is still compared');
 assert(equiv('rate( x{b="2", a="1"} [5m] )', 'rate(x{a="1",b="2"}[5m])'),
   'whitespace + matcher order combine');
 assert(equiv('SUM BY (b, a) (x)', 'SUM BY (a, b) (x)'),

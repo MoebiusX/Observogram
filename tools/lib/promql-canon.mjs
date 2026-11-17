@@ -202,12 +202,32 @@ function isStructurallySound(expr) {
   return !quote && stack.length === 0;
 }
 
+// An expression less its comments: `#` to the end of the line, outside a
+// string literal. No part of what a ruler runs — it lists the query
+// re-printed without them — nor of what a rule file states.
+export function withoutPromqlComments(text) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      out += ch;
+      if (ch === '\\' && quote !== '`') { out += text[i + 1] ?? ''; i++; } else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
+    if (ch === '#') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
+    out += ch;
+  }
+  return out;
+}
+
 // → { text, method: 'parser-proven' | 'textual-fallback', changed }
-// `text` always has whitespace collapsed (the long-standing baseline);
-// ordering canonicalization is applied ONLY when the parser proves the
-// expression well-formed.
+// `text` always has whitespace collapsed (the long-standing baseline) and
+// comments dropped; ordering canonicalization is applied ONLY when the parser
+// proves the expression well-formed.
 export function canonicalizePromql(value) {
-  const collapsed = String(value ?? '').replace(/\s+/g, ' ').trim();
+  const collapsed = withoutPromqlComments(String(value ?? '')).replace(/\s+/g, ' ').trim();
   if (!collapsed) return { text: collapsed, method: 'textual-fallback', changed: false };
   const parsed = parsePromqlDependencies(collapsed);
   if (!parsed.parseOk || !isStructurallySound(collapsed)) {

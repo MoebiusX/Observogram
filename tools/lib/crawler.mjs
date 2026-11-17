@@ -31,8 +31,9 @@ import {
 } from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
 import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
-import { BACKEND_PATTERNS } from './backend-products.mjs';
+import { BACKEND_PATTERNS, isImageReference } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
+import { canonicalizePromql, withoutPromqlComments } from './promql-canon.mjs';
 import { symbolSlug as slug, packSlug } from './slug.mjs';
 import { detectChaos, chaosExperimentsFrom, chaosControlSummary, chaosPassReads } from './chaos-detect.mjs';
 import { isRepoPackPath, readRepoPack } from './repo-pack.mjs';
@@ -371,12 +372,100 @@ function imageTag(ref) {
   return at > name.lastIndexOf('/') ? name.slice(at + 1).trim() : '';
 }
 
-function registerBackendFromImage(image, relPath, backends, evidence, summary, { dedupeByProduct = false, pipelines = null } = {}) {
-  const ref = String(image || '').trim();
+// The tag an image reference writes out itself, or '': none where a variable
+// gives it (`grafana/grafana:${TAG:-11.2.0}`). A variable elsewhere in the
+// reference (`${REGISTRY}prometheus:v2.53.0`) leaves the tag its own.
+function literalImageTag(ref) {
+  let text = String(ref ?? '');
+  for (let i = 0; i < 8 && /\$\{[^{}]*\}/.test(text); i++) text = text.replace(/\$\{[^{}]*\}/g, '{}');
+  const tag = imageTag(text);
+  return /[{}$]/.test(tag) ? '' : tag;
+}
+
+// A version read from a tag a variable's default gives
+// (`grafana/grafana:${TAG:-11.2.0}`): what runs where nothing sets the
+// variable, so it is declared — but compose takes a variable from the
+// project's `.env` before its default, envsubst from an environment, and a
+// scan reads neither, so the scan says so.
+function noteDefaultedVersion(summary, relPath, who, version, written, tag) {
+  if (literalImageTag(written) === tag) return;
+  // A version whose numbers the file writes out, a variable only after them
+  // (`grafana:11.2.0${VARIANT}`), is the file's own.
+  let text = String(written ?? '');
+  for (let i = 0; i < 8 && /\$\{[^{}]*\}/.test(text); i++) text = text.replace(/\$\{[^{}]*\}/g, '\u0000');
+  const writtenTag = imageTag(text.replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, '\u0000'));
+  const core = /^v?\d+(?:\.\d+)*/.exec(tag)?.[0];
+  if (core && writtenTag.startsWith(core) && !/[\d.]/.test(writtenTag[core.length] ?? '')) return;
+  summary.warnings.push(`${relPath}: the version ${version} of ${who} is the default its image names (${shownText(written)}); a .env or the environment may set another, which the scan does not read.`);
+}
+
+// The version an image's tag gives, or '': only a tag of an image tag's own
+// form that starts with a number. Of a tag a chart or a deploy step fills in
+// in part, the numbers it writes out before the filled part
+// (`v2.39.1{{ .Values.suffix }}`, `11.2.0-#{Distro}#` → `v2.39.1`,
+// `11.2.0`), none where the filled part continues them
+// (`v2.{{ .Values.minor }}`) or is the whole tag. Never an OpenShift build's
+// (`origin-<name>`, `ose-<name>`), which carries the platform's release, not
+// the product's.
+const platformTagged = (ref) => /(?:^|\/)(?:origin|ose)-[^/]*$/i.test(String(ref ?? '').split('@')[0]);
+const versionTagOf = (ref, tag) => {
+  if (!tag || !/^v?\d/.test(tag) || platformTagged(ref)) return '';
+  if (/^[\w][\w.-]{0,127}$/.test(tag) && !tag.includes(HELM_VALUE)) return tag;
+  const core = /^v?\d+(?:\.\d+)*/.exec(tag)[0];
+  return core.length < tag.length && !/[\d.]/.test(tag[core.length]) ? core : '';
+};
+// An OpenShift build's release tag is said: the product version it ships is
+// not in the reference, so none is declared, and the compiler's bands fall to
+// their defaults.
+function notePlatformTag(summary, relPath, product, ref, tag) {
+  if (!platformTagged(ref) || !/^v?\d/.test(tag)) return;
+  summary.warnings.push(`${relPath}: ${shownText(ref)} is an OpenShift build of ${product}: its tag ${shownText(tag)} is the platform's release, not ${product}'s, so no version is declared.`);
+}
+
+// An image reference as it resolves with its variables unset — each
+// `${VAR:-default}` its default, any other `${…}` or `$VAR` nothing
+// (composeDefaults, as `docker compose config` resolves them with no variable
+// set) — less a digest a variable or a chart gives (`@sha256:${DIGEST}`,
+// `@sha256:{{ .Values.digest }}`) and a tag or a digest that resolved to
+// nothing.
+const resolvedImage = (image) => {
+  const written = String(image ?? '').trim().replace(/@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:(?:\$(?:\{[^{}]*\}|[A-Za-z_][A-Za-z0-9_]*)|helmvalue)$/, '');
+  const text = written.includes('$') ? composeDefaults(written).trim() : written;
+  // Trimmed by index: a regex would restart at every `:`.
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === ':' || text[end - 1] === '@')) end--;
+  return text.slice(0, end);
+};
+
+// The product row an image reference names (BACKEND_PATTERNS), or null.
+// `bare`: the field holds only an image (a compose service's `image:`, a
+// container's, a values file's `image:` or `repository:`), so a name alone
+// is that image, as a runtime reads it (`grafana` is `grafana:latest`); a
+// field that holds other names too (a values file's `name:`) keeps them
+// words. A URL, or a string with an `@` that starts no digest, is no image
+// (isImageReference), whatever row it would match.
+function backendPatternFor(ref, { bare = false } = {}) {
+  const rowFor = (r) => {
+    if (!isImageReference(r)) return null;
+    const probe = bare && /^\w[\w.-]*$/.test(r) ? `${r}:latest` : r;
+    return BACKEND_PATTERNS.find((p) => p.match.test(probe)) ?? null;
+  };
+  const row = rowFor(ref);
+  if (row) return row;
+  // A tag a deploy step fills in (`:#{Version}#`, `:{{ version }}`, the
+  // `:-debian-12` an unset `${VERSION}` leaves) leaves the name before it the
+  // image's; such a tag gives no version (versionTagOf).
+  const slash = ref.lastIndexOf('/');
+  const colon = ref.indexOf(':', slash + 1);
+  return colon > slash + 1 ? rowFor(ref.slice(0, colon)) : null;
+}
+
+function registerBackendFromImage(image, relPath, backends, evidence, summary, { dedupeByProduct = false, pipelines = null, bare = false } = {}) {
+  const ref = resolvedImage(image);
   if (!ref) return false;
-  const tag = imageTag(ref);
-  for (const p of BACKEND_PATTERNS) {
-    if (!p.match.test(ref)) continue;
+  const tag = versionTagOf(ref, imageTag(ref));
+  const p = backendPatternFor(ref, { bare });
+  if (p) {
     const baseId = `${p.signal}-${p.product}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
     if (dedupeByProduct && backends.some(b => b.signal === p.signal && b.product === p.product)) return false;
     let id = baseId, n = 2;
@@ -388,7 +477,11 @@ function registerBackendFromImage(image, relPath, backends, evidence, summary, {
       endpoints: [`http://${p.product}:80`],
       auth: { kind: 'none' },
     };
-    if (tag && /^v?\d/.test(tag)) backend.version = { declared: tag.replace(/^v/, ''), gating: 'off' };
+    if (tag && /^v?\d/.test(tag)) {
+      backend.version = { declared: tag.replace(/^v/, ''), gating: 'off' };
+      noteDefaultedVersion(summary, relPath, p.product, backend.version.declared, image, tag);
+    }
+    notePlatformTag(summary, relPath, p.product, ref, imageTag(ref));
     if (summary.invented) summary.invented.endpoints.push(id);   // a workload image states no port
     backends.push(backend);
     evidence[id] = relPath;
@@ -799,7 +892,7 @@ export function crawlFiles(filesInput, opts = {}) {
     },
     inferred: { slis: 0, slos: 0, baselines: false, tier: null },
     warnings: [],
-    omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
+    omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [], ruleWaits: [] },
     normalized,
     // What the crawler had to INVENT (no evidence in the repository): every
     // entry below becomes a `crawler.scaffold.<symbol>` mark (see `mark`).
@@ -938,20 +1031,20 @@ export function crawlFiles(filesInput, opts = {}) {
 
   settleCollectorGuesses(collectorState, pipelines, evidence, summary);
 
-  // Rules read from several files: the same ones declared once, the
-  // differing ones each kept — and both said, naming the files.
+  // Rules read the same from several places, declared as often as one place
+  // holds them; a resource named alike in several files whose rules differ
+  // (resourceAlternatives) — both said, naming the places.
+  const placesOf = (places) => (places.length > 4 ? `${places.slice(0, 4).join(', ')}, … (${places.length - 4} more)` : places.join(', '));
   const copiesRead = ruleCopiesRead(summary);
-  const namedCopies = (list) => list.slice(0, 8).map((c) => `${c.name} (${c.files.join(', ')})`).join('; ') + (list.length > 8 ? `; … (${list.length - 8} more)` : '');
-  if (copiesRead.same.length) {
-    summary.warnings.push(`${copiesRead.same.length} rule(s) are written the same in more than one file and are declared once — the ruler is given one of the copies: ${namedCopies(copiesRead.same)}.`);
+  if (copiesRead.length) {
+    summary.warnings.push(`${copiesRead.length} rule(s) are written the same in more than one place and declared as often as one place holds them — a rule file and the PrometheusRule that wraps it, a chart's ConfigMap and its PrometheusRule, deploy one of them; where a ruler loads several, its listing holds the rule more often: ${copiesRead.slice(0, 8).map((c) => `${c.name} (${placesOf(c.places)})`).join('; ')}${copiesRead.length > 8 ? `; … (${copiesRead.length - 8} more)` : ''}.`);
   }
-  if (copiesRead.differing.length) {
-    summary.warnings.push(`${copiesRead.differing.length} rule name(s) are written differently in more than one file, and each form is declared — which one runs is not known here (a kustomize overlay, for one, is not merged into its base): ${namedCopies(copiesRead.differing)}.`);
+  const alternatives = resourceAlternatives(summary);
+  // Rules named by a value filled in at deploy time: not declared (chartNamedRule), said.
+  const chartNamed = chartNamedRules.get(summary) ?? [];
+  if (chartNamed.length) {
+    summary.warnings.push(`${chartNamed.length} rule(s) are not declared: each takes its name from a value filled in at deploy time (a chart's values, a deploy step's variable), so which rules it renders is not known here — ${chartNamed.slice(0, 8).map((r) => `${r.name} (${r.relPath})`).join(', ')}${chartNamed.length > 8 ? `, … (${chartNamed.length - 8} more)` : ''}.`);
   }
-  // An SLO any of whose alerting rules is written differently in several
-  // files states no rules: held against the ruler's one copy, the closest
-  // form would answer for a rule that may not run.
-  const rulesDiffering = new Set(copiesRead.differing.filter((c) => c.kind === 'alert').map((c) => c.name));
 
   // ----- infer SLIs/SLOs (decompiler ⇄ compiler symmetry) -----
   // PRIMARY source: recording rules. compile.mjs materialises every SLI in
@@ -982,6 +1075,10 @@ export function crawlFiles(filesInput, opts = {}) {
   // policy rather than manufacturing junk L1 contracts that can never match
   // the live system.
   const haveRecordedSlis = sliMap.size > 0;
+  // A repository whose recording rules are all named at deploy time
+  // (chartNamedRule) records series all the same: its other alerts stay
+  // operational rules, never SLOs read from their names.
+  const recordsSeries = haveRecordedSlis || (chartNamedRules.get(summary) ?? []).some((r) => r.kind === 'record');
   // The ids an alert name derives must be spec Slugs (and Refs): letter-led,
   // at most 64 characters, trailing separators trimmed.
   const repoNs = String(repoName).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'svc';
@@ -993,10 +1090,14 @@ export function crawlFiles(filesInput, opts = {}) {
   };
   for (const alert of burnRateAlerts) {
     const linked = recordedSloForExpr(alert.expr, (id) => sloMap.has(id));
-    if (linked) { alert.slo = linked; continue; }
+    // A wait the rule's window could not take (no spec Duration, a value a
+    // chart or a deploy step fills in) is said where the rule binds an SLO;
+    // a rule left to the operational ones says it there.
+    if (linked) { alert.slo = linked; if (alert.waitLeftOut) summary.omitted.ruleWaits.push(alert.waitLeftOut); continue; }
 
-    if (haveRecordedSlis) { alert._drop = true; continue; }
+    if (recordsSeries) { alert._drop = true; continue; }
 
+    if (alert.waitLeftOut) summary.omitted.ruleWaits.push(alert.waitLeftOut);
     const sloId = symbolId(alert.slo, `${repoNs}_slo`);
     alert.slo = sloId;
     if (!sloMap.has(sloId)) {
@@ -1044,14 +1145,56 @@ export function crawlFiles(filesInput, opts = {}) {
   // is operational, when the repo records SLIs at all — a repo with no
   // recording rules still reads every alert as an SLO contract (the tier-3
   // fallback), and then declares no operational rules.
-  const ruleMeta = new Map(alertRules.map(r => [r.rule, r]));
-  const operational = haveRecordedSlis
-    ? operationalAlertRules(alertRules.map(r => r.rule), (id) => sloMap.has(id), {
-      engineOf: (rule) => ruleMeta.get(rule)?.engine ?? alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
-      sourceOf: (rule) => ruleMeta.get(rule)?.source,
-    })
-    : { kept: [], skipped: [] };
+  // A rule a chart's include gives labels the scan does not read is held to
+  // the labels it writes: `observogram.partial.alerting.rules[i]` names them
+  // (tools/lib/artefact-model.mjs, PARTIALLY OBSERVED FIELDS, mirrored here
+  // as the source-rule annotation is), and the comparison reads no other.
+  const operational = { kept: [], skipped: [] };
+  const partialRules = {};
+  if (recordsSeries) {
+    for (const r of alertRules) {
+      const one = operationalAlertRules([r.rule], (id) => sloMap.has(id), {
+        engineOf: () => r.engine ?? alertRuleEngine(r.rule, r.relPath),
+        sourceOf: () => r.source,
+      });
+      operational.skipped.push(...one.skipped);
+      for (const entry of one.kept) {
+        // What a chart or a deploy step fills in is no statement of the
+        // repository's: a wait that is no spec Duration is left out (said),
+        // a label it fills in is no label written, and the rule is held to
+        // the rest — `expr=`, `for=`, `labels=<keys written>`, and the keys
+        // whose values it fills in, `labels.filled=<keys>`.
+        const fields = [];
+        if (filledAtDeploy(entry.expr, { expression: true })) fields.push('expr=');
+        if (entry.for !== undefined && (filledAtDeploy(entry.for) || !SPEC_DURATION_RE.test(String(entry.for)))) {
+          summary.omitted.ruleWaits.push({ rule: entry.name, value: shownText(entry.for), source: r.source });
+          delete entry.for;
+          fields.push('for=');
+        }
+        const labelKeys = Object.keys(entry.labels ?? {});
+        const filledKeys = labelKeys.filter((k) => filledAtDeploy(entry.labels[k]));
+        for (const k of filledKeys) delete entry.labels[k];
+        if (filledKeys.includes('severity')) delete entry.severity;
+        if (entry.labels && !Object.keys(entry.labels).length) delete entry.labels;
+        if (r.partialLabels || filledKeys.length) fields.push(partialLabelsAnnotation(Object.keys(entry.labels ?? {})));
+        if (filledKeys.length) fields.push(filledLabelsAnnotation(filledKeys));
+        operational.kept.push(entry);
+        if (fields.length) partialRules[`${PARTIAL_ANNOTATION}alerting.rules[${operational.kept.length - 1}]`] = fields.sort().join(';');
+      }
+    }
+  }
   summary.discovered.alertRules = operational.kept.length;
+  if (summary.omitted.ruleWaits.length) {
+    summary.warnings.push(`${summary.omitted.ruleWaits.length} alert rule wait(s) are filled in at deploy time or are no spec Duration, and are left out — each rule is held to the rest of what it writes: ${summary.omitted.ruleWaits.slice(0, 8).map((o) => `${o.rule}=${o.value} (${o.source})`).join(', ')}${summary.omitted.ruleWaits.length > 8 ? ', …' : ''}.`);
+  }
+  // A resource named alike in several files whose rules differ: each form is
+  // declared and stated — said, naming them.
+  if (alternatives.length) {
+    const ruleNames = (names) => names.map((n) => n.replace(/^(?:alert|record) /, ''));
+    const named = alternatives.slice(0, 8).map((a) => `${a.resource.replace(/^\//, '')} (${placesOf(a.places)}: ${ruleNames(a.names).slice(0, 4).join(', ')}${a.names.length > 4 ? ', …' : ''})`).join('; ')
+      + (alternatives.length > 8 ? `; … (${alternatives.length - 8} more)` : '');
+    summary.warnings.push(`${alternatives.length} PrometheusRule resource(s) named alike in more than one file hold rules written differently — a kustomize base and its overlays (one form runs; the scan does not merge them) or separate apps (each runs): every form is declared and stated, and each live rule is held to the closest form: one no ruler runs reads declared, not live, and so may one that runs, where it has drifted further from the ruler than another: ${named}.`);
+  }
   if (operational.kept.length) {
     const names = operational.kept.map(r => r.name);
     const shown = names.slice(0, 8).join(', ') + (names.length > 8 ? `, … (${names.length - 8} more)` : '');
@@ -1400,7 +1543,9 @@ export function crawlFiles(filesInput, opts = {}) {
         ...alertNameAnnotations(alertRules),
         // The rules each burn-rate entry was read from, with their own terms: the entry keeps only
         // { slo, windows }, and the windows are this reading's, so the comparison reads the rules here.
-        ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id), rulesDiffering) : {}),
+        ...(haveRecordedSlis ? sourceRuleAnnotations(alertRules, burnRateAlerts, (id) => sloMap.has(id)) : {}),
+        // The operational rules held to the labels they write (a chart's include renders the rest).
+        ...partialRules,
         ...(chaosFound.scenarios.length && chaosControlSummary(chaosFound) ? { 'crawler.chaos.control': chaosControlSummary(chaosFound) } : {}),
         ...(chaosFound.scenarios.length && chaosFound.toggle?.enabled === false ? { 'crawler.chaos.disabled': `${chaosFound.toggle.path}: false (${chaosFound.toggle.file})` } : {}),
         ...metricAnnotations,
@@ -1565,47 +1710,221 @@ const HELM_CLOSE = '\u0000helm-close\u0000';
 // deploy time, which the repository does not state.
 const HELM_VALUE = 'helmvalue';
 const helmLiteral = (text) => text.replaceAll('{{', HELM_OPEN).replaceAll('}}', HELM_CLOSE);
+// Text a warning or the summary shows: a value the chart fills in as `…`,
+// never the placeholder.
+const shownText = (value) => String(value ?? '').trim().replaceAll(HELM_VALUE, '…');
 
 // The stripped text and, for each of its lines, the index of the line of
 // `content` it was left from (`origin`; a dropped line leaves none): where
 // the reader stops in the text is a line of the template.
-function stripGoTemplate(content) {
+//
+// `rules`: the text is read for its rules (a ConfigMap's rules file, a
+// PrometheusRule resource). A line that holds only an include — `{{ toYaml
+// .Values.extraLabels | indent 8 }}`, `{{- include "x.labels" . | nindent 6
+// }}` — renders YAML from the chart's values or helpers, which the scan does
+// not read. Left as HELM_VALUE it is a line the reader cannot place, and a
+// rule it stands in would be cut or read in part. It is left out instead, and
+// where the map it renders into is one — a rule's labels, the rule itself,
+// its group — a key marks it there (INCLUDE_MARK, includeColumn), so the
+// rules walk knows that rule's labels are written only in part
+// (withoutIncludeMarks). Where it renders list items (more rules, more
+// groups) nothing marks it: the rules written around it are whole. `shift`:
+// the columns a ConfigMap block was de-indented by, which an include's
+// `indent` argument still counts.
+function stripGoTemplate(content, { rules = false, shift = 0 } = {}) {
   const kept = [];
   const origin = [];
+  const includes = [];   // rules: { at, column } — an include left out, and the column its YAML starts at
+  let scalar = -1;       // rules: the column an open block scalar's text runs deeper than, or -1
   // The lines the YAML reader counts (a CR alone is a break too), a
   // byte-order mark set aside as the reader sets it aside.
   const text = String(content);
   (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text).split(/\r\n?|\n/).forEach((line, i) => {
     const t = line.trim();
+    if (rules) {
+      const templated = isTemplateLine(line);
+      // A template line inside a block scalar is its text, as before — but
+      // one that renders at or left of the scalar's key renders after it,
+      // and ends it.
+      if (scalar >= 0 && t && !templated && line.length - line.trimStart().length <= scalar) scalar = -1;
+      if (scalar >= 0 && templated) {
+        const a = templateLineActions(line);
+        if (a.render && !a.literal && a.column !== null && (a.argued ? a.column - shift : a.column) <= scalar) scalar = -1;
+      }
+      if (templated && scalar < 0) {
+        const actions = templateLineActions(line);
+        if (!actions.render) return;
+        if (!actions.literal) {
+          const column = actions.column === null ? null : actions.argued ? actions.column - shift : actions.column;
+          includes.push({ at: kept.length, column, argued: actions.argued, own: line.length - line.trimStart().length });
+          kept.push(null);
+          origin.push(i);
+          return;
+        }
+      }
+    }
     if (/^\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}$/.test(t)) return;            // comment
     if (/^\{\{-?\s*(if|else|end|range|with|define|block)\b.*?-?\}\}$/.test(t)) return; // control flow
-    kept.push(line
+    const out = line
       .replace(/\{\{-?\s*"((?:[^"\\]|\\.)*)"\s*-?\}\}/g, (_, s) => helmLiteral(s.replace(/\\(.)/g, '$1')))   // {{ "…" }} prints …
       .replace(/\{\{-?\s*`([^`]*)`\s*-?\}\}/g, (_, s) => helmLiteral(s))                                      // {{ `…` }} prints …
       .replace(/\{\{-?[\s\S]*?-?\}\}/g, HELM_VALUE) // inline value injection
-      .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}'));
+      .replaceAll(HELM_OPEN, '{{').replaceAll(HELM_CLOSE, '}}');
+    kept.push(out);
     origin.push(i);
+    if (rules && scalar < 0) scalar = blockScalarColumn(out);
   });
-  return { text: kept.join('\n'), origin };
+  if (!rules) return { text: kept.join('\n'), origin };
+  const columnOf = (l) => l.length - l.trimStart().length;
+  includes.forEach(({ at, column, argued, own }, k) => {
+    // An indent the chart computes (`indent (int .Values.n)`): its YAML
+    // renders beside the line above it, or under a `key:` that holds nothing.
+    let renders = column;
+    if (renders === null) {
+      let above = at - 1;
+      while (above >= 0 && (kept[above] === null || !kept[above].trim() || /^\s*#/.test(kept[above]))) above--;
+      if (above < 0) renders = -1;
+      else if (/:[ \t]*(?:#.*)?$/.test(kept[above])) {
+        // Under a `key:` with nothing after it: the column of the map's own
+        // keys — the first line of YAML after the include deeper than the
+        // key — else one step past the key.
+        let below = at + 1;
+        while (below < kept.length && (kept[below] === null || !kept[below].trim() || /^\s*#/.test(kept[below]))) below++;
+        const keyColumn = columnOf(kept[above]);
+        renders = below < kept.length && columnOf(kept[below]) > keyColumn ? columnOf(kept[below]) : keyColumn + 2;
+      } else renders = columnOf(kept[above]);
+    }
+    const where = includeColumn(kept, at, renders, argued);
+    // A scalar the action prints: the rest of a plain scalar, or the value of
+    // a key that holds one — the placeholder there, never a key.
+    if (where && typeof where === 'object') {
+      if (where.join >= 0) { kept[where.join] = `${kept[where.join].replace(/[ \t]+$/, '')} ${HELM_VALUE}`; kept[at] = null; }
+      else kept[at] = `${' '.repeat(own)}${HELM_VALUE}`;
+      return;
+    }
+    kept[at] = where > 0 ? `${' '.repeat(where)}${INCLUDE_MARK}${k}: ""` : null;
+  });
+  const lines = [];
+  const from = [];
+  kept.forEach((line, j) => { if (line !== null) { lines.push(line); from.push(origin[j]); } });
+  return { text: lines.join('\n'), origin: from };
 }
 
 // A line that holds only template actions ({{- if .Values.x }}, {{- end }},
 // {{ toYaml .Values.y | indent 4 }}).
 const isTemplateLine = (line) => /^\s*(?:\{\{.*?\}\}\s*)+$/.test(line);
 
-// How many lines of a stripped template text to read when the reader cannot
-// place its line n (1-based): those before the rule the line stands in — the
-// last `- alert:` or `- record:` item above it whose lines it still runs
-// through — so no rule is read in part; else those before the line.
-function cutBeforeRule(lines, n) {
-  const indent = (l) => l.length - l.trimStart().length;
-  for (let i = Math.min(n, lines.length) - 2; i >= 0; i--) {
-    const item = /^(\s*)- (?:alert|record):/.exec(lines[i]);
-    if (!item) continue;
-    const inside = lines.slice(i + 1, n - 1).every((l) => !l.trim() || indent(l) > item[1].length);
-    return inside ? i : n - 1;
+// What a line of template actions renders: nothing (`render` false) when
+// every action is control flow, a comment or a variable's assignment; a
+// string (`literal`) when one prints a literal; else YAML starting at
+// `column` — an action's `indent`/`nindent` argument (`argued`; null where
+// the chart computes it), or the line's own column.
+const SILENT_ACTION_RE = /^(?:(?:if|else|end|range|with|define|block)\b|\/\*|\$[\w]*\s*:?=)/;
+function templateLineActions(line) {
+  const bodies = [...line.matchAll(/\{\{-?([\s\S]*?)-?\}\}/g)].map((m) => m[1].trim());
+  if (bodies.some((b) => /^(?:"(?:[^"\\]|\\.)*"|`[^`]*`)$/.test(b))) return { render: true, literal: true };
+  const rendering = bodies.filter((b) => !SILENT_ACTION_RE.test(b));
+  if (!rendering.length) return { render: false };
+  for (const b of rendering) {
+    const m = /\bn?indent\s+(\S+)/.exec(b);
+    if (m) return { render: true, column: /^\d+$/.test(m[1]) ? Number(m[1]) : null, argued: true };
   }
-  return n - 1;
+  return { render: true, column: line.length - line.trimStart().length, argued: false };
+}
+
+// The column a line's block scalar (`expr: |`, `- description: >-`) runs
+// deeper than — its key's — or -1 for a line that opens none. Only after a
+// key or a dash: a bare `>` or `|` is a plain scalar's text (a comparison
+// wrapped onto a line of its own).
+function blockScalarColumn(line) {
+  const m = /^(\s*)((?:-[ \t]+)*)(?:(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s#'"-][^#]*?)[ \t]*:[ \t]+)?[|>][-+1-9]{0,2}[ \t]*(?:#.*)?$/.exec(line);
+  return m && (m[2] || /:[ \t]+[|>]/.test(line)) ? m[1].length + m[2].length : -1;
+}
+
+// The key stripGoTemplate leaves where an include renders into a map.
+const INCLUDE_MARK = 'observogram.include-';
+const INCLUDE_MARK_RE = /^observogram\.include-\d+$/;
+
+// Where an include left out of `lines` (at index `at`) renders, from the
+// column its YAML starts at: the column of a map's keys to mark (> 0), -1
+// where nothing is marked — list items (more rules, more groups), the top of
+// the text, or a place no key can stand — or `{ join }` where the action
+// prints a scalar: the value of the key on line `join`, or (-1) the rest of a
+// plain scalar. An action with no `indent` argument (`argued` false) prints
+// a scalar where it continues one; `toYaml … | nindent` renders YAML.
+const SCALAR_RULE_KEY_RE = /^(?:expr|for|keep_firing_for|alert|record|title|uid|condition|noDataState|execErrState|interval|limit|query_offset|name)$/;
+function includeColumn(lines, at, column, argued = true) {
+  if (column <= 0) return -1;
+  const quiet = (l) => l === null || !l.trim() || /^\s*#/.test(l);
+  const columnOf = (l) => l.length - l.trimStart().length;
+  // A line in the include's own column: a list item, or a key beside it —
+  // or, above it, `rules:` / `groups:` opening an indentless list (its first
+  // items), or a plain scalar's continuation, which an action with no indent
+  // argument continues.
+  const beside = (l, above, j = -1) => {
+    if (/^\s*-(?:[ \t]|$)/.test(l)) return -1;
+    if (!above) return column;
+    if (/^\s*["']?(?:rules|groups)["']?[ \t]*:[ \t]*(?:#.*)?$/.test(l)) {
+      // An indentless list only where the include follows the key (it
+      // renders the list) or the list's first item stands in the key's own
+      // column; after an indented list it renders the keys beside the key.
+      let n = j + 1;
+      while (n < lines.length && n !== at && quiet(lines[n])) n++;
+      if (n === at || n >= lines.length) return -1;
+      if (columnOf(lines[n]) === columnOf(l) && /^\s*-(?:[ \t]|$)/.test(lines[n])) return -1;
+      return column;
+    }
+    if (!argued && !/^\s*(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s#'"][^#]*?)[ \t]*:(?:[ \t]|$)/.test(l)) return { join: -1 };
+    return column;
+  };
+  for (let j = at - 1; j >= 0; j--) {
+    const line = lines[j];
+    if (quiet(line) || columnOf(line) > column) continue;
+    if (columnOf(line) === column) return beside(line, true, j);
+    for (let n = at + 1; n < lines.length; n++) {
+      const next = lines[n];
+      if (quiet(next) || columnOf(next) > column) continue;
+      if (columnOf(next) === column) return beside(next, false);
+      break;
+    }
+    // `line` holds the include: what it renders is under it, or beside it.
+    const body = line.trim();
+    const dashes = /^(?:-[ \t]+)+/.exec(body)?.[0] ?? '';
+    const inner = columnOf(line) + dashes.length;   // where an item's own map starts
+    const rest = body.slice(dashes.length);
+    if (dashes && column === inner) return column;
+    if (dashes && column < inner) return -1;
+    // Under `line`, with no line of its own column, a map's keys may stand at
+    // any column deeper than `line`: the mark never deeper than one step past
+    // it, whatever indent the chart asks for.
+    const under = Math.min(column, inner + 2);
+    if (!rest) return under;
+    const key = /^("(?:[^"\\]|\\.)*"|'[^']*'|[^\s#'"][^#]*?)[ \t]*:(?:[ \t]+(.*))?$/.exec(rest);
+    if (!key) return -1;
+    // `key:` with nothing after it: the include renders its value — a list
+    // under `rules:` or `groups:`; the scalar of a key that holds one (a
+    // rule's `expr`, `for`, …, or a key of its labels or annotations); else a
+    // map.
+    if (!String(key[2] ?? '').replace(/(?:^|[ \t]+)#.*$/, '').trim()) {
+      if (/^["']?(?:rules|groups)["']?$/.test(key[1])) return -1;
+      const name = key[1].replace(/^["']|["']$/g, '');
+      let parent = null;
+      for (let p = j - 1; p >= 0; p--) {
+        const l = lines[p];
+        if (quiet(l) || columnOf(l) >= columnOf(line)) continue;
+        parent = l.trim().replace(/^(?:-[ \t]+)+/, '');
+        break;
+      }
+      const inStringMap = parent !== null && /^["']?(?:labels|annotations)["']?[ \t]*:[ \t]*(?:#.*)?$/.test(parent);
+      if (SCALAR_RULE_KEY_RE.test(name) || inStringMap) return { join: j };
+      return under;
+    }
+    // Deeper than a key's plain scalar: an action with no indent argument
+    // continues it; YAML rendered there stands beside that key.
+    if (!argued) return { join: -1 };
+    return inner > 0 ? inner : -1;
+  }
+  return -1;
 }
 
 // A line of a stripped text (from 1) → the line of the template it was left
@@ -1631,16 +1950,36 @@ function extractConfigMapData(content) {
   const flush = () => {
     if (current) {
       // Template lines after the block's last line of YAML belong to what
-      // follows it (the {{- end }} closing the document), not to the block.
+      // follows it (the {{- end }} closing the document, an include that
+      // renders the ConfigMap's next keys), not to the block — but for an
+      // include whose YAML starts inside the block (its labels, its rules).
       let end = current.body.length;
-      while (end > 0 && (!current.body[end - 1].trim() || isTemplateLine(current.body[end - 1]))) end--;
+      while (end > 0) {
+        const line = current.body[end - 1];
+        if (line.trim()) {
+          if (!isTemplateLine(line)) break;
+          const actions = templateLineActions(line);
+          // A computed indent (column null) renders where the line stands.
+          if (actions.render && (actions.literal || (actions.column ?? indentOf(line)) > current.indent)) break;
+        }
+        end--;
+      }
       if (current.body.slice(end).some(isTemplateLine)) current.body = current.body.slice(0, end);
     }
-    if (current && current.body.some((l) => l.trim())) {
-      // De-indented by the block's YAML; a template line left of it stays at the margin.
+    // A block that is template actions alone (`{{ .Files.Get "dashboards/x.json"
+    // | indent 4 }}`, `{{ toYaml .Values.rules | indent 4 }}`) states nothing
+    // of its own: the chart fills it in whole, and it is not read.
+    if (current && current.body.some((l) => l.trim() && !isTemplateLine(l))) {
+      // De-indented by the block's YAML; a template line left of it stays at
+      // the margin. `base`: the columns taken off, which an include's
+      // `indent` argument still counts (stripGoTemplate's `shift`).
       const widths = current.body.filter((l) => l.trim() && !isTemplateLine(l)).map(indentOf);
       const base = widths.length ? Math.min(...widths) : 0;
-      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(Math.min(base, indentOf(l)))).join('\n'), first: current.first });
+      // `tail`: the trailing template lines kept above, which only a rules
+      // file reads (another config is read without them, as before).
+      let plainEnd = current.body.length;
+      while (plainEnd > 0 && (!current.body[plainEnd - 1].trim() || isTemplateLine(current.body[plainEnd - 1]))) plainEnd--;
+      blocks.push({ key: current.key, body: current.body.map((l) => l.slice(Math.min(base, indentOf(l)))).join('\n'), first: current.first, base, tail: current.body.length - plainEnd });
     }
     current = null;
   };
@@ -1663,7 +2002,9 @@ function extractConfigMapData(content) {
     if (dataM) { dataIndent = dataM[1].length; continue; }
 
     if (dataIndent >= 0) {
-      if (trimmed !== '' && indent <= dataIndent) {
+      // A line of template actions between the data keys ({{- if
+      // .Values.alerts.enabled }} at the margin) does not end the data map.
+      if (trimmed !== '' && indent <= dataIndent && !isTemplateLine(line)) {
         dataIndent = -1;   // left the data block
       } else {
         const keyM = /^(\s*)([\w][\w.-]*):\s*\|[-+0-9]*\s*$/.exec(line);
@@ -1734,12 +2075,19 @@ function prometheusRuleResources(text) {
   return out;
 }
 
+// A values file's image object as one reference: `registry`, `repository`
+// (or `repo`, `name`), `tag`, `digest` — the shape Bitnami's and most
+// charts' values give an image.
 function imageFromHelmImageObject(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
   const repository = obj.repository || obj.repo || obj.name;
   if (typeof repository !== 'string') return null;
+  const registry = typeof obj.registry === 'string' && obj.registry.trim() && typeof obj.repository === 'string' ? `${obj.registry.trim().replace(/\/+$/, '')}/` : '';
   const tag = typeof obj.tag === 'string' || typeof obj.tag === 'number' ? String(obj.tag) : '';
-  return tag ? `${repository}:${tag}` : repository;
+  // A digest given as its hex alone is sha256's (the grafana/alloy chart takes "sha256:XYZ" or "XYZ").
+  const hex = typeof obj.digest === 'string' ? obj.digest.trim() : '';
+  const digest = hex ? `@${/^[0-9a-f]{64}$/i.test(hex) ? `sha256:${hex}` : hex}` : '';
+  return `${registry}${repository}${tag ? `:${tag}` : ''}${digest}`;
 }
 
 function looksLikeActuatorMetricsConfig(relPath, content, obj = null) {
@@ -2200,6 +2548,8 @@ function extractPrometheusMetricNames(expr) {
 function addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, context) {
   const names = extractPrometheusMetricNames(expr);
   for (const name of names) {
+    // A name a chart fills in (`{{ .Values.prefix }}_requests_total`) is no metric's.
+    if (name.includes(HELM_VALUE)) continue;
     addMetricDefinition(metricDefinitions, evidence, summary, {
       name,
       type: 'promql-reference',
@@ -2321,16 +2671,29 @@ function alertNameAnnotations(alertRules) {
 // the placeholder stripGoTemplate leaves (HELM_VALUE), or a ${VAR} a deploy
 // step substitutes: held against what live renders there it would read as a
 // difference, so that SLO states no rules and compares as it always did.
+//
+// A rule whose labels a chart's include renders in part is stated with the
+// labels it writes, and says so (`partial`): the comparison holds it to them.
 const SOURCE_RULES_ANNOTATION = 'observogram.source_rules.policy.burn_rate_alerts.';
-function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo, rulesDiffering = new Set()) {
-  const bySlo = sourceRuleTerms(alertRules.map((r) => r.rule), hasSlo);
+const PARTIAL_ANNOTATION = 'observogram.partial.';
+const partialLabelsAnnotation = (keys) => `labels=${[...new Set(keys.map(String))].sort().join(',')}`;
+// Of an operational rule's labels, the keys it writes with a value filled in
+// at deploy time: written, value unknown (artefact-model.mjs's
+// FILLED_LABELS_FIELD, mirrored).
+const filledLabelsAnnotation = (keys) => `labels.filled=${[...new Set(keys.map(String))].sort().join(',')}`;
+function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo) {
+  const meta = new Map(alertRules.map((r) => [r.rule, r]));
+  const shown = (labels) => (isMapping(labels) ? Object.keys(labels).filter((k) => labels[k] !== null && labels[k] !== undefined) : []);
+  const bySlo = sourceRuleTerms(alertRules.map((r) => r.rule), hasSlo, {
+    partialOf: (rule) => (meta.get(rule)?.partialLabels ? { labels: shown(rule.labels).sort() } : null),
+  });
   // Decided on each rule as the file writes it: what the reading keeps of it
-  // no longer shows a labels map the chart fills in whole. A rule written
-  // differently in several files (ruleCopiesRead) is not known as the ruler
-  // lists it either.
+  // no longer shows a labels map the chart fills in whole. A rule written in
+  // several forms (a kustomize base and its overlay) states every form: the
+  // comparison holds the rule live runs to the closest (pairRulesOfOneName).
   const withheld = new Set();
   for (const r of alertRules) {
-    if (!notStatedAsWritten(r) && !rulesDiffering.has(r.name)) continue;
+    if (!notStatedAsWritten(r)) continue;
     for (const slo of sourceRuleTerms([r.rule], hasSlo).keys()) withheld.add(slo);
   }
   const out = {};
@@ -2356,7 +2719,58 @@ function sourceRuleAnnotations(alertRules, burnRateAlerts, hasSlo, rulesDifferin
 //     (asListed, tools/lib/mini-yaml.mjs). A label value that is an alias to
 //     no anchor is stated as its text: the ruler refuses such a file, so live
 //     lists none of its rules to hold the statement to.
-const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*\}|\$[A-Za-z_][A-Za-z0-9_]*/;
+// A braced variable takes the forms a deploy step's substitution writes with
+// a default or an edit (`${var:=default}`, `${var:-d}`, `${var:+a}`,
+// `${var:0:7}`, `${var/a/b}`: Flux's post-build substitution, envsubst).
+const INJECTED_NAME_RE = /\$\{[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*/;
+
+// A value of an operational rule's that a chart or a deploy step fills in:
+// the placeholder stripGoTemplate leaves, or a variable a deploy step
+// substitutes — any `${…}`, and a bare `$NAME` written as an environment
+// variable is (upper case) — never the ruler's own templating
+// ({{ $labels.x }}, quoted strings inside an action honoured), a capture
+// group (`$1`, or `$host` / `${host}` naming a group the expression's regex
+// defines, `(?P<host>…)`), text PromQL holds itself (`/odata/$metadata`,
+// `Outer$Inner`), a PromQL comment, or Grafana's own macros
+// (`$__rate_interval`), which live lists as written (crawlFiles holds the
+// rule to the rest).
+const DEPLOY_VARIABLE_RE = /\$\{(?!__)[A-Za-z_][A-Za-z0-9_.]*(?:[:/#%^,=+?-][^}]*)?\}|\$(?!__)[A-Z_][A-Z0-9_]*(?![A-Za-z0-9_])/g;
+const HELM_VALUE_RE = new RegExp(`\\b${HELM_VALUE}\\b`);
+function filledAtDeploy(value, { expression = false } = {}) {
+  if (typeof value !== 'string') return false;
+  let own = withoutRulerTemplates(value);
+  if (expression) own = withoutPromqlComments(own);
+  if (HELM_VALUE_RE.test(own)) return true;
+  const groups = new Set([...own.matchAll(/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/g)].map((m) => m[1]));
+  for (const m of own.matchAll(DEPLOY_VARIABLE_RE)) {
+    if (!groups.has(m[0].replace(/^\$\{?|\}$/g, ''))) return true;
+  }
+  return false;
+}
+// The text less the ruler's own template actions (`{{ … }}`), the quoted
+// strings inside an action honoured (`{{ reReplaceAll ":[0-9]{2,5}" "" … }}`).
+function withoutRulerTemplates(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf('{{', i);
+    if (open < 0) { out += text.slice(i); break; }
+    out += text.slice(i, open);
+    let j = open + 2;
+    let closed = -1;
+    while (j < text.length) {
+      const ch = text[j];
+      if (ch === '"') { j++; while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1; j++; continue; }
+      if (ch === '`') { const e = text.indexOf('`', j + 1); j = e < 0 ? text.length : e + 1; continue; }
+      if (ch === '}' && text[j + 1] === '}') { closed = j + 2; break; }
+      j++;
+    }
+    if (closed < 0) { out += text.slice(open); break; }
+    i = closed;
+  }
+  return out;
+}
+
 function notStatedAsWritten({ rule, labelsUnread }) {
   if (labelsUnread) return true;
   const text = (v) => (typeof v === 'string' ? v : '');
@@ -2495,8 +2909,8 @@ function buildLifecycleAnnotations(classified, { recordingRules, alertRules, bur
   recordingRules.forEach((rule, i) => {
     ownRule(rule, fileOf(evidence[`QRY-${i + 1}-${slug(rule.name).slice(0, 16)}`]), new Set());
   });
-  for (const { rule, relPath } of alertRules) {
-    const file = fileOf(relPath);
+  // A rule speaks for its file and for each place a copy of it was left out of (ruleCopy).
+  for (const { rule, relPath, copies } of alertRules) for (const file of new Set([relPath, ...(copies ?? [])].map(fileOf))) {
     const { alertName, expr, slo } = burnCandidateFromAlertRule(rule);
     const linked = linkedSlo(expr);
     if (linked) {
@@ -2607,7 +3021,8 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     if (typeof node === 'string') {
       const key = path[path.length - 1] || '';
       if (/^(image|repository|repo|name)$/.test(String(key).toLowerCase())) {
-        registerBackendFromImage(node, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines });
+        // `image:` and `repository:` hold only an image; `name:` and `repo:` other names too.
+        registerBackendFromImage(node, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines, bare: /^(image|repository)$/i.test(String(key)) });
       }
       return;
     }
@@ -2617,12 +3032,16 @@ function walkHelmValues(f, backends, pipelines, evidence, summary, disabledCompo
     }
     if (typeof node !== 'object') return;
 
-    const image = imageFromHelmImageObject(node);
-    if (image) registerBackendFromImage(image, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines });
+    const joined = imageFromHelmImageObject(node);
+    // Where the registry joined in leaves no row to match (a row anchored at the namespace), the reference without it.
+    const bareObject = typeof node.repository === 'string';
+    const image = joined && !backendPatternFor(resolvedImage(joined), { bare: bareObject })
+      ? (imageFromHelmImageObject({ ...node, registry: undefined }) ?? joined) : joined;
+    if (image) registerBackendFromImage(image, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines, bare: bareObject });
 
     for (const [key, value] of Object.entries(node)) {
       if (key === 'image' && typeof value === 'string') {
-        registerBackendFromImage(value, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines });
+        registerBackendFromImage(value, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines, bare: true });
       }
       visit(value, path.concat(key));
     }
@@ -2674,7 +3093,7 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
       ...(Array.isArray(podSpec?.initContainers) ? podSpec.initContainers : []),
     ];
     for (const c of containers) {
-      registerBackendFromImage(c?.image, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines });
+      registerBackendFromImage(c?.image, f.relPath, backends, evidence, summary, { dedupeByProduct: true, pipelines, bare: true });
     }
   }
 }
@@ -2713,30 +3132,19 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     }
   };
 
-  // A text cut from the template, read by its walker. An include alone on a
-  // line (left as HELM_VALUE) renders YAML the scan cannot place: where the
-  // reader throws on one, what precedes the line is read, and the scan says
-  // where it stopped (noteStop, in the template's own lines).
-  const readTemplateText = (kind, sub, lineAt) => {
-    try { return mappingStops(lineAt, () => route(kind, sub)); }
-    catch (e) {
-      const at = /^yaml line (\d+): expected "key: value", got "helmvalue(?: helmvalue)*"$/.exec(String(e?.message ?? ''));
-      if (!at) throw e;
-      const n = Number(at[1]);
-      noteStop?.(lineAt(n));
-      const lines = sub.content.split('\n');
-      return mappingStops(lineAt, () => route(kind, { ...sub, content: lines.slice(0, cutBeforeRule(lines, n)).join('\n') }));
-    }
-  };
-
   const blocks = extractConfigMapData(f.content);
 
-  for (const { key, body, first } of blocks) {
-    const { text: clean, origin } = stripGoTemplate(body);
-    // What the reader says of the block, it says of the template's own lines.
-    const lineAt = templateLineAt(origin, first);
+  for (const { key, body: whole, first, base, tail = 0 } of blocks) {
+    // A trailing include is kept only where the block is read for its rules:
+    // another config ends at its last line of YAML, as it always did.
+    const lines = whole.split('\n');
+    const plain = tail ? lines.slice(0, lines.length - tail).join('\n') : whole;
+    const { text: clean } = stripGoTemplate(plain);
+    const lk0 = key.toLowerCase();
+    const rulesBlock = /rule/.test(lk0) || /^groups:\s*$/m.test(clean);
+    const body = rulesBlock ? whole : plain;
+    if (!body.trim()) continue;
     const lk = key.toLowerCase();
-    const sub = { relPath: `${f.relPath}#${key}`, content: clean };
     let kind = 'unknown';
 
     if (/rule/.test(lk) || /^groups:\s*$/m.test(clean))                              kind = 'prometheus-rules';
@@ -2749,12 +3157,23 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
     // scrape jobs, or its exporters alone.
     else if (/^receivers:/m.test(clean) && (/^exporters:/m.test(clean) || /^\s+scrape_configs:/m.test(clean))) kind = 'otel-collector';
 
+    // A rules file is read for its rules (stripGoTemplate's `rules`): an
+    // include alone on a line is left out, and the rule it renders into is
+    // held to the labels it writes.
+    const { text, origin } = kind === 'prometheus-rules' ? stripGoTemplate(body, { rules: true, shift: base }) : stripGoTemplate(body);
+    // What the reader says of the block, it says of the template's own lines.
+    const lineAt = templateLineAt(origin, first);
+    const sub = { relPath: `${f.relPath}#${key}`, content: text };
     // A ConfigMap whose data key looks like an observability artefact but
     // can't be parsed is a genuine signal worth surfacing; ordinary
     // non-observability data keys (scripts, plain config) are simply skipped.
-    try { readTemplateText(kind, sub, lineAt); }
+    try { mappingStops(lineAt, () => route(kind, sub)); }
     catch (e) { summary.warnings.push(`Failed to parse ${sub.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
+
+  // The template read for its rules, once it holds some.
+  let rulesText = null;
+  const wholeRules = () => (rulesText ??= stripGoTemplate(f.content, { rules: true }));
 
   // No embedded ConfigMap payloads — the template may itself be a single
   // observability manifest. Route it only when its *shape* matches (filename
@@ -2762,11 +3181,14 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
   // `deployment-alertmanager.yaml`); stay silent otherwise, since the
   // overwhelming majority of chart templates are Deployments, Services,
   // Secrets, etc. that carry no observability contracts.
-  const whole = stripGoTemplate(f.content);
   if (blocks.length === 0) {
-    const kind = sniffObservabilityKind(whole.text);
+    const whole = stripGoTemplate(f.content);
+    let kind = sniffObservabilityKind(whole.text);
+    // An include the plain strip cannot place does not hide a rules file.
+    if (kind === 'unknown' && sniffObservabilityKind(wholeRules().text) === 'prometheus-rules') kind = 'prometheus-rules';
+    const read = kind === 'prometheus-rules' ? wholeRules() : whole;
     if (kind !== 'unknown') {
-      try { mappingStops(templateLineAt(whole.origin), () => route(kind, { relPath: f.relPath, content: whole.text }, { resources: false })); } catch (_) { /* speculative */ }
+      try { mappingStops(templateLineAt(read.origin), () => route(kind, { relPath: f.relPath, content: read.text }, { resources: false })); } catch (_) { /* speculative */ }
     }
   }
 
@@ -2774,9 +3196,11 @@ function walkStrippedTemplate(f, buckets, evidence, summary) {
   // apiVersion, kind and spec alone (prometheusRuleResources), beside any
   // ConfigMap the template holds too. A resource is no guess: one that does
   // not read is said.
+  if (!PROMETHEUS_RULE_KIND_RE.test(f.content)) return;
+  const whole = wholeRules();
   for (const resource of prometheusRuleResources(whole.text)) {
     const lineAt = (n) => templateLineAt(whole.origin)(resource.lines[Math.min(Math.max(n, 1), resource.lines.length) - 1] + 1);
-    try { readTemplateText('prometheus-rules', { relPath: f.relPath, content: resource.text }, lineAt); }
+    try { mappingStops(lineAt, () => route('prometheus-rules', { relPath: f.relPath, content: resource.text })); }
     catch (e) { summary.warnings.push(`Failed to parse ${f.relPath}: ${atFileLine(e.message, lineAt)}`); }
   }
 }
@@ -2790,18 +3214,31 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
     if (!obj?.services) continue;
     for (const [svcName, svc] of Object.entries(obj.services)) {
     // The image as `docker compose config` resolves it with the variables
-    // unset: each `${VAR:-default}` its default, any other `${…}` nothing.
-    const image = composeDefaults(svc?.image).trim();
-    if (!image) continue;
-    for (const p of BACKEND_PATTERNS) {
-      if (p.match.test(image)) {
+    // unset (resolvedImage); a service's `image:` holds only an image, so a
+    // name alone is that image (backendPatternFor's `bare`).
+    const image = resolvedImage(svc?.image);
+    // An image whose variables leave it no name — `${REGISTRY}/${IMAGE}:${TAG}`
+    // resolves to `/`, `${IMAGE}:${TAG:-latest}` to `:latest` — is as wholly a
+    // variable as `${GRAFANA_IMAGE}`; its name is the last segment of its path,
+    // before a tag or a digest.
+    const nameOf = (ref) => ref.split('@')[0].replace(/:[^/:]*$/, '').split('/').pop();
+    if (!image || !/[A-Za-z0-9]/.test(nameOf(image))) {
+      // An image that is wholly a variable is said, not dropped in silence —
+      // but for a service compose builds (`build:`): its image is the
+      // project's own, never a backend.
+      if (/\$/.test(String(svc?.image ?? '')) && !svc?.build) summary.warnings.push(`${f.relPath}: the image of ${svcName} is a variable (${String(svc.image).trim()}) a .env or the environment sets, which the scan does not read; no backend is drafted from it.`);
+      continue;
+    }
+    const p = backendPatternFor(image, { bare: true });
+    if (p) {
+      {
         // Schema id pattern: ^[a-z][a-z0-9_-]*[a-z0-9]$ (lowercase, ends alphanumeric).
         const baseId = `${p.signal}-${p.product}`;
         let id = baseId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
         let n = 2;
         while (backends.some(b => b.id === id)) id = `${baseId}-${n++}`;
         const endpoint = inferEndpoint(svc, p.product);
-        const versionTag = imageTag(image);
+        const versionTag = versionTagOf(image, imageTag(image));
         const backend = {
           id,
           signal: p.signal,
@@ -2811,13 +3248,14 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
         };
         if (versionTag && /^v?\d/.test(versionTag)) {
           backend.version = { declared: versionTag.replace(/^v/, ''), gating: 'off' };
+          noteDefaultedVersion(summary, f.relPath, svcName, backend.version.declared, svc?.image, versionTag);
         }
+        notePlatformTag(summary, f.relPath, p.product, image, imageTag(image));
         if (!endpoint && summary.invented) summary.invented.endpoints.push(id);
         backends.push(backend);
         evidence[id] = f.relPath;
         summary.discovered.backends++;
         registerMetricsExporterFromBackend(p, pipelines, f.relPath, evidence, summary);
-        break;
       }
     }
   }
@@ -2826,14 +3264,18 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
 
 // Compose interpolation with the variables unset: each `${VAR:-default}` or
 // `${VAR-default}` its default, any other `${…}` nothing — innermost first.
+// One pass is linear in the text: the default and the rest of a `${…}` are
+// one alternative or the other, never two runs that trade characters.
 function composeDefaults(value) {
   let text = String(value ?? '');
   for (let i = 0; i < 8; i++) {
-    const next = text.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-([^${}]*))?[^${}]*\}/g, (_, fallback) => fallback ?? '');
+    // The rest of a `${…}` starts with a character no name holds: the name and the rest never trade characters.
+    const next = text.replace(/\$\{[A-Za-z_][A-Za-z0-9_]*(?:(:?-)([^${}]*)|[^${}A-Za-z0-9_][^${}]*)?\}/g, (_, sep, fallback) => fallback ?? '');
     if (next === text) break;
     text = next;
   }
-  return text;
+  // `$NAME`, compose's other form, is nothing unset too; `$$` is a literal `$`.
+  return text.replace(/\$(\$|[A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => (name === '$' ? '$' : ''));
 }
 
 function inferEndpoint(svc, product) {
@@ -2955,57 +3397,142 @@ function groupLabelsFit(group, rules, f, summary) {
   return false;
 }
 
-// The rules one scan read, by what each says. A rule written the same in
-// another file — a rule file and the PrometheusRule that wraps it, a chart's
-// ConfigMap and its PrometheusRule behind a values switch — is one rule: the
-// ruler is given one of the copies, so it is declared once (ruleCopy answers
-// true for the later copy). A rule written differently under one name in
-// several files (a kustomize base and its overlay) is kept as each file
-// writes it: which one runs is not known here (ruleCopiesRead).
-const ruleCopies = new WeakMap();   // a scan's summary → { byTerms: Map(key → { kind, name, files }), byName: Map(kind:name → Map(key → Set(files))) }
+// The rules one scan read, by what the comparison reads of each: for one
+// engine, its name, its expression as the comparison reads it (spacing and
+// matcher order aside, canonicalizePromql), its wait, its labels — and a
+// Grafana-managed rule's uid; never its annotations, which the comparison
+// does not read. Written so in several places (a rule file
+// and the PrometheusRule that wraps it, a chart's ConfigMap and its
+// PrometheusRule behind a values switch), a rule is declared as many times as
+// one place holds it: the ruler is given one place, and each further copy
+// would read declared, not live (ruleCopy answers `copy` for it). Two places
+// a ruler loads together (one `rule_files` glob) then leave one copy live
+// only: the scan does not read what a ruler loads.
+const ruleCopies = new WeakMap();   // a scan's summary → Map(key → { name, perPlace: Map(place → count), declared, places: Set, entry })
 const sortedTerms = (v) => (v && typeof v === 'object' && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedTerms(v[k])]))
   : Array.isArray(v) ? v.map(sortedTerms) : v);
-function ruleCopy(summary, relPath, kind, terms) {
+function ruleCopyKey(kind, engine, name, { expr, wait, labels, uid }) {
+  const text = (v) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : (v ?? null));
+  const query = (v) => (typeof v === 'string' ? canonicalizePromql(v).text : text(v));
+  // A zero wait is no wait, as the comparison reads it.
+  const duration = (v) => (v === undefined || v === null || v === '' ? null : canonicalRuleDuration(v));
+  // Labels as the comparison reads them: each value as text, an empty one no label.
+  const shown = (m) => {
+    if (!isMapping(m)) return m ?? null;
+    const kept = Object.entries(m).filter(([, v]) => v !== null && v !== undefined && v !== '')
+      .map(([k, v]) => [k, typeof v === 'string' ? v : typeof v === 'object' ? JSON.stringify(v) : String(v)]);
+    return kept.length ? Object.fromEntries(kept) : null;
+  };
+  return `${kind} ${engine}:${name}\n${JSON.stringify(sortedTerms({ expr: query(expr), wait: duration(wait), labels: shown(labels), uid: uid ?? null }))}`;
+}
+function ruleCopy(summary, place, key, name) {
   let copies = ruleCopies.get(summary);
-  if (!copies) ruleCopies.set(summary, (copies = { byTerms: new Map(), byName: new Map() }));
-  const key = `${kind}:${JSON.stringify(sortedTerms(terms))}`;
-  const nameKey = `${kind}:${terms.name}`;
-  if (!copies.byName.has(nameKey)) copies.byName.set(nameKey, new Map());
-  const forms = copies.byName.get(nameKey);
-  if (!forms.has(key)) forms.set(key, new Set());
-  forms.get(key).add(relPath);
-  const seen = copies.byTerms.get(key);
-  if (!seen) { copies.byTerms.set(key, { kind, name: terms.name, files: new Set([relPath]) }); return false; }
-  // Twice in one file: the ruler is given both.
-  if (seen.files.has(relPath)) return false;
-  seen.files.add(relPath);
-  return true;
+  if (!copies) ruleCopies.set(summary, (copies = new Map()));
+  let record = copies.get(key);
+  if (!record) copies.set(key, (record = { name, perPlace: new Map(), declared: 0, places: new Set(), entry: null }));
+  const n = (record.perPlace.get(place) ?? 0) + 1;
+  record.perPlace.set(place, n);
+  record.places.add(place);
+  if (n > record.declared) { record.declared = n; return { copy: false, record }; }
+  return { copy: true, record };
 }
 
-// What ruleCopy saw in one scan: `same` the rules written the same in several
-// files ([{ kind, name, files }]), `differing` the names written differently
-// in several files ([{ kind, name, files }]: a file's set of forms of the
-// name is not another's).
+// The rules ruleCopy declared once for several places: [{ name, places }].
 function ruleCopiesRead(summary) {
   const copies = ruleCopies.get(summary);
-  if (!copies) return { same: [], differing: [] };
-  const same = [...copies.byTerms.values()].filter((c) => c.files.size > 1).map((c) => ({ ...c, files: [...c.files] }));
-  const differing = [];
-  for (const [nameKey, forms] of copies.byName) {
-    const byFile = new Map();
-    for (const [key, files] of forms) for (const file of files) {
-      if (!byFile.has(file)) byFile.set(file, new Set());
-      byFile.get(file).add(key);
+  if (!copies) return [];
+  return [...copies.values()]
+    .filter((c) => [...c.perPlace.values()].reduce((a, b) => a + b, 0) > c.declared)
+    .map((c) => ({ name: c.name, places: [...c.places] }));
+}
+
+// A PrometheusRule resource named alike in several files — a kustomize base
+// and its overlays (the scan does not merge them), one resource per
+// environment folder, or two apps' resources that share a name — whose rules
+// differ between them: which form runs is not known here, and the scan says
+// so. Every form is declared and stated, and a form no ruler runs reads
+// declared, not live. Rules named alike in files that are no such resources
+// (two rule files, two services' files) all run, and are stated.
+const ruleResources = new WeakMap();   // a scan's summary → Map(resource → Map(place → Map(name → Set(key))))
+function noteResourceRule(summary, resource, place, name, key) {
+  if (!resource) return;
+  let byResource = ruleResources.get(summary);
+  if (!byResource) ruleResources.set(summary, (byResource = new Map()));
+  if (!byResource.has(resource)) byResource.set(resource, new Map());
+  const byPlace = byResource.get(resource);
+  if (!byPlace.has(place)) byPlace.set(place, new Map());
+  const byName = byPlace.get(place);
+  if (!byName.has(name)) byName.set(name, new Set());
+  byName.get(name).add(key);
+}
+// [{ resource, places, names }] — the resources whose rules of `names` differ between places.
+function resourceAlternatives(summary) {
+  const out = [];
+  for (const [resource, byPlace] of ruleResources.get(summary) ?? []) {
+    if (byPlace.size < 2) continue;
+    const names = new Set();
+    for (const name of new Set([...byPlace.values()].flatMap((m) => [...m.keys()]))) {
+      const forms = [...byPlace.values()].filter((m) => m.has(name)).map((m) => [...m.get(name)].sort().join('\n'));
+      if (forms.length > 1 && new Set(forms).size > 1) names.add(name);
     }
-    const shapes = new Set([...byFile.values()].map((keys) => [...keys].sort().join('\n')));
-    if (byFile.size > 1 && shapes.size > 1) {
-      // `<kind> <engine>:<name>`: a kind of rule, for an engine.
-      const [kindEngine] = nameKey.split(':', 1);
-      differing.push({ kind: kindEngine.split(' ')[0], name: nameKey.slice(kindEngine.length + 1), files: [...byFile.keys()] });
-    }
+    if (names.size) out.push({ resource, places: [...byPlace.keys()], names: [...names] });
   }
-  return { same, differing };
+  return out;
+}
+
+// A map without the keys stripGoTemplate left where an include renders into
+// it, and whether it held one (`marked`).
+function withoutIncludeMarks(map) {
+  if (!isMapping(map) || !Object.keys(map).some((k) => INCLUDE_MARK_RE.test(k))) return { map, marked: false };
+  return { map: Object.fromEntries(Object.entries(map).filter(([k]) => !INCLUDE_MARK_RE.test(k))), marked: true };
+}
+
+// A rule group, and a rule, as the chart writes them, apart from what its
+// includes render (withoutIncludeMarks), or a labels map it fills in whole
+// (`labels: {{ include … }}`): `partial` when either gives the group's or the
+// rule's labels — then the rule is held to the labels it writes, and to no
+// other (observogram.partial, crawlFiles).
+function groupAsWritten(group) {
+  const own = withoutIncludeMarks(group);
+  if (!isMapping(own.map)) return { group: own.map, partial: false };
+  const labels = withoutIncludeMarks(own.map.labels);
+  const filled = readingTemplate() && own.map.labels === HELM_VALUE;
+  // An include beside the group's own labels map cannot add to it (a second
+  // `labels:` is a duplicate key, not more labels).
+  if (!labels.marked && !filled) return { group: own.map, partial: own.marked && !isMapping(own.map.labels) };
+  const { labels: _labels, ...rest } = own.map;
+  return { group: filled ? rest : { ...rest, labels: labels.map }, partial: true };
+}
+function ruleAsWritten(rule) {
+  const own = withoutIncludeMarks(rule);
+  if (!isMapping(own.map)) return { rule: own.map, partial: false };
+  const labels = withoutIncludeMarks(own.map.labels);
+  const annotations = withoutIncludeMarks(own.map.annotations);
+  const filled = readingTemplate() && own.map.labels === HELM_VALUE;
+  // An include beside the rule's own labels map cannot add to it.
+  const besideOwn = own.marked && !isMapping(own.map.labels);
+  if (!labels.marked && !annotations.marked && !filled) return { rule: own.map, partial: besideOwn };
+  const { labels: _labels, ...rest } = own.map;
+  return {
+    rule: { ...rest, ...(filled ? {} : { labels: labels.map }), ...(annotations.marked ? { annotations: annotations.map } : {}) },
+    partial: besideOwn || labels.marked || filled,
+  };
+}
+const readingTemplate = () => repoYaml === TEMPLATE_YAML;
+
+// The rules named by a value filled in at deploy time — a chart's values
+// (`- alert: {{ .Values.prefix }}Down`, a `range` over them), a deploy
+// step's variable (`- alert: ${SERVICE}Down`): which rules they render is
+// not known here, and a name no ruler lists pairs with nothing, so they are
+// not declared, and the scan says so (crawlFiles).
+const chartNamedRules = new WeakMap();   // a scan's summary → [{ name, relPath }]
+function chartNamedRule(summary, name, relPath, kind = 'alert') {
+  const chart = readingTemplate() && name.includes(HELM_VALUE);
+  if (!chart && !INJECTED_NAME_RE.test(name)) return false;
+  if (!chartNamedRules.has(summary)) chartNamedRules.set(summary, []);
+  chartNamedRules.get(summary).push({ name: chart ? name.replaceAll(HELM_VALUE, '…') : name, relPath, kind });
+  return true;
 }
 
 // The rule groups of each document: a rule file's, and a PrometheusRule
@@ -3033,17 +3560,25 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
     // Ruler) the operator gives them to, whatever its file's path looks like
     // (alertRuleEngine) — but for a rule in LogQL (walkPrometheusRule).
     const engine = isPrometheusRuleResource(obj) ? 'prometheus' : null;
-    groups.forEach((group, g) => {
+    // Which resource it is, for its alternatives in other files (resourceAlternatives).
+    const resource = engine && typeof obj.metadata?.name === 'string' && obj.metadata.name
+      ? `${obj.metadata.namespace ?? ''}/${obj.metadata.name}` : null;
+    groups.forEach((rawGroup, g) => {
+      // What a chart's include renders into the group is not read: its rules'
+      // labels are written only in part (withoutIncludeMarks).
+      const { group, partial: groupPartial } = groupAsWritten(rawGroup);
       const rules = Array.isArray(group?.rules) ? group.rules : [];
       const mergeGroup = groupLabelsFit(group, rules, f, summary);
-      rules.forEach((rule, r) => {
+      rules.forEach((rawRule, r) => {
         ruleCount++;
+        const { rule, partial } = ruleAsWritten(rawRule);
         const twin = () => {
           const writtenGroup = groupsOf(writtenDocs()[d])?.[g];
-          return { group: writtenGroup, rule: writtenGroup?.rules?.[r] };
+          return { group: groupAsWritten(writtenGroup).group, rule: ruleAsWritten(writtenGroup?.rules?.[r]).rule };
         };
         try {
-          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin, mergeGroup, engine);
+          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin, mergeGroup,
+            { engine, resource, partialLabels: groupPartial || partial });
         } catch (e) {
           skipped.push(e?.message || String(e));
         }
@@ -3058,15 +3593,29 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metr
   }
 }
 
-function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin = () => ({}), mergeGroup = true, engine = null) {
+// `from`: what the rule's source says of it — `engine` (a PrometheusRule
+// resource's), `resource` (which resource, for its alternatives),
+// `partialLabels` (a chart's include renders some of its labels).
+function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary, twin = () => ({}), mergeGroup = true, from = {}) {
+  const engine = from.engine ?? null;
+  // Where a rule stands, as the scan reports it: a group name the chart fills
+  // in shows `…`, never the placeholder.
+  const place = `${f.relPath}#${shownText(group.name || '_') || '_'}`;
   if (rule.record) {
     // The Prometheus form (`record: <name>`, `expr`) and the Grafana
     // unified-alerting recording form (`record: { metric, from }`, the
     // expression in `data[].model.expr`).
     const name = rule.record && typeof rule.record === 'object' ? String(rule.record.metric ?? '') : String(rule.record);
+    const chartNamed = chartNamedRule(summary, name, f.relPath, 'record');
     const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
     const expr = typeof rule.expr === 'string' ? rule.expr : grafanaExpr !== null ? grafanaExpr : String(rule.expr || '');
-    const origin = `${f.relPath}#${group.name || '_'}/${name}`;
+    const origin = `${place}/${shownText(name)}`;
+    // A rule named at deploy time is not declared, nor its series; the
+    // metrics its expression reads stay in the inventory.
+    if (chartNamed) {
+      addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, { kind: 'recording-rule', name: shownText(name), origin, usedBy: `recording_rule:${shownText(name)}` });
+      return;
+    }
     // The expressions feed the metric inventory whether or not the rule can
     // be declared: evidence is never lost.
     addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, { ...rule, record: name }, {
@@ -3093,10 +3642,14 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       // Duration; a bare number is seconds (`30` → `30s`).
       const text = typeof group.interval === 'number' ? canonicalRuleDuration(group.interval) : String(group.interval).trim();
       if (text && SPEC_DURATION_RE.test(text)) entry.interval = text;
-      else summary.omitted.ruleIntervals.push({ group: group.name || '_', value: String(group.interval), source: f.relPath });
+      else summary.omitted.ruleIntervals.push({ group: shownText(group.name || '_') || '_', value: shownText(group.interval), source: f.relPath });
     }
-    // Written the same in another file, for the same engine: one rule, declared once (ruleCopy).
-    if (ruleCopy(summary, f.relPath, `record ${alertRuleEngine(rule, f.relPath)}`, { name, expr, interval: entry.interval ?? null, labels: rule.labels ?? null })) return;
+    // Written the same in another place, for the same engine: declared as
+    // often as one place holds it (ruleCopy). Its group's interval is no part
+    // of what the comparison reads of it.
+    const key = ruleCopyKey('record', alertRuleEngine(rule, f.relPath), name, { expr, labels: rule.labels });
+    noteResourceRule(summary, from.resource, f.relPath, `record ${name}`, key);
+    if (ruleCopy(summary, f.relPath, key, name).copy) return;
     recordingRules.push(entry);
     evidence[id] = origin;
     summary.discovered.recordingRules++;
@@ -3107,22 +3660,45 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
     // The entry an alert starts as, and later the SLO it binds to, are
     // the shared derivation (sli-inference.mjs) the live fetcher applies
     // to the ruler's rules: one rule set, one policy.
+    if (chartNamedRule(summary, String(rule.alert || rule.title), f.relPath)) {
+      // Not declared; the metrics its expression reads stay in the inventory.
+      const name = String(rule.alert || rule.title).replaceAll(HELM_VALUE, '…');
+      const text = typeof rule.expr === 'string' ? rule.expr : grafanaRuleExpr(rule);
+      if (text) addPromqlMetricReferences(metricDefinitions, evidence, summary, text, { kind: 'alert-rule', name, origin: `${place}/${name}`, usedBy: `alert:${name}` });
+      return;
+    }
     const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
     const listed = asListed(rule, group, twin, mergeGroup);
     const read = grafanaExpr === null ? listed.rule : { ...listed.rule, expr: grafanaExpr };
     const candidate = burnCandidateFromAlertRule(read);
+    // A wait its window could not take — no spec Duration, a value a chart
+    // or a deploy step fills in — is said where the rule binds an SLO
+    // (crawlFiles); never part of the pack.
+    if (read.for !== undefined && read.for !== null && !candidate.windows.length && canonicalRuleDuration(read.for) !== null) {
+      Object.defineProperty(candidate, 'waitLeftOut', { value: { rule: candidate.alertName, value: shownText(read.for), source: `${place}/${candidate.alertName}` }, enumerable: false });
+    }
     const { alertName, expr } = candidate;
-    // Written the same in another file, for the same engine: one rule, declared once (ruleCopy).
+    // Written the same in another place, for the same engine: declared as
+    // often as one place holds it (ruleCopy); the place a copy is left out of
+    // still speaks for it (`copies`, buildLifecycleAnnotations).
     const ruleEngine = engine && !looksLikeLogQL(alertRuleExpr(read)) ? engine : alertRuleEngine(read, f.relPath);
-    const terms = { name: alertName, expr: read.expr ?? null, for: read.for ?? null, keep_firing_for: read.keep_firing_for ?? null,
-      labels: read.labels ?? null, annotations: read.annotations ?? null, data: read.data ?? null };
-    if (ruleCopy(summary, f.relPath, `alert ${ruleEngine}`, terms)) return;
+    const key = ruleCopyKey('alert', ruleEngine, alertName, {
+      expr: alertRuleExpr(read), wait: read.for, labels: read.labels, uid: isGrafanaManagedRule(read) ? read.uid : null,
+    });
+    noteResourceRule(summary, from.resource, f.relPath, `alert ${alertName}`, key);
+    const { copy, record } = ruleCopy(summary, f.relPath, key, alertName);
+    if (copy) {
+      record.entry?.copies.add(f.relPath);
+      // Labels one copy writes only in part are known only in part.
+      if (from.partialLabels && record.entry) record.entry.partialLabels = true;
+      return;
+    }
     // Every alert rule that reads is kept raw as well, with where it was
     // read from: the ones that turn out to guard no SLO are declared in
     // alerting.rules (crawlFiles), name for name. A rule skipped above
     // (its model could not be read) is not declared either.
-    alertRules.push({
-      rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}`, name: alertName,
+    const kept = {
+      rule: read, relPath: f.relPath, source: `${place}/${alertName}`, name: alertName,
       // Labels the group gives every rule that this reading cannot see (sourceRuleAnnotations).
       ...(listed.labelsUnread ? { labelsUnread: true } : {}),
       // The engine the rule's source names (a PrometheusRule resource's), over
@@ -3130,16 +3706,23 @@ function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, aler
       // (Grafana Alloy loads PrometheusRule resources into one): its own
       // expression says so (alertRuleEngine).
       ...(engine && !looksLikeLogQL(alertRuleExpr(read)) ? { engine } : {}),
-    });
+      // Which resource it was read from, and the places its left-out copies stood.
+      resource: from.resource ?? null,
+      copies: new Set(),
+      // Labels a chart's include renders, which the scan does not read.
+      ...(from.partialLabels ? { partialLabels: true } : {}),
+    };
+    alertRules.push(kept);
+    if (!record.entry) record.entry = kept;
     if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
       burnRateAlerts.push(candidate);
       const id = `pol-${burnRateAlerts.length}`;
-      evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
+      evidence[id] = `${place}/${alertName}`;
       summary.discovered.burnRateAlerts++;
       addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
         kind: 'alert-rule',
         name: alertName,
-        origin: `${f.relPath}#${group.name || '_'}/${alertName}`,
+        origin: `${place}/${alertName}`,
         usedBy: `alert:${alertName}`,
       });
     }
@@ -3487,7 +4070,7 @@ function collectionEvidenceOf(relPath, content, catalogue) {
       };
       const scratch = {
         discovered: {}, warnings: [], invented: { endpoints: [], channels: [] },
-        omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
+        omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [], ruleWaits: [] },
       };
       walkHelmTemplate({ relPath, content }, buckets, {}, scratch);
       const jobs = [...new Set(buckets.scrapeJobs.map(j => j.job))];

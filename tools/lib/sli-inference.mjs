@@ -48,17 +48,28 @@ export const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$
 // per SLO) share the metric segment `errorbudget`; it is reserved and never an SLI.
 const POLICY_SEGMENT = 'errorbudget';
 
+// An id a recorded name derives is a spec Slug (`$defs.Slug`, at most 64
+// characters): cut there, trailing separators trimmed, an SLO's keeping its
+// `_99` (kube-prometheus-stack's `node_namespace_pod_container:
+// container_cpu_usage_seconds_total:*` would give a 65-character SLO id, a
+// pack the schema refuses). The crawler cuts an id an alert's name derives
+// the same way (crawlFiles' symbolId).
+const SLUG_MAX = 64;
+const cutSlug = (id, max) => id.slice(0, max).replace(/[^a-z0-9]+$/, '');
+const sliIdOf = (service, metric) => cutSlug(`${service}_${metric}`.toLowerCase(), SLUG_MAX);
+const sloIdOf = (sliId) => `${cutSlug(sliId, SLUG_MAX - 3)}_99`;
+
 /** Canonical SLI id contributed by a recording rule, or null. */
 export function ruleNameToSliId(name) {
   const m = RULE_NAME_RE.exec(typeof name === 'string' ? name : '');
   if (!m || m[2] === POLICY_SEGMENT) return null;
-  return `${m[1]}_${m[2]}`.toLowerCase();
+  return sliIdOf(m[1], m[2]);
 }
 
 /** Canonical SLO id (`<sliId>_99`) a recording rule contributes to, or null. */
 export function ruleNameToSloId(name) {
   const sliId = ruleNameToSliId(name);
-  return sliId ? `${sliId}_99` : null;
+  return sliId ? sloIdOf(sliId) : null;
 }
 
 // Parse Prometheus-convention recording rules into SLI / SLO pairs.
@@ -84,7 +95,7 @@ export function inferSlisFromRecordingRules(rules) {
   }
   const out = [];
   for (const { service, metric, ops } of byBase.values()) {
-    const sliId = `${service}_${metric}`.toLowerCase();
+    const sliId = sliIdOf(service, metric);
     let sli, slo;
     // Every choice below is made over the op names in SORTED order, never in
     // the order the rules arrived. A repository lists its rules in file
@@ -151,7 +162,7 @@ export function inferSlisFromRecordingRules(rules) {
       };
     }
     slo = {
-      id: `${sliId}_99`,
+      id: sloIdOf(sliId),
       sli: sliId,
       objective: 0.99,
       window: '30d',
@@ -218,7 +229,11 @@ export function alertRuleWindows(rule) {
   const sev = rule?.labels?.severity?.toString()?.toUpperCase();
   const severity = /^SEV[123]$/.test(sev) ? sev : 'SEV2';
   const wait = canonicalRuleDuration(rule?.for);
-  if (wait) out.push({ short: wait, long: '6h', factor: 6, severity });
+  // A wait that is no spec Duration — a value a chart or a deploy step fills
+  // in (`for: {{ .Values.pageFor }}`, `${PAGE_FOR}`) — gives no window: the
+  // caller fills the rest (defaultBurnWindows) and the scan says it left the
+  // wait out (summary.omitted.ruleWaits). A live wait is a number of seconds.
+  if (wait && SPEC_DURATION_RE.test(wait)) out.push({ short: wait, long: '6h', factor: 6, severity });
   return out;
 }
 
