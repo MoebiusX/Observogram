@@ -1012,6 +1012,20 @@ process.stdout.write('\n--- scaffold placeholders never pair ---\n');
     '200 members raise the ratios', [swamp.summary, small.summary]);
   assert(swamp.summary.onlyInA === small.summary.onlyInA && keys(swamp.layers.L2.onlyInA).filter(k => k.includes('acme_gone_')).length === 5 && swamp.summary.dynamicFamilies.members === 200,
     'five declared metrics that are gone stay named, and the summary says how much rests on a pattern', swamp.summary);
+  // A literal the declaring side's own family names (an alert rule naming one event counter): live, it pairs by
+  // name; not minted yet, it is parked with the reason, out of the union, and counted on the family — never
+  // "declared, not live". A literal no family names stays onlyInA.
+  const named = clone(scopedRepoPack);
+  named.metadata.annotations['crawler.discovered.metric_names'] = JSON.stringify([...JSON.parse(named.metadata.annotations['crawler.discovered.metric_names']),
+    'acme_queue_orders_total', 'acme_queue_returns_total', 'acme_queue_disputes_total', 'acme_cache_evictions_total']);
+  const unminted = diffPacks(adapt(declare(named, [FAMILY])), adapt(listing(['acme_queue_orders_total'])));
+  const parkedNames = unminted.layers.L2.notObserved.filter(x => x.key.startsWith('metric::') && /acme_queue_/.test(x.key));
+  assert(keys(unminted.layers.L2.inBoth).some(k => k.includes('acme_queue_orders_total'))
+    && parkedNames.length === 2 && parkedNames.every(x => x.side === 'a' && x.reason === `matches the dynamic family ${FAMILY}; a member exists only after its first observation`)
+    && keys(unminted.layers.L2.onlyInA).filter(k => k.includes('acme_')).length === 1 && keys(unminted.layers.L2.onlyInA).some(k => k.includes('acme_cache_evictions_total'))
+    && unminted.summary.dynamicFamilies.unminted === 2,
+    'a declared literal its own family names: one aligned, two parked as not minted yet, the unrelated one declared-not-live', [unminted.summary, parkedNames]);
+  assert(!('unminted' in swamp.summary.dynamicFamilies), 'no unminted key without the case', swamp.summary.dynamicFamilies);
   assert(d.summary.inBoth === d.layers.L1.inBoth.length + d.layers.L2.inBoth.length + d.layers.L2X.inBoth.length + d.layers.L3.inBoth.length + d.layers.L4.inBoth.length + d.layers.L5.inBoth.length + d.layers.GOV.inBoth.length,
     'the members count as inBoth', d.summary);
   assert(!d.scope.serviceTokens.includes('acme') && !d.scope.serviceTokens.includes('acmeexporter') && JSON.stringify(d.scope.exporterTokens) === JSON.stringify(['acme', 'acmeexporter']),

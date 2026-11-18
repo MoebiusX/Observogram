@@ -1011,13 +1011,15 @@ test('the folder push-down: an engine whose tool takes a folder uid is asked onc
   assert.ok(mixed.pack.spec.alerting.rules.some((r) => r.name === 'PaymentsErrorRatioHigh'));
   assert.ok(mixed.pack.spec.alerting.rules.some((r) => r.name === 'StackValidationAlwaysFiring'), 'the other folder\'s rule is in the pack: never half an engine under no annotation');
   assert.equal(mixed.pack.metadata.annotations['observogram.scope.alert_rule'], undefined);
-  // Mixed estate whose whole re-read fails: the per-folder half is left out (never half an engine in the pack), and the gate log says so.
+  // Mixed estate whose whole re-read fails (a shared Grafana whose whole listing passes the cap): the folders' own answers stand, and the gate log says so.
   const halfFails = fullTools({ [T.grafanaRules]: (args) => (args.folder_uid ? byFolder(args) : { isError: 'listing too large' }) });
   const half = await snapshotOf(halfFails, { scope: { folderUids: ['payments-alerts'] } });
   const halfAlerts = half.records.filter((r) => r.stage === 'alert_rules').pop();
-  assert.deepEqual([halfAlerts.state, halfAlerts.counts], ['done', { listed: vmRules('alerting').length, kept: vmRules('alerting').length, engines: 1 }]);
-  assert.equal(halfAlerts.message, `grafana gave no answer when read whole beside an engine that names no folder, so its rules were left out; the rule groups name no folder uid; the folder scope was not applied to alert rules (all ${vmRules('alerting').length} kept)`);
-  assert.ok(!half.pack.spec.alerting.rules.some((r) => r.engine === 'grafana'), 'no Grafana rule at all, rather than the scoped folder\'s alone');
+  assert.equal(halfAlerts.state, 'done');
+  assert.equal(halfAlerts.counts.engines, 2, 'both engines are held');
+  assert.ok(halfAlerts.message.startsWith('grafana gave no answer when read whole beside an engine that names no folder, so it is held for the scoped folders alone'), halfAlerts.message);
+  assert.ok(half.pack.spec.alerting.rules.some((r) => r.name === 'PaymentsErrorRatioHigh'), 'the scoped folder\'s rules are read, never dropped with the whole listing');
+  assert.ok(!half.pack.spec.alerting.rules.some((r) => r.name === 'StackValidationAlwaysFiring'), 'the other folder\'s rule was never read');
   // One folder answers with an error: the engine is read whole instead (whole or not at all), the folder scope applies client-side, and the gate log says so.
   const flaky = fullTools({ [T.grafanaRules]: (args) => (args.folder_uid === 'bg0gvuuj8otmof' ? { isError: 'folder gone' } : byFolder(args)) });
   for (const t of [T.vmalert, T.search, T.detail]) delete flaky[t];

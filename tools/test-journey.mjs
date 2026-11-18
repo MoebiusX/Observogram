@@ -1324,6 +1324,16 @@ try {
       && JSON.stringify(oldNote.metricExclude) === JSON.stringify(['^.*:.*:.*$']) && oldNote.notApplied?.length === 1
       && oldNote.notApplied[0] === to.packB.notApplied[0],
       'a stored scope loads and runs whatever it holds: the bounded pattern applied, the other read without and named — on the record as on the pack', { outcome: to.outcome, record: to.packB, oldNote });
+    // The same stored scope over a live side that does not answer: the lost record holds the scope the read
+    // applied and names the pattern it went without, as a run that read does — so the listing keeps counting it.
+    writeFileSync(join(TMP, 'journeys', 'old-scope-lost.journey.yaml'), ['name: old-scope-lost', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { mcp: { url: http://127.0.0.1:9/mcp, scope: { metricPrefixes: [shop_], metricExclude: ['^.*:.*:.*$', '${Q}'] } } }`].join('\n'));
+    let scopeLost = null;
+    try { await runJourney(loadJourneyDef('old-scope-lost')); } catch (e) { scopeLost = e; }
+    const lostScoped = readJourneyRuns('old-scope-lost')[0];
+    assert(scopeLost?.vantageLost === true && lostScoped?.outcome === 'vantage-lost'
+      && JSON.stringify(lostScoped.packB.liveScope) === JSON.stringify({ metricPrefixes: ['shop_'], metricExclude: ['^.*:.*:.*$'] })
+      && lostScoped.packB.notApplied?.length === 1 && lostScoped.packB.notApplied[0].startsWith(`exclude pattern "${Q}" not applied`),
+      'a lost run records the applied scope and names the pattern it went without', lostScoped?.packB);
     const tcRecordRaw = readFileSync(join(TMP, 'runs', 'fake-live-cred', stemOf(tc)), 'utf8');
     const tcSnapRaw = readFileSync(join(liveDirOf('fake-live-cred'), stemOf(tc)), 'utf8');
     assert(!tcRecordRaw.includes('FAKETOKSECRET') && !tcSnapRaw.includes('FAKETOKSECRET') && readLivePack('fake-live-cred', tc)?.metadata?.annotations?.['mcp.url'] === `${fakeUrl}?keep=1`,

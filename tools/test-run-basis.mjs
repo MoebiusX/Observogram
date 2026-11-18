@@ -163,6 +163,11 @@ test('RB6 basisSummary: what GET /api/journeys lists of the last run — the fig
     scopeNotApplied: 0,
   });
   assert.equal(rb.basisSummary({ ...R.checked, packB: { liveScope: { metricExclude: ['^go_'] }, notApplied: ['exclude pattern "^q*q*$" not applied — it may be too slow to match'] } }).scopeNotApplied, 1, 'the stored exclude patterns the read went without, counted');
+  // A family read in part is listed and named on the row: "Live answered in part" alone said nothing of which.
+  const inPart = { ...R.checked, vantage: 'partial', probes: probes({ attempted: ['alert_rules'], succeeded: ['alert_rules'], partial: ['alert_rules'] }) };
+  assert.deepEqual(rb.basisSummary(inPart).probesPartial, ['alert_rules']);
+  assert.deepEqual(om.partialParts(rb.basisFactsOf(inPart), 'partial'), ['Live answered in part: alert rules read only in part']);
+  assert.equal('probesPartial' in rb.basisSummary(R.checked), false, 'no key without one');
   assert.deepEqual([rb.basisSummary(R.emptyOld).alignmentPct, rb.basisSummary(R.emptyOld).compared], [null, 0], 'an older record\'s 100 over an empty union lists no figure');
   assert.deepEqual([rb.basisSummary(R.noData).liveLoss, rb.basisSummary(R.defect1New).liveLoss], ['no-data', 'error']);
   const old = rb.basisSummary({ packA: { scan: { files: 3, candidates: 17, environment: { profile: 'prod', excluded: 14 } } } });

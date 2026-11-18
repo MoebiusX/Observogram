@@ -275,6 +275,14 @@ test('an answer in no alert-rule shape, or one listing rules without their expre
     assert.equal(fetched.probeResults.alert_rules.outcome, 'failed', JSON.stringify(answer));
     assert.match(canonical.metadata.annotations['mcp.probeErrors.alert_rules'], why);
   }
+  // Under a folder scope the same answer, given for a folder, is the engine's failure with that reason: the
+  // whole estate is never asked for (on a shared Grafana its listing passed the response cap, and that error
+  // replaced the true one).
+  const seen = [];
+  const scoped = await livePack({ [T.grafana]: (args) => { seen.push(args); return { rules: [{ name: 'A' }, { name: 'B' }] }; } }, { scope: { folderUids: ['shop-alerts', 'shop-more'] } });
+  assert.ok(seen.length >= 1 && seen.every((a) => Object.keys(a).length > 0), `every call carried its folder: ${JSON.stringify(seen)}`);
+  assert.equal(scoped.fetched.probeResults.alert_rules.outcome, 'failed');
+  assert.match(scoped.canonical.metadata.annotations['mcp.probeErrors.alert_rules'], /lists alert rules without their expressions/);
 });
 
 test('what a read could not hold is not checked, with the reason: a declared Grafana-managed rule against a read with no Grafana alert-rule tool, a declared Prometheus rule against a Grafana-only read, a Loki rule and a Grafana-managed recording rule against any read; a draft whose whole alert-rule family is blind parks the alert rules too', async () => {

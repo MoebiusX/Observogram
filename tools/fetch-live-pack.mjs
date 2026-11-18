@@ -3052,6 +3052,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
     snapScope = { ...normalized.scope, metricExclude: applying };
     for (const pattern of applying) excludeMatchers.push(compileBoundedPattern(pattern, { timed: false }).re);
   }
+  // A read that throws after this point still says the scope it applied (e.liveScope, below).
+  try {
   const stageLabel = new Map(stagesFor(mode).map(st => [st.id, st]));
   const report = (stage, state, { counts = null, message = null, gap = null } = {}) => {
     if (typeof onStage !== 'function' || !stageLabel.has(stage)) return;
@@ -3546,18 +3548,28 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       let adapted = null;
       let perFolder = false;
       let why = null;
+      // A folder answer the tool gave and this reader could not use (no listing
+      // shape, no expressions) — the whole read can only be the same answer, larger: the engine has
+      // failed with that reason, and the whole estate is never asked for.
+      let unusable = false;
       if (calls) {
         const all = [];
         for (const { uid, args } of calls) {
-          const one = adaptedOf(await cachedCall(name, args), name);
-          if (!one) { why = `gave no answer for folder ${uid}`; break; }
+          const response = await cachedCall(name, args);
+          const one = adaptedOf(response, name);
+          if (!one) { why = `gave no answer for folder ${uid}`; unusable = response != null && !!probeFailures[name]; break; }
           if (one.some(r => r?.folderUid !== uid)) { why = 'answered rules outside the folder asked for'; break; }
           all.push(...one);
         }
         if (!why) { adapted = all; perFolder = true; }
         // The whole read decides now: what a folder answered (a folder the store does not know, 404)
         // says nothing of whether the store has a rules API, so the engine is not judged by it.
-        else delete probeFailures[name];
+        else if (!unusable) delete probeFailures[name];
+      }
+      if (unusable) {
+        unionNotes.push(`${engineOf(name)} ${why} it could use, so it was not read whole`);
+        gaveNoAnswer(name, storeOf(name));
+        continue;
       }
       if (!adapted) {
         adapted = adaptedOf(await cachedCall(name, candArgs(candidate)), name);
@@ -3569,18 +3581,22 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       }
       perEngine.push({ name, adapted, perFolder, store: storeOf(name, adapted) });
     }
-    // Whole, or not at all: a per-folder engine beside one that names no folder
-    // is re-read whole, and left out when that read fails — never half an
-    // engine in the pack.
+    // A per-folder engine beside one that names no folder is re-read whole, so
+    // the pack holds the whole family the annotation says it does. When that
+    // read gives no answer (on a shared Grafana the whole listing can pass the
+    // response cap), the folders' own answers stand: they are what the scope
+    // asked for, each folder answered, and the note says the engine is held
+    // for its folders alone — never no rule at all for a scope that was read.
     const union = perEngine.flatMap(e => e.adapted);
     if (union.length && !union.every(r => typeof r?.folderUid === 'string' && r.folderUid !== '')) {
       for (const e of [...perEngine]) {
         if (!e.perFolder) continue;
+        const failedBefore = probeFailures[e.name];
         const whole = adaptedOf(await cachedCall(e.name, candArgs(candidates.find(c => candName(c) === e.name))), e.name);
         if (whole) { e.adapted = whole; e.perFolder = false; unionNotes.push(`${engineOf(e.name)} was read whole, since another engine names no folder`); } else {
-          perEngine.splice(perEngine.indexOf(e), 1);
-          failedEngines.push({ name: e.name, store: e.store, refused: isProbeRefusal(probeFailures[e.name]) });
-          unionNotes.push(`${engineOf(e.name)} gave no answer when read whole beside an engine that names no folder, so its rules were left out`);
+          // The folders answered: the whole read's failure is no failure of the engine.
+          if (failedBefore === undefined) delete probeFailures[e.name];
+          unionNotes.push(`${engineOf(e.name)} gave no answer when read whole beside an engine that names no folder, so it is held for the scoped folders alone`);
         }
       }
     }
@@ -4342,6 +4358,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null, tra
       liveScope: { scope: snapScope, learned: { applied: [...new Set(applied)], appliedGroups: [...new Set(appliedGroups)], folderTitles, ...(excludesNotApplied.length ? { notApplied: excludesNotApplied } : {}) } },
     } : {}),
   };
+  } catch (e) {
+    if (e && typeof e === 'object' && snapScope && !snapshot) e.liveScope = { scope: snapScope, learned: excludesNotApplied.length ? { notApplied: excludesNotApplied } : {} };
+    throw e;
+  }
 }
 
 // Convenience entrypoint used by the CLI + the server: end-to-end build,

@@ -851,6 +851,11 @@ async function resolvePackB(def, crawlScope = null, live = null, { probeMemory =
     // itself failing (unreachable, core tools missing, unbuildable answer).
     if (isTransportHookError(e)) throw e;
     e.vantageLost = true;
+    // The scope the read applied before it threw (fetchMcp's e.liveScope), as on success.
+    if (e && typeof e === 'object' && e.liveScope) {
+      e.appliedScope = compactScope(e.liveScope.scope);
+      e.notApplied = Array.isArray(e.liveScope.learned?.notApplied) ? e.liveScope.learned.notApplied.filter((v) => typeof v === 'string') : [];
+    }
     throw e;
   }
 }
@@ -1633,7 +1638,7 @@ const lostPackA = (a, scan) => ({ source: a.source, name: a.canonical?.metadata?
 // Key order: journey, startedAt, tookMs, outcome, error, packA, packB, scope,
 // vantage, [probes, probeErrors, probeUnsupported?, probeAnsweredBy?,
 // toolsExposedCount], gate, notify.
-async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource, liveTarget, live, error, err, notifyTarget, notifier }) {
+async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, packBSource, liveTarget, live, error, err, notifyTarget, notifier, appliedScope, notApplied }) {
   const lost = {
     journey: def.name,
     startedAt,
@@ -1641,7 +1646,11 @@ async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, pac
     outcome: 'vantage-lost',
     error,
     packA: lostPackA(a, scan),
-    packB: { source: packBSource, ...(liveTarget ? { liveScope: packBScopeOf(def) } : {}) },
+    packB: {
+      source: packBSource,
+      ...(liveTarget ? { liveScope: appliedScope !== undefined ? appliedScope : packBScopeOf(def) } : {}),
+      ...(liveTarget && Array.isArray(notApplied) && notApplied.length ? { notApplied: notApplied.slice(0, 32).map((v) => v.slice(0, 400)) } : {}),
+    },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
     vantage: 'lost',
     ...(live ? {
@@ -1718,7 +1727,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
     if (liveTarget && e?.vantageLost && !e.vantageRecorded) {
-      await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: `mcp:${liveTarget.safeUrl}`, liveTarget, live: null, error: String(e.message || e), err: e, notifyTarget, notifier });
+      await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: `mcp:${liveTarget.safeUrl}`, liveTarget, live: null, error: String(e.message || e), err: e, notifyTarget, notifier, appliedScope: e.appliedScope, notApplied: e.notApplied });
       if (e && typeof e === 'object') e.vantageRecorded = true;
     }
     throw e;
@@ -1732,7 +1741,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   if (live.vantage === 'lost') {
     const err = new Error(firstProbeError(live)?.error || NO_PROBE_DATA);
     err.vantageLost = true;
-    await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: b.source, liveTarget, live, error: err.message, err, notifyTarget, notifier });
+    await recordLostVantage(def, { startedAt, t0, a, scan: packAScan, previousRun, packBSource: b.source, liveTarget, live, error: err.message, err, notifyTarget, notifier, appliedScope: b.appliedScope, notApplied: b.notApplied });
     err.vantageRecorded = true;
     throw err;
   }
