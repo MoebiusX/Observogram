@@ -37,6 +37,7 @@ import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYE
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
+import { objectivesTermKey } from './slo-objectives.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -392,7 +393,12 @@ const asideKey = (run) => (typeof run?.grade?.setAside?.fingerprint === 'string'
 // (mttx-targets.mjs targetsTermKey, '' for none: none set, or Calibrated does not read them) — a
 // run graded with other targets (its grade.targets, recorded only when its Calibrated counted
 // them) is not the letter either.
-const runTargetsKey = (run) => targetsTermKey(run?.grade?.targets ?? null);
+// With them, the key of the SLO objectives stated in the studio the grade counts (slo-objectives.mjs
+// objectivesTermKey; the run's is its grade.objectives.key), joined as '<targets>#<objectives>'.
+const runObjectivesKey = (run) => (typeof run?.grade?.objectives?.key === 'string' ? run.grade.objectives.key : '');
+const termsOf = (targets, objectives) => (objectives ? `${targets || ''}#${objectives}` : (targets || ''));
+const termParts = (terms) => { const t = String(terms || ''); const at = t.indexOf('#'); return at < 0 ? [t, ''] : [t.slice(0, at), t.slice(at + 1)]; };
+const runTargetsKey = (run) => termsOf(targetsTermKey(run?.grade?.targets ?? null), runObjectivesKey(run));
 const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
 // A run graded under another grade schema (its grade.schema) scored by other rules: its letter is
 // not this engine's either. A record that names no schema is not judged by it.
@@ -411,6 +417,14 @@ export function studioTargetsCounted(diagnostic) {
   if (!diagnostic) return null;
   const c = criterionOf(diagnostic, 'calibrated');
   return !!c?.baselines?.studio && c.applies !== false;
+}
+// The key of the service's stated SLO objectives the grade counts now: the ones its Calibrated counted
+// (criterion.objectives.studioIds); with no grade to ask, all of them. '' for none.
+export function serviceObjectivesKey(service, diagnostic = null) {
+  if (!diagnostic) return objectivesTermKey(service?.objectives ?? null);
+  const c = criterionOf(diagnostic, 'calibrated');
+  if (!c || c.applies === false) return '';
+  return objectivesTermKey(service?.objectives ?? null, Array.isArray(c.objectives?.studioIds) ? c.objectives.studioIds : []);
 }
 // The name of a service's set-asides that hold at `now` ('' for none).
 export const serviceAsideKey = (service, now = Date.now()) => setAsideFingerprint(service?.setAside, new Date(now).toISOString());
@@ -708,12 +722,17 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
   const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
+  const [nowTargets, nowObjectives] = termParts(targets);
+  const wasTargets = targetsTermKey(run?.grade?.targets ?? null);
   const whatChanged = otherSchema(run?.grade?.schema) ? 'how the grade scores changed'
     : offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed'
     : asideKey(run) !== (aside || '') ? 'what is set aside changed'
-      : !runTargetsKey(run) ? 'the grade has counted the MTTD / MTTR targets set in the studio'
-        : !targets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
-          : 'the MTTD / MTTR targets changed';
+      : wasTargets !== nowTargets ? (!wasTargets ? 'the grade has counted the MTTD / MTTR targets set in the studio'
+        : !nowTargets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
+          : 'the MTTD / MTTR targets changed')
+        : !runObjectivesKey(run) ? 'the grade has counted the objectives stated in the studio'
+          : !nowObjectives ? 'the grade has stopped counting the objectives stated in the studio'
+            : 'the objectives stated in the studio changed';
   // A check that reads a recording is not checked again from here: the line does not say to.
   const liveCheck = journey ? journeyIsLive(journey) : /^mcp:/i.test(String(run?.packB?.source || ''));
   return {
@@ -1845,7 +1864,9 @@ export function buildOverviewModel(input = {}) {
   // their key; with no grade to ask, the record's.
   const counted = studioTargetsCounted(pending ? null : diagnostic);
   // No grade to ask (the pack could not be read): Calibrated switched off counts nothing either way.
-  const targets = counted === false || (counted === null && gradeOffKeys(off).includes('calibrated')) ? '' : serviceTargetsKey(picked.service);
+  const targetsOnly = counted === false || (counted === null && gradeOffKeys(off).includes('calibrated')) ? '' : serviceTargetsKey(picked.service);
+  // …and the SLO objectives stated in the studio its Calibrated counts, joined to them.
+  const targets = termsOf(targetsOnly, !pending && diagnostic ? serviceObjectivesKey(picked.service, diagnostic) : (gradeOffKeys(off).includes('calibrated') ? '' : serviceObjectivesKey(picked.service)));
   const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off, aside, targets });
   const canSwitch = gradeSwitches === true && picked.how === 'primary' && !pending;
   // `graded`: the criteria the service is graded on, by name — where the reasons are not offered
@@ -2259,6 +2280,12 @@ const targetsDiffer = (runTargets, targets) => {
   const was = targetsTermKey(runTargets ?? null);
   return !!was && was !== (targets || '');
 };
+// The same for the stated SLO objectives a run counted (the listing's lastRun.objectives, their key):
+// the service's own for those SLOs now read otherwise, or are gone.
+const objectivesDiffer = (was, objectives) => {
+  if (typeof was !== 'string' || !was) return false;
+  return objectivesTermKey(objectives ?? null, was.split(';').map((p) => p.slice(0, p.lastIndexOf('=')))) !== was;
+};
 // The row's five states (the listing's lastRun is the newest run that is not a stopped Run; its
 // facts are tools/lib/run-basis.mjs basisSummary's — an older server's listing has none, and its
 // row reads as before):
@@ -2295,7 +2322,7 @@ function lastCheckNotes(journey, last) {
   if (skipped) notes.push({ text: `${skipped} stored exclude ${skipped === 1 ? 'pattern' : 'patterns'} not applied — may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the live scope`, tone: 'warn' });
   return notes;
 }
-function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
+function lastCheckOf(journey, now, off = [], aside = '', targets = '', objectives = null) {
   const last = journey?.lastRun || null;
   const notes = lastCheckNotes(journey, last);
   if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: 'Not checked yet', reason: '', notes, when: '' };
@@ -2325,7 +2352,8 @@ function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
     : otherSchema(last.gradeSchema) ? ' · graded before the grade changed how it scores'
     : offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed"
       : lastAside !== (aside || '') ? " · graded before this service's set-asides changed"
-        : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';
+        : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed"
+          : objectivesDiffer(last.objectives, objectives) ? " · graded before this service's objectives changed" : '';
   const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
   const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
   // How much it compared: the listing's count (null from an older server, which is read as before).
@@ -2488,7 +2516,7 @@ export function serviceListModel(input = {}) {
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
-        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now), serviceTargetsKey(s));
+        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now), serviceTargetsKey(s), s.objectives ?? null);
       const busy = !!running[key];
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;

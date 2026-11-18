@@ -205,7 +205,7 @@ const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 90071992
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
-const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'objectives', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'ref', 'livePack', 'liveScope', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
@@ -248,7 +248,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.checkout = json.service.id;
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
   // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
@@ -256,7 +256,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.payments = second.json.service.id;
   assert.deepEqual(stamped(second.json.service), {
     id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
   // tier: null is "graded by the pack", explicitly.
@@ -292,7 +292,7 @@ test('GET /api/services and GET /api/services/:id: the views by slug, as a viewe
   const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
   assert.deepEqual(stamped(one.json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
   for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
@@ -305,7 +305,7 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
   // Only what differs is a change (and a row names only those fields).
@@ -547,6 +547,77 @@ test('a journey\'s run counts its service\'s MTTD / MTTR targets set in the stud
   } finally {
     for (const path of [file, FILE_A, join(WORKSPACE, 'orgs', 'acme', 'runs', NAME)]) rmSync(path, { recursive: true, force: true });
     await call('oscar', 'PATCH', `/api/services/${ids.ledgerNulls}`, { targets: null });
+  }
+});
+
+test('a journey\'s run counts its service\'s SLO objectives stated in the studio for the SLOs whose own is the scan\'s guess: the record and the listing name the ones counted, the studio\'s saved check carries them and reads back, a statement for an SLO the scan does not hold counts nothing, and none stated grades as before', async () => {
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { computeDiagnosticGrade, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const { withStatedObjectives } = await import('../studio/slo-objectives.mjs');
+  const { adapt } = await import('../tools/lib/adapter.mjs');
+  const { diffPacks } = await import('../tools/lib/diff.mjs');
+  const { comparePackBranches } = await import('../tools/lib/traceability-graph.mjs');
+  const NAME = 'objectives-graded';
+  const RUN = 'POST /api/journeys/:name/run';
+  const K = 'PATCH /api/services/:id';
+  const P = `/api/services/${ids.ledgerNulls}`;
+  const dir = join(WORKSPACE, 'orgs', 'acme', 'journeys');
+  mkdirSync(dir, { recursive: true });
+  // A scanned repository: every SLO carries the scan's default objective, marked as the scan marks it.
+  const packA = parseYaml(readFileSync(join(ROOT, 'examples', 'target-advanced.pack.yaml'), 'utf8'));
+  const sloIds = packA.spec.slos.map((x) => x.id);
+  assert.equal(sloIds.length, 4);
+  for (const slo of packA.spec.slos) { slo.objective = 0.99; slo.window = '30d'; }
+  packA.metadata.annotations = { ...(packA.metadata.annotations || {}), 'crawler.guessMarks': '1', ...Object.fromEntries(sloIds.map((id) => [`crawler.scaffold.slos.${id}.objective`, 'default'])) };
+  const FILE_A = join(WORKSPACE, 'orgs', 'acme', 'objectives-graded.pack.json');
+  const FILE_B = join(ROOT, 'examples', 'production-curated.pack.yaml');
+  writeFileSync(FILE_A, JSON.stringify(packA));
+  const layeredA = adapt(packA, { environment: 'prod' });
+  const layeredB = adapt(parseYaml(readFileSync(FILE_B, 'utf8')), {});
+  const diff = { ...diffPacks(layeredA, layeredB, { service: 'ledger-nulls' }), traceabilityGraph: comparePackBranches(layeredA, layeredB) };
+  const TWO = { slos: { [sloIds[0]]: { objective: 0.999, window: '30d' }, [sloIds[2]]: { objective: 0.995, window: '28d' } } };
+  const scoreWith = (o) => Math.round(computeDiagnosticGrade(withStatedObjectives(layeredA, o), layeredB, computePostureMatrix(layeredA, layeredB), null, diff, {}).overall.audit.scorePctExact);
+  assert.ok(scoreWith(TWO) > scoreWith(null), 'two stated objectives lift this pack\'s score');
+  const file = join(dir, `${NAME}.journey.yaml`);
+  writeFileSync(file, ['# Saved by the service ledger-nulls, environment prod, on 2026-11-18T10:00:00.000Z.', `name: ${NAME}`, `packA: { file: ${FILE_A.replaceAll('\\', '/')} }`, `packB: { file: ${FILE_B.replaceAll('\\', '/')} }`, 'env: prod', 'service: ledger-nulls', 'gate: { minAlignmentPct: 1 }', ''].join('\n'));
+  const keyOf = (ids2, o) => ids2.slice().sort().map((id) => `${id}=${o.slos[id].objective}/${o.slos[id].window}`).join(';');
+  try {
+    const before = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([before.json.record.grade.score, 'objectives' in before.json.record.grade], [scoreWith(null), false], 'none stated: graded as before');
+    // Not objectives: refused with the reason, nothing kept.
+    for (const [bad, why] of [
+      [{ slos: { [sloIds[0]]: { objective: 99.9, window: '30d' } } }, 'objective is a number above 0 and below 1'],
+      [{ slos: { [sloIds[0]]: { objective: 0.999, window: '45d' } } }, 'window is one of 7d, 28d, 30d, 90d'],
+      [{ slos: { 'not an id': { objective: 0.999, window: '30d' } } }, 'is not an SLO id'],
+      [[], 'objectives is { slos'],
+    ]) {
+      const r = await call('oscar', 'PATCH', P, { objectives: bad });
+      assert.ok(r.status === 400 && String(r.json.error).includes(why), `refused: ${JSON.stringify(bad)} → ${r.status} ${r.json?.error}`);
+    }
+    assert.equal((await ok('GET /api/services/:id', 'vera', P)).json.service.objectives, null);
+    // Stated: two the scan guessed, and one for an SLO this scan does not hold.
+    const SENT = { slos: { ...TWO.slos, 'gone.since:v2': { objective: 0.9, window: '7d' } } };
+    const patched = (await ok(K, 'oscar', P, { objectives: SENT })).json.service.objectives;
+    assert.deepEqual(Object.keys(patched.slos).sort(), Object.keys(SENT.slos).sort());
+    const first = patched.slos[sloIds[0]];
+    assert.ok(first.objective === 0.999 && first.window === '30d' && typeof first.by === 'string' && first.by && !Number.isNaN(Date.parse(first.at)), `each entry is signed and dated: ${JSON.stringify(first)}`);
+    assert.match(readFileSync(file, 'utf8'), /sloObjectives:/, 'the studio\'s saved check is rewritten with them');
+    assert.deepEqual(parseYaml(readFileSync(file, 'utf8')).sloObjectives, SENT, 'and the check reads back what was stated, without who and when');
+    const counted = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([counted.json.record.grade.score, counted.json.record.grade.objectives], [scoreWith(TWO), { count: 2, key: keyOf([sloIds[0], sloIds[2]], TWO) }], 'counted for Calibrated, the ones counted named on the record');
+    const lastRun = (await call('vera', 'GET', '/api/journeys')).json.journeys.find((j) => j.name === NAME).lastRun;
+    assert.equal(lastRun.objectives, keyOf([sloIds[0], sloIds[2]], TWO), 'and on the listing');
+    // One changed: the other keeps who stated it and when.
+    const again = (await ok(K, 'oscar', P, { objectives: { slos: { ...SENT.slos, [sloIds[2]]: { objective: 0.99, window: '28d' } } } })).json.service.objectives;
+    assert.deepEqual(again.slos[sloIds[0]], first, 'an entry sent again unchanged keeps who and when');
+    assert.equal(again.slos[sloIds[2]].objective, 0.99);
+    await ok(K, 'oscar', P, { objectives: null });
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /sloObjectives:/, 'cleared: the check loses them');
+    const cleared = await ok(RUN, 'oscar', `/api/journeys/${NAME}/run`, {});
+    assert.deepEqual([cleared.json.record.grade.score, 'objectives' in cleared.json.record.grade], [scoreWith(null), false]);
+  } finally {
+    for (const path of [file, FILE_A, join(WORKSPACE, 'orgs', 'acme', 'runs', NAME)]) rmSync(path, { recursive: true, force: true });
+    await call('oscar', 'PATCH', P, { objectives: null });
   }
 });
 
@@ -1154,7 +1225,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
@@ -1194,7 +1265,7 @@ test('a register writes the service, environment and link rows by the person reg
   ids.demo = demo.id;
   ids.demoProd = demo.environments[0].id;
   assert.deepEqual(stamped(demo), {
-    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
     environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1528,7 +1599,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],

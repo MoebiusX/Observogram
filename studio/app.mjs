@@ -133,6 +133,7 @@ import { renderControlRoom, placeControlRoom } from './control-room-view.mjs';
 import { createControlRoomDriver } from './control-room-api.mjs';
 import { buildControlRoomModel } from './control-room-model.mjs';
 import { MTTX_CUSTOM, withStudioTargets } from './mttx-targets.mjs';
+import { withStatedObjectives } from './slo-objectives.mjs';
 
 // The brand (studio/brand.mjs): kicked off here, at module top level, so the
 // one fetch (/lib/brand.mjs, modulepreloaded by the shell) overlaps the
@@ -292,10 +293,10 @@ function withServiceStudioRuns(pack, packId, env) {
     ? state.services.find((s) => Array.isArray(s?.packs) && s.packs.some((p) => p && p.id === packId && p.role === 'primary')) || null
     : null;
   const hasRuns = Array.isArray(service?.chaosRuns) && service.chaosRuns.length > 0;
-  if (!service || (!hasRuns && !service.targets)) return pack;
+  if (!service || (!hasRuns && !service.targets && !service.objectives)) return pack;
   const pageEnv = state.serviceId === service.id ? state.serviceEnv : null;   // the service page's, for its own pack only
   const withRuns = hasRuns ? withStudioRuns(pack, service.chaosRuns, { env: env || pageEnv || null }) : pack;
-  return withStudioTargets(withRuns, service.targets);
+  return withStatedObjectives(withStudioTargets(withRuns, service.targets), service.objectives);
 }
 
 // The /conformance report carries onPlaceholder itself — worked out for this
@@ -2862,7 +2863,8 @@ async function refreshOverviewFacts() {
   // The chaos runs recorded in the studio for this service and environment (studio/chaos-runs.mjs):
   // the measured MTTD, the control room and the repository's grade read them as the check does.
   // Its MTTD / MTTR targets set in the studio ride on the pack for the grade's Calibrated (only the grade reads them).
-  const layered = facts.layered ? withStudioTargets(withStudioRuns(facts.layered, picked.service.chaosRuns, { env: picked.env || null }), picked.service.targets) : facts.layered;
+  // So do the SLO objectives stated in the studio (studio/slo-objectives.mjs).
+  const layered = facts.layered ? withStatedObjectives(withStudioTargets(withStudioRuns(facts.layered, picked.service.chaosRuns, { env: picked.env || null }), picked.service.targets), picked.service.objectives) : facts.layered;
   overviewFacts = { ...facts, layered, running: false, startError: null, loaded: true };
   redraw();
   // A run just recorded (Save and check again): the check runs once the board knows its journey.

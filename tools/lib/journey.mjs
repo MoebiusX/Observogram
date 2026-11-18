@@ -43,6 +43,10 @@
 //     { profile: lab, mttd: 1m, mttr: 5m }
 //                               #   Calibrated counts them where the repository states no
 //                               #   spec.baselines of its own. Written by the server, like gradeOff.
+//   sloObjectives:         # optional: the SLO objectives stated in the studio (studio/slo-objectives.mjs) —
+//     { slos: { orders_availability_99: { objective: 0.999, window: 30d } } }
+//                               #   Calibrated counts one for an SLO whose own objective is the scan's
+//                               #   guess. Written by the server, like gradeOff.
 //   gate:                  # all optional; omitted criteria don't gate
 //     A key whose figure is absent breaches, never passes: nothing compared
 //     (minAlignmentPct and the counts), no grade, no live age, no on-wire
@@ -134,6 +138,7 @@ import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAG
 import { applySetAsides, SET_ASIDE_KINDS, SET_ASIDE_MAX, SET_ASIDE_SIDES } from '../../studio/set-asides.mjs';
 import { CHAOS_RUNS_MAX, chaosRunErrors, withStudioRuns } from '../../studio/chaos-runs.mjs';
 import { storedTargetsError, withStudioTargets } from '../../studio/mttx-targets.mjs';
+import { objectivesTermKey, storedObjectivesError, withStatedObjectives } from '../../studio/slo-objectives.mjs';
 import { comparisonByTier, chainLine } from '../../studio/artefact-tiers.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 // The report's reading of a run's figure (renderJourneyMarkdown): the match only over a comparison.
@@ -242,6 +247,9 @@ export function loadJourneyDef(ref, { allowPath = true } = {}) {
   if (def.chaosRuns !== undefined) validateChaosRuns(def.chaosRuns, def.name);
   if (def.mttxTargets !== undefined && storedTargetsError(def.mttxTargets)) {
     throw new Error(`journey ${def.name}: mttxTargets must be the service's MTTD / MTTR targets — ${storedTargetsError(def.mttxTargets)}`);
+  }
+  if (def.sloObjectives !== undefined && storedObjectivesError(def.sloObjectives)) {
+    throw new Error(`journey ${def.name}: sloObjectives must be the service's stated SLO objectives — ${storedObjectivesError(def.sloObjectives)}`);
   }
   // Step 5: a typo'd or malformed schedule / stackBudget block is a
   // load-time configuration error (CLI `list` prints it, GET /api/journeys
@@ -1692,7 +1700,7 @@ async function recordLostVantage(def, { startedAt, t0, a, scan, previousRun, pac
 // recorded as packA.scan. A crawl: Pack A carries its own. A run that is
 // not told (Check now on the last scan) keeps the scan of the newest record
 // of the same Pack A file: the file is that scan's.
-export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null, chaosRuns = null, mttxTargets = undefined } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null, resolveMcp = null, resolveNotify = null, onPackB = null, scan = null, gradeOff = null, setAside = null, chaosRuns = null, mttxTargets = undefined, sloObjectives = undefined } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -1790,10 +1798,15 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // (studio/mttx-targets.mjs withStudioTargets) — the grade's copy of the pack alone: the comparison
   // above never sees them. The record names them as grade.targets.
   const targetsGiven = mttxTargets === undefined ? (def.mttxTargets ?? null) : mttxTargets;
-  const grade = computeDiagnosticGrade(withStudioTargets(layeredA, targetsGiven), layeredB, posture, null, diff, { off });
+  // The SLO objectives stated in the studio, by the same rule (studio/slo-objectives.mjs
+  // withStatedObjectives): Calibrated counts one for an SLO whose own is the scan's guess. The record
+  // names the ones it counted as grade.objectives.
+  const objectivesGiven = sloObjectives === undefined ? (def.sloObjectives ?? null) : sloObjectives;
+  const grade = computeDiagnosticGrade(withStatedObjectives(withStudioTargets(layeredA, targetsGiven), objectivesGiven), layeredB, posture, null, diff, { off });
   // Named on the record only when Calibrated counted them (graded, and the repository states none).
   const calibrated = [...(grade.coverage?.criteria || []), ...(grade.trust?.criteria || [])].find((c) => c?.key === 'calibrated');
   const targetsUsed = calibrated?.applies !== false ? (calibrated?.baselines?.studio ?? null) : null;
+  const objectiveIds = calibrated?.applies !== false && Array.isArray(calibrated?.objectives?.studioIds) ? calibrated.objectives.studioIds : [];
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
@@ -1909,6 +1922,10 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       // The MTTD / MTTR targets set in the studio this run's Calibrated counted (its service's when the
       // run was made): absent when none was set, Calibrated was not graded or the repository states its own.
       ...(targetsUsed ? { targets: { profile: targetsUsed.profile, mttd: targetsUsed.mttd, mttr: targetsUsed.mttr } } : {}),
+      // The SLO objectives stated in the studio this run's Calibrated counted: how many, and their key
+      // ('<slo id>=<objective>/<window>;…'), so a reader tells a run graded on other objectives apart.
+      // Absent when none was counted.
+      ...(objectiveIds.length ? { objectives: { count: objectiveIds.length, key: objectivesTermKey(objectivesGiven, objectiveIds) } } : {}),
     },
     traceability: rollup ? {
       integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,

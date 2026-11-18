@@ -107,6 +107,7 @@ import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
+import { objectivesTermKey } from '../studio/slo-objectives.mjs';
 import { recordIdentityMode, bootStore } from './boot.mjs';
 import { currentStore } from './store/db.mjs';
 import { defaultOrgId } from './store/identity.mjs';
@@ -1052,6 +1053,8 @@ app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
           // The MTTD / MTTR targets set in the studio that score was graded with, null when none was.
           targets: lastRun.grade?.targets && typeof lastRun.grade.targets === 'object' && typeof lastRun.grade.targets.mttd === 'string' && typeof lastRun.grade.targets.mttr === 'string'
             ? { profile: String(lastRun.grade.targets.profile ?? '').slice(0, 40), mttd: lastRun.grade.targets.mttd.slice(0, 16), mttr: lastRun.grade.targets.mttr.slice(0, 16) } : null,
+          // The key of the stated SLO objectives that score counted ('' when none was).
+          objectives: typeof lastRun.grade?.objectives?.key === 'string' && lastRun.grade.objectives.key.length <= 20000 ? lastRun.grade.objectives.key : '',
           breaches: lastRun.gate?.breaches?.length ?? 0,
           // Step 5: the delivery outcome of the last run — status, HTTP
           // status, reason. null when the record carries no notify object
@@ -1308,6 +1311,13 @@ const mttxTargetsOfService = (service) => {
   const t = service?.targets;
   return t && typeof t === 'object' && typeof t.mttd === 'string' && typeof t.mttr === 'string' ? { profile: t.profile, mttd: t.mttd, mttr: t.mttr } : null;
 };
+// A service's stated SLO objectives as a check file carries them (journey.mjs sloObjectives), or null.
+const sloObjectivesOfService = (service) => {
+  const slos = service?.objectives?.slos;
+  if (!slos || typeof slos !== 'object') return null;
+  const out = Object.fromEntries(Object.entries(slos).filter(([, e]) => e && typeof e.objective === 'number' && typeof e.window === 'string').map(([id, e]) => [id, { objective: e.objective, window: e.window }]));
+  return Object.keys(out).length ? { slos: out } : null;
+};
 
 // The grade criteria a journey is not graded on. A journey of a service with
 // a record (serviceOfJourney) is graded on the record's switches
@@ -1343,6 +1353,13 @@ function mttxTargetsOfJourney(def) {
   return def?.mttxTargets ?? null;
 }
 
+// The SLO objectives stated in the studio a journey is graded with, by the same rule.
+function sloObjectivesOfJourney(def) {
+  const service = serviceOfJourney(def);
+  if (service) return sloObjectivesOfService(service);
+  return def?.sloObjectives ?? null;
+}
+
 // A definition about to be saved, with its service's switches in it (or
 // without the key when none is off): a run that has no record to ask —
 // `packc journey run`, which is what a schedule runs — then grades as the
@@ -1363,12 +1380,13 @@ function withServiceScope(def, service) {
 
 function withServiceGradeOff(def, service) {
   if (!service) return def;
-  const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, mttxTargets: _wasTargets, ...rest } = def;
+  const { gradeOff: _was, setAside: _wasAside, chaosRuns: _wasRuns, mttxTargets: _wasTargets, sloObjectives: _wasObjectives, ...rest } = def;
+  const objectives = sloObjectivesOfService(service);
   const keys = gradeOffKeysOf(service);
   const aside = setAsideOfService(service);
   const runs = chaosRunsOfService(service);
   const targets = mttxTargetsOfService(service);
-  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}), ...(runs.length ? { chaosRuns: runs } : {}), ...(targets ? { mttxTargets: targets } : {}) };
+  return { ...rest, ...(keys.length ? { gradeOff: keys } : {}), ...(aside.length ? { setAside: aside } : {}), ...(runs.length ? { chaosRuns: runs } : {}), ...(targets ? { mttxTargets: targets } : {}), ...(objectives ? { sloObjectives: objectives } : {}) };
 }
 
 // A service's switches, written into every check the studio saved for it
@@ -1420,6 +1438,7 @@ function writeGradeOffToChecks(names, service) {
   const aside = JSON.stringify(setAsideOfService(service));
   const runs = JSON.stringify(chaosRunsOfService(service));
   const targets = JSON.stringify(mttxTargetsOfService(service));
+  const objectives = objectivesTermKey(sloObjectivesOfService(service));
   let written = 0;
   for (const name of names) {
     let def;
@@ -1429,12 +1448,12 @@ function writeGradeOffToChecks(names, service) {
     const wasRuns = JSON.stringify(Array.isArray(def.chaosRuns) ? def.chaosRuns : []);
     const wasTargets = JSON.stringify(def.mttxTargets ? { profile: def.mttxTargets.profile, mttd: def.mttxTargets.mttd, mttr: def.mttxTargets.mttr } : null);
     const scoped = JSON.stringify(withServiceScope(def, service)?.packB?.mcp?.scope ?? null) === JSON.stringify(def.packB?.mcp?.scope ?? null);
-    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs && wasTargets === targets && scoped) continue;
+    if (was.length === keys.length && was.every((k, i) => k === keys[i]) && wasAside === aside && wasRuns === runs && wasTargets === targets && objectivesTermKey(def.sloObjectives ?? null) === objectives && scoped) continue;
     const banner = studioBanner(def.__source);
     if (!banner) continue;   // written by hand: left as it is
     const { __source: _source, ...rest } = def;
     try { saveJourneyDef(name, withServiceGradeOff(withServiceScope(rest, service), service), { banner }); written += 1; }
-    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs and MTTD / MTTR targets (${e.message})\n`); }
+    catch (e) { process.stderr.write(`[service] ${service.slug}: the saved check ${name} could not be rewritten with the grade criteria, set-asides, recorded chaos runs, MTTD / MTTR targets and stated objectives (${e.message})\n`); }
   }
   return written;
 }
@@ -1504,6 +1523,9 @@ async function executeJourneyRun(req, res, def, { mcpTarget, notifyHook }, extra
       // The MTTD / MTTR targets set in the studio (its record's): Calibrated counts them where the
       // repository states none.
       mttxTargets: mttxTargetsOfJourney(def),
+      // The SLO objectives stated in the studio (its record's): Calibrated counts one for an SLO whose
+      // own is the scan's guess.
+      sloObjectives: sloObjectivesOfJourney(def),
     });
     const kept = packB?.live ? keepLivePackOf(req, def, packB.canonical) : null;
     const auditError = auditAfter(req, runRow({
