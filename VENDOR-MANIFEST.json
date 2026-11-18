@@ -892,8 +892,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/live-fetch.mjs": {
-      "sha256": "cde0ce3dcc1def386ed1f0fe524173d58a0b5a05dc5323778a298daee946478c",
-      "bytes": 46739,
+      "sha256": "403a77a170b8a988189447388a5dcb9148ea0328e7d1db16669de34715ad0451",
+      "bytes": 48105,
       "exports": [
         "EXCLUDE_NAME_MAX",
         "LIVE_KINDS",

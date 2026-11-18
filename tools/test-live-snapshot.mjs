@@ -865,7 +865,16 @@ test('an exclude pattern never stalls the thread: its steps over a 256-character
   // A pack's recorded patterns are read back by the rule they were recorded under: an older pack keeps a
   // pattern the bound refuses now, so the diff parks what its own read excluded (a new pack records only
   // what its read applied); a shape no release accepted is still dropped.
-  assert.deepEqual(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [Q] }) }).get('metric'), { by: 'prefix', values: [], exclude: [Q] });
+  // It is never RUN by the diff (a pack can be uploaded, and such a pattern holds the thread for seconds on one
+  // ordinary name): it is kept apart, and a name it may have dropped reads not checked, with the reason.
+  const oldEntry = scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [Q, '^go_'] }) }).get('metric');
+  assert.deepEqual(oldEntry, { by: 'prefix', values: [], exclude: ['^go_'], unrun: [Q] });
+  const HOSTILE = `^${'.*'.repeat(10)}#$`;
+  const hostile = scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: [HOSTILE] }) }).get('metric');
+  const t3 = performance.now();
+  assert.deepEqual([inScope('metric', { spec: { name: 'node_memory_MemAvailable_bytes' } }, hostile), inScope('metric', { spec: { name: 'go_goroutines' } }, oldEntry), inScope('metric', { spec: { name: 'qqq' } }, oldEntry)], [null, false, null]);
+  assert.ok(performance.now() - t3 < 500, 'the pattern past the bound was not run');
+  assert.equal(scopeReason('metric', null, oldEntry), `the live read dropped metrics by a pattern this release does not run (${Q}: may be too slow to match), so this metric was not checked`);
   assert.equal(scopeOf({ 'observogram.scope.metric': JSON.stringify({ by: 'prefix', values: [], exclude: ['up'] }) }).get('metric'), undefined);
   // The third review's holes: a legacy octal escape is one unit (\060 is '0', so five of them starred are five
   // overlapping quantifiers), and a class's set is sampled at every unit it can change at, non-ASCII ones

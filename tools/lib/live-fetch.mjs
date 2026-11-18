@@ -374,11 +374,13 @@ function excludeWork(pattern, n = EXCLUDE_NAME_MAX) {
         while (k + 1 + run.length < seq.length && literalOf(seq[k + 1 + run.length]) !== null) run += literalOf(seq[k + 1 + run.length]);
         const periods = [...run].map((_, j) => periodOf(run.slice(0, j + 1)));
         const rest = vecs[k + 1 + run.length];
+        // Asked once per term, not once per number of characters left: it compares two sampled sets.
+        const stopsHere = lo !== hi && stops(t, seq[k + 1], atEnd);
         for (let m = 0; m <= n; m += 1) {
           if (m < lo) { out[m] = m + 1; continue; }
           const top = Math.min(hi, m);
           if (lo === top) out[m] = lo + w[m - lo];
-          else if (stops(t, seq[k + 1], atEnd)) out[m] = 2 * top - lo + 1 + w[m - lo];
+          else if (stopsHere) out[m] = 2 * top - lo + 1 + w[m - lo];
           else {
             let sum = top;
             for (let len = lo; len <= top; len += 1) sum += w[m - len];
@@ -623,11 +625,18 @@ export function scopeOf(annotations) {
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.values)) continue;
     if (parsed.by === 'prefix') {
       const values = parsed.values.filter((v) => typeof v === 'string' && v !== '');
-      const exclude = (Array.isArray(parsed.exclude) ? parsed.exclude : [])
+      // A recorded pattern is run by the diff only when the rule for new input holds for it (a pack
+      // can be uploaded, and a pattern past the bound can hold the thread for seconds on one name).
+      // One an earlier release recorded and the bound refuses now is kept apart as `unrun`: the
+      // read that recorded it dropped names by it, so a name it may have dropped is not checked
+      // (inScope: null) — never run, and never "declared, not live" for want of running it.
+      const recorded = (Array.isArray(parsed.exclude) ? parsed.exclude : [])
         .filter((v) => typeof v === 'string' && v !== '' && checkExcludeStored(v) === null)
         .slice(0, SCOPE_LIMITS.excludes);
-      if (values.length || exclude.length) {
-        out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values, ...(exclude.length ? { exclude } : {}) });
+      const exclude = recorded.filter((v) => checkExclude(v) === null);
+      const unrun = recorded.filter((v) => !exclude.includes(v));
+      if (values.length || exclude.length || unrun.length) {
+        out.set(key.slice(SCOPE_ANNOTATION_PREFIX.length), { by: 'prefix', values, ...(exclude.length ? { exclude } : {}), ...(unrun.length ? { unrun } : {}) });
       }
     } else if (parsed.by === 'folder') {
       const values = parsed.values
@@ -719,8 +728,10 @@ export function inScope(kind, artefact, scopeEntry) {
     // A name is inside when it carries a prefix (any name, when no prefix was
     // set) and no exclude pattern drops it (excludedBy: a name over the bound
     // never is): the fetcher kept exactly those.
-    return names.some((n) => (scopeEntry.values.length === 0 || scopeEntry.values.some((p) => n.startsWith(p)))
+    const inside = names.some((n) => (scopeEntry.values.length === 0 || scopeEntry.values.some((p) => n.startsWith(p)))
       && !excludedBy(excluded, n));
+    // Inside by every pattern that can be run: a recorded pattern that cannot may still have dropped it.
+    return inside && Array.isArray(scopeEntry.unrun) && scopeEntry.unrun.length ? null : inside;
   }
   if (scopeEntry.by === 'folder') {
     const uid = folderUidOf(artefact);
@@ -781,6 +792,9 @@ export function scopeReason(kind, verdict, scopeEntry, { holder = 'a', folderTit
     const excluded = Array.isArray(scopeEntry.exclude) && scopeEntry.exclude.length ? `excluded ${scopeEntry.exclude.join(' ')}` : '';
     const list = [prefixes, excluded].filter(Boolean).join('; ');
     const read = [scopeEntry.values.length ? `with the prefixes ${scopeEntry.values.join(', ')}` : '', excluded ? `not matching ${scopeEntry.exclude.join(' ')}` : ''].filter(Boolean).join(' and ');
+    if (verdict === null && Array.isArray(scopeEntry.unrun) && scopeEntry.unrun.length) {
+      return `the live read dropped ${many} by ${scopeEntry.unrun.length === 1 ? 'a pattern' : 'patterns'} this release does not run (${scopeEntry.unrun.join(' ')}: may be too slow to match), so this ${one} was not checked`;
+    }
     return verdict === false
       ? `outside the snapshot's ${one} scope (${list})`
       : `the snapshot read only ${many} ${read}; ${pack} gives this ${one} no name, so it was not checked`;
