@@ -582,3 +582,17 @@ test('a threshold the repository does not state — a chart value Grafana fills 
     assert.deepEqual([pair?.match, pair?.deltas, pair?.unobserved], ['aligned', [], [{ field: 'condition', side: 'a', keys: [] }]], label);
   }
 });
+
+test('grade schema 6: the objectives the scan derives from alert names root no requirement chain — a repository of alert rules alone has no declared chain, the placeholders are counted beside the rollup, and Drift-free is scored on what was compared and says so', async () => {
+  const { comparePackBranches } = await import('./lib/traceability-graph.mjs');
+  const { computeDiagnosticGrade } = await import('../studio/diagnostic-grade.mjs');
+  const { canonical } = await livePack({ [T.grafana]: () => clone(PROVISIONING) });
+  const a = adapt(DECLARED);
+  const b = adapt(canonical);
+  const graph = comparePackBranches(a, b);
+  assert.deepEqual([graph.rollup.declaredTotal, graph.rollup.placeholderRoots, graph.rollup.integrityPct], [0, 3, null], 'three alert rules, three placeholder objectives, no declared chain');
+  const d = { ...diffPacks(a, b), traceabilityGraph: graph };
+  const drift = computeDiagnosticGrade(a, b, null, 'live', d, { nowMs: Date.parse('2026-11-16T00:10:00Z') }).trust.criteria.find((c) => c.key === 'drift-free');
+  assert.match(drift.detail, /^weighted live-fidelity \d+%/, 'scored on the diff, not on chains nobody wrote');
+  assert.match(drift.detail, /; 3 placeholder objectives left out of the chains, scored on what was compared/);
+});

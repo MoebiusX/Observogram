@@ -243,6 +243,16 @@ export function compareBranches(graphA, graphB) {
   const rootsB = requirementRoots(graphB);
   const aByRoot = new Map(rootsA.map((key) => [rootCompareKey(graphA.nodes.get(key)), buildBranch(graphA, key)]));
   const bByRoot = new Map(rootsB.map((key) => [rootCompareKey(graphB.nodes.get(key)), buildBranch(graphB, key)]));
+  // Grade schema 6: a declared branch rooted on an SLO or SLI the scan invented (a placeholder derived
+  // from an alert name, or its schema-minimum stub) is no commitment anyone declared: it is counted
+  // beside the rollup (placeholderRoots), never in it, so a repository of alert rules alone is not
+  // graded on chains nobody wrote (0.8.43's decision A11, reversed).
+  let placeholderRoots = 0;
+  for (const [rootKey, branch] of [...aByRoot]) {
+    if (!isScaffoldNode(graphA.nodes.get(branch.rootKey))) continue;
+    aByRoot.delete(rootKey);
+    placeholderRoots += 1;
+  }
   const rootKeys = [...new Set([...aByRoot.keys(), ...bByRoot.keys()])]
     // A live-only branch rooted on a placeholder SLO/SLI (the fetcher's
     // per-service availability guess, `platform_availability`) is not an
@@ -277,6 +287,7 @@ export function compareBranches(graphA, graphB) {
     integrityMean,
     // No declared commitment: no integrity figure (an empty set is not 100 % intact).
     integrityPct: integrityMean === null ? null : Math.round(integrityMean * 100),
+    ...(placeholderRoots ? { placeholderRoots } : {}),
   };
   // Additive ladder rollup over the same declared branches. integrityMean
   // and the intact/partial/broken/undeclared counts above are the scored

@@ -366,7 +366,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // sentences, the board's scan line by kind, the Grafana rule reading in sli-inference, crawler,
   // artefact-model and diff, and the exclude patterns' work bound in tools/lib/live-fetch.mjs; no
   // dependency), about 15 KB over.
-  assert.ok(built.bytes < 7_317_000, `the two-pack bundle is under 7,317,000 bytes (${built.bytes})`);
+  // 7,345,000 since grade schema 6 (2026-11-18: the two-pack bundle measured 7,325,332 with 0.8.44's
+  // findings and the grade's guessed-value helpers, the scan's field marks in the bundled packs and the
+  // step estimate in tools/lib/live-fetch.mjs; no dependency), about 20 KB over.
+  assert.ok(built.bytes < 7_345_000, `the two-pack bundle is under 7,345,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

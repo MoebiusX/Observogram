@@ -107,6 +107,36 @@ function studioTargetsOf(pack) {
   return { profile: typeof st.profile === 'string' && st.profile ? st.profile : 'custom', mttd: st.mttd, mttr: st.mttr };
 }
 
+// What the repository scan or the live fetcher GUESSED (grade schema 6): a value under a scanner's
+// scaffold mark — the artefact's own, or a field's (crawler.scaffold.slos.<id>.objective) while the value
+// is still the default that mark was written for. A pack scanned before the marks existed (no
+// `crawler.guessMarks` stamp) is read by the scan's own words instead. Mirrored, not imported, from
+// tools/lib/conformance.mjs (the engine imports nothing); tools/test-diagnostic-grade.mjs pins the two.
+const GUESS_PREFIXES = ['crawler.scaffold.', 'mcp.scaffold.'];
+const GUESSED_SLI_WORDS = /^(Inferred from recording rule|Auto-derived from burn-rate alert|Stub SLI|Availability SLI for .*\(synthesised from [A-Z]{3} system_health)/;
+const guessMarked = (ann, symbol) => GUESS_PREFIXES.some((p) => !!ann?.[`${p}${symbol}`]);
+const guessStamped = (ann) => ann?.['crawler.guessMarks'] === '1';
+const sliOfSlo = (slo, slis) => {
+  const ref = String(slo?.spec?.sli ?? '').replace(/^ref:slis\./, '');
+  return slis.find((a) => a?.spec?.id === ref) || null;
+};
+export function sloObjectiveGuessed(ann, slo, sli = null) {
+  if (isScaffoldArtefact(slo)) return true;
+  const s = slo?.spec || {};
+  if (guessMarked(ann, `slos.${s.id}.objective`)) return s.objective === 0.99;
+  return !guessStamped(ann) && s.objective === 0.99 && s.window === '30d' && GUESSED_SLI_WORDS.test(String(sli?.spec?.description || ''));
+}
+export function sliBoundGuessed(ann, sli) {
+  const s = sli?.spec || {};
+  const isDefault = s.type === 'threshold' && s.threshold === 1 && s.unit === 'ratio';
+  if (!isDefault) return false;
+  if (guessMarked(ann, `slis.${s.id}.threshold`)) return true;
+  return !guessStamped(ann) && GUESSED_SLI_WORDS.test(String(s.description || ''));
+}
+export function propagatorsGuessed(ann) {
+  return guessMarked(ann, 'otel.sdk.propagators') || guessMarked(ann, 'otel');
+}
+
 // Why a side could not look at chaos experiments: the repository scan's
 // stamp (tools/lib/crawler.mjs, while it has no chaos detector) and the
 // live fetcher's (tools/fetch-live-pack.mjs).
@@ -465,7 +495,7 @@ export const GRADE_CRITERION_KEYS = Object.freeze(GRADE_CRITERIA.map((c) => c.ke
 // The grade's schema: computeDiagnosticGrade's `gradeSchema`, a run record's
 // `grade.schema`. A grade of another schema scored by other rules (see the
 // history beside `gradeSchema` below).
-export const GRADE_SCHEMA = 5;
+export const GRADE_SCHEMA = 6;
 
 // The criteria a caller leaves out of a grade, from `opts.off`: keys, or
 // objects with a `key` (a service record's switches), in the engine's order.
@@ -507,9 +537,13 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
 
   const otel = L2.find(a => /^OTEL-/.test(a.id || ''));
   const propagators = otel?.spec?.sdk?.propagators || otel?.sdk?.propagators || [];
-  const hasTraceContext = (Array.isArray(propagators) ? propagators : [])
+  // Grade schema 6: a propagator the scan wrote as its default (it reads no SDK configuration) is no
+  // statement, so it earns nothing — the pack's own mark says which it is.
+  const propagatorDeclared = (Array.isArray(propagators) ? propagators : [])
     .some(p => /tracecontext/i.test(String(p)));
-  const logCorrelationDeclared = !!(otel?.spec?.log_correlation === true || otel?.log_correlation === true);
+  const propagatorGuessed = propagatorDeclared && propagatorsGuessed(ann);
+  const hasTraceContext = propagatorDeclared && !propagatorGuessed;
+  const logCorrelationDeclared = !!(otel?.spec?.log_correlation === true || otel?.spec?.sdk?.log_correlation === true || otel?.log_correlation === true);
   const correlated = hasTraceContext && (logCorrelationDeclared || signalsPresent.has('logs'));
 
   // Calibrated counts only baselines someone declared. The MTTD/MTTR block
@@ -534,9 +568,20 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     const obj = a.spec?.objective ?? a.objective;
     return typeof obj === 'number' && obj > 0 && obj <= 1;
   };
-  const slosWithObjective = slos.filter(a => hasObjective(a) && !isScaffoldArtefact(a));
+  // Grade schema 6: an objective counts only when someone stated it. The scan's default on an SLO it
+  // inferred from recording rules (99% over 30 days) is a guess like its invented SLOs', and earns
+  // nothing; an SLO whose indicator has no bound but the scan's (threshold 1, as a ratio) has no "good"
+  // to hold an objective against, so it is left out of the count altogether. The points follow the share
+  // of the SLOs that can hold an objective which state one.
+  const slis = L1.filter(a => /^SLI-/.test(a.id || ''));
+  const realSlos = slos.filter(a => hasObjective(a) && !isScaffoldArtefact(a));
+  const unboundedSlos = realSlos.filter(a => sliBoundGuessed(ann, sliOfSlo(a, slis)));
+  const countable = realSlos.filter(a => !unboundedSlos.includes(a));
+  const guessedObjectives = countable.filter(a => sloObjectiveGuessed(ann, a, sliOfSlo(a, slis)));
+  const slosWithObjective = countable.filter(a => !guessedObjectives.includes(a));
   const scaffoldObjectives = slos.filter(a => hasObjective(a) && isScaffoldArtefact(a)).length;
   const calibrated = hasBaselines && slosWithObjective.length > 0;
+  const calibratedScore = hasBaselines && countable.length ? slosWithObjective.length / countable.length : 0;
 
   let totalObserved = 0;
   for (const l of POSTURE_LAYERS) {
@@ -574,16 +619,26 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       pass: correlated,
       detail: hasTraceContext
         ? (logCorrelationDeclared ? 'tracecontext propagator + log_correlation: true' : 'tracecontext propagator declared')
-        : 'tracecontext propagator missing - logs/traces cannot be joined',
+        : propagatorGuessed ? 'the trace propagator is the scan\'s default: the repository states no SDK configuration'
+          : 'tracecontext propagator missing - logs/traces cannot be joined',
+      // Additive: whether a propagator is declared, and whether it is the scan's guess.
+      propagators: { declared: hasTraceContext, guessed: propagatorGuessed },
     },
     { key: 'calibrated',    label: 'Calibrated',    sub: 'normal defined with numbers',
       pass: calibrated,
+      score: calibratedScore,
+      // The counted number comes first in every sentence: an older board reads the first number.
       detail: hasBaselines
         ? (slosWithObjective.length
             ? `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'MTTD/MTTR baselines'} + ${slosWithObjective.length} SLO${slosWithObjective.length === 1 ? '' : 's'} with explicit objective`
-            : `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'baselines declared'} but no SLOs have explicit objectives` + (scaffoldObjectives
-              ? ` - ${scaffoldObjectives === 1 ? 'the one present is a scaffold' : `the ${scaffoldObjectives} present are scaffolds`} (defaults, never measured)`
-              : ''))
+              + (guessedObjectives.length ? `; ${guessedObjectives.length} more carry the scan's default` : '')
+              + (unboundedSlos.length ? `; ${unboundedSlos.length} recorded series ${unboundedSlos.length === 1 ? 'has' : 'have'} no bound` : '')
+            : `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'baselines declared'} but no SLOs have explicit objectives` + (guessedObjectives.length
+              ? ` - ${guessedObjectives.length === 1 ? 'the one present carries' : `the ${guessedObjectives.length} present carry`} the scan's default (99% over 30 days, never stated)`
+              : scaffoldObjectives
+                ? ` - ${scaffoldObjectives === 1 ? 'the one present is a scaffold' : `the ${scaffoldObjectives} present are scaffolds`} (defaults, never measured)`
+                : '')
+              + (unboundedSlos.length ? `; ${unboundedSlos.length} recorded series ${unboundedSlos.length === 1 ? 'has' : 'have'} no bound` : ''))
         : 'no MTTD/MTTR baselines declared' + (scaffoldBaselines
             ? ` - ${scaffoldBaselines === 1 ? 'the one present is a scaffold' : `the ${scaffoldBaselines} present are scaffolds`} (defaults, never measured)`
             : ''),
@@ -592,7 +647,9 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       baselines: { declared: baselineArtefacts.length - scaffoldBaselines, scaffolds: scaffoldBaselines, ...(fromStudio ? { studio: studioTargets } : {}) },
       // Additive: the SLO objectives counted and the scan's left out — only
       // when the scan wrote some.
-      ...(scaffoldObjectives ? { objectives: { declared: slosWithObjective.length, scaffolds: scaffoldObjectives } } : {}),
+      // Present only when the scan wrote some: `declared` is the counted ones (an older board reads it), `guessed`
+      // the scan's defaults, `unbounded` those with no bound to hold one against, `total` the share's base.
+      ...(scaffoldObjectives || guessedObjectives.length || unboundedSlos.length ? { objectives: { declared: slosWithObjective.length, scaffolds: scaffoldObjectives, guessed: guessedObjectives.length, unbounded: unboundedSlos.length, total: countable.length } } : {}),
     },
     { key: 'comprehensive', label: 'Comprehensive', sub: 'coverage spans all layers',
       pass: comprehensive,
@@ -712,7 +769,11 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         onlyInA: declaredMissing,
         onlyInB: liveShadow,
       });
-      const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
+      // Placeholder objectives the scan derived (grade schema 6) root no chain: the criterion is scored
+      // here, on what was compared, and says so.
+      const placeholderRoots = Number(branchRollup?.placeholderRoots) || 0;
+      const scaffoldNote = (placeholderRoots ? `; ${placeholderRoots} placeholder objective${placeholderRoots === 1 ? '' : 's'} left out of the chains, scored on what was compared` : '')
+        + (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
         + (notObserved ? `; ${notObserved} not checked (the live side could not check them)` : '')
         + aheadNote + asideNote;
       if (weighted.health === null) {
@@ -877,10 +938,12 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
     // families returned no data (each read 1 before). Every record this
     // scores differently compared nothing, and its drift.compared (0) or its
     // zero counts say so; a run whose vantage was lost carries no grade at
-    // all (tools/lib/journey.mjs). A bump would take every letter off the
-    // board until each service runs again, and 6 is reserved for the
-    // ladder-integrity proposal (docs/VENDORING.md). The owner may still
-    // choose the bump.
+    // all (tools/lib/journey.mjs).
+    // 6 (0.8.45, the owner's decision of 2026-11-17): nothing the scan guessed
+    // counts — an inferred SLO's default objective and the default trace
+    // propagator earn nothing (Calibrated by the share stated, Correlated by a
+    // stated propagator), and the objectives derived from alert names root no
+    // requirement chain. The ladder-integrity proposal takes 7.
     gradeSchema: GRADE_SCHEMA,
     coverage: {
       criteria: coverageListed,
