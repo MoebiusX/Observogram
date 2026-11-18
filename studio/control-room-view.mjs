@@ -218,7 +218,7 @@ function sloHtml(r) {
   const bound = r.now?.state === 'data' && r.now.threshold !== null && r.now.role !== 'good' && r.now.role !== 'errors'
     ? `, ${r.now.better === 'higher' ? '≥' : '≤'} ${exactWords(r.now.threshold, r.now.unit)}` : '';
   const objective = r.objective.value !== null
-    ? `Objective ${formatValue(r.objective.value, 'ratio')}${r.objective.window ? ` over ${r.objective.window}` : ''}${bound}${r.objective.isDefault ? ' (default)' : ''}`
+    ? `Objective ${formatValue(r.objective.value, 'ratio')}${r.objective.window ? ` over ${r.objective.window}` : ''}${bound}${r.objective.isDefault ? ' (default)' : r.objective.source === 'studio' ? ' (stated in the studio)' : ''}`
     : 'No objective';
   const budget = budgetWords(r.budget);
   return `
@@ -229,14 +229,15 @@ function sloHtml(r) {
             <span class="ov-cr__slo-budget">${escapeHtml(budget)}</span>
           </li>`;
 }
-function slosHtml(s) {
+function slosHtml(s, action = null) {
   if (!s) return '';
+  const state = action ? ` <button type="button" class="og-btn og-btn--text" data-ux-action="cr-objectives" aria-label="${escapeHtml(action.aria)}">${escapeHtml(action.label)}</button>` : '';
   return `
       <section class="ov-cr__slos" aria-label="SLIs and SLOs">
         <h3 class="ov-cr__h">SLIs and SLOs</h3>${s.rows.length ? `
         <ul class="ov-cr__slo-list">${s.rows.map(sloHtml).join('')}
         </ul>
-        <p class="ov-cr__muted">Read live from the series its repository's own recording rules write.${s.rows.some((r) => r.objective.isDefault) ? " A default objective is the scan's: the repository states none, so the SLI is not judged against it." : ''}${s.cut ? ` ${s.cut} more not read.` : ''}</p>` : `
+        <p class="ov-cr__muted">Read live from the series its repository's own recording rules write.${s.rows.some((r) => r.objective.isDefault) ? " A default objective is the scan's: the repository states none, so the SLI is not judged against it." : ''}${s.cut ? ` ${s.cut} more not read.` : ''}${state}</p>` : `
         <p class="ov-cr__muted">${escapeHtml(s.note)}</p>`}${s.unrecorded?.length ? `
         <p class="ov-cr__muted">No recorded series: ${escapeHtml(s.unrecorded.slice(0, 6).join(', '))}${s.unrecorded.length > 6 ? ` and ${s.unrecorded.length - 6} more` : ''}.</p>` : ''}
       </section>`;
@@ -256,7 +257,7 @@ function bodyHtml(m) {
       <section class="ov-cr__kpis" aria-label="Detection and resolution">${kpiHtml(m.kpis.mttr)}${kpiHtml(m.kpis.mttd)}
       </section>${m.targets || m.record ? `
       <p class="ov-cr__targets">${m.targets ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-targets" aria-label="${escapeHtml(m.targets.aria)}">${escapeHtml(m.targets.label)}</button>` : ''}${m.record ? `<button type="button" class="og-btn og-btn--text" data-ux-action="cr-record" aria-label="${escapeHtml(m.record.aria)}">${escapeHtml(m.record.label)}</button>` : ''}</p>` : ''}
-      ${slosHtml(m.slos)}
+      ${slosHtml(m.slos, m.objectives)}
       ${insights}
       <details class="ov-cr__fold" data-cr-open="more">
         <summary class="ov-cr__fold-sum"><span class="ov-cr__h">${escapeHtml(m.more.label)}</span><span class="ov-cr__muted">${escapeHtml(m.more.detail)}</span></summary>
@@ -379,6 +380,8 @@ export function renderControlRoom(container, model, host = appHost) {
     'cr-refresh': () => { if (!model.reading) ov.refreshControlRoom?.(); },
     // Set targets… / Change targets…: the service's form at its Targets answer (the panel closes).
     'cr-targets': () => ov.setTargets?.('control-room'),
+    // State objectives… / Change objectives…: the service's objectives form (the panel closes).
+    'cr-objectives': () => ov.stateObjectives?.('control-room'),
     // Record a chaos run…: the service's chaos run form (the panel closes).
     'cr-record': () => ov.recordChaosRun?.('control-room'),
   });

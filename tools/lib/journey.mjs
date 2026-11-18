@@ -1838,7 +1838,14 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   // The live scope the read applied (resolvePackB), never the stored one it may have read without part of.
   const appliedScope = b.appliedScope !== undefined ? b.appliedScope : packBScopeOf(def);
   const comparable = scanComparability(packAScan, recent) ?? (liveTarget ? liveScopeComparability(appliedScope, recent) : null);
-  const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)];
+  // A grade breach right after the grade changed how it scores says so: the run before was held to
+  // other rules, so this is not the service getting worse.
+  const schemaBefore = Number.isInteger(previousRun?.grade?.schema) ? previousRun.grade.schema : null;
+  const schemaNow = grade.gradeSchema ?? 1;
+  const breaches = [...evaluateGate(def.gate, facts), ...scanGateBreaches(packAScan)]
+    .map((b) => (b.criterion === 'requireGradePass' && schemaBefore !== null && schemaBefore !== schemaNow && Number.isFinite(facts.gradeScore)
+      ? { ...b, detail: `${b.detail} — the grade changed how it scores since the previous run (schema ${schemaBefore} → ${schemaNow}; that run read ${previousRun.grade.score ?? '?'}%)` }
+      : b));
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
 
@@ -1932,6 +1939,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       broken: rollup.broken, undeclared: rollup.undeclared, declaredTotal: rollup.declaredTotal,
       // Only when chains were left out because their requirement is set aside: how many.
       ...(rollup.setAside ? { setAside: rollup.setAside } : {}),
+      // Only when declared chains were left out because the scan invented their objective: how many.
+      ...(rollup.placeholderRoots ? { placeholderRoots: rollup.placeholderRoots } : {}),
     } : null,
     // Step 4: per requirement chain — the scored verdict, the on-wire ladder
     // verdict and the degraded nodes with their blast radius (chain-history.mjs;

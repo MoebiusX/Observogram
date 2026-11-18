@@ -448,7 +448,12 @@ const windowWords = (w) => { const s = durationSeconds(w); return s === null ? S
 // ({ state: 'none' | 'empty' | 'not-read', note }); the view formats the numbers. The tone is the
 // budget's (the repository's own judgment: left · low · spent), else the SLI against its objective
 // where both are the repository's own and the direction is known; never against a default objective.
-export function slosOf(slos) {
+// `objectives`: the service's objectives stated in the studio ({ slos: { '<slo id>': { objective, window } } },
+// studio/slo-objectives.mjs). One stated for an SLO whose own is the scan's default stands on its row
+// (`objective.source` 'studio'), and the SLI is judged against it — not by a budget the repository
+// records against another objective.
+export function slosOf(slos, { objectives = null } = {}) {
+  const stated = isObj(objectives) && isObj(objectives.slos) ? objectives.slos : {};
   if (!isObj(slos)) return null;
   if (slos.outcome === 'failed' || slos.outcome === 'not-attempted') {
     return { rows: [], note: `The SLOs were not read${slos.reason ? `: ${slos.reason}` : ''}.`, cut: 0 };
@@ -463,13 +468,17 @@ export function slosOf(slos) {
     return { state: 'not-read', note: `Not read: ${x.reason || 'no answer'}` };
   };
   const rows = (Array.isArray(slos.rows) ? slos.rows : []).filter(isObj).map((r) => {
-    const objective = num(r.objective);
-    const isDefault = r.objectiveSource === 'default';
+    const own = isObj(stated[r.id]) && r.objectiveSource === 'default' && num(stated[r.id].objective) !== null ? stated[r.id] : null;
+    const objective = own ? num(own.objective) : num(r.objective);
+    const isDefault = !own && r.objectiveSource === 'default';
+    const window = own && typeof own.window === 'string' ? own.window : r.window;
+    // The recorded budget is against the repository's own objective: with another stated, it is not this row's.
+    const budgetApplies = !own || num(own.objective) === num(r.objective);
     const role = ['errors', 'good', 'latency', 'value'].includes(r.now?.role) ? r.now.role : 'value';
     const now = isObj(r.now)
       ? read(r.now, { unit: String(r.now.unit || ''), better: ['higher', 'lower'].includes(r.now.better) ? r.now.better : null, window: r.now.window, role, threshold: num(r.now.threshold) })
       : { state: 'none', note: 'its repository records no series for it' };
-    const budget = isObj(r.budget) ? read(r.budget, { unit: 'ratio', better: 'higher' }) : null;
+    const budget = isObj(r.budget) && budgetApplies ? read(r.budget, { unit: 'ratio', better: 'higher' }) : null;
     let tone = 'none';
     // judged: the tone came from the SLI against its bound — the view then says the value exactly.
     let judged = false;
@@ -493,7 +502,7 @@ export function slosOf(slos) {
     }
     return {
       id: String(r.id || ''), title: sliWords(r.sli || r.id),
-      objective: { value: objective, window: r.window ? windowWords(r.window) : '', isDefault },
+      objective: { value: objective, window: window ? windowWords(window) : '', isDefault, ...(own ? { source: 'studio' } : {}) },
       now, budget, tone, judged,
     };
   });
@@ -602,6 +611,10 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
       : null,
     // The way to record a chaos run's result, from where MTTD says none is recorded.
     record: isObj(mttx) && !mttx.unread && mttx.record === true ? { label: 'Record a chaos run…', aria: `Record a chaos run of ${title}` } : null,
+    // The way to state the objectives the scan only guessed, from where the SLOs are read.
+    objectives: isObj(mttx) && !mttx.unread && (mttx.objectivesAction === 'State objectives…' || mttx.objectivesAction === 'Change objectives…')
+      ? { label: mttx.objectivesAction, aria: `${mttx.objectivesAction === 'State objectives…' ? 'State' : 'Change'} the objectives of ${title}` }
+      : null,
     timingReadAt: a?.timing?.readAt || null,
     // Cut at the deadline: the parts not read say so; the strip says why.
     outOfTime: !!a?.calls?.outOfTime,
@@ -609,7 +622,7 @@ export function buildControlRoomModel({ state = CONTROL_ROOM_CLOSED, serviceName
     scrape: a ? scrapeOf(a.scrape) : null,
     alerts: a ? alertRowsOf(a.alerts, a.timing, serverNow, a.readAt) : { rows: [], more: 0 },
     families: a ? familiesOf(a.families, a.absent, { scoped: a.scope?.kind === 'service' }) : { rows: [], note: '', absent: '' },
-    slos: a ? slosOf(a.slos) : null,
+    slos: a ? slosOf(a.slos, { objectives: isObj(mttx) ? mttx.objectives ?? null : null }) : null,
     calls: a?.calls || null,
   };
   model.more = moreOf(model.status, model.alerts, model.scrape, model.families);

@@ -4210,6 +4210,13 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
       ? `${whose}, but the SLO objectives are defaults the scan wrote, so nothing says what normal is.`
       : `${whose}, but no SLO has a numeric objective, so nothing says what normal is.`;
     b.fix = 'Give each SLO a numeric objective.';
+    // The scan's default (99% over 30 days) on an inferred SLO: a service states them in the studio.
+    if (c.objectives?.guessed > 0) {
+      b.why = `${whose}, but the ${c.objectives.guessed === 1 ? 'SLO objective is' : `${c.objectives.guessed} SLO objectives are`} the scan's default (99% over 30 days), which nobody stated, so nothing says what normal is.`;
+      b.fix = serviceTargets
+        ? 'State each objective in the studio (State objectives… on its board), or declare it in the repository.'
+        : 'State each objective in the repository: a number and a window someone decided.';
+    }
   } else if (c.key === 'calibrated' && c.baselines?.scaffolds > 0 && !c.baselines.declared) {
     // The only baselines are the scaffold every scan writes (platform
     // defaults): nothing measured them, and the next scan writes them again.

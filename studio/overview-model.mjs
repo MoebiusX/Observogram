@@ -490,14 +490,22 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
     line(c.calibrated,
       c.calibrated.baselines?.studio
         // Counted from the studio: said as the studio's, never as the repository's.
-        ? `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair targets set in the studio (${studioTargetsName(c.calibrated.baselines.studio)}).`
-        : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
+        ? `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}${statedWords(c.calibrated)}, with detection and repair targets set in the studio (${studioTargetsName(c.calibrated.baselines.studio)}).`
+        : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}${statedWords(c.calibrated)}, with detection and repair baselines.`,
       calibratedNo(c.calibrated)),
     line(c.comprehensive,
       `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`,
       `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`),
     chaosLine(c['chaos-validated'], liveUnobserved),
   ];
+}
+
+// The objectives counted from the studio, said as the studio's, never as the repository's.
+function statedWords(crit) {
+  const n = Number(crit?.objectives?.studio) || 0;
+  if (!n) return '';
+  const left = Number(crit.objectives.guessed) || 0;
+  return ` (${n === Number(crit.objectives.declared) ? 'stated in the studio' : `${n} stated in the studio`}${left ? `; ${left} more ${left === 1 ? 'carries' : 'carry'} the scan's default` : ''})`;
 }
 
 // The targets set in the studio, named: a profile's name ("lab default"), or their minutes.
@@ -708,6 +716,8 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
       ...criteria,
+      // The objectives the scan derived from alert names root no promise: said where the letter is.
+      ...(Number(run.traceability?.placeholderRoots) > 0 ? { placeholders: `${run.traceability.placeholderRoots} placeholder objective${run.traceability.placeholderRoots === 1 ? '' : 's'} the scan derived from alert names root${run.traceability.placeholderRoots === 1 ? 's' : ''} no promise: what drifted is scored on what was compared.` } : {}),
       ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now, off }),
     };
   }
@@ -1439,7 +1449,15 @@ export function chainModel({ layered = null, targets = null, env = null, settabl
 // ({ declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords }, action }), never a verdict.
 // `action`: 'Set targets…' | 'Change targets…' | null, as on the board's tile (targetsActionFor);
 // `record`: true where Record a chaos run… opens (the pack declares an experiment, and `settable`).
-export function controlRoomMttx({ loaded = false, layered = null, layeredError = null, targets = null, settable = false } = {}) {
+// `objectives` (the service's stated SLO objectives) ride along for the panel's SLO rows, with
+// `objectivesAction` ('State objectives…' | 'Change objectives…' | null, as under the board's letter).
+export function controlRoomMttx(facts = {}) {
+  const m = controlRoomMttxOf(facts);
+  if (m.unread) return m;
+  const offer = facts.diagnostic ? objectivesOffer(facts.diagnostic, { objectives: facts.objectives ?? null }, { settable: !!facts.settable }) : null;
+  return { ...m, ...(facts.objectives ? { objectives: facts.objectives } : {}), ...(offer ? { objectivesAction: offer.label } : {}) };
+}
+function controlRoomMttxOf({ loaded = false, layered = null, layeredError = null, targets = null, settable = false } = {}) {
   if (!loaded || layeredError || !layered) return { unread: true };
   const m = declaredByTier(layered).mttx;
   const runs = Array.isArray(m.runs) ? m.runs : [];

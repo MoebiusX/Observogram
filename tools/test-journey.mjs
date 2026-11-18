@@ -983,6 +983,57 @@ try {
       assert(thrown(() => loadJourneyDef('targets-badly')) === `journey targets-badly: mttxTargets must be the service's MTTD / MTTR targets — ${why}`,
         `a definition that says "${line}" does not load — the error says why`, thrown(() => loadJourneyDef('targets-badly')));
     }
+    // --- SLO objectives stated in the studio: Calibrated counts one for an SLO whose own is the scan's guess ---
+    {
+      const guess = parseYaml(readFileSync(PACK_A, 'utf8'));
+      const sloIds = guess.spec.slos.map((x) => x.id);
+      for (const slo of guess.spec.slos) { slo.objective = 0.99; slo.window = '30d'; }
+      guess.metadata.annotations = { ...(guess.metadata.annotations || {}), 'crawler.guessMarks': '1', ...Object.fromEntries(sloIds.map((id) => [`crawler.scaffold.slos.${id}.objective`, 'default'])) };
+      const GUESS = join(TMP, 'guessed-objectives.pack.json');
+      writeFileSync(GUESS, JSON.stringify(guess));
+      const fileOf = (name, extra = []) => writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${GUESS.replaceAll('\\', '/')} }`, `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`, 'env: prod', ...extra].join('\n'));
+      fileOf('guessed', ['gate: { minAlignmentPct: 1 }']);
+      const ONE = { slos: { [sloIds[0]]: { objective: 0.999, window: '28d' }, not_in_this_pack: { objective: 0.9, window: '7d' } } };
+      const noneStated = await runJourney(loadJourneyDef('guessed'));
+      const oneStated = await runJourney(loadJourneyDef('guessed'), { sloObjectives: ONE });
+      assert(!('objectives' in noneStated.grade) && oneStated.grade.score > noneStated.grade.score
+        && JSON.stringify(oneStated.grade.objectives) === JSON.stringify({ count: 1, key: `${sloIds[0]}=0.999/28d` }),
+      'a stated objective lifts the score, and the record names the ones counted (never one for an SLO the pack does not hold)', { none: noneStated.grade, one: oneStated.grade });
+      assert(JSON.stringify(oneStated.drift) === JSON.stringify(noneStated.drift), 'the comparison with live never sees them');
+      const offCal = await runJourney(loadJourneyDef('guessed'), { sloObjectives: ONE, gradeOff: ['calibrated'] });
+      assert(!('objectives' in offCal.grade), 'Calibrated switched off: the record names none', offCal.grade);
+      // The file's own (what the server writes) grades the same; handed null (the server: the service has none), none.
+      fileOf('guessed-by-file', ['gate: { minAlignmentPct: 1 }', `sloObjectives: { slos: { ${sloIds[0]}: { objective: 0.999, window: 28d } } }`]);
+      const byFile = await runJourney(loadJourneyDef('guessed-by-file'));
+      const handedNull = await runJourney(loadJourneyDef('guessed-by-file'), { sloObjectives: null });
+      assert(byFile.grade.score === oneStated.grade.score && byFile.grade.objectives.count === 1 && handedNull.grade.score === noneStated.grade.score && !('objectives' in handedNull.grade),
+        'a check file\'s own sloObjectives is what a run handed none grades with; handed null, none', { file: byFile.grade, none: handedNull.grade });
+      for (const [line, why] of [
+        ['sloObjectives: lab', 'it is not { slos: { <slo id>: { objective, window } } }'],
+        [`sloObjectives: { slos: { ${sloIds[0]}: { objective: 99.9, window: 30d } } }`, `"${sloIds[0]}": objective is a number above 0 and below 1 (0.999 for 99.9%)`],
+        [`sloObjectives: { slos: { ${sloIds[0]}: { objective: 0.999, window: 45d } } }`, `"${sloIds[0]}": window is one of 7d, 28d, 30d, 90d`],
+      ]) {
+        fileOf('objectives-badly', [line]);
+        assert(thrown(() => loadJourneyDef('objectives-badly')) === `journey objectives-badly: sloObjectives must be the service's stated SLO objectives — ${why}`,
+          `a definition that says "${line}" does not load — the error says why`, thrown(() => loadJourneyDef('objectives-badly')));
+      }
+      // A grade breach right after the grade changed how it scores says so, with what the run before read.
+      fileOf('guessed-gated', ['gate: { requireGradePass: true }']);
+      const gatedFirst = await runJourney(loadJourneyDef('guessed-gated'));
+      const gradeBreach = (r) => r.gate.breaches.find((b) => b.criterion === 'requireGradePass');
+      assert(gradeBreach(gatedFirst) && !/changed how it scores/.test(gradeBreach(gatedFirst).detail), 'a first run below the bar: the plain sentence', gatedFirst.gate.breaches);
+      const firstFile = join(TMP, 'runs', 'guessed-gated', `${gatedFirst.startedAt.replace(/[:.]/g, '-')}.json`);
+      const older = JSON.parse(readFileSync(firstFile, 'utf8'));
+      older.grade.schema = 5; older.grade.score = 90;
+      writeFileSync(firstFile, JSON.stringify(older));
+      const gatedNext = await runJourney(loadJourneyDef('guessed-gated'));
+      assert(gradeBreach(gatedNext).detail === `diagnostic grade ${gatedNext.grade.score}% is below the 85% pass bar — the grade changed how it scores since the previous run (schema 5 → ${gatedNext.grade.schema}; that run read 90%)`,
+        'the run before was graded under another schema: the breach says the scoring changed, and what that run read', gradeBreach(gatedNext));
+      const gatedThird = await runJourney(loadJourneyDef('guessed-gated'));
+      assert(!/changed how it scores/.test(gradeBreach(gatedThird).detail), 'the run after: the same schema, the plain sentence again');
+      for (const name of ['guessed', 'guessed-by-file', 'objectives-badly', 'guessed-gated']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
+      rmSync(GUESS);
+    }
     for (const name of ['no-baselines', 'no-baselines-targets', 'targets-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));
     rmSync(BARE);
     for (const name of ['runs-by-file', 'runs-badly']) rmSync(join(TMP, 'journeys', `${name}.journey.yaml`));

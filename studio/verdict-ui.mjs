@@ -330,6 +330,8 @@ export function loadRunHistory(onReady, { fetchFn = api } = {}) {
             : typeof r.grade?.score === 'number' ? r.grade.score : null;
           return {
             gradeScore,
+            // The schema that score was graded under (the listing's gradeSchema, a record's grade.schema).
+            gradeSchema: Number.isInteger(r.gradeSchema) ? r.gradeSchema : Number.isInteger(r.grade?.schema) ? r.grade.schema : null,
             alignmentPct: historyAlignmentPct(r),
             at: r.at || r.startedAt || null,
             outcome: r.outcome || null,
@@ -343,8 +345,17 @@ export function loadRunHistory(onReady, { fetchFn = api } = {}) {
   _runsPromise.then(onReady);
 }
 
+// The score's series stops at the last change of how the grade scores (its schema): a run graded by
+// other rules is not a point on the same line, nor what "vs previous run" is measured from.
 export function runSeries(field) {
-  const vals = (_runs?.runs || []).map(r => r[field]).filter(v => typeof v === 'number');
+  let runs = _runs?.runs || [];
+  if (field === 'gradeScore' && runs.length) {
+    const schema = runs[runs.length - 1].gradeSchema ?? null;
+    let from = runs.length - 1;
+    while (from > 0 && (runs[from - 1].gradeSchema ?? null) === schema) from -= 1;
+    runs = runs.slice(from);
+  }
+  const vals = runs.map(r => r[field]).filter(v => typeof v === 'number');
   return vals.length >= 2 ? vals : null;
 }
 

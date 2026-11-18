@@ -2051,6 +2051,8 @@ function controlRoomTargets() {
   const service = overviewService();
   return controlRoomMttx({
     loaded: overviewFacts.loaded, layered: overviewFacts.layered, layeredError: overviewFacts.layeredError, targets: service?.targets ?? null,
+    // The objectives stated in the studio, for the panel's SLO rows, and the grade that says which take one.
+    objectives: service?.objectives ?? null, diagnostic: overviewDerived.diagnostic,
     // Set targets… / Change targets… where the form can open: the service list, a record, a rank that may change it.
     settable: serviceListAvailable() && Number.isInteger(service?.id) && state.access?.canWrite !== false,
   });

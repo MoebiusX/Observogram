@@ -523,7 +523,8 @@ function diagnoseColHtml(g, f, s, primary, serviceId = null) {
           <div class="ov-result__text">
             <div class="ov-grade__label">${escapeHtml(g.label)}</div>
             ${g.word ? `<div class="ov-grade__word">${escapeHtml(g.word)}</div>` : ''}${g.criteria ? `
-            <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}
+            <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}${g.placeholders ? `
+            <div class="ov-grade__criteria og-muted">${escapeHtml(g.placeholders)}</div>` : ''}
             ${source}
           </div>
         </div>${g.objectives ? `

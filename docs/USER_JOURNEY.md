@@ -141,7 +141,7 @@ Upload one or compare two instead*.
 ## Diagnostic Grade Contract
 
 The Diagnostic Grade is the top-level answer. It is scored from seven
-criteria (grade schema 6: nothing the scan guessed counts), plus one informational operability check:
+criteria (grade schema 6: nothing the scan guessed counts — under the letter, **State objectives…** opens a form that takes the objective and window of each SLO the scan only guessed, says what the letter would read as they are typed, and checks the service again on Save), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
