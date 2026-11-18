@@ -33,11 +33,11 @@
 // module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, GRADE_SCHEMA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
+import { computeDiagnosticGrade, computePostureMatrix, instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, GRADE_SCHEMA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
-import { objectivesTermKey } from './slo-objectives.mjs';
+import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -512,6 +512,10 @@ function studioTargetsName(t) {
 function calibratedNo(crit) {
   if (!/no .*baselines/i.test(crit.detail)) {
     // The baselines half is there; the objectives are missing, or only the scan's invented ones (`objectives.scaffolds`).
+    const guessed = Number(crit.objectives?.guessed) || 0;
+    if (guessed > 0 && !crit.objectives.declared) {
+      return `Normal is not defined with numbers: the ${guessed === 1 ? 'one objective is' : `${guessed} objectives are`} the scan's default (99% over 30 days), which nobody stated.`;
+    }
     return crit.objectives?.scaffolds > 0 && !crit.objectives.declared
       ? 'Normal is not defined with numbers: the objectives are defaults the scan wrote, not targets anyone set.'
       : 'Normal is not defined with numbers: no objective has a target.';
@@ -1877,6 +1881,10 @@ export function buildOverviewModel(input = {}) {
     switches: { enabled: access?.canWrite !== false, reason: access?.canWrite !== false ? null : (access?.reason || 'Not available for your role here.') },
     graded: GRADE_CRITERIA.filter((c) => !offKeys.includes(c.key)).map((c) => ({ key: c.key, label: c.label })),
   } : graded0;
+  // State objectives… / Change objectives…: where the host draws the service list (the form lives
+  // there), for a service record, to a rank that may change it — and only when an SLO takes one.
+  const offer = objectivesOffer(pending ? null : diagnostic, picked.service, { settable: !!listable && picked.how === 'primary' && Number.isInteger(picked.service?.id) && access?.canWrite !== false });
+  if (offer) grade.objectives = offer;
   const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending, stopped: journey ? stopped : null });
   // A service with no pack at all has nothing to grade: the drift check
   // starts here, as with no service, under the service's own header — the
@@ -2126,7 +2134,7 @@ function envScopeCell(own, defaults) {
 // endpoint and a scope typed — or null. The host sends it and hands the answer back with the key:
 // an answer for another key (an older scope) is dropped.
 export function scopeCheckOf(form) {
-  if (!form?.open || form.chaosRun || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
+  if (!form?.open || form.chaosRun || form.objectives || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
   const v = form.values || {};
   const env = trimmed(v.env);
   if (!env || !v.endpointId || v.endpointId === LIVE_PACK) return null;
@@ -2888,7 +2896,7 @@ const FORM_DRAFT_VALUE_MAX = 2048;
 // pre-fill, or Use the server default) rides along, compact, so the restored form keeps and drops on
 // save what it said it would before the round trip.
 export function formDraft(form, { now = Date.now() } = {}) {
-  if (!form?.open || form.chaosRun) return null;
+  if (!form?.open || form.chaosRun || form.objectives) return null;
   const prefill = form.scopePrefill ? scopeFromValues(scopeFormValues(form.scopePrefill)) : null;
   return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched, ...(prefill ? { scopePrefill: prefill } : {}) };
 }
@@ -2943,6 +2951,145 @@ export function targetsOnlyPlan(values = {}, { services = [], serviceId = null }
   const targets = targetsFromForm(values);
   const changed = !!existing && !Object.keys(problems).length && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
   return { problems, serviceId: existing ? existing.id : null, patch: changed ? { targets } : null, name: existing?.name || trimmed(values.name), envName: trimmed(values.env) };
+}
+
+// ---------- State objectives… ----------
+//
+// An SLO the scan inferred carries its default objective (99% over 30 days), which the grade does not
+// count (schema 6). The form asks the objective and its window per such SLO (studio/slo-objectives.mjs),
+// shown with the indicator it reads and that indicator's series; Save sends the service's whole
+// record (PATCH { objectives }) and checks the service again, so the grade takes it.
+
+const OBJ = 'obj:';
+const WIN = 'win:';
+const DROP = 'drop:';
+const calibratedOf = (diagnostic) => criterionOf(diagnostic, 'calibrated');
+// The repository's own grade with these objectives stated (and no others): the letter the board shows
+// after a Save, until the service is checked again.
+function gradeWithObjectives(layered, objectives, off = [], posture = null) {
+  const bare = { ...layered, meta: { ...(layered.meta && typeof layered.meta === 'object' ? layered.meta : {}), studioObjectives: undefined } };
+  const pack = withStatedObjectives(bare, objectives);
+  return computeDiagnosticGrade(pack, null, posture || computePostureMatrix(pack, null), null, null, { off });
+}
+
+// objectivesOffer(diagnostic, service, { settable }) → { label, note, left, of } | null — what the
+// board offers under the letter: 'State objectives…' while an SLO still carries the scan's default,
+// 'Change objectives…' once each has one. null: nothing to state, Calibrated is not graded, or the
+// reader may not change the service.
+export function objectivesOffer(diagnostic, service, { settable = false } = {}) {
+  const c = settable ? calibratedOf(diagnostic) : null;
+  if (!c || c.applies === false) return null;
+  const rows = objectiveRowsOf(c, service?.objectives ?? null);
+  if (!rows.ask.length) return null;
+  const left = rows.ask.filter((r) => !r.stated).length;
+  const of = rows.ask.length;
+  return {
+    label: left ? 'State objectives…' : 'Change objectives…', left, of,
+    note: left
+      ? `${left === of ? (of === 1 ? 'Its one objective carries' : `All ${of} objectives carry`) : `${left} of ${of} objectives carry`} the scan's default (99% over 30 days): nobody stated ${left === 1 ? 'it' : 'them'}, so the grade does not count ${left === 1 ? 'it' : 'them'}.`
+      : `${of === 1 ? 'Its objective is' : `All ${of} objectives are`} stated in the studio.`,
+  };
+}
+
+// objectivesFormOpened(services, { serviceId, env, layered }) → the form State objectives… opens: a
+// row per SLO that takes an objective, the ones already stated filled in. null for a service that is
+// not a record, a pack that is not read, or one with nothing to state.
+export function objectivesFormOpened(services, { serviceId = null, env = null, layered = null } = {}) {
+  const service = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
+  if (!service || !layered) return null;
+  const off = Array.isArray(service.gradeOff) ? service.gradeOff : [];
+  let posture; let rows;
+  try {
+    posture = computePostureMatrix(layered, null);
+    rows = objectiveRowsOf(calibratedOf(gradeWithObjectives(layered, service.objectives ?? null, off, posture)), service.objectives ?? null);
+  } catch (_) { return null; }
+  if (!rows.ask.length && !rows.elsewhere.length) return null;
+  const values = { name: service.name, env: env || '' };
+  for (const r of rows.ask) { values[`${OBJ}${r.id}`] = r.percent; values[`${WIN}${r.id}`] = r.window; }
+  const first = rows.ask.find((r) => !r.stated) || rows.ask[0] || null;
+  return { open: true, mode: 'edit', objectives: true, serviceId: service.id, envFixed: !!env, layered, posture, rows, values, focus: first ? `${OBJ}${first.id}` : null, scroll: true, saving: false, error: null };
+}
+
+export function objectivesFormInput(form, field, value) {
+  if (!form?.objectives) return form;
+  return { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+}
+
+// objectivesPlan(form, { services }) → what Save does: { problems, serviceId, objectives, patch, name,
+// envName } — `objectives` the service's whole record as the form now reads (the entries for SLOs this
+// scan does not hold kept, unless ticked for removal), `patch` { objectives } only when it differs
+// from the record's.
+export function objectivesPlan(form, { services = [] } = {}) {
+  const v = form?.values || {};
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form?.serviceId) || null;
+  const name = existing?.name || trimmed(v.name);
+  const envName = trimmed(v.env);
+  if (!existing) return { problems: { [form?.focus || 'name']: 'This service is no longer listed: close the form and open it again.' }, serviceId: null, objectives: null, patch: null, name, envName };
+  const asked = new Set((form.rows?.ask || []).map((r) => r.id));
+  const was = existing.objectives?.slos && typeof existing.objectives.slos === 'object' ? existing.objectives.slos : {};
+  const keep = Object.fromEntries(Object.entries(was).filter(([id]) => !asked.has(id) && v[`${DROP}${id}`] !== '1'));
+  const answers = Object.fromEntries([...asked].map((id) => [id, { percent: v[`${OBJ}${id}`], window: v[`${WIN}${id}`] }]));
+  const { objectives, problems: list } = objectivesFromForm(answers, keep);
+  const problems = Object.fromEntries(list.map((p) => [`${OBJ}${p.id}`, p.text]));
+  const changed = !Object.keys(problems).length && !sameObjectives(existing.objectives ?? null, objectives);
+  return { problems, serviceId: existing.id, objectives, patch: changed ? { objectives } : null, name, envName };
+}
+
+// objectivesWhatIf(form, { services }) → { text, tone } — said under the rows at every keystroke: how
+// many are stated, and the letter the repository alone would read with them (the letter the board
+// shows after Save, until the check that follows).
+export function objectivesWhatIf(form, { services = [] } = {}) {
+  if (!form?.objectives) return { text: '', tone: 'neutral' };
+  const plan = objectivesPlan(form, { services });
+  if (Object.keys(plan.problems).length) return { text: 'Give each objective as a percent above 0 and below 100, such as 99.9; leave one blank to state nothing for it.', tone: 'warn' };
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form.serviceId) || null;
+  const off = Array.isArray(existing?.gradeOff) ? existing.gradeOff : [];
+  let now; let then;
+  try {
+    now = gradeWithObjectives(form.layered, existing?.objectives ?? null, off, form.posture);
+    then = gradeWithObjectives(form.layered, plan.objectives, off, form.posture);
+  } catch (_) { return { text: '', tone: 'neutral' }; }
+  const c = calibratedOf(then);
+  const of = (form.rows?.ask || []).length;
+  const stated = (form.rows?.ask || []).filter((r) => trimmed(form.values[`${OBJ}${r.id}`])).length;
+  const said = (g) => `${g.overall?.instrumentGrade?.letter || '–'} ${Math.round(g.overall?.audit?.scorePctExact ?? 0)}`;
+  const head = `${stated} of ${of} stated.`;
+  if (c?.applies === false) return { text: `${head} Calibrated is not graded for this service, so the letter does not move.`, tone: 'neutral' };
+  const needsTargets = /no .*baselines/i.test(String(c?.detail || ''));
+  const moved = said(now) === said(then)
+    ? `The repository alone reads ${said(now)} either way`
+    : `The repository alone would read ${said(then)} (it reads ${said(now)} now)`;
+  return {
+    text: `${head} ${moved}${needsTargets ? ' — Calibrated also needs detection and repair targets: Set targets… on the board.' : '.'} Save checks the service again, so the letter against live takes them.`,
+    tone: stated === of ? 'ok' : 'neutral',
+  };
+}
+
+// What the renderer draws.
+function objectivesFormView(form, { access = null } = {}) {
+  const v = form.values || {};
+  const env = trimmed(v.env);
+  const canWrite = access?.canWrite !== false;
+  const rows = form.rows || { ask: [], unbounded: [], repository: 0, elsewhere: [] };
+  return {
+    open: true, mode: 'edit', objectives: true, saving: !!form.saving, error: form.error || null, focus: form.focus || null, scroll: !!form.scroll,
+    title: `State objectives · ${v.name}${env ? ` · ${env}` : ''}`,
+    hint: 'The scan gives every objective it infers 99% over 30 days — a default, which the grade does not count. State what the service is actually held to: kept with this service, signed and dated, and counted by the grade where the repository states none. The comparison with live is not touched.',
+    values: { ...v },
+    rows: rows.ask.map((r) => ({
+      id: r.id, sli: r.sli, series: r.series, field: `${OBJ}${r.id}`, windowField: `${WIN}${r.id}`, percent: v[`${OBJ}${r.id}`] ?? '',
+      windows: OBJECTIVE_WINDOWS.map((w) => ({ value: w, label: `over ${w.replace(/d$/, '')} days`, selected: (v[`${WIN}${r.id}`] || '30d') === w })),
+      was: r.stated ? 'stated in the studio' : 'the scan\'s default, not counted',
+    })),
+    unbounded: rows.unbounded.length
+      ? `${rows.unbounded.length} recorded series ${rows.unbounded.length === 1 ? 'has' : 'have'} no bound that says what "good" is, so ${rows.unbounded.length === 1 ? 'it holds' : 'they hold'} no objective and ${rows.unbounded.length === 1 ? 'is' : 'are'} left out of the count: ${rows.unbounded.slice(0, 4).map((r) => r.sli).join(', ')}${rows.unbounded.length > 4 ? `, and ${rows.unbounded.length - 4} more` : ''}.`
+      : '',
+    repository: rows.repository ? `${rows.repository} ${rows.repository === 1 ? 'objective is' : 'objectives are'} stated in the repository and ${rows.repository === 1 ? 'needs' : 'need'} nothing here.` : '',
+    elsewhere: rows.elsewhere.map((r) => ({ id: r.id, words: `${r.percent}% over ${String(r.window).replace(/d$/, '')} days`, field: `${DROP}${r.id}`, checked: v[`${DROP}${r.id}`] === '1' })),
+    whatIf: objectivesWhatIf(form, { services: form.servicesAtOpen || [] }),
+    problems: objectivesPlan(form, { services: form.servicesAtOpen || [] }).problems,
+    canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
 }
 
 // ---------- Record a chaos run… ----------
@@ -3165,6 +3312,7 @@ export function formProblemsNote(problems = {}) {
 export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, heldTokens = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   if (form.chaosRun) return chaosRunFormModel(form, { access, now });
+  if (form.objectives) return objectivesFormView(form, { access });
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;

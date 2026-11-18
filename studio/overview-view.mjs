@@ -526,7 +526,8 @@ function diagnoseColHtml(g, f, s, primary, serviceId = null) {
             <div class="ov-grade__criteria og-muted">${escapeHtml(g.criteria)}</div>` : ''}
             ${source}
           </div>
-        </div>
+        </div>${g.objectives ? `
+        <p class="ov-grade__state"><span class="og-muted">${escapeHtml(g.objectives.note)}</span> <button type="button" class="og-btn og-btn--text" data-ux-action="ov-objectives">${escapeHtml(g.objectives.label)}</button></p>` : ''}
         ${boardWhyHtml(g, serviceId)}
       </section>
       <section class="ov-card ov-card--b ov-live og-panel og-panel--pad${toneClass('og-panel', s.tone)}" aria-labelledby="ov-live-eyebrow" aria-live="polite">
@@ -738,6 +739,8 @@ export function renderOverview(container, model, host = appHost) {
     'ov-mttx-set': () => ov.setTargets?.('board'),
     // Record a chaos run…: the service's chaos run form, on the service list where its form lives.
     'ov-mttx-record': () => ov.recordChaosRun?.('board'),
+    // State objectives… / Change objectives…: the service's objectives form, on the service list.
+    'ov-objectives': () => ov.stateObjectives?.('board'),
     // A criterion's switch (the model's `switches`): ask why in place, then the host's setGradeCriterion.
     'ov-grade-ask': (ev, el) => { gradeAsk = { service: model.service?.id ?? null, key: el.dataset.key, reason: '', focus: true }; whyOpen = true; redraw(); },
     'ov-grade-ask-cancel': () => { gradeAsk = null; redraw(); },
@@ -1122,8 +1125,50 @@ function chaosRunFormHtml(f) {
     </form>`;
 }
 
+// State objectives…: a row per SLO that takes one — the indicator it reads and that indicator's
+// series, the objective as a percent, its window — and under them, at every keystroke, what the
+// letter would read. Save checks the service again; Cancel goes back.
+function objectivesFormHtml(f) {
+  const off = !f.canWrite;
+  const shown = !!f.error;
+  const rows = f.rows.map((r) => `
+          <tr>
+            <th scope="row" class="ov-obj__what"><span class="ov-obj__sli">${escapeHtml(r.sli)}</span>${r.series ? `<code class="ov-obj__series" title="${attr(r.series)}">${escapeHtml(r.series)}</code>` : ''}</th>
+            <td class="ov-obj__num"><input class="og-input" data-field="${attr(r.field)}" value="${attr(r.percent)}" placeholder="99.9" inputmode="decimal" autocomplete="off" size="7" aria-label="Objective of ${attr(r.sli)}, as a percent"><span aria-hidden="true">%</span>${fieldErr(f, r.field, shown)}</td>
+            <td><select class="og-input" data-field="${attr(r.windowField)}" aria-label="Window of ${attr(r.sli)}">${r.windows.map((w) => `<option value="${attr(w.value)}"${w.selected ? ' selected' : ''}>${escapeHtml(w.label)}</option>`).join('')}</select></td>
+            <td class="ov-obj__was og-muted">${escapeHtml(r.was)}</td>
+          </tr>`).join('');
+  const table = f.rows.length ? `
+      <table class="ov-obj">
+        <thead><tr><th scope="col">Indicator, and the series it reads</th><th scope="col">Objective</th><th scope="col">Window</th><th scope="col">Now</th></tr></thead>
+        <tbody>${rows}
+        </tbody>
+      </table>
+      <p class="ov-obj__whatif ov-obj__whatif--${attr(f.whatIf.tone)}" id="ov-obj-whatif" role="status" aria-live="polite">${escapeHtml(f.whatIf.text)}</p>` : '';
+  const notes = [f.unbounded, f.repository].filter(Boolean).map((t) => `
+      <p class="ov-form__hint og-muted">${escapeHtml(t)}</p>`).join('');
+  const elsewhere = f.elsewhere.length ? `
+      <fieldset class="ov-form__fired">
+        <legend class="ov-form__l">Stated for an objective this scan does not hold — kept, unless ticked</legend>${f.elsewhere.map((x) => `
+        <label class="ov-form__check"><input type="checkbox" data-field="${attr(x.field)}"${x.checked ? ' checked' : ''}> Remove ${escapeHtml(x.id)} (${escapeHtml(x.words)})</label>`).join('')}
+      </fieldset>` : '';
+  return `
+    <form class="ov-form ov-form--objectives og-panel" aria-labelledby="ov-form-h" novalidate data-objectives="1">
+      <header class="ov-form__head">
+        <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
+        <p class="ov-card__sub">${escapeHtml(f.hint)}</p>
+      </header>${table}${notes}${elsewhere}${f.error ? `
+      <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
+      <div class="ov-form__acts">
+        <button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-save"${f.saving || off ? ' disabled' : ''}${off ? ` title="${attr(f.reason)}"` : ''}>${f.saving ? 'Saving…' : 'Save and check again'}</button>
+        <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
+      </div>
+    </form>`;
+}
+
 function svcFormHtml(f) {
   if (f.chaosRun) return chaosRunFormHtml(f);
+  if (f.objectives) return objectivesFormHtml(f);
   if (f.targetsOnly) return targetsFormHtml(f);
   const v = f.values;
   const shown = !!f.error;   // the field notes appear once a save was tried
@@ -1384,7 +1429,13 @@ export function renderServiceList(container, list, form, host = appHost, { draft
       // A box (the chaos run's alerts that fired) is '1' ticked, '' not.
       const box = input.type === 'checkbox';
       const event = input.tagName === 'SELECT' || box ? 'change' : 'input';
-      input.addEventListener(event, () => ov.formInput?.(input.dataset.field, box ? (input.checked ? '1' : '') : input.value, { redraw: input.tagName === 'SELECT' }));
+      input.addEventListener(event, () => {
+        ov.formInput?.(input.dataset.field, box ? (input.checked ? '1' : '') : input.value, { redraw: input.tagName === 'SELECT' });
+        // State objectives…: what the letter would read, said again at every keystroke, in place.
+        const whatIf = formEl.dataset.objectives && input.tagName !== 'SELECT' ? formEl.querySelector('#ov-obj-whatif') : null;
+        const said = whatIf ? ov.objectivesWhatIf?.() : null;
+        if (whatIf && said) { whatIf.textContent = said.text; whatIf.className = `ov-obj__whatif ov-obj__whatif--${said.tone}`; }
+      });
     });
     // Escape closes the folder panel, not the form.
     const panel = formEl.querySelector('.ov-folders');

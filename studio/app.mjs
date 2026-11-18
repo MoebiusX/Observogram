@@ -121,7 +121,7 @@ import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMod
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
-  targetsFormOpened, targetsOnlyPlan, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan,
+  targetsFormOpened, targetsOnlyPlan, objectivesFormOpened, objectivesFormInput, objectivesPlan, objectivesWhatIf, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan,
   useServerDefaultScope, scopeCheckOf, scopeChecking, scopeChecked, scopeCheckFailed, scopeCheckView } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
 import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture, checkServiceScope } from './overview-api.mjs';
@@ -2509,6 +2509,54 @@ function openTargetsForm(from = 'board') {
   renderMainView();
 }
 
+// State objectives… / Change objectives…, from the board's grade card or the control room: the
+// objectives form on the service list (overview-model.mjs objectivesFormOpened); Save or Cancel
+// brings the board back. `from`: 'board' or 'control-room' — where the focus goes back to.
+function openObjectivesForm(from = 'board') {
+  const picked = pickOverviewService(state.services, state.catalog, { serviceId: state.overviewServiceId, env: state.overviewEnv, isLiveAggregatePack });
+  if (!serviceListAvailable() || !Number.isInteger(picked.service?.id)) return;
+  const form = objectivesFormOpened(state.services, { serviceId: picked.service.id, env: picked.env || null, layered: overviewFacts.layered });
+  if (!form) return;
+  if (controlRoom.state().open) controlRoom.close();
+  const back = { serviceId: picked.service.id, env: picked.env || null, focus: from === 'control-room' ? '[data-ux-action="ov-control-room"]' : '[data-ux-action="ov-objectives"]' };
+  enterOverviewList();
+  listForm = { ...form, servicesAtOpen: state.services || [], returnTo: back };
+  renderMainView();
+}
+
+// Save and check again: the objectives first (PATCH { objectives }), then back to the board, which
+// checks the service again so the grade takes them. Nothing changed: back, and no check.
+async function saveObjectivesForm(nav) {
+  const plan = objectivesPlan(listForm, { services: state.services || [] });
+  if (Object.keys(plan.problems).length) {
+    listForm = { ...listForm, error: formProblemsNote(plan.problems), focus: Object.keys(plan.problems)[0] };
+    renderMainView();
+    return;
+  }
+  if (plan.patch) {
+    listForm = { ...listForm, saving: true, error: null };
+    renderMainView();
+    try {
+      await patchService(plan.serviceId, plan.patch);
+    } catch (e) {
+      await refreshServices();
+      listForm = { ...listForm, saving: false, error: e?.message || String(e) };
+      renderMainView();
+      return;
+    }
+    await refreshServices();
+  }
+  const returnTo = listForm.returnTo || null;
+  listForm = FORM_CLOSED;
+  const n = plan.objectives ? Object.keys(plan.objectives.slos).length : 0;
+  announce(plan.patch
+    ? `${plan.name}${plan.envName ? ` · ${plan.envName}` : ''}: ${n ? `${n} objective${n === 1 ? '' : 's'} stated` : 'no objective is stated now'}. Checking again, so the grade takes ${n === 1 ? 'it' : 'them'}.`
+    : `${plan.name}: the objectives are as they were.`);
+  if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') { renderMainView(); return; }
+  if (plan.patch) checkAfterRecord = true;
+  afterListForm(returnTo);
+}
+
 // Record a chaos run…, from the board's MTTD / MTTR tile or the control room: the chaos run form on
 // the service list (overview-model.mjs chaosRunFormOpened), the service's own experiments; Save or
 // Cancel brings the board back. `from`: 'board' or 'control-room' — where the focus goes back to.
@@ -2621,6 +2669,7 @@ async function saveTargetsForm(nav) {
 
 function listFormInput(field, value, { redraw = false } = {}) {
   if (listForm.chaosRun) { listForm = chaosRunFormInput(listForm, field, value); if (redraw) renderMainView(); return; }
+  if (listForm.objectives) { listForm = { ...objectivesFormInput(listForm, field, value), focus: field, scroll: false }; if (redraw) renderMainView(); return; }
   listForm = serviceFormInput(listForm, field, value);
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
   // Another environment chosen (the service's Change): the focus stays on the choice through the redraw.
@@ -2643,6 +2692,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   const nav = navGeneration;
   if (listForm.targetsOnly) { await saveTargetsForm(nav); return; }
   if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
+  if (listForm.objectives) { await saveObjectivesForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
   const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null, packs: listForm.packs || null });
@@ -3022,6 +3072,8 @@ const overviewActions = {
   closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
   setTargets: (from) => openTargetsForm(from === 'control-room' ? 'control-room' : 'board'),
   recordChaosRun: (from) => openChaosRunForm(from === 'control-room' ? 'control-room' : 'board'),
+  stateObjectives: (from) => openObjectivesForm(from === 'control-room' ? 'control-room' : 'board'),
+  objectivesWhatIf: () => objectivesWhatIf(listForm, { services: state.services || [] }),
   forgetChaosRun: (runId) => forgetChaosRun(String(runId || '')),
   browseFolders: listBrowseFolders,
   openFolder: (path) => { listOpenFolder(path); },
