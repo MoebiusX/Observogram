@@ -554,7 +554,7 @@ test('the views: serviceViewOf and listServiceViews agree, sorted by slug, envir
       assert.deepEqual(list.map((v) => v.slug), ['api-gateway', 'pay']);
       assert.deepEqual(list, [admin.serviceViewOf(db, services.getService(db, api.id)), admin.serviceViewOf(db, services.getService(db, pay.id))]);
       const [, payView] = list;
-      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'objectives', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
+      assert.deepEqual(Object.keys(payView), ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'objectives', 'agreement', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs']);
       assert.equal(payView.targets, null, 'no targets until they are set');
       assert.deepEqual([payView.gradeOff, list[0].gradeOff], [[], []], 'every criterion graded until one is switched off');
       assert.deepEqual([payView.name, payView.owners, payView.tier, payView.description, payView.source], ['Pay', ['team-pay'], 'tier-1', 'pays', { kind: 'observogram' }]);
