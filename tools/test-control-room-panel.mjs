@@ -696,3 +696,30 @@ test('renderControlRoom: the status, MTTR and MTTD, then the SLIs and SLOs; the 
   assert.ok(!c2.innerHTML.includes('ov-cr__slos') && c2.innerHTML.includes('ov-cr__fold'));
 });
 
+test('an objective stated in the studio stands on its SLO\'s row where the repository\'s is the scan\'s default: the SLI is judged against it, a budget recorded against another objective is not its own, and the repository\'s own statement is left alone', () => {
+  const stated = { slos: {
+    slo_http_requests_99: { objective: 0.7, window: '7d', by: 'ada', at: '2026-11-18T10:00:00Z' },
+    slo_availability_99: { objective: 0.999, window: '28d' },
+    checkout_errors_99_9: { objective: 0.5, window: '7d' },     // the repository states its own: not read
+    spent_99: { objective: 0.99, window: '30d' },               // the same number as the default: its recorded budget still stands
+  } };
+  const m = slosOf(SLOS, { objectives: stated });
+  const row = (title) => m.rows.find((r) => r.title === title);
+  assert.deepEqual(row('http requests').objective, { value: 0.7, window: '7 days', isDefault: false, source: 'studio' });
+  assert.deepEqual([row('http requests').tone, row('http requests').judged], ['good', true], 'a 20 % error ratio against a stated 70 %: within it, and judged');
+  assert.deepEqual([row('availability').objective.value, row('availability').budget, row('availability').tone, row('availability').judged], [0.999, null, 'good', true], 'the budget was recorded against 99 %: not this objective\'s; the SLI at 99.93 % holds 99.9 %');
+  assert.deepEqual(row('checkout errors').objective, { value: 0.999, window: '30 days', isDefault: false }, 'the repository\'s own: as it was');
+  assert.deepEqual([row('latency').objective.source, row('latency').tone], ['studio', 'bad'], 'stated at the default\'s own number: the recorded budget (spent) still says so');
+  assert.deepEqual(slosOf(SLOS), slosOf(SLOS, { objectives: null }), 'none stated: as before');
+  // The panel: the row says whose the objective is, and the way to state them is offered where the SLOs are read.
+  globalThis.document = { activeElement: null };
+  const { container } = panelHost();
+  const state = controlRoomAnswered(controlRoomOpened(CONTROL_ROOM_CLOSED, { serviceId: 3, env: 'prod', now: NOW }), answer({ slos: SLOS }), { now: NOW });
+  const model = buildControlRoomModel({ state, serviceName: 'Demo', envName: 'prod', mttx: { ...mttx, objectives: stated, objectivesAction: 'State objectives…' }, now: NOW });
+  assert.deepEqual(model.objectives, { label: 'State objectives…', aria: 'State the objectives of Demo · prod' });
+  renderControlRoom(container, model, { overview: {} });
+  assert.ok(container.innerHTML.includes('(stated in the studio)') && container.innerHTML.includes('data-ux-action="cr-objectives"'), 'said on the row, offered under the list');
+  const plain = buildControlRoomModel({ state, serviceName: 'Demo', envName: 'prod', mttx, now: NOW });
+  renderControlRoom(container, plain, { overview: {} });
+  assert.ok(plain.objectives === null && !container.innerHTML.includes('cr-objectives') && !container.innerHTML.includes('stated in the studio'), 'a host that offers none draws none');
+});

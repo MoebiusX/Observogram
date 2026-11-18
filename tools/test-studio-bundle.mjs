@@ -369,7 +369,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 7,345,000 since grade schema 6 (2026-11-18: the two-pack bundle measured 7,325,332 with 0.8.44's
   // findings and the grade's guessed-value helpers, the scan's field marks in the bundled packs and the
   // step estimate in tools/lib/live-fetch.mjs; no dependency), about 20 KB over.
-  assert.ok(built.bytes < 7_345_000, `the two-pack bundle is under 7,345,000 bytes (${built.bytes})`);
+  // 7,400,000 since State objectives… (2026-11-19: the two-pack bundle measured 7,377,473 with
+  // studio/slo-objectives.mjs, the objectives form and its what-if in the board's model and view, the
+  // control room's stated objective and the engine's objective rows; no dependency), about 22 KB over.
+  assert.ok(built.bytes < 7_400_000, `the two-pack bundle is under 7,400,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

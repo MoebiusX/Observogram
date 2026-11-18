@@ -26,6 +26,11 @@
 // mttr, by, at } as parseTargets wrote it, or null. Kept the same way, under
 // mttx_targets:<orgId>:<serviceId>.
 //
+// objectives is the SLO objectives stated for the service in the studio, for
+// the SLOs whose own is the scan's guess (studio/slo-objectives.mjs): { slos:
+// { '<slo id>': { objective, window, by, at } } } as parseObjectives wrote it,
+// or null. Kept the same way, under slo_objectives:<orgId>:<serviceId>.
+//
 // chaosRuns is the chaos runs recorded in the studio for the service's
 // experiments (studio/chaos-runs.mjs): [{ experiment, at, outcome,
 // environment, mttd, alertsFired, note, by, recordedAt }] as parseChaosRuns
@@ -63,6 +68,7 @@ const REPO = 'services';
 export const gradeOffKey = (orgId, serviceId) => `grade_off:${orgId}:${serviceId}`;
 export const setAsideKey = (orgId, serviceId) => `set_aside:${orgId}:${serviceId}`;
 export const targetsKey = (orgId, serviceId) => `mttx_targets:${orgId}:${serviceId}`;
+export const objectivesKey = (orgId, serviceId) => `slo_objectives:${orgId}:${serviceId}`;
 export const chaosRunsKey = (orgId, serviceId) => `chaos_runs:${orgId}:${serviceId}`;
 export const envRefsKey = (orgId, serviceId) => `env_refs:${orgId}:${serviceId}`;
 export const livePacksKey = (orgId, serviceId) => `live_packs:${orgId}:${serviceId}`;
@@ -96,6 +102,17 @@ function storedSetAside(db, orgId, serviceId) {
   if (!Array.isArray(value) || value.some((x) => !x || typeof x !== 'object' || Array.isArray(x) || typeof x.key !== 'string' || typeof x.side !== 'string')) {
     throw new Error(`observogram store: schema_meta ${key} is not a list of set-asides`);
   }
+  return value;
+}
+
+// The stored objectives, or null when there are none; damage is named, as above.
+const objectivesShape = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !!v.slos && typeof v.slos === 'object' && !Array.isArray(v.slos)
+  && Object.values(v.slos).every((e) => !!e && typeof e === 'object' && !Array.isArray(e) && typeof e.objective === 'number' && typeof e.window === 'string');
+function storedObjectives(db, orgId, serviceId) {
+  const key = objectivesKey(orgId, serviceId);
+  const value = getMetaJson(db, key, null);
+  if (value === null) return null;
+  if (!objectivesShape(value)) throw new Error(`observogram store: schema_meta ${key} is not a service's objectives`);
   return value;
 }
 
@@ -170,7 +187,7 @@ function withGradeOff(db, service) {
   const { createdAt, updatedAt, ...rest } = service;
   return {
     ...rest, gradeOff: storedGradeOff(db, service.orgId, service.id), setAside: storedSetAside(db, service.orgId, service.id),
-    targets: storedTargets(db, service.orgId, service.id), chaosRuns: storedChaosRuns(db, service.orgId, service.id),
+    targets: storedTargets(db, service.orgId, service.id), objectives: storedObjectives(db, service.orgId, service.id), chaosRuns: storedChaosRuns(db, service.orgId, service.id),
     envRefs: storedEnvRefs(db, service.orgId, service.id), livePacks: storedLivePacks(db, service.orgId, service.id),
     liveScopes: storedLiveScopes(db, service.orgId, service.id), envSurfaces: storedEnvSurfaces(db, service.orgId, service.id), createdAt, updatedAt,
   };
@@ -190,6 +207,13 @@ function setAsideJson(setAside) {
     throw new TypeError('observogram store: setAside is an array of { key, side, layer, label, kind, note, until, by, at }');
   }
   return setAside.length ? JSON.stringify(setAside) : null;
+}
+
+// null (no key), or { slos: { id: { objective, window, … } } } with at least one entry (the admin module owns its shape).
+function objectivesJson(objectives) {
+  if (objectives === null || objectives === undefined) return null;
+  if (!objectivesShape(objectives)) throw new TypeError('observogram store: objectives is { slos: { <slo id>: { objective, window, by, at } } } or null');
+  return Object.keys(objectives.slos).length ? JSON.stringify(objectives) : null;
 }
 
 // null (no key), or a plain object with a profile and two durations (the admin module owns its shape).
@@ -301,6 +325,7 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     putMeta(db, gradeOffKey(org, row.id), null);
     putMeta(db, setAsideKey(org, row.id), null);
     putMeta(db, targetsKey(org, row.id), targetsJson(targets));
+    putMeta(db, objectivesKey(org, row.id), null);
     putMeta(db, chaosRunsKey(org, row.id), null);
     putMeta(db, envRefsKey(org, row.id), envRefsJson(envRefs));
     putMeta(db, livePacksKey(org, row.id), null);
@@ -332,13 +357,14 @@ export function updateService(db, actor, id, patch) {
   const gradeOff = patch.gradeOff === undefined ? undefined : gradeOffJson(patch.gradeOff);
   const setAside = patch.setAside === undefined ? undefined : setAsideJson(patch.setAside);
   const targets = patch.targets === undefined ? undefined : targetsJson(patch.targets);
+  const objectives = patch.objectives === undefined ? undefined : objectivesJson(patch.objectives);
   const chaosRuns = patch.chaosRuns === undefined ? undefined : chaosRunsJson(patch.chaosRuns);
   const envRefs = patch.envRefs === undefined ? undefined : envRefsJson(patch.envRefs);
   const livePacks = patch.livePacks === undefined ? undefined : livePacksJson(patch.livePacks);
   const liveScopes = patch.liveScopes === undefined ? undefined : liveScopesJson(patch.liveScopes);
   const envSurfaces = patch.envSurfaces === undefined ? undefined : envSurfacesJson(patch.envSurfaces);
   const { sql, params, fields: columns } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description', repository: 'repository' });
-  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs']), ...(patch.livePacks === undefined ? [] : ['livePacks']), ...(patch.liveScopes === undefined ? [] : ['liveScopes']), ...(patch.envSurfaces === undefined ? [] : ['envSurfaces'])];
+  const fields = [...columns, ...(patch.gradeOff === undefined ? [] : ['gradeOff']), ...(patch.setAside === undefined ? [] : ['setAside']), ...(patch.targets === undefined ? [] : ['targets']), ...(patch.objectives === undefined ? [] : ['objectives']), ...(patch.chaosRuns === undefined ? [] : ['chaosRuns']), ...(patch.envRefs === undefined ? [] : ['envRefs']), ...(patch.livePacks === undefined ? [] : ['livePacks']), ...(patch.liveScopes === undefined ? [] : ['liveScopes']), ...(patch.envSurfaces === undefined ? [] : ['envSurfaces'])];
   // The row names the criteria now off, so the audit says what the grade stopped counting,
   // and how many differences are set aside on each side (the list itself can be long).
   const sideCount = (side) => patch.setAside.filter((x) => x.side === side).length;
@@ -348,6 +374,8 @@ export function updateService(db, actor, id, patch) {
     ...(patch.setAside === undefined ? {} : { setAside: { declared: sideCount('declared'), live: sideCount('live') } }),
     // The targets as they now are: the profile and the two durations (none: null).
     ...(patch.targets === undefined ? {} : { targets: patch.targets ? { profile: patch.targets.profile, mttd: patch.targets.mttd, mttr: patch.targets.mttr } : null }),
+    // The stated objectives as they now are: each SLO's objective and window (none: null).
+    ...(patch.objectives === undefined ? {} : { objectives: patch.objectives ? Object.fromEntries(Object.entries(patch.objectives.slos).map(([id, e]) => [id, `${e.objective}/${e.window}`])) : null }),
     // The recorded chaos runs: how many, and how many of each outcome (the list itself can be long).
     ...(patch.chaosRuns === undefined ? {} : { chaosRuns: { runs: patch.chaosRuns.length, pass: patch.chaosRuns.filter((x) => x.outcome === 'pass').length, fail: patch.chaosRuns.filter((x) => x.outcome === 'fail').length } }),
     // The branches by environment as they now are.
@@ -365,6 +393,7 @@ export function updateService(db, actor, id, patch) {
     if (gradeOff !== undefined) putMeta(db, gradeOffKey(org, id), gradeOff);
     if (setAside !== undefined) putMeta(db, setAsideKey(org, id), setAside);
     if (targets !== undefined) putMeta(db, targetsKey(org, id), targets);
+    if (objectives !== undefined) putMeta(db, objectivesKey(org, id), objectives);
     if (chaosRuns !== undefined) putMeta(db, chaosRunsKey(org, id), chaosRuns);
     if (envRefs !== undefined) putMeta(db, envRefsKey(org, id), envRefs);
     if (livePacks !== undefined) putMeta(db, livePacksKey(org, id), livePacks);
@@ -387,11 +416,12 @@ export function deleteService(db, actor, id, { detail = null } = {}) {
     if (!row) throw notFound('service', id);
     // The record as it was, its switches with it — none when a key was damaged.
     let current;
-    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, chaosRuns: [], envRefs: {}, livePacks: {}, liveScopes: {}, envSurfaces: {} }; }
+    try { current = withGradeOff(db, row); } catch (_) { current = { ...row, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, livePacks: {}, liveScopes: {}, envSurfaces: {} }; }
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
     putMeta(db, gradeOffKey(org, id), null);
     putMeta(db, setAsideKey(org, id), null);
     putMeta(db, targetsKey(org, id), null);
+    putMeta(db, objectivesKey(org, id), null);
     putMeta(db, chaosRunsKey(org, id), null);
     putMeta(db, envRefsKey(org, id), null);
     putMeta(db, livePacksKey(org, id), null);

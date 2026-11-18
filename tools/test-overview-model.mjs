@@ -3579,10 +3579,11 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
   'studio/artefact-tiers.mjs': [],
   'studio/clause-fixes.mjs': [],
   'studio/mttx-targets.mjs': [],
+  'studio/slo-objectives.mjs': [],
   'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
@@ -4403,4 +4404,89 @@ test('Add environment on a service\'s row: the service\'s own form with the envi
   const c4 = overviewContainer();
   renderServiceList(c4, list, m, { overview: {} });
   assert.ok(c4.innerHTML.includes('>Add an environment to Checkout</h2>') && c4.innerHTML.includes('Name the environment and choose the MCP endpoint that reads it live'));
+});
+
+test('State objectives…: the board offers it while an SLO carries the scan\'s default; the form asks each with its indicator and series, says at once what the letter would read, and Save sends the service\'s whole record; a run graded on other objectives is not the letter', async () => {
+  const { computeDiagnosticGrade, computePostureMatrix } = await import('../studio/diagnostic-grade.mjs');
+  const { withStatedObjectives } = await import('../studio/slo-objectives.mjs');
+  const { objectivesOffer, objectivesFormOpened, objectivesFormInput, objectivesPlan, objectivesWhatIf, serviceObjectivesKey, formModel, formDraft } = await import('../studio/overview-model.mjs');
+  const sli = (id, extra = {}) => ({ id: `SLI-${id}`, title: id, spec: { id, type: 'ratio', description: 'Inferred from recording rules a and b.', good: `sum(rate(${id}_good[5m]))`, ...extra } });
+  const slo = (id, sliId, objective = 0.99) => ({ id: `SLO-${id}`, title: id, spec: { id, sli: `ref:slis.${sliId}`, objective, window: '30d' } });
+  const layered = {
+    meta: { studioTargets: { profile: 'lab', mttd: '1m', mttr: '5m' }, annotations: {
+      'crawler.guessMarks': '1', 'crawler.scaffold.slos.a_99.objective': 'default', 'crawler.scaffold.slos.b_99.objective': 'default', 'crawler.scaffold.slos.c_99.objective': 'default', 'crawler.scaffold.slis.c.threshold': 'default',
+    } },
+    layers: { L1: [sli('a'), sli('b'), sli('c', { type: 'threshold', threshold: 1, unit: 'ratio' }), slo('a_99', 'a'), slo('b_99', 'b'), slo('c_99', 'c')], L2: [], L3: [], L4: {}, L5: [], GOV: [] },
+  };
+  const gradeOf = (objectives) => { const p = withStatedObjectives(layered, objectives); return computeDiagnosticGrade(p, null, computePostureMatrix(p, null), null, null, {}); };
+  const ONE = { slos: { a_99: { objective: 0.999, window: '28d', by: 'ada', at: '2026-11-18T10:00:00Z' } } };
+  const BOTH = { slos: { ...ONE.slos, b_99: { objective: 0.995, window: '30d', by: 'ada', at: '2026-11-18T10:00:00Z' } } };
+  // The offer under the letter.
+  assert.deepEqual(objectivesOffer(gradeOf(null), { objectives: null }, { settable: true }), { label: 'State objectives…', left: 2, of: 2, note: "All 2 objectives carry the scan's default (99% over 30 days): nobody stated them, so the grade does not count them." });
+  assert.deepEqual(objectivesOffer(gradeOf(ONE), { objectives: ONE }, { settable: true }), { label: 'State objectives…', left: 1, of: 2, note: "1 of 2 objectives carry the scan's default (99% over 30 days): nobody stated it, so the grade does not count it." });
+  assert.deepEqual(objectivesOffer(gradeOf(BOTH), { objectives: BOTH }, { settable: true }), { label: 'Change objectives…', left: 0, of: 2, note: 'All 2 objectives are stated in the studio.' });
+  assert.equal(objectivesOffer(gradeOf(null), { objectives: null }, { settable: false }), null, 'a reader who may not change the service: none');
+  assert.equal(objectivesOffer(null, { objectives: null }, { settable: true }), null, 'no grade to ask: none');
+  assert.equal(objectivesOffer(computeDiagnosticGrade(layered, null, computePostureMatrix(layered, null), null, null, { off: ['calibrated'] }), {}, { settable: true }), null, 'Calibrated not graded: none');
+  // The key the board compares a run's with: the ones its Calibrated counts.
+  const WITH_GONE = { slos: { ...ONE.slos, gone_99: { objective: 0.9, window: '7d' } } };
+  assert.equal(serviceObjectivesKey({ objectives: WITH_GONE }, gradeOf(WITH_GONE)), 'a_99=0.999/28d');
+  assert.equal(serviceObjectivesKey({ objectives: WITH_GONE }), 'a_99=0.999/28d;gone_99=0.9/7d', 'no grade to ask: all of them');
+  assert.equal(serviceObjectivesKey({ objectives: null }, gradeOf(null)), '');
+  // The form.
+  const services = [{ id: 7, name: 'Checkout', gradeOff: [], objectives: WITH_GONE }];
+  assert.equal(objectivesFormOpened(services, { serviceId: 8, layered }), null, 'not a record');
+  assert.equal(objectivesFormOpened(services, { serviceId: 7, layered: null }), null, 'no pack read');
+  let form = objectivesFormOpened(services, { serviceId: 7, env: 'prod', layered });
+  assert.deepEqual([form.objectives, form.serviceId, form.focus, form.values], [true, 7, 'obj:b_99', { name: 'Checkout', env: 'prod', 'obj:a_99': '99.9', 'win:a_99': '28d', 'obj:b_99': '', 'win:b_99': '30d' }], 'the stated one filled in, the focus on the first that is not');
+  assert.equal(formDraft(form), null, 'never kept as a draft of the service form');
+  form = { ...form, servicesAtOpen: services };
+  const view = formModel(form, {});
+  assert.deepEqual([view.title, view.rows.map((r) => [r.sli, r.series, r.percent, r.was]), view.elsewhere, view.repository], [
+    'State objectives · Checkout · prod',
+    [['a', 'sum(rate(a_good[5m]))', '99.9', 'stated in the studio'], ['b', 'sum(rate(b_good[5m]))', '', "the scan's default, not counted"]],
+    [{ id: 'gone_99', words: '90% over 7 days', field: 'drop:gone_99', checked: false }], '',
+  ]);
+  assert.equal(view.unbounded, 'One recorded series has no bound that says what "good" is, so it holds no objective and is left out of the count: c.'.replace('One recorded series has', '1 recorded series has'));
+  const letterOf = (g) => `${g.overall.instrumentGrade.letter} ${Math.round(g.overall.audit.scorePctExact)}`;
+  assert.equal(objectivesWhatIf(form, { services }).text, `1 of 2 stated. The repository alone reads ${letterOf(gradeOf(ONE))} either way. Save checks the service again, so the letter against live takes them.`);
+  // Typed: said at once; nothing is saved until Save.
+  form = objectivesFormInput(form, 'obj:b_99', '99.5');
+  assert.deepEqual(objectivesWhatIf(form, { services }), { text: `2 of 2 stated. The repository alone would read ${letterOf(gradeOf(BOTH))} (it reads ${letterOf(gradeOf(ONE))} now). Save checks the service again, so the letter against live takes them.`, tone: 'ok' });
+  assert.ok(gradeOf(BOTH).overall.audit.scorePctExact > gradeOf(ONE).overall.audit.scorePctExact);
+  assert.deepEqual(objectivesPlan(form, { services }), {
+    problems: {}, serviceId: 7, name: 'Checkout', envName: 'prod',
+    objectives: { slos: { gone_99: { objective: 0.9, window: '7d' }, a_99: { objective: 0.999, window: '28d' }, b_99: { objective: 0.995, window: '30d' } } },
+    patch: { objectives: { slos: { gone_99: { objective: 0.9, window: '7d' }, a_99: { objective: 0.999, window: '28d' }, b_99: { objective: 0.995, window: '30d' } } } },
+  }, 'the whole record: what this scan does not hold is kept');
+  const bad = objectivesFormInput(form, 'obj:a_99', 'lots');
+  assert.deepEqual([objectivesPlan(bad, { services }).problems, objectivesPlan(bad, { services }).patch, objectivesWhatIf(bad, { services }).tone], [{ 'obj:a_99': 'A percent above 0 and below 100, such as 99.9' }, null, 'warn']);
+  // Blanked and ticked for removal: none left, and the patch clears them.
+  let cleared = objectivesFormInput(objectivesFormInput(objectivesFormInput(form, 'obj:a_99', ''), 'obj:b_99', ' '), 'drop:gone_99', '1');
+  assert.deepEqual([objectivesPlan(cleared, { services }).objectives, objectivesPlan(cleared, { services }).patch], [null, { objectives: null }]);
+  // As the record has them: nothing to save.
+  assert.equal(objectivesPlan(objectivesFormOpened(services, { serviceId: 7, layered }), { services }).patch, null);
+  assert.deepEqual(objectivesPlan(form, { services: [] }).serviceId, null, 'the service went away: nothing is sent');
+  // The letter: a run graded on other objectives than the service's now is not it, and the line says which way.
+  const key = 'a_99=0.999/28d';
+  const statedRun = { ...atBarRun, grade: { ...atBarRun.grade, objectives: { count: 1, key } } };
+  assert.equal(runGradesBoard(statedRun, krystalinePack, [], '', `#${key}`), true);
+  assert.equal(runGradesBoard(statedRun, krystalinePack, [], '', ''), false);
+  assert.equal(runGradesBoard(atBarRun, krystalinePack, [], '', `#${key}`), false);
+  const sourceOf = (r, terms) => gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: r, journey, now: NOW, targets: terms }).source;
+  assert.equal(sourceOf(atBarRun, `#${key}`), 'Graded from the repository alone: the grade has counted the objectives stated in the studio since the last live check. Check again to grade against live.');
+  assert.equal(sourceOf(statedRun, ''), 'Graded from the repository alone: the grade has stopped counting the objectives stated in the studio since the last live check. Check again to grade against live.');
+  assert.equal(sourceOf(statedRun, '#a_99=0.9995/28d'), 'Graded from the repository alone: the objectives stated in the studio changed since the last live check. Check again to grade against live.');
+  assert.equal(sourceOf({ ...statedRun, grade: { ...statedRun.grade, targets: { profile: 'lab', mttd: '1m', mttr: '5m' } } }, `financial:1:15#${key}`), 'Graded from the repository alone: the MTTD / MTTR targets changed since the last live check. Check again to grade against live.', 'the targets are named first');
+  // The list row has no grade to ask: it flags a run whose counted objectives now read otherwise, or are gone.
+  const lastRun = { startedAt: lastRunAt, outcome: 'pass', alignmentPct: 91.6, gradeScore: 88 };
+  const rowOf = (last, service) => serviceListModel({ services: [svcRow(service)], servicesStatus: { kind: 'ok' }, journeys: [listJourney('checkout.prod', { service: 'checkout', env: 'prod' }, { ...lastRun, ...last })], endpoints: [EP], now: NOW }).rows[0].last.gradeLabel;
+  assert.equal(rowOf({ objectives: key }, { objectives: BOTH }), 'Diagnostic grade', 'the ones the run counted read the same (another stated since is the next check\'s)');
+  assert.equal(rowOf({ objectives: key }, { objectives: { slos: { a_99: { objective: 0.9995, window: '28d' } } } }), "Diagnostic grade · graded before this service's objectives changed");
+  assert.equal(rowOf({ objectives: key }, {}), "Diagnostic grade · graded before this service's objectives changed");
+  assert.equal(rowOf({ objectives: '' }, { objectives: BOTH }), 'Diagnostic grade', 'a run that names none: not flagged');
+  // The control room is handed them, with the same way in.
+  const cr = controlRoomMttx({ loaded: true, layered, settable: true, objectives: ONE, diagnostic: gradeOf(ONE) });
+  assert.deepEqual([cr.objectives, cr.objectivesAction], [ONE, 'State objectives…']);
+  assert.ok(!('objectives' in controlRoomMttx({ loaded: true, layered, settable: true })) && !('objectivesAction' in controlRoomMttx({ loaded: true, layered, settable: true })), 'none stated and no grade handed: as before');
 });

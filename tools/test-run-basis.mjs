@@ -214,3 +214,19 @@ test('RB7 the studio\'s copies agree: overview-model\'s rule and verdict-ui\'s h
   assert.equal(healthPctOf({ healthPct: 87, totalBadness: 3 }, 20), 87);
   assert.equal(healthPctOf(null), null);
 });
+
+test('the score\'s history stops at the last change of how the grade scores: the sparkline and "vs previous run" never span it; the match figure, which did not change, keeps its whole line', async () => {
+  const { loadRunHistory, runSeries, deltaVsPrevious } = await import('../studio/verdict-ui.mjs');
+  const drift = (alignmentPct) => ({ alignmentPct, compared: 10 });
+  // Newest first, as the API lists them: two runs under schema 6 after two under schema 5.
+  const runs = [
+    { startedAt: '2026-11-18T12:00:00Z', outcome: 'pass', grade: { score: 49, schema: 6 }, drift: drift(92) },
+    { startedAt: '2026-11-18T11:00:00Z', outcome: 'pass', grade: { score: 47, schema: 6 }, drift: drift(91) },
+    { startedAt: '2026-11-13T11:00:00Z', outcome: 'pass', grade: { score: 78, schema: 5 }, drift: drift(90) },
+    { startedAt: '2026-11-12T11:00:00Z', outcome: 'pass', grade: { score: 77, schema: 5 }, drift: drift(89) },
+  ];
+  await new Promise((done) => loadRunHistory(done, { fetchFn: async (path) => (path === '/api/journeys' ? { journeys: [{ name: 'checkout.prod', lastRun: {} }] } : { runs }) }));
+  assert.deepEqual(runSeries('gradeScore'), [47, 49], 'only the runs graded as the newest was');
+  assert.equal(deltaVsPrevious(runSeries('gradeScore'), 'pts'), '▲ 2 pts vs previous run', 'never 78 → 47');
+  assert.deepEqual(runSeries('alignmentPct'), [89, 90, 91, 92]);
+});

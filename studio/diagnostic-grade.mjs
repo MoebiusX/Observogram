@@ -137,6 +137,20 @@ export function propagatorsGuessed(ann) {
   return guessMarked(ann, 'otel.sdk.propagators') || guessMarked(ann, 'otel');
 }
 
+// The service's SLO objectives stated in the studio, as the pack carries them for the grade
+// (studio/slo-objectives.mjs withStatedObjectives: meta.studioObjectives, { '<slo id>': { objective,
+// window } }), read here and not imported so the engine stays zero-import: {} for none.
+const STUDIO_OBJECTIVE_WINDOWS = ['7d', '28d', '30d', '90d'];
+function studioObjectivesOf(pack) {
+  const so = pack?.meta?.studioObjectives;
+  const out = {};
+  if (!so || typeof so !== 'object' || Array.isArray(so)) return out;
+  for (const [id, e] of Object.entries(so)) {
+    if (e && typeof e === 'object' && typeof e.objective === 'number' && e.objective > 0 && e.objective < 1 && STUDIO_OBJECTIVE_WINDOWS.includes(e.window)) out[id] = { objective: e.objective, window: e.window };
+  }
+  return out;
+}
+
 // Why a side could not look at chaos experiments: the repository scan's
 // stamp (tools/lib/crawler.mjs, while it has no chaos detector) and the
 // live fetcher's (tools/fetch-live-pack.mjs).
@@ -577,8 +591,21 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
   const realSlos = slos.filter(a => hasObjective(a) && !isScaffoldArtefact(a));
   const unboundedSlos = realSlos.filter(a => sliBoundGuessed(ann, sliOfSlo(a, slis)));
   const countable = realSlos.filter(a => !unboundedSlos.includes(a));
-  const guessedObjectives = countable.filter(a => sloObjectiveGuessed(ann, a, sliOfSlo(a, slis)));
+  // An objective stated in the studio for an SLO whose own is the scan's guess counts as a person's
+  // (a repository's own statement wins: the studio's entry for that SLO is then not read).
+  const studioObjectives = studioObjectivesOf(packA);
+  const guessedByScan = countable.filter(a => sloObjectiveGuessed(ann, a, sliOfSlo(a, slis)));
+  const studioStated = guessedByScan.filter(a => !!studioObjectives[a.spec?.id]);
+  const guessedObjectives = guessedByScan.filter(a => !studioStated.includes(a));
   const slosWithObjective = countable.filter(a => !guessedObjectives.includes(a));
+  // One row per SLO for the studio's form: what state its objective is in, with its indicator's name
+  // and the series it reads (never the scan's id alone, which ends in the default it guessed).
+  const objectiveRows = realSlos.map((a) => {
+    const sli = sliOfSlo(a, slis);
+    const state = unboundedSlos.includes(a) ? 'unbounded' : studioStated.includes(a) ? 'studio' : guessedObjectives.includes(a) ? 'guessed' : 'repository';
+    const series = String(sli?.spec?.good || sli?.spec?.query || sli?.spec?.total || '').slice(0, 160);
+    return { id: String(a.spec?.id ?? ''), sli: String(sli?.spec?.id ?? ''), series, state };
+  }).filter((r) => r.id);
   const scaffoldObjectives = slos.filter(a => hasObjective(a) && isScaffoldArtefact(a)).length;
   const calibrated = hasBaselines && slosWithObjective.length > 0;
   const calibratedScore = hasBaselines && countable.length ? slosWithObjective.length / countable.length : 0;
@@ -631,6 +658,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       detail: hasBaselines
         ? (slosWithObjective.length
             ? `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'MTTD/MTTR baselines'} + ${slosWithObjective.length} SLO${slosWithObjective.length === 1 ? '' : 's'} with explicit objective`
+              + (studioStated.length ? ` (${studioStated.length} stated in the studio)` : '')
               + (guessedObjectives.length ? `; ${guessedObjectives.length} more carry the scan's default` : '')
               + (unboundedSlos.length ? `; ${unboundedSlos.length} recorded series ${unboundedSlos.length === 1 ? 'has' : 'have'} no bound` : '')
             : `${fromStudio ? 'MTTD/MTTR targets set in the studio' : 'baselines declared'} but no SLOs have explicit objectives` + (guessedObjectives.length
@@ -649,7 +677,15 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       // when the scan wrote some.
       // Present only when the scan wrote some: `declared` is the counted ones (an older board reads it), `guessed`
       // the scan's defaults, `unbounded` those with no bound to hold one against, `total` the share's base.
-      ...(scaffoldObjectives || guessedObjectives.length || unboundedSlos.length ? { objectives: { declared: slosWithObjective.length, scaffolds: scaffoldObjectives, guessed: guessedObjectives.length, unbounded: unboundedSlos.length, total: countable.length } } : {}),
+      ...(scaffoldObjectives || guessedByScan.length || unboundedSlos.length ? {
+        objectives: {
+          declared: slosWithObjective.length, scaffolds: scaffoldObjectives, guessed: guessedObjectives.length, unbounded: unboundedSlos.length, total: countable.length,
+          // The ones stated in the studio (their ids, for the record's terms): only when any counted.
+          ...(studioStated.length ? { studio: studioStated.length, studioIds: studioStated.map((a) => String(a.spec.id)).sort() } : {}),
+        },
+        // Additive: a row per SLO, for the studio's "State it…" form.
+        objectiveRows,
+      } : {}),
     },
     { key: 'comprehensive', label: 'Comprehensive', sub: 'coverage spans all layers',
       pass: comprehensive,

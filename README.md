@@ -522,6 +522,19 @@ requirement chain, so a repository of alert rules alone is scored on Drift-free
 by what was compared. A letter graded under schema 5 says it was graded before
 the grade changed how it scores, until the service is checked again.
 
+The way back is in the studio: **State objectives…**, under the letter on a
+service's board and beside the SLOs in its control room, lists every SLO whose
+objective is the scan's default — with the indicator it reads and that
+indicator's series — and takes a percent and a window for each. What is stated
+is kept with the service, signed and dated (`PATCH /api/services/:id`
+`{ objectives: { slos: { "<slo id>": { objective, window } } } }`), written
+into its saved checks as `sloObjectives:`, and counted by Calibrated where the
+repository states none — on the grade's copy of the pack only, never in the
+comparison with live. The form says what the letter would read while the
+numbers are typed; Save checks the service again. An SLO whose indicator has no
+bound holds no objective and is not asked; one the repository states is left
+alone.
+
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated (a repository states its own
 in `.observability/pack.yaml`, `spec.baselines`, and those count; where it
@@ -2106,8 +2119,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.45 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.45
+docker build -t observogram:0.8.46 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.46
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2170,7 +2183,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.45
+  observogram:0.8.46
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2178,7 +2191,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.45
+    image: observogram:0.8.46
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

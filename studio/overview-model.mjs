@@ -33,10 +33,11 @@
 // module (alignmentPct, pct); the renderer puts the sign on them.
 
 import { agoText, packForService } from './services-model.mjs';
-import { instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, GRADE_SCHEMA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
+import { computeDiagnosticGrade, computePostureMatrix, instrumentGradeFor, INSTRUMENT_GRADE_SCALE, layerItemsFor, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER, GRADE_CRITERIA, GRADE_SCHEMA, gradeOffKeys, isScaffoldArtefact } from './diagnostic-grade.mjs';
 import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
+import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -392,7 +393,12 @@ const asideKey = (run) => (typeof run?.grade?.setAside?.fingerprint === 'string'
 // (mttx-targets.mjs targetsTermKey, '' for none: none set, or Calibrated does not read them) — a
 // run graded with other targets (its grade.targets, recorded only when its Calibrated counted
 // them) is not the letter either.
-const runTargetsKey = (run) => targetsTermKey(run?.grade?.targets ?? null);
+// With them, the key of the SLO objectives stated in the studio the grade counts (slo-objectives.mjs
+// objectivesTermKey; the run's is its grade.objectives.key), joined as '<targets>#<objectives>'.
+const runObjectivesKey = (run) => (typeof run?.grade?.objectives?.key === 'string' ? run.grade.objectives.key : '');
+const termsOf = (targets, objectives) => (objectives ? `${targets || ''}#${objectives}` : (targets || ''));
+const termParts = (terms) => { const t = String(terms || ''); const at = t.indexOf('#'); return at < 0 ? [t, ''] : [t.slice(0, at), t.slice(at + 1)]; };
+const runTargetsKey = (run) => termsOf(targetsTermKey(run?.grade?.targets ?? null), runObjectivesKey(run));
 const runFinishedWithLetter = (run) => !!run && (run.outcome === 'pass' || run.outcome === 'gate-failed') && !!run.grade?.letter;
 // A run graded under another grade schema (its grade.schema) scored by other rules: its letter is
 // not this engine's either. A record that names no schema is not judged by it.
@@ -411,6 +417,14 @@ export function studioTargetsCounted(diagnostic) {
   if (!diagnostic) return null;
   const c = criterionOf(diagnostic, 'calibrated');
   return !!c?.baselines?.studio && c.applies !== false;
+}
+// The key of the service's stated SLO objectives the grade counts now: the ones its Calibrated counted
+// (criterion.objectives.studioIds); with no grade to ask, all of them. '' for none.
+export function serviceObjectivesKey(service, diagnostic = null) {
+  if (!diagnostic) return objectivesTermKey(service?.objectives ?? null);
+  const c = criterionOf(diagnostic, 'calibrated');
+  if (!c || c.applies === false) return '';
+  return objectivesTermKey(service?.objectives ?? null, Array.isArray(c.objectives?.studioIds) ? c.objectives.studioIds : []);
 }
 // The name of a service's set-asides that hold at `now` ('' for none).
 export const serviceAsideKey = (service, now = Date.now()) => setAsideFingerprint(service?.setAside, new Date(now).toISOString());
@@ -476,14 +490,22 @@ function repositoryGradeLines(diagnostic, liveUnobserved = []) {
     line(c.calibrated,
       c.calibrated.baselines?.studio
         // Counted from the studio: said as the studio's, never as the repository's.
-        ? `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair targets set in the studio (${studioTargetsName(c.calibrated.baselines.studio)}).`
-        : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}, with detection and repair baselines.`,
+        ? `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}${statedWords(c.calibrated)}, with detection and repair targets set in the studio (${studioTargetsName(c.calibrated.baselines.studio)}).`
+        : `Normal is defined with numbers: ${objectives} objective${objectives === 1 ? '' : 's'}${statedWords(c.calibrated)}, with detection and repair baselines.`,
       calibratedNo(c.calibrated)),
     line(c.comprehensive,
       `Coverage reaches ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`,
       `Coverage reaches only ${coverage} in 100 across infrastructure, platform, application and user experience; the bar is 50.`),
     chaosLine(c['chaos-validated'], liveUnobserved),
   ];
+}
+
+// The objectives counted from the studio, said as the studio's, never as the repository's.
+function statedWords(crit) {
+  const n = Number(crit?.objectives?.studio) || 0;
+  if (!n) return '';
+  const left = Number(crit.objectives.guessed) || 0;
+  return ` (${n === Number(crit.objectives.declared) ? 'stated in the studio' : `${n} stated in the studio`}${left ? `; ${left} more ${left === 1 ? 'carries' : 'carry'} the scan's default` : ''})`;
 }
 
 // The targets set in the studio, named: a profile's name ("lab default"), or their minutes.
@@ -498,6 +520,10 @@ function studioTargetsName(t) {
 function calibratedNo(crit) {
   if (!/no .*baselines/i.test(crit.detail)) {
     // The baselines half is there; the objectives are missing, or only the scan's invented ones (`objectives.scaffolds`).
+    const guessed = Number(crit.objectives?.guessed) || 0;
+    if (guessed > 0 && !crit.objectives.declared) {
+      return `Normal is not defined with numbers: the ${guessed === 1 ? 'one objective is' : `${guessed} objectives are`} the scan's default (99% over 30 days), which nobody stated.`;
+    }
     return crit.objectives?.scaffolds > 0 && !crit.objectives.declared
       ? 'Normal is not defined with numbers: the objectives are defaults the scan wrote, not targets anyone set.'
       : 'Normal is not defined with numbers: no objective has a target.';
@@ -690,6 +716,8 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
       ...criteria,
+      // The objectives the scan derived from alert names root no promise: said where the letter is.
+      ...(Number(run.traceability?.placeholderRoots) > 0 ? { placeholders: `${run.traceability.placeholderRoots} placeholder objective${run.traceability.placeholderRoots === 1 ? '' : 's'} the scan derived from alert names root${run.traceability.placeholderRoots === 1 ? 's' : ''} no promise: what drifted is scored on what was compared.` } : {}),
       ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now, off }),
     };
   }
@@ -708,12 +736,17 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
   // The last live check graded this pack, on other criteria than the service's now, or
   // leaving out other differences than its set-asides now.
   const regraded = !lost && !partial && runFinishedWithLetter(run) && runGradedPack(run, pack) && !sameTerms(run, off, aside, targets);
+  const [nowTargets, nowObjectives] = termParts(targets);
+  const wasTargets = targetsTermKey(run?.grade?.targets ?? null);
   const whatChanged = otherSchema(run?.grade?.schema) ? 'how the grade scores changed'
     : offKey(run?.grade?.off) !== offKey(off) ? 'the criteria graded here changed'
     : asideKey(run) !== (aside || '') ? 'what is set aside changed'
-      : !runTargetsKey(run) ? 'the grade has counted the MTTD / MTTR targets set in the studio'
-        : !targets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
-          : 'the MTTD / MTTR targets changed';
+      : wasTargets !== nowTargets ? (!wasTargets ? 'the grade has counted the MTTD / MTTR targets set in the studio'
+        : !nowTargets ? 'the grade has stopped counting the MTTD / MTTR targets set in the studio'
+          : 'the MTTD / MTTR targets changed')
+        : !runObjectivesKey(run) ? 'the grade has counted the objectives stated in the studio'
+          : !nowObjectives ? 'the grade has stopped counting the objectives stated in the studio'
+            : 'the objectives stated in the studio changed';
   // A check that reads a recording is not checked again from here: the line does not say to.
   const liveCheck = journey ? journeyIsLive(journey) : /^mcp:/i.test(String(run?.packB?.source || ''));
   return {
@@ -1416,7 +1449,15 @@ export function chainModel({ layered = null, targets = null, env = null, settabl
 // ({ declared: false, runs, recommended: { name, mttd, mttr, mttdWords, mttrWords }, action }), never a verdict.
 // `action`: 'Set targets…' | 'Change targets…' | null, as on the board's tile (targetsActionFor);
 // `record`: true where Record a chaos run… opens (the pack declares an experiment, and `settable`).
-export function controlRoomMttx({ loaded = false, layered = null, layeredError = null, targets = null, settable = false } = {}) {
+// `objectives` (the service's stated SLO objectives) ride along for the panel's SLO rows, with
+// `objectivesAction` ('State objectives…' | 'Change objectives…' | null, as under the board's letter).
+export function controlRoomMttx(facts = {}) {
+  const m = controlRoomMttxOf(facts);
+  if (m.unread) return m;
+  const offer = facts.diagnostic ? objectivesOffer(facts.diagnostic, { objectives: facts.objectives ?? null }, { settable: !!facts.settable }) : null;
+  return { ...m, ...(facts.objectives ? { objectives: facts.objectives } : {}), ...(offer ? { objectivesAction: offer.label } : {}) };
+}
+function controlRoomMttxOf({ loaded = false, layered = null, layeredError = null, targets = null, settable = false } = {}) {
   if (!loaded || layeredError || !layered) return { unread: true };
   const m = declaredByTier(layered).mttx;
   const runs = Array.isArray(m.runs) ? m.runs : [];
@@ -1845,7 +1886,9 @@ export function buildOverviewModel(input = {}) {
   // their key; with no grade to ask, the record's.
   const counted = studioTargetsCounted(pending ? null : diagnostic);
   // No grade to ask (the pack could not be read): Calibrated switched off counts nothing either way.
-  const targets = counted === false || (counted === null && gradeOffKeys(off).includes('calibrated')) ? '' : serviceTargetsKey(picked.service);
+  const targetsOnly = counted === false || (counted === null && gradeOffKeys(off).includes('calibrated')) ? '' : serviceTargetsKey(picked.service);
+  // …and the SLO objectives stated in the studio its Calibrated counts, joined to them.
+  const targets = termsOf(targetsOnly, !pending && diagnostic ? serviceObjectivesKey(picked.service, diagnostic) : (gradeOffKeys(off).includes('calibrated') ? '' : serviceObjectivesKey(picked.service)));
   const graded0 = gradeModel({ pack: picked.pack, how: picked.how, diagnostic: pending ? null : diagnostic, diagnosticError: pending ? null : diagnosticError, run: run && journey && !pending ? run : null, journey, now, off, aside, targets });
   const canSwitch = gradeSwitches === true && picked.how === 'primary' && !pending;
   // `graded`: the criteria the service is graded on, by name — where the reasons are not offered
@@ -1856,6 +1899,10 @@ export function buildOverviewModel(input = {}) {
     switches: { enabled: access?.canWrite !== false, reason: access?.canWrite !== false ? null : (access?.reason || 'Not available for your role here.') },
     graded: GRADE_CRITERIA.filter((c) => !offKeys.includes(c.key)).map((c) => ({ key: c.key, label: c.label })),
   } : graded0;
+  // State objectives… / Change objectives…: where the host draws the service list (the form lives
+  // there), for a service record, to a rank that may change it — and only when an SLO takes one.
+  const offer = objectivesOffer(pending ? null : diagnostic, picked.service, { settable: !!listable && picked.how === 'primary' && Number.isInteger(picked.service?.id) && access?.canWrite !== false });
+  if (offer) grade.objectives = offer;
   const still = stillTrueModel({ journey, run: journey ? run : null, now, running, startError, journeysError, pending, stopped: journey ? stopped : null });
   // A service with no pack at all has nothing to grade: the drift check
   // starts here, as with no service, under the service's own header — the
@@ -2105,7 +2152,7 @@ function envScopeCell(own, defaults) {
 // endpoint and a scope typed — or null. The host sends it and hands the answer back with the key:
 // an answer for another key (an older scope) is dropped.
 export function scopeCheckOf(form) {
-  if (!form?.open || form.chaosRun || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
+  if (!form?.open || form.chaosRun || form.objectives || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
   const v = form.values || {};
   const env = trimmed(v.env);
   if (!env || !v.endpointId || v.endpointId === LIVE_PACK) return null;
@@ -2259,6 +2306,12 @@ const targetsDiffer = (runTargets, targets) => {
   const was = targetsTermKey(runTargets ?? null);
   return !!was && was !== (targets || '');
 };
+// The same for the stated SLO objectives a run counted (the listing's lastRun.objectives, their key):
+// the service's own for those SLOs now read otherwise, or are gone.
+const objectivesDiffer = (was, objectives) => {
+  if (typeof was !== 'string' || !was) return false;
+  return objectivesTermKey(objectives ?? null, was.split(';').map((p) => p.slice(0, p.lastIndexOf('=')))) !== was;
+};
 // The row's five states (the listing's lastRun is the newest run that is not a stopped Run; its
 // facts are tools/lib/run-basis.mjs basisSummary's — an older server's listing has none, and its
 // row reads as before):
@@ -2295,7 +2348,7 @@ function lastCheckNotes(journey, last) {
   if (skipped) notes.push({ text: `${skipped} stored exclude ${skipped === 1 ? 'pattern' : 'patterns'} not applied — may be too slow to match; change ${skipped === 1 ? 'it' : 'them'} in the live scope`, tone: 'warn' });
   return notes;
 }
-function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
+function lastCheckOf(journey, now, off = [], aside = '', targets = '', objectives = null) {
   const last = journey?.lastRun || null;
   const notes = lastCheckNotes(journey, last);
   if (!last) return { state: 'never', word: OVERVIEW_STATUS.never, ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null, label: 'Not checked yet', reason: '', notes, when: '' };
@@ -2325,7 +2378,8 @@ function lastCheckOf(journey, now, off = [], aside = '', targets = '') {
     : otherSchema(last.gradeSchema) ? ' · graded before the grade changed how it scores'
     : offKey(last.gradeOff) !== offKey(off) ? " · graded before this service's criteria changed"
       : lastAside !== (aside || '') ? " · graded before this service's set-asides changed"
-        : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed" : '';
+        : targetsDiffer(last.targets, targets) ? " · graded before this service's targets changed"
+          : objectivesDiffer(last.objectives, objectives) ? " · graded before this service's objectives changed" : '';
   const lastAsideN = (Number(last.setAside?.declared) || 0) + (Number(last.setAside?.live) || 0);
   const asideSaid = ig && lastAsideN && !before ? ` · ${lastAsideN} set aside` : '';
   // How much it compared: the listing's count (null from an older server, which is read as before).
@@ -2488,7 +2542,7 @@ export function serviceListModel(input = {}) {
       const journey = journeysError ? null : journeyForService(journeys, { slug: s.slug, env: env?.name ?? null, packId: pack?.id || null });
       const last = journeysError
         ? { state: 'unknown', word: 'Not known', ago: '', letter: null, tone: 'neutral', alignmentPct: null, gate: null }
-        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now), serviceTargetsKey(s));
+        : lastCheckOf(journey, now, s.gradeOff, serviceAsideKey(s, now), serviceTargetsKey(s), s.objectives ?? null);
       const busy = !!running[key];
       let why = reason;
       if (!why && !env) why = `Add an environment to ${s.name} first.`;
@@ -2860,7 +2914,7 @@ const FORM_DRAFT_VALUE_MAX = 2048;
 // pre-fill, or Use the server default) rides along, compact, so the restored form keeps and drops on
 // save what it said it would before the round trip.
 export function formDraft(form, { now = Date.now() } = {}) {
-  if (!form?.open || form.chaosRun) return null;
+  if (!form?.open || form.chaosRun || form.objectives) return null;
   const prefill = form.scopePrefill ? scopeFromValues(scopeFormValues(form.scopePrefill)) : null;
   return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched, ...(prefill ? { scopePrefill: prefill } : {}) };
 }
@@ -2915,6 +2969,145 @@ export function targetsOnlyPlan(values = {}, { services = [], serviceId = null }
   const targets = targetsFromForm(values);
   const changed = !!existing && !Object.keys(problems).length && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
   return { problems, serviceId: existing ? existing.id : null, patch: changed ? { targets } : null, name: existing?.name || trimmed(values.name), envName: trimmed(values.env) };
+}
+
+// ---------- State objectives… ----------
+//
+// An SLO the scan inferred carries its default objective (99% over 30 days), which the grade does not
+// count (schema 6). The form asks the objective and its window per such SLO (studio/slo-objectives.mjs),
+// shown with the indicator it reads and that indicator's series; Save sends the service's whole
+// record (PATCH { objectives }) and checks the service again, so the grade takes it.
+
+const OBJ = 'obj:';
+const WIN = 'win:';
+const DROP = 'drop:';
+const calibratedOf = (diagnostic) => criterionOf(diagnostic, 'calibrated');
+// The repository's own grade with these objectives stated (and no others): the letter the board shows
+// after a Save, until the service is checked again.
+function gradeWithObjectives(layered, objectives, off = [], posture = null) {
+  const bare = { ...layered, meta: { ...(layered.meta && typeof layered.meta === 'object' ? layered.meta : {}), studioObjectives: undefined } };
+  const pack = withStatedObjectives(bare, objectives);
+  return computeDiagnosticGrade(pack, null, posture || computePostureMatrix(pack, null), null, null, { off });
+}
+
+// objectivesOffer(diagnostic, service, { settable }) → { label, note, left, of } | null — what the
+// board offers under the letter: 'State objectives…' while an SLO still carries the scan's default,
+// 'Change objectives…' once each has one. null: nothing to state, Calibrated is not graded, or the
+// reader may not change the service.
+export function objectivesOffer(diagnostic, service, { settable = false } = {}) {
+  const c = settable ? calibratedOf(diagnostic) : null;
+  if (!c || c.applies === false) return null;
+  const rows = objectiveRowsOf(c, service?.objectives ?? null);
+  if (!rows.ask.length) return null;
+  const left = rows.ask.filter((r) => !r.stated).length;
+  const of = rows.ask.length;
+  return {
+    label: left ? 'State objectives…' : 'Change objectives…', left, of,
+    note: left
+      ? `${left === of ? (of === 1 ? 'Its one objective carries' : `All ${of} objectives carry`) : `${left} of ${of} objectives carry`} the scan's default (99% over 30 days): nobody stated ${left === 1 ? 'it' : 'them'}, so the grade does not count ${left === 1 ? 'it' : 'them'}.`
+      : `${of === 1 ? 'Its objective is' : `All ${of} objectives are`} stated in the studio.`,
+  };
+}
+
+// objectivesFormOpened(services, { serviceId, env, layered }) → the form State objectives… opens: a
+// row per SLO that takes an objective, the ones already stated filled in. null for a service that is
+// not a record, a pack that is not read, or one with nothing to state.
+export function objectivesFormOpened(services, { serviceId = null, env = null, layered = null } = {}) {
+  const service = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
+  if (!service || !layered) return null;
+  const off = Array.isArray(service.gradeOff) ? service.gradeOff : [];
+  let posture; let rows;
+  try {
+    posture = computePostureMatrix(layered, null);
+    rows = objectiveRowsOf(calibratedOf(gradeWithObjectives(layered, service.objectives ?? null, off, posture)), service.objectives ?? null);
+  } catch (_) { return null; }
+  if (!rows.ask.length && !rows.elsewhere.length) return null;
+  const values = { name: service.name, env: env || '' };
+  for (const r of rows.ask) { values[`${OBJ}${r.id}`] = r.percent; values[`${WIN}${r.id}`] = r.window; }
+  const first = rows.ask.find((r) => !r.stated) || rows.ask[0] || null;
+  return { open: true, mode: 'edit', objectives: true, serviceId: service.id, envFixed: !!env, layered, posture, rows, values, focus: first ? `${OBJ}${first.id}` : null, scroll: true, saving: false, error: null };
+}
+
+export function objectivesFormInput(form, field, value) {
+  if (!form?.objectives) return form;
+  return { ...form, values: { ...form.values, [field]: String(value ?? '') }, error: null };
+}
+
+// objectivesPlan(form, { services }) → what Save does: { problems, serviceId, objectives, patch, name,
+// envName } — `objectives` the service's whole record as the form now reads (the entries for SLOs this
+// scan does not hold kept, unless ticked for removal), `patch` { objectives } only when it differs
+// from the record's.
+export function objectivesPlan(form, { services = [] } = {}) {
+  const v = form?.values || {};
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form?.serviceId) || null;
+  const name = existing?.name || trimmed(v.name);
+  const envName = trimmed(v.env);
+  if (!existing) return { problems: { [form?.focus || 'name']: 'This service is no longer listed: close the form and open it again.' }, serviceId: null, objectives: null, patch: null, name, envName };
+  const asked = new Set((form.rows?.ask || []).map((r) => r.id));
+  const was = existing.objectives?.slos && typeof existing.objectives.slos === 'object' ? existing.objectives.slos : {};
+  const keep = Object.fromEntries(Object.entries(was).filter(([id]) => !asked.has(id) && v[`${DROP}${id}`] !== '1'));
+  const answers = Object.fromEntries([...asked].map((id) => [id, { percent: v[`${OBJ}${id}`], window: v[`${WIN}${id}`] }]));
+  const { objectives, problems: list } = objectivesFromForm(answers, keep);
+  const problems = Object.fromEntries(list.map((p) => [`${OBJ}${p.id}`, p.text]));
+  const changed = !Object.keys(problems).length && !sameObjectives(existing.objectives ?? null, objectives);
+  return { problems, serviceId: existing.id, objectives, patch: changed ? { objectives } : null, name, envName };
+}
+
+// objectivesWhatIf(form, { services }) → { text, tone } — said under the rows at every keystroke: how
+// many are stated, and the letter the repository alone would read with them (the letter the board
+// shows after Save, until the check that follows).
+export function objectivesWhatIf(form, { services = [] } = {}) {
+  if (!form?.objectives) return { text: '', tone: 'neutral' };
+  const plan = objectivesPlan(form, { services });
+  if (Object.keys(plan.problems).length) return { text: 'Give each objective as a percent above 0 and below 100, such as 99.9; leave one blank to state nothing for it.', tone: 'warn' };
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form.serviceId) || null;
+  const off = Array.isArray(existing?.gradeOff) ? existing.gradeOff : [];
+  let now; let then;
+  try {
+    now = gradeWithObjectives(form.layered, existing?.objectives ?? null, off, form.posture);
+    then = gradeWithObjectives(form.layered, plan.objectives, off, form.posture);
+  } catch (_) { return { text: '', tone: 'neutral' }; }
+  const c = calibratedOf(then);
+  const of = (form.rows?.ask || []).length;
+  const stated = (form.rows?.ask || []).filter((r) => trimmed(form.values[`${OBJ}${r.id}`])).length;
+  const said = (g) => `${g.overall?.instrumentGrade?.letter || '–'} ${Math.round(g.overall?.audit?.scorePctExact ?? 0)}`;
+  const head = `${stated} of ${of} stated.`;
+  if (c?.applies === false) return { text: `${head} Calibrated is not graded for this service, so the letter does not move.`, tone: 'neutral' };
+  const needsTargets = /no .*baselines/i.test(String(c?.detail || ''));
+  const moved = said(now) === said(then)
+    ? `The repository alone reads ${said(now)} either way`
+    : `The repository alone would read ${said(then)} (it reads ${said(now)} now)`;
+  return {
+    text: `${head} ${moved}${needsTargets ? ' — Calibrated also needs detection and repair targets: Set targets… on the board.' : '.'} Save checks the service again, so the letter against live takes them.`,
+    tone: stated === of ? 'ok' : 'neutral',
+  };
+}
+
+// What the renderer draws.
+function objectivesFormView(form, { access = null } = {}) {
+  const v = form.values || {};
+  const env = trimmed(v.env);
+  const canWrite = access?.canWrite !== false;
+  const rows = form.rows || { ask: [], unbounded: [], repository: 0, elsewhere: [] };
+  return {
+    open: true, mode: 'edit', objectives: true, saving: !!form.saving, error: form.error || null, focus: form.focus || null, scroll: !!form.scroll,
+    title: `State objectives · ${v.name}${env ? ` · ${env}` : ''}`,
+    hint: 'The scan gives every objective it infers 99% over 30 days — a default, which the grade does not count. State what the service is actually held to: kept with this service, signed and dated, and counted by the grade where the repository states none. The comparison with live is not touched.',
+    values: { ...v },
+    rows: rows.ask.map((r) => ({
+      id: r.id, sli: r.sli, series: r.series, field: `${OBJ}${r.id}`, windowField: `${WIN}${r.id}`, percent: v[`${OBJ}${r.id}`] ?? '',
+      windows: OBJECTIVE_WINDOWS.map((w) => ({ value: w, label: `over ${w.replace(/d$/, '')} days`, selected: (v[`${WIN}${r.id}`] || '30d') === w })),
+      was: r.stated ? 'stated in the studio' : 'the scan\'s default, not counted',
+    })),
+    unbounded: rows.unbounded.length
+      ? `${rows.unbounded.length} recorded series ${rows.unbounded.length === 1 ? 'has' : 'have'} no bound that says what "good" is, so ${rows.unbounded.length === 1 ? 'it holds' : 'they hold'} no objective and ${rows.unbounded.length === 1 ? 'is' : 'are'} left out of the count: ${rows.unbounded.slice(0, 4).map((r) => r.sli).join(', ')}${rows.unbounded.length > 4 ? `, and ${rows.unbounded.length - 4} more` : ''}.`
+      : '',
+    repository: rows.repository ? `${rows.repository} ${rows.repository === 1 ? 'objective is' : 'objectives are'} stated in the repository and ${rows.repository === 1 ? 'needs' : 'need'} nothing here.` : '',
+    elsewhere: rows.elsewhere.map((r) => ({ id: r.id, words: `${r.percent}% over ${String(r.window).replace(/d$/, '')} days`, field: `${DROP}${r.id}`, checked: v[`${DROP}${r.id}`] === '1' })),
+    whatIf: objectivesWhatIf(form, { services: form.servicesAtOpen || [] }),
+    problems: objectivesPlan(form, { services: form.servicesAtOpen || [] }).problems,
+    canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
 }
 
 // ---------- Record a chaos run… ----------
@@ -3137,6 +3330,7 @@ export function formProblemsNote(problems = {}) {
 export function formModel(form, { endpoints = null, register = null, access = null, folders = null, uploads = false, repoSignIn = null, sources = null, heldTokens = null, now = Date.now() } = {}) {
   if (!form?.open) return { open: false };
   if (form.chaosRun) return chaosRunFormModel(form, { access, now });
+  if (form.objectives) return objectivesFormView(form, { access });
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;

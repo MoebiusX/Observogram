@@ -138,7 +138,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     // Pointed away from its upload: the copy goes with it.
     if (changed.includes('repository') && before?.repository?.kind === 'upload') deleteUpload(id);
     const view = serviceViewOf(db, service);
-    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets') || changed.includes('liveScopes')) onGradeOffChanged?.(view);
+    if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets') || changed.includes('objectives') || changed.includes('liveScopes')) onGradeOffChanged?.(view);
     res.json({ ok: true, service: view, changed });
   }));
 
@@ -168,7 +168,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     const id = pathId(req, res, 'id', 'service');
     if (id === null) return;
     const current = getService(db, id);
-    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length) || current.targets
+    const after = current && ((Array.isArray(current.gradeOff) && current.gradeOff.length) || (Array.isArray(current.setAside) && current.setAside.length) || (Array.isArray(current.chaosRuns) && current.chaosRuns.length) || current.targets || current.objectives
       || (current.liveScopes && typeof current.liveScopes === 'object' && Object.keys(current.liveScopes).length)) ? onServiceDeleting?.(current) : null;
     const { service, environments, packLinks, waivers } = deleteServiceFromApi(db, actor, id);
     deleteUpload(id);   // its uploaded repository, if it had one
