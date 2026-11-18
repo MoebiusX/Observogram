@@ -595,6 +595,12 @@ its manifest (docs/EXPORTER_METRICS.md §18.1), which a pack carries as a
 - Either side may declare one, and the **same pattern on both sides pairs with
   itself** (`metric::family:<pattern>`), so a self-diff stays fully aligned. A
   side that says it cannot observe metrics claims nothing through a family.
+- A **literal its own side's family names** (an alert rule that names one event
+  counter) and that has no pair is a member **not minted yet**: it is *not
+  checked* (`notObserved`, *matches the dynamic family <pattern>; a member
+  exists only after its first observation*), out of the union, and counted in
+  `summary.dynamicFamilies.unminted`. Live, it pairs by name as any literal. A
+  literal no family names stays `onlyInA`.
 - A family with **no member is never `onlyInA`**: a queue with no traffic mints
   nothing. It is named in `summary.dynamicFamilies.unmatched`, unless it did
   match names that went elsewhere first (its row's `covered`: they paired by name,

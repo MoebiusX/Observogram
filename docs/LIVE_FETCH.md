@@ -172,7 +172,7 @@ stored scope (a saved check's, an environment's) is read by the rule earlier
 releases had (`{ stored: true }`) and always loads — a pattern it holds that the
 rule refuses now is not applied, the run record's `packB.liveScope` is the scope
 applied and `packB.notApplied` names the rest (as the metric stage and
-`observogram.live.scope` do). The estimate is an interim: the next patch matches
+`observogram.live.scope` do). The estimate is an interim: a later patch matches
 patterns in linear time. Folder
 uids filter dashboards before the detail reads and alert rules when every
 rule names its folder (an alert-rule tool that takes a folder uid — Grafana's,

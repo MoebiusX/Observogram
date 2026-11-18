@@ -175,6 +175,8 @@ export function basisFactsOf(record) {
   return {
     notReadLive: tiers ? Object.values(tiers).reduce((s, t) => s + (isObj(t) ? count(t.notRead) ?? 0 : 0), 0) : null,
     probesFailed: inStageOrder(names(r.probes?.failed) || []).slice(0, 8).map((f) => f.slice(0, 40)),
+    // The families read in part (probes.partial: one of a family's stores went unread beside rules) — only when any.
+    ...((names(r.probes?.partial) || []).length ? { probesPartial: inStageOrder(names(r.probes.partial)).slice(0, 8).map((f) => f.slice(0, 40)) } : {}),
     scoped: isObj(r.packB?.liveScope) && Object.keys(r.packB.liveScope).length > 0,
     setAsideCount: aside,
     scan: scanFactsOf(r.packA?.scan),

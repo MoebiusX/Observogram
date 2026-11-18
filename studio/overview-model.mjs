@@ -310,6 +310,7 @@ export function basisFactsOf(record) {
   return {
     notReadLive: tiers ? Object.values(tiers).reduce((s, t) => s + (isPlain(t) ? countOf(t.notRead) ?? 0 : 0), 0) : null,
     probesFailed: inProbeOrder(namesOf(r.probes?.failed) || []).slice(0, 8).map((f) => f.slice(0, 40)),
+    ...((namesOf(r.probes?.partial) || []).length ? { probesPartial: inProbeOrder(namesOf(r.probes.partial)).slice(0, 8).map((f) => f.slice(0, 40)) } : {}),
     scoped: isPlain(r.packB?.liveScope) && Object.keys(r.packB.liveScope).length > 0,
     setAsideCount: aside,
     scan: scanFactsOf(r.packA?.scan),
@@ -330,8 +331,11 @@ export function nothingReason(facts) {
 export function partialParts(facts, vantage) {
   const x = isPlain(facts) ? facts : {};
   const failed = namesOf(x.probesFailed) || [];
+  // A family read in part (one of its stores went unread beside rules another gave) is named too.
+  const inPart = (namesOf(x.probesPartial) || []).filter((f) => !failed.includes(f));
+  const said = [failed.length ? `${listWords(failed.map(familyWord))} not read` : '', inPart.length ? `${listWords(inPart.map(familyWord))} read only in part` : ''].filter(Boolean).join('; ');
   return [
-    vantage === 'partial' ? (failed.length ? `Live answered in part: ${listWords(failed.map(familyWord))} not read` : 'Live answered in part') : '',
+    vantage === 'partial' ? (said ? `Live answered in part: ${said}` : 'Live answered in part') : '',
     filesNotReadWords(x.scan),
   ].filter(Boolean);
 }

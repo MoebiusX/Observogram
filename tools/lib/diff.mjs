@@ -90,6 +90,11 @@
 //   family. Two sides declaring one pattern pair with each other. A family
 //   with no member is never onlyInA: it is counted in
 //   `summary.dynamicFamilies`, a key present only when a family is declared.
+//   Nor is a literal its own side's family names (an alert rule naming one
+//   member) that has no pair: the member is not minted yet, so it is parked in
+//   notObserved with that reason, out of the union, and counted as the
+//   summary's `unminted` (present only when there is one). A blind or scoped
+//   other side, and a declared-ahead artefact, keep their own reasons first.
 //   A member is a pair like any other, so it counts in `jaccard` and `alignment`;
 //   `summary.dynamicFamilies.members` says how much of them rests on a pattern.
 //
@@ -330,8 +335,11 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
         // artefact is not in: A's artefact is unchecked, not absent.
         const unchecked = bBlind.has(kind) ? bBlind.get(kind) : (outsideScope(kind, aGroup, bScoped, 'a') ?? unreadByEngine(kind, aGroup, bUnread));
         const ahead = unchecked ? null : declaredAheadReason(aGroup, lifecycleEnvironments);
+        // A literal its own side's family names: no member is minted before its first observation.
+        const unminted = unchecked || ahead ? null : unmintedMemberReason(k, aGroup, aFamilies);
         if (unchecked) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unchecked);
         else if (ahead) pushNotObserved(bucketAhead(bucket), k, aGroup, 'a', ahead);
+        else if (unminted) pushNotObserved(bucket.notObserved, k, aGroup, 'a', unminted);
         else pushUnmatched(bucket.onlyInA, k, aGroup);
       }
     }
@@ -1045,6 +1053,16 @@ function claimByFamily(baseKey, group, families, side, bucket) {
   return true;
 }
 
+// An unpaired metric group its own side's family names is a member not minted
+// yet: parked with the reason, out of the union, counted on the family's row.
+function unmintedMemberReason(baseKey, group, families) {
+  if (!families.length || baseKey.slice(0, baseKey.indexOf('::')) !== 'metric') return null;
+  const claims = group.map((artefact) => familyOfMetric(artefact, families));
+  if (claims.some((family) => !family)) return null;
+  for (const family of claims) family.row.unminted = (family.row.unminted || 0) + 1;
+  return `matches the dynamic family ${claims[0].row.pattern}; a member exists only after its first observation`;
+}
+
 // One pattern on both sides is one declaration, the same on each.
 function pairDeclaredFamilies(aFamilies, bFamilies, bucket) {
   for (const a of aFamilies) {
@@ -1094,6 +1112,7 @@ function familySummary(ledger, blind, scoped) {
   return {
     declared: distinct(families).length,
     members: families.reduce((sum, row) => sum + row.members, 0),
+    ...(families.some((row) => row.unminted) ? { unminted: families.reduce((sum, row) => sum + (row.unminted || 0), 0) } : {}),
     unmatched: distinct(families.filter((row) => !row.refused && !row.members && !row.paired && !row.covered && !row.notObserved)),
     refused: families.filter((row) => row.refused).map(({ pattern, side, refused }) => ({ pattern, side, reason: refused })),
     families,
