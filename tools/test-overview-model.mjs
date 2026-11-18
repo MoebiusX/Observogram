@@ -3579,11 +3579,12 @@ test('renderServiceList: Sign in to â€¦ before the token field and Sign out of â
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './agreement.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
   'studio/artefact-tiers.mjs': [],
   'studio/clause-fixes.mjs': [],
   'studio/mttx-targets.mjs': [],
   'studio/slo-objectives.mjs': [],
+  'studio/agreement.mjs': [],
   'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],

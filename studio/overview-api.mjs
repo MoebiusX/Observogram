@@ -137,6 +137,22 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
   return out;
 }
 
+// GET /api/services/:id/agreement — a service's agreement against its repository's pack:
+// { agreement, coverage, catalogue, repository } (server/routes/services.mjs). A failure is a
+// sentence, never thrown: { error }.
+export async function loadServiceAgreement(serviceId, { fetchFn = requestJson } = {}) {
+  try {
+    const body = await fetchFn(`/api/services/${encodeURIComponent(serviceId)}/agreement`);
+    return { agreement: body?.agreement ?? null, coverage: body?.coverage ?? null, catalogue: Array.isArray(body?.catalogue) ? body.catalogue : [], repository: body?.repository ?? null };
+  } catch (e) { return { error: sentence(e) }; }
+}
+// The same for every service that has one, by id: what the list's Agreement column says.
+export async function loadAgreementFacts(services, { fetchFn = requestJson } = {}) {
+  const out = {};
+  await Promise.all((Array.isArray(services) ? services : []).filter((s) => s && Number.isInteger(s.id) && s.agreement).map(async (s) => { out[s.id] = await loadServiceAgreement(s.id, { fetchFn }); }));
+  return out;
+}
+
 // GET /api/repository-folders[?path=] — one folder on the server and the
 // folders inside it, names only (Overview's Browse…; the server's rule is
 // the one a save applies). `path` null is the top: the folders the server

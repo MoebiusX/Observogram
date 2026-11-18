@@ -914,6 +914,8 @@ function mxRowHtml(svc, columns, canWrite) {
   return `
       <li class="ov-mx__row${svc.complete ? '' : ' ov-mx__row--incomplete'}">
         <div class="ov-mx__svc">${name}</div>
+${svc.agreement ? `
+        <div class="ov-mx__agr" data-col="Agreement">${mxAgreementHtml(svc)}</div>` : ''}
         <div class="ov-mx__repo" data-col="Repository">${mxRepoHtml(svc, first)}${tokenFold}</div>
         ${columns.map((c) => mxCellHtml(svc.cells[c] || null, c, svc, canWrite)).join('')}
         <div class="ov-mx__rowacts">${all}${pick || !Object.keys(svc.cells).length ? change : ''}${addEnv}</div>${notes}
@@ -1167,8 +1169,72 @@ function objectivesFormHtml(f) {
     </form>`;
 }
 
+// The agreement: its source document, a row per commitment (where the document says it, what is
+// promised, the target as written, whose it is, what it is linked to) with what the repository covers
+// said beside each as it is typed, and Paste several for a whole agreement at once.
+function agreementFormHtml(f) {
+  const off = !f.canWrite;
+  const shown = !!f.error;
+  const v = f.values;
+  const rows = f.rows.map((r) => `
+        <li class="ov-agr__row">
+          <label class="ov-form__f ov-agr__clause"><span class="ov-form__l">Clause</span><input class="og-input" data-field="agr:${r.i}:clause" value="${attr(r.clause)}" maxlength="80" autocomplete="off" placeholder="4.1"></label>
+          <label class="ov-form__f ov-agr__text"><span class="ov-form__l">What is promised</span><input class="og-input" data-field="agr:${r.i}:text" value="${attr(r.text)}" maxlength="500" autocomplete="off">${fieldErr(f, `agr:${r.i}:text`, shown)}</label>
+          <label class="ov-form__f ov-agr__target"><span class="ov-form__l">Target, as written</span><input class="og-input" data-field="agr:${r.i}:target" value="${attr(r.target)}" maxlength="300" autocomplete="off" placeholder="99.9% per calendar month"></label>
+          <label class="ov-form__f ov-agr__owner"><span class="ov-form__l">Who answers for it</span><select class="og-input" data-field="agr:${r.i}:owner" data-keep="1">${r.owners.map((o) => `<option value="${attr(o.value)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select></label>
+          <label class="ov-form__f ov-agr__links"><span class="ov-form__l">Linked to <em>(kind:name, separated by commas)</em></span><input class="og-input" data-field="agr:${r.i}:links" value="${attr(r.links)}" autocomplete="off" list="ov-agr-catalogue" placeholder="slo:checkout_availability_99_9, alert:CheckoutErrorsHigh">${fieldErr(f, `agr:${r.i}:links`, shown)}</label>
+          <span class="ov-agr__state ov-agr__state--${attr(r.state.tone)}" data-agr-state="${r.i}">${escapeHtml(r.state.words)}</span>
+          <button type="button" class="og-btn og-btn--text ov-agr__remove" data-ux-action="ov-agr-remove" data-row="${r.i}"${f.saving || off ? ' disabled' : ''} aria-label="Remove the commitment ${attr(r.clause || r.text || String(r.i + 1))}">Remove</button>
+        </li>`).join('');
+  const versions = f.versions.length > 1 ? `
+      <p class="ov-form__hint og-muted">Versions kept: ${f.versions.map((x) => `${escapeHtml(x.words)} (in force since ${escapeHtml(x.since)}, ${x.commitments} commitment${x.commitments === 1 ? '' : 's'})`).join('; ')}.</p>` : '';
+  return `
+    <form class="ov-form ov-form--agreement og-panel" aria-labelledby="ov-form-h" novalidate data-agreement="1">
+      <header class="ov-form__head">
+        <h2 class="ov-card__h" id="ov-form-h">${escapeHtml(f.title)}</h2>
+        <p class="ov-card__sub">${escapeHtml(f.hint)}</p>
+      </header>
+      <div class="ov-agr__source">
+        <label class="ov-form__f"><span class="ov-form__l">The document it is written in</span><input class="og-input" data-field="agrDocument" value="${attr(v.agrDocument)}" maxlength="200" autocomplete="off" placeholder="Operational level agreement, payments platform">${fieldErr(f, 'agrDocument', shown)}</label>
+        <label class="ov-form__f"><span class="ov-form__l">Its version</span><input class="og-input" data-field="agrVersion" value="${attr(v.agrVersion)}" maxlength="40" autocomplete="off" placeholder="2.1">${fieldErr(f, 'agrVersion', shown)}</label>
+        <label class="ov-form__f"><span class="ov-form__l">In force since</span><input class="og-input" type="date" data-field="agrEffective" value="${attr(v.agrEffective)}">${fieldErr(f, 'agrEffective', shown)}</label>
+      </div>
+      <p class="ov-form__hint og-muted">Saved under another document, version or date, it is kept as a new version; under the same, it corrects this one.</p>${versions}
+      <ol class="ov-agr__rows">${rows}
+      </ol>
+      <datalist id="ov-agr-catalogue">${f.catalogue.slice(0, 400).map((x) => `<option value="${attr(x)}"></option>`).join('')}</datalist>
+      <div class="ov-agr__more">
+        <button type="button" class="og-btn" data-ux-action="ov-agr-add"${f.saving || off || !f.canAdd ? ' disabled' : ''}>Add a commitment</button>
+        <details class="ov-agr__paste">
+          <summary>Paste several…</summary>
+          <label class="ov-form__f"><span class="ov-form__l">One commitment a line: clause | what is promised | target | whose (consumer, or leave blank) | links</span>
+            <textarea class="og-input" data-field="agrPaste" rows="5" spellcheck="false" placeholder="4.1 | Requests succeed | 99.9% per calendar month | | slo:checkout_availability_99_9">${escapeHtml(v.agrPaste)}</textarea></label>
+          <button type="button" class="og-btn" data-ux-action="ov-agr-paste"${f.saving || off ? ' disabled' : ''}>Add them</button>
+        </details>
+      </div>
+      <p class="ov-obj__whatif" id="ov-agr-summary" role="status" aria-live="polite">${escapeHtml(f.summary)}</p>
+      <p class="ov-form__hint og-muted">${escapeHtml(f.repository)}</p>${f.error ? `
+      <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
+      <div class="ov-form__acts">
+        <button type="submit" class="og-btn og-btn--primary" data-ux-action="ov-form-save"${f.saving || off ? ' disabled' : ''}${off ? ` title="${attr(f.reason)}"` : ''}>${f.saving ? 'Saving…' : 'Save'}</button>
+        <button type="button" class="og-btn og-btn--text" data-ux-action="ov-form-close"${f.saving ? ' disabled' : ''}>Cancel</button>
+      </div>
+    </form>`;
+}
+
+// The list's Agreement cell: the stage before the repository.
+function mxAgreementHtml(svc) {
+  const a = svc.agreement;
+  if (!a) return '';
+  if (a.state === 'none') {
+    return `<span class="og-muted">None recorded</span>${a.action ? `<button type="button" class="ov-svc__fill" data-ux-action="ov-agr-open" data-service="${attr(svc.serviceId)}" aria-label="Record the agreement of ${attr(svc.name)}">${escapeHtml(a.action)}</button>` : ''}`;
+  }
+  return `<span class="ov-agr__title">${escapeHtml(a.title)}</span><span class="ov-agr__since og-muted">${escapeHtml(a.since)}</span><span class="ov-agr__sum ov-agr__sum--${attr(a.tone)}">${escapeHtml(a.summary)}</span><button type="button" class="ov-svc__edit" data-ux-action="ov-agr-open" data-service="${attr(svc.serviceId)}" aria-label="Open the agreement of ${attr(svc.name)}">${escapeHtml(a.action)}</button>`;
+}
+
 function svcFormHtml(f) {
   if (f.chaosRun) return chaosRunFormHtml(f);
+  if (f.agreement) return agreementFormHtml(f);
   if (f.objectives) return objectivesFormHtml(f);
   if (f.targetsOnly) return targetsFormHtml(f);
   const v = f.values;
@@ -1280,8 +1346,8 @@ export function serviceListHtml(list, form, ov = {}) {
     // One row per service, a column per environment (the model's serviceMatrix).
     const m = list.matrix || { columns: [], services: [], legend: [] };
     body = `
-      <div class="ov-svcs__table ov-mx" style="--ov-envs: ${Math.max(1, m.columns.length)}">
-        <div class="ov-mx__cols" aria-hidden="true"><span>Service</span><span>Repository</span>${m.columns.map((c) => `<span class="ov-mx__colh">${escapeHtml(c)}</span>`).join('')}<span></span></div>
+      <div class="ov-svcs__table ov-mx${m.agreements ? ' ov-mx--agr' : ''}" style="--ov-envs: ${Math.max(1, m.columns.length)}">
+        <div class="ov-mx__cols" aria-hidden="true"><span>Service</span>${m.agreements ? '<span>Agreement</span>' : ''}<span>Repository</span>${m.columns.map((c) => `<span class="ov-mx__colh">${escapeHtml(c)}</span>`).join('')}<span></span></div>
         <ul class="ov-svcs__rows" aria-label="Services">${m.services.map((svc) => mxRowHtml(svc, m.columns, list.canWrite)).join('')}
         </ul>
       </div>${mxLegendHtml(m.legend)}`;
@@ -1369,6 +1435,11 @@ export function renderServiceList(container, list, form, host = appHost, { draft
   wireUxActions(container, {
     'ov-svc-add': () => ov.addService?.(),
     // A host without addEnvironment opens the service's form on no environment: the field to name one.
+    // The agreement: its form from the list's cell; a row added, removed, several pasted.
+    'ov-agr-open': (ev, el) => ov.openAgreement?.(Number(el.dataset.service)),
+    'ov-agr-add': () => ov.agreementAdd?.(),
+    'ov-agr-remove': (ev, el) => ov.agreementRemove?.(Number(el.dataset.row)),
+    'ov-agr-paste': () => ov.agreementPaste?.(),
     'ov-svc-add-env': (ev, el) => (typeof ov.addEnvironment === 'function' ? ov.addEnvironment(Number(el.dataset.service)) : ov.editService?.(Number(el.dataset.service), null)),
     // A service's Change (data-pick) opens with its environment as a choice; a cell's, on that environment.
     'ov-svc-edit': (ev, el) => (el.dataset.pick ? ov.editService?.(Number(el.dataset.service), svcEnv(el), { pick: true }) : ov.editService?.(Number(el.dataset.service), svcEnv(el))),
@@ -1432,6 +1503,13 @@ export function renderServiceList(container, list, form, host = appHost, { draft
       const event = input.tagName === 'SELECT' || box ? 'change' : 'input';
       input.addEventListener(event, () => {
         ov.formInput?.(input.dataset.field, box ? (input.checked ? '1' : '') : input.value, { redraw: input.tagName === 'SELECT' });
+        // The agreement: what the repository covers, said again at every keystroke, in place.
+        if (formEl.dataset.agreement && input.tagName !== 'SELECT') {
+          const said = ov.agreementWhatIf?.();
+          const sum = said ? formEl.querySelector('#ov-agr-summary') : null;
+          if (sum) sum.textContent = said.summary;
+          (said?.states || []).forEach((st, i) => { const el = formEl.querySelector(`[data-agr-state="${i}"]`); if (el) { el.textContent = st.words; el.className = `ov-agr__state ov-agr__state--${st.tone}`; } });
+        }
         // State objectives…: what the letter would read, said again at every keystroke, in place.
         const whatIf = formEl.dataset.objectives && input.tagName !== 'SELECT' ? formEl.querySelector('#ov-obj-whatif') : null;
         const said = whatIf ? ov.objectivesWhatIf?.() : null;

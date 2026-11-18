@@ -182,9 +182,13 @@ export function agreementCatalogue(layered) {
  *                     notCovered over the service's own commitments; null each when no pack was read
  */
 export function agreementCoverage(version, layered) {
+  return coverageOver(version, isObj(layered?.layers) ? agreementCatalogue(layered) : null);
+}
+/** The same over a catalogue already read (agreementCatalogue's, as the server answers it): null for none read. */
+export function coverageOver(version, known) {
   const commitments = isObj(version) && Array.isArray(version.commitments) ? version.commitments.filter(isObj) : [];
-  const read = isObj(layered?.layers);
-  const catalogue = read ? agreementCatalogue(layered) : [];
+  const read = Array.isArray(known);
+  const catalogue = read ? known : [];
   const find = (l) => catalogue.find((x) => x.kind === l.kind && x.name === l.name) || null;
   const rows = commitments.map((c) => {
     const links = (Array.isArray(c.links) ? c.links : []).map((l) => {
