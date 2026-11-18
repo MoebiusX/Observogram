@@ -495,7 +495,7 @@ and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
 A pack can therefore pass the grade while still showing drift that belongs in
 Remediate.
 
-The checks are (grade schema 5):
+The checks are (grade schema 6):
 
 | Area | Criteria | Scored |
 |---|---|---|
@@ -509,6 +509,18 @@ Comprehensive the average observed across the four layers (48 in 100 earns
 0.48). Each is still met at its bar — three kinds, 50 in 100 — but a step
 short of the bar is no longer worth nothing, and the bar is no longer the
 whole point.
+
+Nothing the scan guessed counts (grade schema 6). An SLO the scan infers from
+recording rules takes 99% over 30 days as its objective, and every scanned
+pack carries the trace propagator the scan writes by default: both are marked
+(`crawler.scaffold.slos.<id>.objective`, `crawler.scaffold.otel.sdk.propagators`)
+and earn nothing — Calibrated's point follows the share of the SLOs that can
+hold an objective which state one (an SLO whose indicator has no bound but the
+scan's is left out of that count), and Correlated asks for a propagator the
+repository states. The objectives the scan derives from alert names root no
+requirement chain, so a repository of alert rules alone is scored on Drift-free
+by what was compared. A letter graded under schema 5 says it was graded before
+the grade changed how it scores, until the service is checked again.
 
 A scaffold earns nothing: the MTTD/MTTR baselines every scan writes as
 platform defaults do not make a pack Calibrated (a repository states its own
@@ -2094,8 +2106,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.44 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.44
+docker build -t observogram:0.8.45 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.45
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2158,7 +2170,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.44
+  observogram:0.8.45
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2166,7 +2178,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.44
+    image: observogram:0.8.45
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

@@ -1212,8 +1212,18 @@ export function crawlFiles(filesInput, opts = {}) {
   const sliMap = new Map();
   const sloMap = new Map();
   for (const { sli, slo } of inferSlisFromRecordingRules(recordingRules)) {
-    if (!sliMap.has(sli.id)) { sliMap.set(sli.id, sli); summary.inferred.slis++; }
-    if (!sloMap.has(slo.id)) { sloMap.set(slo.id, slo); summary.inferred.slos++; }
+    if (!sliMap.has(sli.id)) {
+      sliMap.set(sli.id, sli); summary.inferred.slis++;
+      // A threshold SLI whose rules state no bound takes 1 as a ratio: the scan's guess, marked by field.
+      if (sli.type === 'threshold' && sli.threshold === 1 && sli.unit === 'ratio') markInvented(`slis.${sli.id}.threshold`, 'default; the recording rules state no bound');
+    }
+    if (!sloMap.has(slo.id)) {
+      sloMap.set(slo.id, slo); summary.inferred.slos++;
+      // The SLO is recorded (its series exist); its objective and window are the scan's defaults, marked
+      // by field so the artefact stays declared and compared while the grade counts no guessed number.
+      markInvented(`slos.${slo.id}.objective`, 'default; the repository states no objective');
+      markInvented(`slos.${slo.id}.window`, 'default; the repository states no window');
+    }
   }
 
   // Burn-rate alerts target an SLO. The compiler only ever emits alerts
@@ -1693,6 +1703,9 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
         'crawler.scaffoldCount':   String(scaffoldMarks.size),
+        // This scan marks every value it guessed (crawler.scaffold.<symbol>[.<field>]): a reader need not
+        // fall back on the scan's wording to tell a guess from a statement.
+        'crawler.guessMarks':      '1',
         // `crawler.unobserved.chaos` is gone: the scan detects chaos
         // experiments (chaos-detect.mjs), so "none declared" here means it
         // looked. A pack scanned before still carries the key, and the grade

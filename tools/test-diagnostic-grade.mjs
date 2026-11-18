@@ -164,7 +164,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   assert(result.overall.audit.status === 'PASS', 'high traceability integrity plus fresh live evidence should pass', result.overall);
   assert(result.overall.verdict.word === 'Diagnostic-grade', 'passing verdict should be diagnostic-grade', result.overall.verdict);
-  assert(result.gradeSchema === 5 && GRADE_SCHEMA === 5, 'grade schema 5 (schema 2 made Actionable informational operability; 3 scaffolds earn nothing; 4 chaos declared vs proven; 5 Multi-modal and Comprehensive earn by how far they get)', result.gradeSchema);
+  assert(result.gradeSchema === 6 && GRADE_SCHEMA === 6, 'grade schema 6 (6 nothing the scan guessed counts; schema 2 made Actionable informational operability; 3 scaffolds earn nothing; 4 chaos declared vs proven; 5 Multi-modal and Comprehensive earn by how far they get)', result.gradeSchema);
   assert(result.coverage.passed === 4 && result.coverage.total === 4, 'all four coverage clauses should pass (schema 2)', result.coverage);
   assert(result.overall.total === 7, 'overall total is 7 scored criteria (4 coverage + 3 trust)', result.overall);
   assert(closeTo(result.trust.passed, 2.9), 'trust score should include fractional drift fidelity', result.trust);
@@ -571,7 +571,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   // 1. Calibrated: a scaffold baseline is no baseline.
   const scaffoldOnly = grade(withL5([SCAFFOLD_BASE, REAL_CHAOS]));
   const cal = criterion(scaffoldOnly, 'calibrated');
-  assert(scaffoldOnly.gradeSchema === 5, 'grade schema 5 keeps schema 3\'s rule: scaffolds earn nothing', scaffoldOnly.gradeSchema);
+  assert(scaffoldOnly.gradeSchema === 6, 'grade schema 6 keeps schema 3\'s rule: scaffolds earn nothing', scaffoldOnly.gradeSchema);
   assert(cal.pass === false, 'the scan\'s default baselines (a scaffold) do not make a pack Calibrated', cal);
   assert(cal.detail === 'no MTTD/MTTR baselines declared - the one present is a scaffold (defaults, never measured)', 'Calibrated says the baselines present are a scaffold', cal.detail);
   assert(JSON.stringify(cal.baselines) === JSON.stringify({ declared: 0, scaffolds: 1 }), 'Calibrated counts the scaffold apart', cal.baselines);
@@ -601,11 +601,54 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   };
   const inventedOnly = criterion(grade(withStudioTargets(scaffoldSlos([SCAFFOLD_BASE, REAL_CHAOS]), LAB)), 'calibrated');
   assert(inventedOnly.pass === false && inventedOnly.detail === 'MTTD/MTTR targets set in the studio but no SLOs have explicit objectives - the one present is a scaffold (defaults, never measured)'
-    && JSON.stringify(inventedOnly.objectives) === JSON.stringify({ declared: 0, scaffolds: 1 }),
+    && JSON.stringify(inventedOnly.objectives) === JSON.stringify({ declared: 0, scaffolds: 1, guessed: 0, unbounded: 0, total: 0 }),
   'the studio\'s targets beside the scan\'s invented objective are not Calibrated: no number came from the repository', inventedOnly);
   const repoInvented = criterion(grade(scaffoldSlos([REAL_BASE, REAL_CHAOS])), 'calibrated');
   assert(repoInvented.pass === false && /^baselines declared but no SLOs have explicit objectives - the one present is a scaffold/.test(repoInvented.detail), 'the repository\'s baselines beside an invented objective: not Calibrated either', repoInvented);
   assert(!Object.hasOwn(studio, 'objectives'), 'no invented objective: no objectives key', studio);
+  // Grade schema 6: nothing the scan guessed counts. An SLO the scan inferred from recording rules keeps
+  // its default objective (99% over 30 days), marked by field: it earns nothing until someone states one.
+  // An SLO whose indicator has no bound but the scan's (threshold 1, as a ratio) is left out of the count.
+  // The points follow the share of the countable SLOs that state an objective.
+  const inferred = (marks, objectives = {}) => {
+    const p = withL5([REAL_BASE, REAL_CHAOS], { 'crawler.guessMarks': '1', ...marks });
+    p.layers.L1 = [
+      { id: 'SLI-01', title: 'orders_availability', spec: { id: 'orders_availability', type: 'ratio', description: 'Inferred from recording rules a and b.' } },
+      { id: 'SLI-02', title: 'orders_latency', spec: { id: 'orders_latency', type: 'ratio', description: 'Inferred from recording rules c and d.' } },
+      { id: 'SLI-03', title: 'orders_cost', spec: { id: 'orders_cost', type: 'threshold', threshold: 1, unit: 'ratio', description: 'Inferred from recording rules e and f.' } },
+      { id: 'SLO-01', title: 'orders_availability_99', spec: { id: 'orders_availability_99', sli: 'ref:slis.orders_availability', objective: objectives.a ?? 0.99, window: '30d' } },
+      { id: 'SLO-02', title: 'orders_latency_99', spec: { id: 'orders_latency_99', sli: 'ref:slis.orders_latency', objective: 0.99, window: '30d' } },
+      { id: 'SLO-03', title: 'orders_cost_99', spec: { id: 'orders_cost_99', sli: 'ref:slis.orders_cost', objective: 0.99, window: '30d' } },
+    ];
+    return p;
+  };
+  const MARKS = {
+    'crawler.scaffold.slos.orders_availability_99.objective': 'default', 'crawler.scaffold.slos.orders_latency_99.objective': 'default',
+    'crawler.scaffold.slos.orders_cost_99.objective': 'default', 'crawler.scaffold.slis.orders_cost.threshold': 'default',
+  };
+  const guessedAll = criterion(grade(inferred(MARKS)), 'calibrated');
+  assert(guessedAll.pass === false && guessedAll.score === 0
+    && guessedAll.detail === 'baselines declared but no SLOs have explicit objectives - the 2 present carry the scan\'s default (99% over 30 days, never stated); 1 recorded series has no bound'
+    && JSON.stringify(guessedAll.objectives) === JSON.stringify({ declared: 0, scaffolds: 0, guessed: 2, unbounded: 1, total: 2 }),
+  'schema 6: the scan\'s default objectives earn nothing, and the SLO with no bound is left out of the count', guessedAll);
+  // One of the two stated (its value is no longer the default the mark was written for): half the point.
+  const halfStated = criterion(grade(inferred(MARKS, { a: 0.999 })), 'calibrated');
+  assert(halfStated.pass === true && halfStated.score === 0.5
+    && halfStated.detail === 'MTTD/MTTR baselines + 1 SLO with explicit objective; 1 more carry the scan\'s default; 1 recorded series has no bound'
+    && JSON.stringify(halfStated.objectives) === JSON.stringify({ declared: 1, scaffolds: 0, guessed: 1, unbounded: 1, total: 2 }),
+  'schema 6: the points follow the share stated; the counted number comes first in the sentence', halfStated);
+  // A pack scanned before the marks (no stamp) is read by the scan's own words: the same verdict.
+  const unstamped = inferred({}); delete unstamped.meta.annotations['crawler.guessMarks'];
+  assert(JSON.stringify(criterion(grade(unstamped), 'calibrated').objectives) === JSON.stringify({ declared: 0, scaffolds: 0, guessed: 2, unbounded: 1, total: 2 }), 'an older scan, without marks, is read by its words');
+  // With the stamp and no mark, an objective of 0.99 is a statement: a person wrote that pack.
+  assert(criterion(grade(inferred({})), 'calibrated').pass === true, 'a stamped pack with no mark on the objective: stated');
+  // Correlated: the propagator the scan writes by default is no statement.
+  const withOtel = (marks) => { const p = withL5([REAL_BASE, REAL_CHAOS], marks); p.layers.L2 = [...p.layers.L2.filter((a) => !/^OTEL-/.test(a.id || '')), { id: 'OTEL-01', title: 'OpenTelemetry', spec: { sdk: { propagators: ['tracecontext', 'baggage'] }, log_correlation: true } }]; return p; };
+  const statedProp = criterion(grade(withOtel({})), 'correlated');
+  const guessedProp = criterion(grade(withOtel({ 'crawler.scaffold.otel.sdk.propagators': 'default; the repository states no SDK configuration' })), 'correlated');
+  assert(statedProp.pass === true && JSON.stringify(statedProp.propagators) === JSON.stringify({ declared: true, guessed: false }), 'a stated propagator still passes Correlated', statedProp);
+  assert(guessedProp.pass === false && guessedProp.detail === 'the trace propagator is the scan\'s default: the repository states no SDK configuration'
+    && JSON.stringify(guessedProp.propagators) === JSON.stringify({ declared: false, guessed: true }), 'schema 6: the scan\'s default propagator earns nothing, and says why', guessedProp);
   // Out of the studio's range (whole minutes, 1m to a week) is no target either.
   for (const odd of [null, {}, { mttd: 1, mttr: '5m' }, { profile: 'lab' }, { mttd: '0m', mttr: '5m' }, { mttd: '1m', mttr: '10081m' }, { mttd: '1d', mttr: '5m' }, { mttd: '30s', mttr: '5m' }]) {
     const p = withL5([SCAFFOLD_BASE, REAL_CHAOS]);
@@ -815,7 +858,7 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(closeTo(one.overall.audit.scorePctExact, 5.9 / 6 * 100) && one.overall.audit.status === 'PASS', 'the score is over the six that apply: 5.9/6 = 98.3%', one.overall.audit);
   assert(same(one.overall.off, ['chaos-validated']), 'overall.off names it', one.overall.off);
   assert(same(Object.keys(one.overall), ['passed', 'total', 'verdict', 'audit', 'instrumentGrade', 'liveDriftFree', 'off']), 'overall gains `off`, after the keys it always had', Object.keys(one.overall));
-  assert(one.gradeSchema === 5, 'the grade schema stays 5: each criterion\'s rule is the same', one.gradeSchema);
+  assert(one.gradeSchema === 6, 'the grade schema stays 6: each criterion\'s rule is the same', one.gradeSchema);
 
   // The case the switch is for: a project that runs no fault injection. Graded
   // on seven it loses a whole point for it and fails the audit; graded on the

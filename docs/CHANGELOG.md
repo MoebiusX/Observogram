@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.8.45 — 2026-11-18
+
+**Grade schema 6: nothing the scan guessed counts.** A scanned service was Calibrated on objectives nobody stated (the scan gives every SLO it infers 99% over 30 days) and Correlated on a trace propagator the scan writes into every pack, and a repository of alert rules alone failed Drift-free on chains rooted on objectives the scan invented. The grade now counts a number only when someone stated it. **Letters move**: krystaline's check of 13 November reads C 49 where it read B+ 78, and its repository alone D 21 where it read C 50; every service shows *graded before the grade changed how it scores* until it is checked again. The way to earn the points back in the studio (*State it…*) is the next change; until then an objective counts when the repository states it.
+
+### Changed
+- **The scan marks every value it guessed** (`tools/lib/crawler.mjs`): beside the artefact marks it already wrote, a field mark for an inferred SLO's objective and window (`crawler.scaffold.slos.<id>.objective`, `.window`) and for a threshold SLI whose rules state no bound (`crawler.scaffold.slis.<id>.threshold`), and one stamp, `crawler.guessMarks: "1"`. A field mark parks nothing: the SLO stays declared and compared. Each adds a *placeholder* row to the conformance report (krystaline: 51 more), and `crawler.scaffoldCount` counts them.
+- **Calibrated counts stated objectives only** (`studio/diagnostic-grade.mjs`; `sloObjectiveGuessed`, `sliBoundGuessed`, new): an objective under the scan's mark that is still its default earns nothing, and an edited one is a statement. An SLO whose indicator has no bound but the scan's (`threshold: 1`, as a ratio) has no "good" to hold an objective against and is left out of the count (krystaline: 15 of 18). The point follows the share of the countable SLOs that state one; the bar is still baselines and one stated objective. A pack scanned before the marks is read by the scan's own words instead. The detail says which (*… the 3 present carry the scan's default (99% over 30 days, never stated); 15 recorded series have no bound*), the counted number first.
+- **Correlated asks for a stated propagator** (`propagatorsGuessed`, new): the propagator a scan writes by default earns nothing (*the trace propagator is the scan's default: the repository states no SDK configuration*). `log_correlation` is also read where the specification puts it (`otel.sdk.log_correlation`), which can only raise a score.
+- **Placeholder objectives root no requirement chain** (`tools/lib/traceability-graph.mjs` `compareBranches`): a declared branch rooted on an SLO or SLI the scan invented — derived from an alert name, or its schema-minimum stub — leaves `branches` and `declaredTotal` and is counted as `rollup.placeholderRoots`. Drift-free then scores a repository of alert rules alone on what was compared, and says *N placeholder objectives left out of the chains*. This reverses 0.8.43's decision A11, as a downstream reported it: 208 of 208 chains broken, letter D, with the rules deployed as declared.
+- **Downstream:** api, behaviour, one-way — `gradeSchema` is 6 and a scanned service's letter drops until its objectives are stated (authored packs do not move); a gate on `requireGradePass` that passed on guessed points fails on the next run; Calibrated gains `score` and `objectives` may carry `guessed`, `unbounded`, `total`; Correlated gains `propagators`; a chain rollup may carry `placeholderRoots` and holds no placeholder-rooted branch; a scan writes `crawler.guessMarks` and field marks, so `crawler.scaffoldCount` and the conformance report's placeholder rows grow; `studio/diagnostic-grade.mjs` exports `sloObjectiveGuessed`, `sliBoundGuessed`, `propagatorsGuessed`. Copy the engine with the board unit.
+
+### Tests
+- `tools/test-diagnostic-grade.mjs`: the scan's default objectives earn nothing; the SLO with no bound is out of the count; one of two stated earns half the point, the counted number first; an older scan is read by its words; a stamped pack with no mark is a statement; the default propagator earns nothing and a stated one passes. `tools/test-grafana-rules.mjs` +1: three alert rules, three placeholder objectives, no declared chain, Drift-free scored on what was compared. Goldens moved on purpose: `tools/fixtures/golden-crawl.pack.json` (the stamp and three field marks, `scaffoldCount` 9 → 12). Pins moved: the schema in `tools/test-journey.mjs` and `server/test-service-run.mjs`, the golden crawl's mark count in `tools/test-pack-conformance.mjs`, the bundle ceiling (7,345,000; measured 7,325,332).
+- Krystaline's 13 November checks replayed through this engine: C 48.9 against live (B+ 77.5 before), D 21.1 from the repository alone.
+- Suite total 2077 → 2078.
+- **Downstream:** none — tests only.
+
+### Decided here (the owner chose them on 2026-11-18)
+- **No way back for Correlated yet**: a propagator is a fact about the code, so a statement in the studio is not evidence; the scan reading `OTEL_PROPAGATORS` from compose and workload files is its own change.
+- **The share, not all-or-nothing**, for Calibrated's point.
+- **Schema 6 is this change alone**; the ladder-integrity proposal takes 7.
+- **An inferred SLO still lights Comprehensive's "SLO declared" cell**: the SLO is recorded; only its number is a guess.
+- **An SLO with no real bound holds no objective**, and is out of the share.
+- **Downstream:** none — decisions recorded with the change above.
+
+### Not here
+- ***State it…***: an objective and window per SLO set in the studio, the way back in the product (the next change). No objective is asked at Add a service.
+- **A repository pack file that states an objective** counts for Calibrated, but against a live side that holds the guessed default it reads drifted on `objective` and `window`; that waits for the live fetcher to mark its own guesses.
+- **History across the change**: the sparkline, the *vs previous run* line, the notification and the `requireGradePass` breach sentence do not yet say the scoring changed; the board, the list and the fleet delta already refuse to compare across schemas.
+- **The board's Drift-free sentence** on the path that scores what was compared says nothing of the placeholder objectives left out; the grade's own detail does.
+- **Checked by tests and a replay of stored checks**, not in a browser.
+- **Downstream:** none — nothing shipped.
+
 ## 0.8.44 — 2026-11-18
 
 **Four findings from a downstream's first week on 0.8.43.** A downstream ran the service check for three services in two environments and traced its low match figures to seven causes; these are the four that were defects here. None is a regression of 0.8.43: two date from 0.6.2, two were limits 0.8.43 wrote down.

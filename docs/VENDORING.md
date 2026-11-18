@@ -158,6 +158,21 @@ bucket path with only placeholders to weigh, a live source with no diff that
 asked or recorded no probe family, or whose families returned no data — each
 scored 1 before.
 
+**Grade schema 6 (0.8.45): nothing the scan guessed counts.**
+`computeDiagnosticGrade` returns `gradeSchema: 6`. Calibrated gains `score`
+(the share of the SLOs that can hold an objective which state one) and its
+`objectives` may carry `guessed`, `unbounded` and `total` beside `declared`
+and `scaffolds` (`declared` is still the counted ones; the counted number is
+still the first number of the detail). Correlated gains `propagators: {
+declared, guessed }`. `sloObjectiveGuessed`, `sliBoundGuessed` and
+`propagatorsGuessed` are new exports. A requirement-chain rollup may carry
+`placeholderRoots`: declared branches rooted on an SLO or SLI the scan invented
+are no longer in `branches` or `declaredTotal`. A scan writes
+`crawler.guessMarks: "1"` and a field mark per guessed value. A scanned
+service's letter drops until its objectives are stated in the repository; a
+board older than this release with this engine still reads the detail's first
+number.
+
 **Grade schema 5 (0.8.33): Multi-modal and Comprehensive earn by how far
 they get.** `computeDiagnosticGrade` returns `gradeSchema: 5` (the new export
 `GRADE_SCHEMA`). Both criteria gain `score` (0..1, read by `criterionScore`):
