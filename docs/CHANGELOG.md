@@ -14,7 +14,7 @@
 
 ### Tests
 - `tools/test-agreement-score.mjs` (new, 5): the dimensions and weights; every level of every dimension, not applicable and not checked; the sums with a weighted shared commitment and the consumer's left out; a host's answer read and each way it is refused, with no numbers; the server's scorer built-in, a module loaded, one that throws, one that answers a promise, one missing and one with no scorer, then back to the built-in. `tools/test-agreement.mjs`: `has`' new keys. `tools/test-overview-model.mjs`: the strip and points as typed, a host's result shown as saved, *not scored* said, the list cell's points. Pins moved: the vendored unit's import list, the bundle ceiling (7,500,000; measured 7,478,471).
-- CHECKED_LINE
+- Checked signed in, in a browser at 1366×768, on a scratch studio whose repository was scanned by a real Run: three commitments, each with its seven levels and points beside it — *Repo 4 · Meas 4 · Alert 4 · Route 0 · Shown 4 · Target 3 · Live ? — 71.3 of 90 points* for an objective whose alerts are routed nowhere; *Repo 2 · Shown 4*, the rest not applicable, for a dashboard half found; the consumer's shown with no points — the service's line *88.8 of 115 points over 2 commitments · Built-in levels, version 1. Proven live is not checked yet.* in the form and on the list, nothing past the width, no console error.
 - Suite total 2099 → 2104.
 - **Downstream:** none — tests only.
 
