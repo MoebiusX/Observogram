@@ -1477,7 +1477,7 @@ function scopeBasisOf(service, envName) {
   const declared = packOf(scanned?.id) || packOf(primary?.packId);
   const kept = livePacksByJourney().get(name);
   const liveMeta = kept ? packOf(kept.id) : null;
-  return { declared, live: liveMeta ? { ...liveMeta, refreshedAt: kept.refreshedAt } : null };
+  return { declared, live: liveMeta ? { ...liveMeta, refreshedAt: kept.refreshedAt } : null, scopeMode: def?.scopeMode ?? null, service: def?.service ?? null };
 }
 
 // A service about to be deleted: the checks that are its own, found while it

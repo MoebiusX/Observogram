@@ -497,6 +497,10 @@ p.ov-scan__sum { cursor: default; }
 .ov-mx--agr .ov-mx__cols, .ov-mx--agr .ov-mx__row { grid-template-columns: minmax(120px, .8fr) minmax(170px, 1fr) minmax(150px, .9fr) repeat(var(--ov-envs), minmax(170px, 1.2fr)) minmax(96px, auto); }
 .ov-mx__agr { display: grid; align-content: start; gap: 4px; padding: 14px; min-width: 0; border-left: 1px solid var(--og-line); font: 400 12.5px/1.4 var(--og-font); color: var(--og-text); }
 .ov-mx--agr .ov-mx__repo { border-left: 1px solid var(--og-line); }
+.ov-mx__proven { display: block; margin-top: 4px; font: 400 12px/1.35 var(--og-font); color: var(--og-muted); }
+.ov-mx__proven--ok { color: var(--og-accent); }
+.ov-mx__proven--warn { color: var(--og-warn); }
+.ov-mx__proven--fail { color: var(--og-fail); }
 .ov-agr__title { font-weight: 600; overflow-wrap: anywhere; }
 .ov-agr__sum--warn { color: var(--og-warn); }
 .ov-mx__agr .ov-svc__edit, .ov-mx__agr .ov-svc__fill { justify-self: start; }

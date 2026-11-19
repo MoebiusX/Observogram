@@ -852,7 +852,8 @@ function mxCellHtml(r, col, svc, canWrite) {
   const editBtn = `<button type="button" class="ov-svc__edit" data-ux-action="ov-svc-edit" data-service="${attr(r.serviceId)}" data-env="${attr(r.env)}" aria-label="Change ${attr(r.name)} in ${attr(r.env)}: its endpoint and branch, the repository, the MTTD / MTTR targets">Change</button>`;
   return `<div class="ov-mx__cell${r.complete ? '' : ' ov-mx__cell--incomplete'}" data-col="${attr(col)}">
             <span class="ov-sr">${escapeHtml(col)}: </span><div class="ov-mx__where">${ep}${branch}${scope}</div>
-            ${grade}${why}${when}
+            ${grade}${why}${when}${r.proven ? `
+            <span class="ov-mx__proven ov-mx__proven--${attr(r.proven.tone)}" title="${attr(r.proven.title)}">${escapeHtml(r.proven.words)}</span>` : ''}
             <div class="ov-mx__acts">${runBtn}${openBtn}${editBtn}</div>
           </div>`;
 }

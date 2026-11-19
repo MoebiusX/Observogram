@@ -158,6 +158,17 @@ bucket path with only placeholders to weigh, a live source with no diff that
 asked or recorded no probe family, or whose families returned no data — each
 scored 1 before.
 
+**Proven live, per environment (0.8.50).** `studio/agreement.mjs` gains
+`liveStatusOf(diff)` (what a comparison says of each declared artefact, by
+`kind:name`), `commitmentEvidence(version, catalogue, status, { env,
+checkedAt })` → `{ env, cap, checkedAt, commitments: [{ id, owner, state:
+'proven' | 'part' | 'not-live' | 'not-checked', level?, why }], counts }`,
+`evidenceSummary`, `evidenceCap` and `isProduction`.
+`GET /api/services/:id/agreement` answers `evidence` by environment name, and
+each of the facts the scorer reads carries production's as `live`, which the
+built-in's *Proven live* scores. `serviceListModel` rows gain `proven`
+(`evidenceCell`: `{ words, tone, title }`) where agreements are handed in.
+
 **The agreement's score (0.8.49).** `studio/agreement-score.mjs` (zero-import,
 the board unit's twelfth module): `scoreAgreement(facts)` → `{ state: 'scored',
 scorer, levelMax, dimensions, commitments: [{ id, owner, weight, counted, cells,

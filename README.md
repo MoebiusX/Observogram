@@ -146,6 +146,18 @@ another scorer's; a module that does not load, throws or answers what does not
 read leaves every agreement *not scored*, with why — never the built-in's
 numbers in its place. Nothing here reaches a letter.
 
+**Proven live, per environment.** Each environment's column says what its last
+live check proves of the agreement — *Agreement: 2 of 3 commitments proven live,
+1 in part.* — each commitment's reason on hover. A commitment is looked up in
+that environment's own scan, its links set beside what the check read live (an
+objective with its indicator and its burn-rate alert): every one live as
+declared proves it, up to the most the environment can prove — 4 in
+production, 3 anywhere else; some of them, or live but not as declared, is 2;
+none, 0. A link the check could not see, or no live check at all, leaves it *not
+checked*, never 0. Production's evidence is the agreement's own *Proven live*;
+another environment's stays in its column. Nothing is read live for this: the
+last check's kept reading is compared again, and a new Run is what refreshes it.
+
 **2. Add a service.** Five numbered answers — the service, the environment,
 the repository, the live endpoint (one of the org's, or a new one) and its
 **targets**, how fast an incident should be detected and resolved — then
@@ -2176,8 +2188,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.49 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.49
+docker build -t observogram:0.8.50 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.50
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2240,7 +2252,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.49
+  observogram:0.8.50
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2248,7 +2260,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.49
+    image: observogram:0.8.50
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com
