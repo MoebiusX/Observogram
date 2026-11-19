@@ -159,3 +159,14 @@ export function score({ facts, builtIn }) {
   }
   assert.ok(scoredByBuiltIn(scoreFacts(facts)), 'and back to the built-in');
 });
+
+test('Proven live reads production\'s evidence for the commitment: its level, or not checked with why — never a 0 for what was not looked at', () => {
+  assert.deepEqual(builtInCells(fact()).evidence, { state: 'not-checked', why: 'No live check of production has been read.' });
+  assert.deepEqual(builtInCells(fact({ live: { state: 'proven', level: 4, why: 'Everything it is linked to runs live as declared in prod.' } })).evidence, { state: 'scored', level: 4, why: 'Everything it is linked to runs live as declared in prod.' });
+  assert.deepEqual(builtInCells(fact({ live: { state: 'part', level: 2, why: 'In part.' } })).evidence.level, 2);
+  assert.deepEqual(builtInCells(fact({ live: { state: 'not-live', level: 0, why: 'None of it runs live.' } })).evidence, { state: 'scored', level: 0, why: 'None of it runs live.' });
+  assert.deepEqual(builtInCells(fact({ live: { state: 'not-checked', why: 'The last check of prod could not see d.' } })).evidence, { state: 'not-checked', why: 'The last check of prod could not see d.' });
+  const proven = scoreAgreement({ commitments: [fact({ id: 'a', live: { state: 'proven', level: 4, why: '' } })] });
+  assert.deepEqual([proven.commitments[0].earned, proven.commitments[0].of, proven.total.notChecked], [100, 100, []], 'every dimension scored: nothing left unchecked');
+  assert.equal(scoreSummary(proven), '100 of 100 points over 1 commitment · Built-in levels, version 1.');
+});

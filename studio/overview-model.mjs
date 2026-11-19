@@ -38,7 +38,7 @@ import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
-import { AGREEMENT_OWNERS, COMMITMENTS_MAX, WEIGHT_MAX, agreementCurrent, commitmentFacts, commitmentId, commitmentsFromText, coverageSummary, coverageWords, gapsWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
+import { AGREEMENT_OWNERS, COMMITMENTS_MAX, WEIGHT_MAX, agreementCurrent, commitmentFacts, evidenceSummary, isProduction, commitmentId, commitmentsFromText, coverageSummary, coverageWords, gapsWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
 import { pointsWords, scoreAgreement, scoreSummary, scoredByBuiltIn } from './agreement-score.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
@@ -2563,6 +2563,8 @@ export function serviceListModel(input = {}) {
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
         repository, live, livePack: exported, last, journey: journey?.name || null, branch,
         agreement: agreements ? agreementCell(s, agreements[s.id] ?? null, { canWrite }) : null,
+        // What this environment's last live check proves of the agreement (decision Q2): in its own column.
+        proven: agreements && env ? evidenceCell(agreements[s.id] ?? null, env.name) : null,
         surface: surfaceId ? { id: surfaceId, label: surfaceLabel(surfaceId) } : null,
         // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from: 'environment' }; none of its
         // own while the server has a default: { text: null, from: null, defaultIgnored, defaultSummary }; else null.
@@ -3009,6 +3011,18 @@ export function agreementCell(service, fact = null, { canWrite = true } = {}) {
   return { state: 'recorded', title: versionWords(current), since: `in force since ${dayMonthYear(current.source.effective)}`, summary, tone, action: 'Open', ...(points ? { points, pointsTitle: scoreSummary(score) } : {}) };
 }
 
+// evidenceCell(fact, env) → the line an environment's column carries for the service's agreement:
+// { words, tone, title } — the counts (evidence summary) and, on hover, each commitment's why; null
+// where the service has no agreement or the server said nothing of this environment.
+export function evidenceCell(fact, env) {
+  const ev = fact && !fact.error && fact.evidence && typeof fact.evidence === 'object' ? fact.evidence[env] : null;
+  const c = ev?.counts;
+  if (!c || !c.commitments) return null;
+  const tone = c.notChecked === c.commitments ? 'neutral' : c.proven === c.commitments ? 'ok' : c.proven || c.part ? 'warn' : 'fail';
+  const said = (ev.commitments || []).filter((x) => x.owner !== 'consumer').map((x) => `${x.id}: ${x.why}`);
+  return { words: `Agreement: ${evidenceSummary(ev)}`, tone, title: [`At most level ${ev.cap} here${ev.cap < 4 ? ' — 4 only with production' : ''}.`, ...said].join('\n') };
+}
+
 const AGR = 'agr:';
 const ownerOfRow = (o) => (AGREEMENT_OWNERS.includes(o) ? o : 'service');
 const weightOfRow = (w) => { const n = Number(trimmed(w)); return Number.isInteger(n) && n >= 1 && n <= WEIGHT_MAX ? n : null; };
@@ -3034,6 +3048,14 @@ export function agreementFormOpened(services, { serviceId = null, fact = null, t
     // The server's result for the version as saved. The page scores again as the form is typed only
     // when it was the built-in's (its rules are here); a host's own scorer runs on the server, at Save.
     saved: fact && !fact.error && fact.score ? fact.score : null,
+    // Production's evidence for the version as saved: the form's Proven live, by commitment.
+    proof: (() => {
+      const ev = fact && !fact.error && fact.evidence && typeof fact.evidence === 'object' ? fact.evidence : null;
+      const prod = ev ? Object.keys(ev).find(isProduction) : null;
+      if (!prod) return null;
+      const links = new Map((current?.commitments || []).map((c) => [c.id, (c.links || []).map(linkText).join(', ')]));
+      return { env: prod, links: Object.fromEntries(links), commitments: ev[prod].commitments || [] };
+    })(),
     repository: fact?.repository ?? null, readError: fact?.error || null,
     versions: (service.agreement?.versions || []).map((v) => ({ words: versionWords(v), since: dayMonthYear(v.source.effective), commitments: v.commitments.length, by: v.by || '', at: v.at || '' })),
     values: { name: service.name, agrDocument: current?.source.document || '', agrVersion: current?.source.version || '', agrEffective: current?.source.effective || today, agrPaste: '' },
@@ -3104,7 +3126,15 @@ export function agreementPlan(form, { services = [] } = {}) {
 export function agreementWhatIf(form) {
   if (!form?.agreement) return { summary: '', states: [] };
   // The facts behind each commitment (studio/agreement.mjs commitmentFacts): its state, then what it lacks.
-  const coverage = commitmentFacts(versionOfForm(form), form.catalogue, form.routes);
+  const facts0 = commitmentFacts(versionOfForm(form), form.catalogue, form.routes);
+  // Proven live is production's, for the version as saved: a row whose links changed since is looked up again on Save.
+  const proof = form.proof || null;
+  const coverage = !proof ? facts0 : { ...facts0, commitments: facts0.commitments.map((c, i) => {
+    const row = form.rows?.[i];
+    const saved = proof.commitments.find((x) => x.id === c.id) || null;
+    const same = !!saved && proof.links[c.id] !== undefined && trimmed(proof.links[c.id]) === trimmed(row?.links ?? '');
+    return { ...c, live: same ? saved : { state: 'not-checked', why: saved ? 'Its links changed: Save, and they are looked up live again.' : `Not saved yet: Save, and it is looked up live in ${proof.env}.` } };
+  }) };
   const said = coverage.commitments.filter((c) => c.text);
   const own = said.filter((c) => c.owner !== 'consumer');
   const n = (state) => (coverage.read ? own.filter((c) => c.state === state).length : null);

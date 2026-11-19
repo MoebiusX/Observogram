@@ -4559,6 +4559,27 @@ test('the agreement: its column on the Services list (drawn only where the host 
   const scoredFact = { ...fact, score: { state: 'scored', scorer: { id: 'observogram.levels', version: 1, label: 'Built-in levels, version 1' }, dimensions: [], commitments: [], total: { commitments: 1, earned: 75, of: 90, notChecked: [] } } };
   assert.deepEqual([agreementCell({ agreement: record }, scoredFact).points, agreementCell({ agreement: record }, scoredFact).pointsTitle, 'points' in agreementCell({ agreement: record }, fact)], ['75 of 90 points', '75 of 90 points over 1 commitment · Built-in levels, version 1.', false]);
   assert.equal(agreementCell({ agreement: record }, { ...fact, score: { state: 'not-scored', scorer: { label: 'acme.mjs' }, reason: 'boom' } }).points, 'Not scored');
+  // Proven live, per environment: a line in each environment's column; production's in the form's Live level.
+  const { evidenceCell } = await import('../studio/overview-model.mjs');
+  const evidence = {
+    prod: { env: 'prod', cap: 4, commitments: [{ id: 'c-4-1', owner: 'service', state: 'proven', level: 4, why: 'Everything it is linked to runs live as declared in prod.' }, { id: 'c-5-2', owner: 'consumer', state: 'not-live', level: 0, why: 'It is linked to nothing, so nothing of it can be seen live.' }], counts: { commitments: 1, proven: 1, part: 0, notLive: 0, notChecked: 0 } },
+    staging: { env: 'staging', cap: 3, commitments: [{ id: 'c-4-1', owner: 'service', state: 'not-checked', why: 'No live check of staging has been read.' }], counts: { commitments: 1, proven: 0, part: 0, notLive: 0, notChecked: 1 } },
+  };
+  const withEvidence = { ...fact, evidence };
+  assert.deepEqual(evidenceCell(withEvidence, 'prod'), { words: 'Agreement: 1 of 1 commitment proven live.', tone: 'ok', title: 'At most level 4 here.\nc-4-1: Everything it is linked to runs live as declared in prod.' });
+  assert.deepEqual([evidenceCell(withEvidence, 'staging').words, evidenceCell(withEvidence, 'staging').tone, evidenceCell(withEvidence, 'staging').title.split('\n')[0]], ['Agreement: The agreement is not checked live here yet.', 'neutral', 'At most level 3 here — 4 only with production.']);
+  assert.deepEqual([evidenceCell(withEvidence, 'dev'), evidenceCell(fact, 'prod'), evidenceCell({ error: 'x' }, 'prod')], [null, null, null]);
+  const proofForm = agreementFormOpened(services, { serviceId: 7, fact: withEvidence, today: '2026-11-19' });
+  assert.deepEqual([proofForm.proof.env, proofForm.proof.links['c-4-1']], ['prod', 'slo:checkout_99_9, dashboard:gone']);
+  const proofCells = (f) => agreementWhatIf(f).states[0].score.cells.find((x) => x.key === 'evidence');
+  assert.deepEqual([proofCells(proofForm).mark, proofCells(proofForm).title], ['4', 'Proven live (weight 10): level 4 of 4. Everything it is linked to runs live as declared in prod.']);
+  const relinked = agreementFormInput(proofForm, 'agr:0:links', 'slo:checkout_99_9');
+  assert.deepEqual([proofCells(relinked).mark, proofCells(relinked).title], ['?', 'Proven live (weight 10): not checked. Its links changed: Save, and they are looked up live again.']);
+  const listed = serviceListModel({ services: [svcRow({ agreement: record })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW, agreements: { [svcRow().id]: withEvidence } });
+  const prodRow = listed.rows.find((r) => r.env === 'prod');
+  assert.equal(prodRow.proven.words, 'Agreement: 1 of 1 commitment proven live.');
+  renderServiceList(c, listed, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c.innerHTML.includes('class="ov-mx__proven ov-mx__proven--ok"') && c.innerHTML.includes('Agreement: 1 of 1 commitment proven live.'));
   // Covered, and yet lacking: an objective nobody stated, with no alert and no dashboard — said on the row, each with its fix.
   const lacking = agreementWhatIf(agreementFormInput(form, 'agr:0:links', 'slo:bare_99')).states[0];
   assert.deepEqual([lacking.words, lacking.tone, lacking.gaps], ['Covered by the repository. Lacks an alert, a dashboard, a stated objective.', 'warn', [

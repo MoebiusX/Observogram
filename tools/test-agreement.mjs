@@ -13,6 +13,7 @@ import {
   LINK_KINDS, AGREEMENT_VERSIONS_MAX, COMMITMENTS_MAX, LINKS_MAX, agreementErrors, agreementRecord, agreementCurrent, sameAgreement, storedAgreementError,
   agreementCatalogue, agreementCoverage, coverageOver, coverageWords, coverageSummary, linkText, linksFromText, commitmentId, commitmentsFromText, linkKindLabel,
   agreementRoutes, commitmentFacts, gapsWords, targetMatch, AGREEMENT_OWNERS,
+  isProduction, evidenceCap, liveStatusOf, commitmentEvidence, evidenceSummary,
 } from '../studio/agreement.mjs';
 
 const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
@@ -247,4 +248,61 @@ test('targetMatch: the target as written beside the objective — the same, appr
   assert.deepEqual(targetMatch('100%', objective(0.9999)), { state: 'approximated', words: 'The target says 100%, which no objective can hold: 99.99% over 30 days approximates it.' });
   assert.deepEqual(targetMatch('99.9% monthly', objective(0.99)), { state: 'looser', words: 'The target says 99.9%; the objective asks less, 99% over 30 days.' });
   assert.equal(targetMatch('99%', objective(0.999)).state, 'stricter');
+});
+
+test('proven live, per environment: what a comparison says of each declared artefact; production proves up to 4, any other environment up to 3', () => {
+  assert.deepEqual(['prod', 'production', 'PRD', 'live', 'staging', 'stg', 'dev', 'uat', ''].map(isProduction), [true, true, true, true, false, false, false, false, false]);
+  assert.deepEqual(['prod', 'staging', 'dev'].map(evidenceCap), [4, 3, 3]);
+  // A comparison as tools/lib/diff.mjs answers it: pairs (aligned, or with deltas), declared only, not seen; the worse of two of one name.
+  const diff = { layers: {
+    L1: { inBoth: [{ a: { id: 'SLO-01', title: 'checkout_99_9' }, deltas: [] }, { a: { id: 'SLI-01', title: 'checkout' }, deltas: [{ field: 'good' }] }], onlyInA: [], notObserved: [] },
+    L3: { inBoth: [], onlyInA: [], notObserved: [{ side: 'a', artefact: { id: 'DASH-01', title: 'checkout-overview' }, reason: '401' }, { side: 'b', artefact: { id: 'DASH-09', title: 'theirs' } }] },
+    L4: { inBoth: [{ a: { id: 'RULE-01', title: 'CheckoutErrorsHigh' }, deltas: [] }], onlyInA: [{ artefact: { id: 'POL-01', title: 'burn-rate alert: checkout_99_9', spec: { slo: 'checkout_99_9' } } }, { artefact: { id: 'RULE-02', title: 'CheckoutErrorsHigh' } }], notObserved: [] },
+    L2: { inBoth: [{ a: { id: 'METRIC-FAM-01', title: 'a family' }, deltas: [] }] },
+  } };
+  assert.deepEqual(liveStatusOf(diff), {
+    'slo:checkout_99_9': 'live', 'indicator:checkout': 'differs', 'dashboard:checkout-overview': 'unseen',
+    'burn_alert:checkout_99_9': 'absent', 'alert:CheckoutErrorsHigh': 'absent',
+  }, 'one of two rules of that name is not live: the worse; what only live holds, and a metric family, are no declared artefact');
+  assert.deepEqual(liveStatusOf(null), {});
+});
+
+test('commitmentEvidence: proven (the environment\'s cap), in part (2), not live (0), not checked (no level); an objective is proven with its indicator and burn-rate alert', () => {
+  const known = [{ kind: 'slo', name: 's', indicator: 'i', burn: ['SEV1'] }, { kind: 'slo', name: 'bare', indicator: '', burn: null }];
+  const status = { 'slo:s': 'live', 'indicator:i': 'live', 'burn_alert:s': 'live', 'slo:bare': 'live', 'dashboard:d': 'live', 'alert:a': 'absent', 'metric:m': 'differs', 'dashboard:u': 'unseen', 'recording_rule:r': 'live' };
+  const version = V([
+    C('chain', { links: [{ kind: 'slo', name: 's' }] }),
+    C('bare', { links: [{ kind: 'slo', name: 'bare' }] }),
+    C('mixed', { links: [{ kind: 'dashboard', name: 'd' }, { kind: 'metric', name: 'm' }, { kind: 'alert', name: 'a' }] }),
+    C('gone', { links: [{ kind: 'alert', name: 'a' }] }),
+    C('unseen', { links: [{ kind: 'dashboard', name: 'd' }, { kind: 'dashboard', name: 'u' }] }),
+    C('undeclared', { links: [{ kind: 'recording_rule', name: 'r' }, { kind: 'metric', name: 'nope' }] }),
+    C('nowhere', { links: [{ kind: 'metric', name: 'nope' }] }),
+    C('unlinked'),
+    C('theirs', { owner: 'consumer', links: [{ kind: 'dashboard', name: 'd' }] }),
+  ]);
+  const prod = commitmentEvidence(version, known, status, { env: 'prod', checkedAt: '2026-11-19T10:00:00Z' });
+  const of = (id) => prod.commitments.find((c) => c.id === id);
+  assert.deepEqual([prod.env, prod.cap, prod.checkedAt], ['prod', 4, '2026-11-19T10:00:00Z']);
+  assert.deepEqual([of('chain').state, of('chain').level, of('chain').why], ['proven', 4, 'Everything it is linked to runs live as declared in prod.']);
+  assert.deepEqual([of('bare').state, of('bare').level], ['proven', 4], 'no indicator or burn-rate alert declared: the objective alone');
+  assert.deepEqual([of('mixed').state, of('mixed').level, of('mixed').why], ['part', 2, 'In part, in prod: d runs live as declared; m runs live, not as declared; a is not live.']);
+  assert.deepEqual([of('gone').state, of('gone').level, of('gone').why], ['not-live', 0, 'None of it runs live in prod: a is not there.']);
+  assert.deepEqual([of('unseen').state, 'level' in of('unseen'), of('unseen').why], ['not-checked', false, 'The last check of prod could not see u.']);
+  assert.deepEqual([of('undeclared').state, of('undeclared').why], ['part', 'In part, in prod: r runs live as declared; nope is not in its scan.']);
+  assert.deepEqual([of('nowhere').state, of('nowhere').level, of('nowhere').why], ['not-live', 0, "Nothing it is linked to is declared in prod's scan."]);
+  assert.deepEqual([of('unlinked').state, of('unlinked').why], ['not-live', 'It is linked to nothing, so nothing of it can be seen live.']);
+  assert.deepEqual(prod.counts, { commitments: 8, proven: 2, part: 2, notLive: 3, notChecked: 1 }, 'the consumer\'s is shown, not counted');
+  assert.equal(evidenceSummary(prod), '2 of 8 commitments proven live, 2 in part, 3 not live, 1 not checked.');
+  // An objective whose burn-rate alert is not live: in part, the alert named as such.
+  const half = commitmentEvidence(V([C('x', { links: [{ kind: 'slo', name: 's' }] })]), known, { ...status, 'burn_alert:s': 'absent' }, { env: 'prod' });
+  assert.equal(half.commitments[0].why, 'In part, in prod: s, i run live as declared; the burn-rate alert on s is not live.');
+  // Staging proves at most 3, and says so.
+  const stg = commitmentEvidence(version, known, status, { env: 'staging' });
+  assert.deepEqual([stg.cap, stg.commitments[0].level, stg.commitments[0].why], [3, 3, 'Everything it is linked to runs live as declared in staging (3 is the most staging can prove: 4 only with production).']);
+  // No live check read: nothing has a level.
+  const none = commitmentEvidence(version, known, null, { env: 'dev' });
+  assert.ok(none.commitments.every((c) => c.state === 'not-checked' && !('level' in c) && c.why === 'No live check of dev has been read.'));
+  assert.equal(evidenceSummary(none), 'The agreement is not checked live here yet.');
+  assert.equal(evidenceSummary(commitmentEvidence(V([]), known, status, { env: 'prod' })), '');
 });

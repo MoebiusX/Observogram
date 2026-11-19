@@ -627,6 +627,7 @@ test('a service\'s agreement: PATCH keeps it in versions, signed and dated — t
   const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
   const one = { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month, excluding planned maintenance', owner: 'service', links: [{ kind: 'slo', name: 'ledger_availability_99_9' }, { kind: 'dashboard', name: 'ledger-overview' }] };
   const theirs = { id: 'c-5-2', text: 'Retries back off', owner: 'consumer' };
+  const envIds = [];
   try {
     assert.equal((await ok('GET /api/services/:id', 'vera', P)).json.service.agreement, null);
     const empty = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
@@ -654,6 +655,17 @@ test('a service\'s agreement: PATCH keeps it in versions, signed and dated — t
     const read = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
     assert.deepEqual(read.agreement, next);
     assert.equal(read.coverage.commitments.length, 1);
+    // Proven live, per environment: two environments, neither with a live check kept — each answers, capped as it is
+    // (production 4, staging 3), and nothing has a level.
+    for (const name of ['prod', 'staging']) envIds.push((await ok('POST /api/services/:id/environments', 'oscar', `${P}/environments`, { name }, 201)).json.environment.id);
+    const perEnv = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
+    assert.deepEqual(Object.keys(perEnv.evidence).sort(), ['prod', 'staging']);
+    assert.deepEqual([perEnv.evidence.prod.cap, perEnv.evidence.staging.cap], [4, 3]);
+    for (const ev of Object.values(perEnv.evidence)) {
+      assert.deepEqual([ev.commitments.length, ev.commitments[0].state, 'level' in ev.commitments[0], ev.counts], [1, 'not-checked', false, { commitments: 1, proven: 0, part: 0, notLive: 0, notChecked: 1 }]);
+    }
+    assert.equal(perEnv.evidence.prod.commitments[0].why, 'No live check of prod has been read.');
+    if (perEnv.score?.state === 'scored') assert.deepEqual(perEnv.score.commitments[0].cells.evidence, { state: 'not-checked', why: 'No live check of prod has been read.' });
     if (read.repository === null) {
       assert.deepEqual([read.coverage.read, read.coverage.commitments.map((c) => [c.id, c.state]), read.coverage.counts, read.coverage.summary, read.catalogue],
         [false, [['c-4-1', 'not-read']], { total: 1, service: 1, consumer: 0, covered: null, part: null, notCovered: null }, '1 commitment; the repository is not read yet.', []]);
@@ -664,6 +676,7 @@ test('a service\'s agreement: PATCH keeps it in versions, signed and dated — t
     assert.equal((await ok(K, 'oscar', P, { agreement: null })).json.service.agreement, null, 'cleared');
   } finally {
     await call('oscar', 'PATCH', P, { agreement: null });
+    for (const id of envIds) await call('oscar', 'DELETE', `/api/environments/${id}`);
   }
 });
 
