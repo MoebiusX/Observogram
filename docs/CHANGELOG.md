@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.8.48 — 2026-11-19
+
+**What stands behind each commitment, and what it lacks.** 0.8.47 said whether a commitment's links are in the repository. That is not whether the repository can keep the promise: an objective can be linked and still have no alert, no dashboard and a number nobody stated. The studio now reads the chain behind every link and says what each commitment lacks, with its fix. These are the facts the agreement's score will be built on; nothing is scored yet.
+
+### Added
+- **The chain behind a link** (`studio/agreement.mjs` `agreementCatalogue`, `agreementRoutes`): for an objective, its indicator and whether a series stands behind it, the severities its burn-rate alert pages at (none: no burn-rate alert), how many dashboards show it or its indicator, and whether its number is the repository's, stated in the studio, or the scan's default; for an alert rule and a burn-rate alert, their severities; and the severities the repository routes to a channel.
+- **The facts per commitment** (`commitmentFacts`): what it has — a measure, the alerts that would fire, whether every severity they page at goes somewhere, the dashboards, the objective — and what it lacks, each gap with its fix (*No alert would fire: the objective slo_server_99 has no burn-rate alert. Remediate compiles a burn-rate alert for each objective.*; *… carries the scan's default (99% over 30 days), which nobody stated. State objectives… on the service's board.*). Only what the commitment's own links call for: one linked to an objective or an indicator should be measured, alerted on and shown; one linked to an alert should have it routed; a dashboard, a metric or an exporter that must exist lacks nothing more. On krystaline's example pack 10 of its 18 objectives have no burn-rate alert, and all 18 carry the scan's default.
+- **The target beside the objective** (`targetMatch`): the target as written, read for a percentage and its period and never changed — *the same*, *approximated* (a calendar month against 30 days; a 100% no objective can hold), *looser* (the objective asks less: a gap) or *stricter*; a target in words is not compared.
+- **Who answers, and how much it counts**: a commitment's owner may be `both` (counted with the service's own), and it may carry a `weight` from 1 to 100 (1 is not written). The form has both. Nothing adds weights up yet.
+- **In the form**, each row says its state and then what it lacks — *Covered by the repository. Lacks an alert, a dashboard, a stated objective.* — the sentences and their fixes on hover, as it is typed; a covered row that lacks something is amber, not green.
+- **Downstream:** api, behaviour — additive. `GET /api/services/:id/agreement`: `catalogue` entries carry the chain's keys and now include the scan's placeholders (marked `guessed`), `routes` is new, and each of `coverage.commitments` carries `has`, `target`, `gaps`, `weight`. `PATCH` takes `owner: 'both'` and `weight`. `studio/agreement.mjs` exports `commitmentFacts`, `agreementRoutes`, `targetMatch`, `gapsWords`, `WEIGHT_MAX`. `agreementCoverage`'s `counts.service` now includes the shared ones.
+
+### Tests
+- `tools/test-agreement.mjs` +3 (9): the catalogue's chain and the routes; the facts and gaps for a whole chain, a bare objective, an alert routed nowhere, a routed alert, a dashboard that must exist, an unlinked commitment and no pack read; the target against the objective in each of its states; both-owner and weight. `tools/test-overview-model.mjs`: the row's words, tone and fixes, both-owner, the weight kept and refused.
+- CHECKED_LINE
+- Suite total 2096 → 2099.
+- **Downstream:** none — tests only.
+
+### Not here
+- **No score, still.** The dimensions, their levels and weights, and a scorer a host can replace come next, over these facts. The levels are a decision not yet taken.
+- **No runtime evidence**: whether a commitment is proven live, per environment.
+- **A gap's fix is said, not done**: nothing here opens the objectives form or compiles the alert.
+- **Owed since the decision of 17 November and not in this change**: one word per layer on the board (it still says *promise* where the decision says *chain*), and the Services list has been measured at 1440 pixels wide, not at 1366.
+- **Downstream:** none — nothing shipped.
+
 ## 0.8.47 — 2026-11-19
 
 **The agreement stage: what a service promised, and how much of it the repository covers.** The chain is agreement → repository → each environment. The grade already says how a live environment represents the repository; nothing said how the repository covers what was promised. A service's operational agreement can now be recorded in the studio, in versions, each commitment linked to what the repository declares for it, and the Services list says how many are covered. This is the first slice of the agreement scorecard: it scores nothing, and it never moves a letter.
