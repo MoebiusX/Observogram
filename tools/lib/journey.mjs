@@ -1768,7 +1768,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const layeredB = adapt(b.canonical, {});
   // Same construct as the studio's /api/diff: the requirement-chain
   // comparison rides on the diff, and the grade's Drift-free criterion
-  // reads it when declared commitments exist. Without it the CLI would
+  // reads it when the repository declares chains. Without it the CLI would
   // grade on raw diff buckets while the studio graded on chain integrity
   // — two scores for one comparison.
   const engineDiff = {
@@ -1914,7 +1914,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
       letter: grade.overall?.instrumentGrade?.letter ?? null,
       letterLabel: grade.overall?.instrumentGrade?.label ?? null,
       // Which construct Drift-free was scored on: requirement-chain
-      // integrity (studio parity) when declared commitments exist, else
+      // integrity (studio parity) when the repository declares chains, else
       // the diff buckets. Explains a score step across a pack change.
       driftConstruct: rollup && rollup.declaredTotal > 0 ? 'requirement-chain' : 'diff-buckets',
       // The criteria left out of this score (the service's switches when the

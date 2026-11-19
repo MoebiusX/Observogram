@@ -12,8 +12,9 @@ The demo question is:
 
 > Is our observability diagnostic-grade?
 
-The OLA is represented by the repo-derived ObservabilityPack. The live MCP pack
-is production evidence. The dry run is valuable only when Observogram compares
+The repo-derived ObservabilityPack is what the repository declares — its
+chains — not the OLA: the OLA's commitments are recorded in the studio and
+scored against those chains. The live MCP pack is production evidence. The dry run is valuable only when Observogram compares
 those two things directly.
 
 ## Success Criteria

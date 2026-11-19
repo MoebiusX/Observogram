@@ -68,7 +68,7 @@ const journeys = fixture('journeys').journeys;
 // the tests read them re-stamped as the current one — a schema-2 run explains
 // nothing, pinned in the gradeWhy test below.
 // Its score is re-scored too: the seven lines it explains under schema 5 (Multi-modal 0.75, Comprehensive 0.35,
-// the promises 0.84) add up to 4.94 of 7.
+// the chains 0.84) add up to 4.94 of 7.
 const restamp = (r) => ({ ...r, grade: { ...r.grade, schema: GRADE_SCHEMA, score: Math.round(4.94 / 7 * 1000) / 10 } });
 const recordedRun = fixture('krystaline-run');
 const run = restamp(recordedRun);
@@ -380,15 +380,15 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
   const rows = (why) => why.map((w) => [w.ok, w.text]);
   // Against live: the yeses first, the partly, then the noes; the points line says how far B+ is.
   const live = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }));
-  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85."], lacks[1]]);
+  assert.deepEqual(rows(live.why), [...has, ['yes', 'Checked against live 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 chains, 84 in 100 hold live; the bar is 85."], lacks[1]]);
   assert.equal(live.points, '4.9 of 7 points. B+ starts at 5.3.', 'Multi-modal 0.75 and Comprehensive 0.35 among them');
   // The repository alone: the two live criteria say so, and score nothing.
   const alone = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: null, now: NOW }));
-  assert.deepEqual(rows(alone.why), [...has, ...lacks, ['no', 'Nothing live has been checked, so no promise is confirmed live.'], ['no', 'Never checked against live.']]);
+  assert.deepEqual(rows(alone.why), [...has, ...lacks, ['no', 'Nothing live has been checked, so no chain is confirmed to hold live.'], ['no', 'Never checked against live.']]);
   assert.equal(alone.points, '3.1 of 7 points. B starts at 4.4.');
   // Against a recording: the words say so.
   const recorded = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey: fileJourney, now: NOW }));
-  assert.deepEqual(rows(recorded.why).slice(3, 6), [['yes', 'Checked against a live recording 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 promises, 84 in 100 hold up in the recording; the bar is 85."]]);
+  assert.deepEqual(rows(recorded.why).slice(3, 6), [['yes', 'Checked against a live recording 2 hours ago.'], lacks[0], ['partly', "Of the links in the repository's 18 chains, 84 in 100 hold in the recording; the bar is 85."]]);
   // A live picture older than a day when it was read: Fresh says no, with the letter that goes with it.
   const stale = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, freshness: { liveAgeHours: 30 }, grade: { ...run.grade, score: 55, letter: 'C', letterLabel: 'Field Grade' } }, journey, now: NOW }));
   assert.deepEqual([stale.letter, rows(stale.why).at(-1), stale.points], ['C', ['no', 'The live picture was more than a day old when it was checked.'], '3.9 of 7 points. B starts at 4.4.']);
@@ -407,7 +407,7 @@ test('gradeWhy: the seven criteria in plain words behind the letter — against 
     const older = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...run, grade: { ...run.grade, schema } }, journey, now: NOW }));
     assert.deepEqual([older.basis, older.letter, older.source, older.points], ['repository', 'C', 'Graded from the repository alone: how the grade scores changed since the last live check. Check again to grade against live.', '3.1 of 7 points. B starts at 4.4.'], `schema ${schema}`);
     // The live check happened; it does not count for this letter — never "never checked".
-    assert.deepEqual(rows(older.why).slice(-2), [['no', 'The last check does not count for this letter, so no promise is confirmed live.'], ['no', 'Checked before, but that check does not count for this letter.']], `schema ${schema}: the live lines`);
+    assert.deepEqual(rows(older.why).slice(-2), [['no', 'The last check does not count for this letter, so no chain is confirmed to hold live.'], ['no', 'Checked before, but that check does not count for this letter.']], `schema ${schema}: the live lines`);
     assert.equal(gradeWhy({ diagnostic: diagnosticFull, run: { ...run, grade: { ...run.grade, schema } }, letter: run.grade.letter, score: run.grade.score, now: NOW }).why.length, 0, `a schema-${schema} run explains nothing`);
   }
   // A record that names no schema is not judged by it.
@@ -1042,7 +1042,7 @@ test('layersModel adds up: Declared is the plates plus Unplaced, each artefact o
   assert.equal(layersModel({ cells: {}, unkinded: 4 }).unplacedNote, '4 things are on no layer: no kind of signal of their own.', 'a count, as a saved posture holds it');
 });
 
-test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the promises that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
+test('rulesModel, fidelityModel, changesModel: the required rules, the live fidelity with its four counts and the chains that hold, the three counts to change — withheld with the reason (never as zeros) when nothing live was seen whole', () => {
   // The rules not met, as things to add (Remediate's): the count and each as the thing to do — Expert's Conformance's
   // own words (studio/clause-fixes.mjs) — never its id; a rule the table does not know reads its clause's description.
   assert.deepEqual(rulesModel({ must: { passed: 0, total: 1 }, clauses: [{ id: 'L9.MUST.new_rule', applies: true, severity: 'MUST', pass: false, description: 'A rule from a newer rubric.' }] }).missing, ['A rule from a newer rubric.']);
@@ -1061,7 +1061,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   const f = keep(fidelityModel({ run, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([f.known, f.alignmentPct, f.against, f.note], [true, 78, 'live', 'The live side answered only in part: its dashboards could not be read.']);
   assert.deepEqual(f.tiles.map((t) => [t.key, t.value, t.label, t.tone]), [['aligned', 252, 'match', 'ok'], ['drifted', 5, 'run differently', 'warn'], ['missing', 38, 'not running live', 'fail'], ['extra', 30, 'live only', 'info']]);
-  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 promises hold in every link, 1 in part, 12 broken.' });
+  assert.deepEqual(f.chains, { total: 18, intact: 5, partial: 1, broken: 12, integrityPct: 84, sentence: '5 of 18 chains hold in every link, 1 in part, 12 broken.' });
   assert.equal(keep(fidelityModel({ run: { ...run, probes: { failed: [] } }, journey, pack: krystalinePack, now: NOW })).note, '', 'every family answered: no note');
   // Rules compared on part of what they say (a live listing that shows severities only, or a Grafana rule's
   // query without its condition — drift.partlyCompared counts both): said beside the numbers and on the strip.
@@ -1070,7 +1070,7 @@ test('rulesModel, fidelityModel, changesModel: the required rules, the live fide
   const one = keep(fidelityModel({ run: { ...run, probes: { failed: [] }, drift: { ...run.drift, partlyCompared: 1 } }, journey, pack: krystalinePack, now: NOW }));
   assert.deepEqual([one.note, one.partial], ['1 alert rule was compared in part: labels or a condition the live side does not show, or values a chart or a deploy step fills in, were not compared.', ['rule labels or conditions']]);
   assert.deepEqual(f.partial, ['dashboards'], 'no such count in the record: the strip names the failed families alone');
-  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no promises line');
+  assert.equal(keep(fidelityModel({ run: { ...run, traceability: { declaredTotal: 0 } }, journey, pack: krystalinePack, now: NOW })).chains, null, 'no declared chains: no chains line');
   // Withheld: never checked, a run of another pack, the live side lost, the live side shrunk — each with its reason and no counts.
   const never = keep(fidelityModel({}));
   assert.deepEqual([never.known, never.alignmentPct, never.tiles, never.chains, never.note], [false, null, [], null, 'Never checked against live.']);
@@ -1114,7 +1114,7 @@ test('buildOverviewModel: the board from the same facts — layers, rules, fidel
   assert.equal(keep(buildOverviewModel({ services, servicesStatus: { kind: 'ok', error: null }, catalog: packs })).layout, 'board', 'the board is the default');
 });
 
-test('renderOverview: the board — three numbered stages over three columns; the stack with its plates, labelled cells and counts; one status strip; the shield and the seven rows open; the ring, four counts and the promises bar; the three tiles to change; one primary; the column links reach host.overview; the simple layout on request, without a pack of its own, and as the fallback when the board cannot be drawn', () => {
+test('renderOverview: the board — three numbered stages over three columns; the stack with its plates, labelled cells and counts; one status strip; the shield and the seven rows open; the ring, four counts and the chains bar; the three tiles to change; one primary; the column links reach host.overview; the simple layout on request, without a pack of its own, and as the fallback when the board cannot be drawn', () => {
   const c = overviewContainer();
   const calls = [];
   const host = { overview: { openDiscover: () => calls.push('discover'), openDiagnose: () => calls.push('diagnose'), openRemediate: () => calls.push('remediate'), openRules: () => calls.push('rules'), openNeuron: () => calls.push('neuron'), checkNow: () => calls.push('check') } };
@@ -1209,7 +1209,7 @@ test('renderOverview: the board — three numbered stages over three columns; th
   assert.ok(html.includes('<svg class="ov-ring ov-ring--warn" viewBox="0 0 88 88" role="img" aria-label="78 in 100 aligned">') && html.includes('stroke-dasharray="238.76" stroke-dashoffset="52.53"') && html.includes('<text class="ov-ring__pct" x="44" y="42">78%</text>'));
   for (const t of ['<div class="ov-tile ov-tile--ok" title="declared and running live"><span class="ov-tile__n">252</span><span class="ov-tile__l">match</span></div>', '<span class="ov-tile__n">5</span><span class="ov-tile__l">run differently</span>', '<span class="ov-tile__n">38</span><span class="ov-tile__l">not running live</span>', '<span class="ov-tile__n">30</span><span class="ov-tile__l">live only</span>']) assert.ok(html.includes(t), t);
   assert.ok(html.includes('<span class="ov-chains__seg ov-chains__seg--ok" style="flex-grow:5"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--warn" style="flex-grow:1"></span>') && html.includes('<span class="ov-chains__seg ov-chains__seg--fail" style="flex-grow:12"></span>'));
-  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 promises hold in every link, 1 in part, 12 broken.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
+  assert.ok(html.includes('<p class="ov-chains__text og-muted">5 of 18 chains hold in every link, 1 in part, 12 broken.</p>') && !html.includes('ov-fid__partial'), 'the families not read are in the strip, not repeated under the counts');
   assert.ok(html.includes('<span class="og-pill og-pill--warn ov-live__pill">Changed</span>') && html.includes('<p class="ov-live__sentence">Checked 2 hours ago against live — 43 things differ from what the repository declares.</p>') && html.includes('<button type="button" class="og-btn ov-check" data-ux-action="ov-check">Check again</button>'));
   // Remediate: the specification's rules not met, as things to add, with the way to all of them in Expert.
   const remediate = html.slice(html.indexOf('ov-col--remediate'));
@@ -1695,7 +1695,7 @@ test('OM6 runToastModel and runToastText: the Run\'s toast — the files read, a
   assert.equal(runRecordedToast({ name: 'Checkout', env: 'prod', before: null, after: { lastRun: { startedAt: 't', outcome: 'vantage-lost', vantage: 'lost', firstProbeError: null, liveLoss: 'no-data' } } }).text, 'Checkout · prod: Live returned no data.', 'a first Run');
 });
 
-test('OM7 why this grade over nothing compared: the Drift-free line says nothing was compared and why — never "N in 100 hold up live" over links nothing could read (the engine scored it nothing, with no figure); the points stay the engine\'s; a comparison keeps the integrity line', () => {
+test('OM7 why this grade over nothing compared: the Drift-free line says nothing was compared and why — never "N in 100 hold live" over links nothing could read (the engine scored it nothing, with no figure); the points stay the engine\'s; a comparison keeps the integrity line', () => {
   // The requirement-chain construct over an empty union: the engine's Drift-free is 0, "nothing compared"; the
   // chains' scored integrity (0) counts the declared links broken for want of anything compared.
   const nothingDrift = { alignmentPct: null, compared: 0, aligned: 0, drifted: 0, declaredNotLive: 0, liveNotDeclared: 0 };
@@ -1703,15 +1703,15 @@ test('OM7 why this grade over nothing compared: the Drift-free line says nothing
   const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey, now: NOW }));
   assert.deepEqual([g.basis, g.letter], ['live', 'C']);
   const driftLine = (m) => m.why.find((w) => w.key === 'drift-free');
-  assert.deepEqual([driftLine(g).ok, driftLine(g).text], ['no', 'Nothing was compared on the last check, so no promise is confirmed live. Live answered in part: dashboards not read.']);
-  assert.ok(!g.why.some((w) => /in 100 hold up/.test(w.text)), 'no measured-looking figure over nothing compared');
+  assert.deepEqual([driftLine(g).ok, driftLine(g).text], ['no', 'Nothing was compared on the last check, so no chain is confirmed to hold live. Live answered in part: dashboards not read.']);
+  assert.ok(!g.why.some((w) => /in 100 hold/.test(w.text)), 'no measured-looking figure over nothing compared');
   assert.equal(g.points, '4.1 of 7 points. B starts at 4.4.', 'the points are the engine\'s: Drift-free earned nothing');
   // An older record over an empty union (its four counts, no drift.compared) reads the same; a recording says so.
   const { compared: _c, ...olderDrift } = nothingDrift;
   assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: { ...nothingChain, drift: { ...olderDrift, alignmentPct: 100 } }, journey, now: NOW }))).text, driftLine(g).text);
-  assert.ok(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey: fileJourney, now: NOW }))).text.startsWith('Nothing was compared on the last check, so no promise is confirmed in the recording.'));
+  assert.ok(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: nothingChain, journey: fileJourney, now: NOW }))).text.startsWith('Nothing was compared on the last check, so no chain is confirmed to hold in the recording.'));
   // A comparison with something in it keeps the integrity line, unchanged.
-  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }))).text, "Of the links in the repository's 18 promises, 84 in 100 hold up live; the bar is 85.");
+  assert.equal(driftLine(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run, journey, now: NOW }))).text, "Of the links in the repository's 18 chains, 84 in 100 hold live; the bar is 85.");
 });
 
 test('OM9 a Run stopped on a partial scan after the check on screen: the next step says the stop — the check shown is the one before it — with its counts and first file, and Check again as the one primary; never "Nothing to do right now" beside the stop', () => {
@@ -1763,12 +1763,12 @@ test('vocabulary: no string of any model built above carries a percentage, a lay
   assert.deepEqual([...pills].sort(), ['Changed', 'Never checked', 'Nothing compared', 'Unchanged', 'Unreachable']);
 });
 
-test('gradeWhy at the bar: promises at 85 in 100 read Yes and still count 0.85 of a point, as the engine scores them, so the list is offered for the letter it explains (seen on the demo 2026-10-28 when a check moved 84 to 85)', () => {
+test('gradeWhy at the bar: chains at 85 in 100 read Yes and still count 0.85 of a point, as the engine scores them, so the list is offered for the letter it explains (seen on the demo 2026-10-28 when a check moved 84 to 85)', () => {
   const atBar = { ...run, traceability: { ...run.traceability, integrityPct: 85 } };
   const g = keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: atBar, journey, now: NOW }));
   assert.equal(g.why.length, 7, 'offered: 3 + 0.85 + 1 = 4.85 of 7 is the letter\'s 69');
   assert.equal(g.why.find((w) => w.text.startsWith('Of the links in the repository'))?.ok, 'yes', 'at the bar the mark is a yes');
-  assert.ok(g.why.some((w) => w.text === "Of the links in the repository's 18 promises, 85 in 100 hold up live; the bar is 85."));
+  assert.ok(g.why.some((w) => w.text === "Of the links in the repository's 18 chains, 85 in 100 hold live; the bar is 85."));
   assert.equal(g.points, '5 of 7 points. B+ starts at 5.3.');
   const far = { ...run, traceability: { ...run.traceability, integrityPct: 100 } };
   assert.equal(keep(gradeModel({ pack: krystalinePack, how: 'primary', diagnostic: diagnosticFull, run: far, journey, now: NOW })).why.length, 0, 'a full point at 100 no longer adds up to a score of 69: withheld, as before');
@@ -1833,7 +1833,7 @@ test('gradeWhy, grade schema 4 (spec 1.5): the chaos line says declared, never r
 // ---------- criteria a service is not graded on ----------
 //
 // A service may switch grade criteria off (its record's gradeOff): the board
-// grades it over the others and says so. The promises at the bar make the
+// grades it over the others and says so. The chains at the bar make the
 // seven lines add up (3 + 0.85 + 1 of 7); with Chaos-validated off the same
 // lines are 4.85 of 6.
 const OFF = [{ key: 'chaos-validated', reason: 'No fault injection here', by: 'ada', at: '2026-11-10T09:00:00.000Z' }];

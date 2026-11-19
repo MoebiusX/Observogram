@@ -26,11 +26,19 @@ Use a repo scan, a live MCP scan, or an uploaded pack to create an
 ObservabilityPack. Compare the declared repo posture with the live production
 posture. Then compile and deploy the delta through the platform tools.
 
-In Observogram, the OLA is represented as an observability contract inside the
-pack: criticality, SLOs, SLIs, telemetry bindings, rules, dashboards, alerts,
-runbooks, and validation expectations. A repo-derived pack captures what the
-service declares. A live MCP-derived pack captures what production verifies.
-The gap between those two packs is the diagnostic finding.
+Each layer has its own word. The **OLA** is the service's operational
+agreement: its **commitments**, recorded in the studio in versions. The
+**repository** declares **chains** — an objective with what realises it:
+indicator, recording rules, burn-rate alert, route, dashboards, chaos
+experiment — inside an observability contract: criticality, SLOs, SLIs,
+telemetry bindings, rules, dashboards, alerts, runbooks, and validation
+expectations. Each **environment** says whether a chain **holds live**. An
+**objective** is the SLO's number. The agreement's score asks how well the
+repository's chains cover the commitments; the grade asks how well an
+environment represents the repository. The repository is not the OLA: a
+repo-derived pack captures what the service declares, a live MCP-derived pack
+what production verifies, and the gap between those two packs is the
+diagnostic finding.
 
 The canonical specification lives at
 [MoebiusX/otel-observability-pack](https://github.com/MoebiusX/otel-observability-pack).
@@ -202,7 +210,7 @@ three columns, every number the engine's own —
   of it, and are listed in Remediate. **Can you trust what the
   signals show?** The chain against live, a row per link (*Exporters 21/21 ·
   Alerts 66/66 · Dashboards 7 not read live*), the chain's alignment as a
-  ring, the promises that hold end to end, and one of five
+  ring, the chains that hold end to end, and one of five
   words — *Never checked · Unchanged · Changed · Unreachable · Nothing compared* — with a timed
   sentence from the service's saved journey: *Checked 2 hours ago against
   live — its exporters and alerts match live, and the 7 dashboards could not
@@ -2188,8 +2196,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.50 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.50
+docker build -t observogram:0.8.51 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.51
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2252,7 +2260,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.50
+  observogram:0.8.51
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2260,7 +2268,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.50
+    image: observogram:0.8.51
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

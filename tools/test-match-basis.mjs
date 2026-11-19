@@ -146,7 +146,7 @@ test('set-asides that leave nothing to count: the summary ratios and the chain r
   assert.deepEqual([out.traceabilityGraph.rollup.declaredTotal, out.traceabilityGraph.rollup.integrityMean, out.traceabilityGraph.rollup.integrityPct], [0, null, null]);
 });
 
-test('no declared commitment: the chain rollup and its ladder have no integrity figure', () => {
+test('no declared chain: the chain rollup and its ladder have no integrity figure', () => {
   const g = compareBranches(buildDependencyGraph({ layers: {} }), buildDependencyGraph(adapt(repoPack())));
   assert.ok(g.rollup.total > 0 && g.rollup.declaredTotal === 0, 'live-only chains, none declared');
   assert.deepEqual([g.rollup.integrityMean, g.rollup.integrityPct], [null, null]);

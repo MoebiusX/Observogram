@@ -385,7 +385,7 @@ function buildTrendTiles(vm, diagnostic) {
       // No declared chain: no integrity figure (null), a dash — never 0%.
       value: rollup && Number.isFinite(rollup.integrityMean) ? `${Math.round(rollup.integrityMean * 100)}` : '—',
       unit: rollup && Number.isFinite(rollup.integrityMean) ? '%' : '',
-      note: rollup ? `${rollup.intact}/${rollup.declaredTotal} declared commitments intact` : 'needs a live diff with declared SLO chains',
+      note: rollup ? `${rollup.intact}/${rollup.declaredTotal} chains intact` : 'needs a live diff with declared SLO chains',
       warn: !!rollup && (rollup.broken > 0),
     }),
     kpiTile({

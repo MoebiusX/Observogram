@@ -252,7 +252,7 @@ process.stdout.write('\n--- live scaffold placeholders are not live evidence ---
          sev1?.status, 'declared_only');
 
   // A live-only branch rooted on a placeholder SLO (the fetcher's
-  // per-service availability guess) is not an undeclared commitment.
+  // per-service availability guess) is not an undeclared chain.
   const guessPack = clone(livePack);
   guessPack.spec.slis.push({ id: 'svc_guess_availability', type: 'ratio', good: 'sum(rate(g[5m]))', total: 'sum(rate(t[5m]))' });
   guessPack.spec.slos.push({ id: 'svc_guess_availability_99', sli: 'svc_guess_availability', objective: 0.99, window: '30d' });

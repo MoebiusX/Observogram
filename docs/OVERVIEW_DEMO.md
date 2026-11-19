@@ -50,12 +50,12 @@ krystaline.io. Left, what the repository puts in place, layer by layer — 600
 things; the application layer has seven of the ten kinds of signal, the
 user-experience layer none, and that is where the 35 in 100 comes from.
 Middle, the grade — C, field grade — and whether what the repository
-promises holds up in production right now. Right, what to change."*
+declares holds live in production right now. Right, what to change."*
 
 **0:20 — press Check again** (middle column, under the ring). The row reads
 *Checking against live now…*. Say, while it runs: *"It is talking to the
 production monitoring stack through its MCP endpoint, drafting what is
-actually deployed, and comparing it with what the repository promises."*
+actually deployed, and comparing it with what the repository declares."*
 
 **0:40 — it comes back.** The ring and the four counts refresh — *78 %
 aligned · 252 match · 5 run differently · 38 not running live · 30 live
@@ -65,8 +65,8 @@ now*, and the right column *38 to add · 5 to update · 30 to review*. Say:
 *"Same answer as last night. The moment it stops being the same, this card
 says so first — that is the monitor of the monitors."*
 
-**0:55 — point at the promises bar.** *5 of 18 promises hold in every link,
-1 in part, 12 broken.* Say: *"A promise is an objective with everything it needs to be
+**0:55 — point at the chains bar.** *5 of 18 chains hold in every link,
+1 in part, 12 broken.* Say: *"A chain is an objective with everything it needs to be
 true — the metric, the rule, the dashboard, the alert. Twelve are broken
 somewhere along that chain, and that is the one thing in this grade that
 moves with drift."*
@@ -139,7 +139,7 @@ either way.
 - **"Why a C when 43 things differ?"** Two measures. The 43 counts things
   the repository declares that are not running live, or run differently.
   The grade is seven criteria at a point each, and only one of them moves
-  with drift: *holds up live*, scored on the 18 declared commitment chains,
+  with drift: *holds up live*, scored on the repository's 18 chains,
   where 84 in 100 holds up — 0.84 of a point, just under the bar of 85. The
   other six (three kinds of signal, joined traces and logs, checked against
   live; numbers for normal, coverage of the stack and a declared chaos

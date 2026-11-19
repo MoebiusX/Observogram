@@ -4,8 +4,8 @@ This document defines the V1 release gate for Observogram. The gate is centered
 on the product promise:
 
 ```text
-Generate an ObservabilityPack, compare it with the OLA-backed declared posture,
-validate live drift, and compile a remediation delta.
+Generate an ObservabilityPack, compare the repository's declared chains with
+live, validate drift, and compile a remediation delta.
 ```
 
 ## V1 Release Standard
@@ -25,7 +25,7 @@ The release question is:
 |---|---|
 | Discover | Load a repo-derived pack, a live MCP pack, and an uploaded YAML/JSON pack. |
 | Diagnose | Render Diagnostic Grade, coverage, trust, live verification, drift, and evidence rows. |
-| OLA comparison | Treat Pack A as declared observability intent and Pack B as live production evidence. |
+| Repository against live | Treat Pack A as the repository's declared chains and Pack B as live production evidence. The OLA's commitments are scored against Pack A in the studio, never in its place. |
 | Traceability | Show SLO-to-artifact chains for critical signals such as settlement latency. |
 | Remediate | Separate deployable rows from manual follow-up rows. |
 | Compile | Produce Grafana-managed settlement latency recording and alerting rules. |
