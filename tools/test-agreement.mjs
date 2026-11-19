@@ -194,7 +194,9 @@ test('the catalogue carries what stands behind an objective and an indicator; th
   assert.deepEqual(agreementRoutes(chained), ['SEV1', 'SEV2'], 'a route with no channel goes nowhere');
   // An objective stated in the studio for a guessed one is a person's.
   const stated = { ...chained, meta: { ...chained.meta, studioObjectives: { bare_99: { objective: 0.995, window: '30d' } } } };
-  assert.equal(agreementCatalogue(stated).find((x) => x.name === 'bare_99' && x.kind === 'slo').objectiveSource, 'studio');
+  const entry = agreementCatalogue(stated).find((x) => x.name === 'bare_99' && x.kind === 'slo');
+  assert.deepEqual([entry.objectiveSource, entry.objective, entry.window], ['studio', 0.995, '30d'], 'the stated number and window are the objective\'s');
+  assert.equal(commitmentFacts(V([C('a', { target: '99.5% over 30 days', links: [{ kind: 'slo', name: 'bare_99' }] })]), agreementCatalogue(stated), []).commitments[0].target.state, 'same');
 });
 
 test('commitmentFacts: what the repository has behind each commitment and what it lacks, each gap with its fix — only what the commitment\'s own links call for', () => {

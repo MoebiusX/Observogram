@@ -199,10 +199,14 @@ export function agreementCatalogue(layered) {
       const indicator = stripRef(a.spec?.sli);
       const sli = sliByName.get(indicator) || null;
       const burn = refsTo(`slos.${name}`).filter((x) => /^POL-/.test(x.id));
+      const source = objectiveSourceOf(layered, a, sli);
+      // Stated in the studio for an objective the scan only guessed: the stated number and window are its own.
+      const stated = source === 'studio' ? layered.meta.studioObjectives[name] : null;
       Object.assign(entry, {
         indicator: sli ? indicator : '', measured: seriesOf(sli),
-        objective: typeof a.spec?.objective === 'number' ? a.spec.objective : null, window: typeof a.spec?.window === 'string' ? a.spec.window : '',
-        objectiveSource: objectiveSourceOf(layered, a, sli),
+        objective: stated ? stated.objective : (typeof a.spec?.objective === 'number' ? a.spec.objective : null),
+        window: stated && typeof stated.window === 'string' ? stated.window : (typeof a.spec?.window === 'string' ? a.spec.window : ''),
+        objectiveSource: source,
         // The severities its burn-rate alert pages at; null when the repository declares none for it.
         burn: burn.length ? [...new Set(burn.flatMap(severitiesOf))] : null,
         dashboards: dashboardsOf([`slos.${name}`, ...(sli ? [`slis.${indicator}`] : [])]),
