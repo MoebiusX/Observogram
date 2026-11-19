@@ -159,6 +159,8 @@ export const ROUTES = Object.freeze({
   'GET /api/services': { class: 'viewer' },
   'GET /api/services/:id': { class: 'viewer' },
   'GET /api/services/:id/environments': { class: 'viewer' },
+  // A service's agreement against its repository's pack (stored packs only).
+  'GET /api/services/:id/agreement': { class: 'viewer' },
   // A service record's waivers of conformance findings (GAP batch 2, B3.2;
   // server/routes/waivers.mjs): history included, newest first.
   'GET /api/services/:id/waivers': { class: 'viewer' },

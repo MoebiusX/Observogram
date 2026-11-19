@@ -121,10 +121,10 @@ import { buildOverviewModel, pickOverviewService, journeyForService, decideUiMod
   serviceListModel, formModel as serviceFormModel, formOpened, formInput as serviceFormInput, formProblems, formProblemsNote, savePlan, FORM_CLOSED, rowKey, NEW_ENDPOINT,
   folderBrowseStart, folderBrowseOpening, folderBrowseListed, folderBrowseFailed, folderBrowseChosen, folderBrowseClosed,
   uploadReading, uploadStaged, uploadFailed, packReading, packStaged, packFailed, liveScopeDefaultsOf, formDraft, formRestored, controlRoomOffer, controlRoomMttx,
-  targetsFormOpened, targetsOnlyPlan, objectivesFormOpened, objectivesFormInput, objectivesPlan, objectivesWhatIf, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan,
+  targetsFormOpened, targetsOnlyPlan, agreementFormOpened, agreementFormInput, agreementFormAdd, agreementFormRemove, agreementFormPaste, agreementPlan, agreementWhatIf, objectivesFormOpened, objectivesFormInput, objectivesPlan, objectivesWhatIf, chaosRunFormOpened, chaosRunFormInput, chaosRunPlan, chaosRunForgetPlan,
   useServerDefaultScope, scopeCheckOf, scopeChecking, scopeChecked, scopeCheckFailed, scopeCheckView } from './overview-model.mjs';
 import { withStudioRuns } from './chaos-runs.mjs';
-import { loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture, checkServiceScope } from './overview-api.mjs';
+import { loadServiceAgreement, loadAgreementFacts, loadOverviewFacts, loadServiceListFacts, loadRepositoryFolders, runServiceCheck, computeOverviewDiagnostic, computeOverviewPosture, checkServiceScope } from './overview-api.mjs';
 import { renderOverview, renderServiceList, readTokenDrafts, scopeCheckBlockHtml } from './overview-view.mjs';
 // The Run's toast: its facts from the board's model, its words from the board's renderer.
 import { runToastModel, runRecordedToast } from './overview-model.mjs';
@@ -2265,6 +2265,8 @@ function serviceListModelNow() {
     access: state.access, now: Date.now(), running: listRunning, results: listResults, showAll: listShowAll, heldTokens: [...repoTokens.keys()],
     repoSignIn: state.identity?.authenticated ? (state.identity.repoSignIn || null) : null, sources: listFacts.sources,
     liveScopeDefaults: liveScopeDefaultsOf(listFacts.liveScope),
+    // Each service's agreement against its repository: the list's Agreement column.
+    agreements: agreementFacts,
   });
 }
 
@@ -2411,9 +2413,10 @@ function listFolderClose() {
 
 async function refreshListFacts() {
   const gen = ++listGeneration;
-  const facts = await loadServiceListFacts();
+  const [facts, agreements] = await Promise.all([loadServiceListFacts(), loadAgreementFacts(state.services)]);
   if (gen !== listGeneration) return;
   listFacts = { ...facts, loaded: true };
+  agreementFacts = agreements;
   // The form is drawn anew with the facts: a select of it that had the focus keeps it (the Targets
   // answer Set targets… opened on, read again as the list arrives; the endpoint). A text field is
   // left alone: focusing it again would select what is being typed.
@@ -2509,6 +2512,48 @@ function openTargetsForm(from = 'board') {
   enterOverviewList();
   listForm = { ...form, returnTo: back };
   renderMainView();
+}
+
+// The agreement, from the list's Agreement cell: its form on the list, with what the repository
+// declares read fresh (GET /api/services/:id/agreement) so the links are looked up as they are typed.
+let agreementFacts = {};
+// The person's own day (never UTC's, which is yesterday's for part of every night west of it and tomorrow's east).
+const localDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+async function openAgreementForm(serviceId) {
+  if (!serviceListAvailable() || !Number.isInteger(serviceId)) return;
+  const nav = navGeneration;
+  const fact = await loadServiceAgreement(serviceId);
+  if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') return;
+  const form = agreementFormOpened(state.services, { serviceId, fact, today: localDay(new Date()) });
+  if (!form) return;
+  listForm = form;
+  renderMainView();
+}
+async function saveAgreementForm(nav) {
+  const plan = agreementPlan(listForm, { services: state.services || [] });
+  if (Object.keys(plan.problems).length) {
+    listForm = { ...listForm, error: formProblemsNote(plan.problems), focus: Object.keys(plan.problems)[0] };
+    renderMainView();
+    return;
+  }
+  if (plan.patch) {
+    listForm = { ...listForm, saving: true, error: null };
+    renderMainView();
+    try {
+      await patchService(plan.serviceId, plan.patch);
+    } catch (e) {
+      await refreshServices();
+      listForm = { ...listForm, saving: false, error: e?.message || String(e) };
+      renderMainView();
+      return;
+    }
+    await refreshServices();
+  }
+  listForm = FORM_CLOSED;
+  announce(plan.patch ? `${plan.name}: the agreement is saved (${plan.words}).` : `${plan.name}: the agreement is as it was.`);
+  if (nav !== navGeneration || state.mode !== 'overview' || overviewScreen !== 'list') { renderMainView(); return; }
+  renderMainView();
+  refreshListFacts();
 }
 
 // State objectives… / Change objectives…, from the board's grade card or the control room: the
@@ -2672,6 +2717,7 @@ async function saveTargetsForm(nav) {
 function listFormInput(field, value, { redraw = false } = {}) {
   if (listForm.chaosRun) { listForm = chaosRunFormInput(listForm, field, value); if (redraw) renderMainView(); return; }
   if (listForm.objectives) { listForm = { ...objectivesFormInput(listForm, field, value), focus: field, scroll: false }; if (redraw) renderMainView(); return; }
+  if (listForm.agreement) { listForm = { ...agreementFormInput(listForm, field, value), focus: redraw ? field : null, scroll: false }; if (redraw) renderMainView(); return; }
   listForm = serviceFormInput(listForm, field, value);
   if (field === 'kind') listForm = { ...listForm, focus: 'location' };
   // Another environment chosen (the service's Change): the focus stays on the choice through the redraw.
@@ -2695,6 +2741,7 @@ async function saveListForm({ run = false, repoAuth = '' } = {}) {
   if (listForm.targetsOnly) { await saveTargetsForm(nav); return; }
   if (listForm.chaosRun) { await saveChaosRunForm(nav); return; }
   if (listForm.objectives) { await saveObjectivesForm(nav); return; }
+  if (listForm.agreement) { await saveAgreementForm(nav); return; }
   const tokenHost = listForm.values.kind === 'github' || listForm.values.kind === 'ado' ? listForm.values.kind : null;
   const token = tokenHost ? String(repoAuth ?? '').trim() : '';
   const problems = formProblems(listForm.values, { sources: listFacts.sources, original: listForm.original ?? null, uploadStaged: !!listForm.upload?.staged, taken: listForm.addEnv ? (listForm.record?.environments || []).map((e) => e.name) : null, packs: listForm.packs || null });
@@ -3074,6 +3121,11 @@ const overviewActions = {
   closeForm: () => { folderGeneration++; const returnTo = listForm.returnTo || null; if (listForm.chaosRun && listForm.forgot) checkAfterRecord = true; listForm = FORM_CLOSED; dropListFormDraft(); afterListForm(returnTo); },
   setTargets: (from) => openTargetsForm(from === 'control-room' ? 'control-room' : 'board'),
   recordChaosRun: (from) => openChaosRunForm(from === 'control-room' ? 'control-room' : 'board'),
+  openAgreement: (serviceId) => { openAgreementForm(serviceId); },
+  agreementAdd: () => { listForm = agreementFormAdd(listForm); renderMainView(); },
+  agreementRemove: (i) => { listForm = agreementFormRemove(listForm, i); renderMainView(); },
+  agreementPaste: () => { listForm = agreementFormPaste(listForm); renderMainView(); },
+  agreementWhatIf: () => agreementWhatIf(listForm),
   stateObjectives: (from) => openObjectivesForm(from === 'control-room' ? 'control-room' : 'board'),
   objectivesWhatIf: () => objectivesWhatIf(listForm, { services: state.services || [] }),
   forgetChaosRun: (runId) => forgetChaosRun(String(runId || '')),

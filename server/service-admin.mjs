@@ -33,6 +33,7 @@ import { GRADE_CRITERION_KEYS } from '../studio/diagnostic-grade.mjs';
 import { SET_ASIDE_KINDS, SET_ASIDE_LAYERS, SET_ASIDE_MAX, SET_ASIDE_SIDES, baseKeyOf, setAsideId } from '../studio/set-asides.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, sameTargets, targetsErrors, targetsRecord } from '../studio/mttx-targets.mjs';
 import { OBJECTIVE_WINDOWS, objectivesErrors, objectivesRecord } from '../studio/slo-objectives.mjs';
+import { agreementErrors, agreementRecord } from '../studio/agreement.mjs';
 import { CHAOS_RUNS_MAX, chaosRunErrors, chaosRunId, chaosRunRecord, sameChaosRun } from '../studio/chaos-runs.mjs';
 import { mcpUrlOrigin, safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
 import { compactScope, normalizeScope } from '../tools/lib/live-fetch.mjs';
@@ -112,6 +113,7 @@ export const WAYS = Object.freeze({
   chaosRuns: `chaosRuns is the whole list of chaos runs recorded in the studio for this service — [{ experiment, at, outcome, environment, mttd, alertsFired, note }], [] for none, at most ${CHAOS_RUNS_MAX}`,
   chaosRun: (why) => `a recorded chaos run: ${why}`,
   chaosRunTwice: (run) => `${run.experiment} at ${run.at}${run.environment ? ` in ${run.environment}` : ''} is recorded twice`,
+  agreement: (why) => `agreement is the service's operational agreement — { source: { document, version, effective }, commitments: [{ id, text, clause, target, owner, links: [{ kind, name }] }] }, or null for none: ${why}`,
   objectives: (why) => `objectives is the SLO objectives stated for this service in the studio — { slos: { "<slo id>": { objective, window } } } with objective above 0 and below 1 and window one of ${OBJECTIVE_WINDOWS.join(', ')}, or null for none: ${why}`,
   targets: (why) => `targets is the MTTD / MTTR targets the studio keeps for this service — { profile } (one of ${MTTX_PROFILES.map((p) => p.id).join(', ')}), { profile: "${MTTX_CUSTOM}", mttd, mttr } in whole minutes, or null for none: ${why}`,
   setAside: `setAside is the whole list of differences this service's grade leaves out — [{ key, side, layer, label, kind, note, until }], [] for none, at most ${SET_ASIDE_MAX}`,
@@ -468,6 +470,16 @@ const optionalLine = (v, field) => {
   if (typeof v !== 'string' || v.length > TEXT_MAX || hasControl(v)) invalid(WAYS.setAsideText(field));
   return v.trim();
 };
+// A service's operational agreement (studio/agreement.mjs): null for none, else the record kept —
+// the version sent saved over the newest when it is the same issue of the document, added when it is
+// another; who saved it and when.
+export function parseAgreement(value, { current = null, actor, now = new Date().toISOString() } = {}) {
+  if (value === null) return null;
+  const errors = agreementErrors(value);
+  if (errors.length) invalid(WAYS.agreement(errors[0]));
+  return agreementRecord(value, { current, actor: typeof actor === 'string' ? actor : (actor?.id ?? actor?.email ?? null), now });
+}
+
 // A service's stated SLO objectives (studio/slo-objectives.mjs): null for none, else the record kept —
 // each entry with who stated it and when; an entry sent again unchanged keeps both.
 export function parseObjectives(value, { current = null, actor, now = new Date().toISOString() } = {}) {
@@ -638,6 +650,7 @@ export function updateServiceFromApi(db, actor, id, patch = {}, { caller = null 
     if (patch.setAside !== undefined) next.setAside = parseSetAside(patch.setAside, { current: current.setAside, actor });
     if (patch.targets !== undefined) next.targets = parseTargets(patch.targets, { current: current.targets ?? null, actor });
     if (patch.objectives !== undefined) next.objectives = parseObjectives(patch.objectives, { current: current.objectives ?? null, actor });
+    if (patch.agreement !== undefined) next.agreement = parseAgreement(patch.agreement, { current: current.agreement ?? null, actor });
     if (patch.chaosRuns !== undefined) next.chaosRuns = parseChaosRuns(patch.chaosRuns, { current: current.chaosRuns ?? [], actor });
     if (patch.envRefs !== undefined) next.envRefs = parseEnvRefs(patch.envRefs);
     if (patch.liveScopes !== undefined) next.liveScopes = parseLiveScopes(patch.liveScopes, { current: current.liveScopes ?? null });
@@ -894,6 +907,8 @@ function serviceView(service, environments, links) {
     targets: service.targets ?? null,
     // The SLO objectives stated for it in the studio (studio/slo-objectives.mjs): { slos: { id: { objective, window, by, at } } } or null.
     objectives: service.objectives ?? null,
+    // Its operational agreement as the studio keeps it (studio/agreement.mjs): { versions: [...] }, newest last, or null.
+    agreement: service.agreement ?? null,
     // The chaos runs recorded in the studio (studio/chaos-runs.mjs), newest first: [{ experiment, at, outcome,
     // environment, mttd, alertsFired, note, by, recordedAt }], [] for none.
     chaosRuns: Array.isArray(service.chaosRuns) ? service.chaosRuns : [],

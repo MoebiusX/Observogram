@@ -3579,11 +3579,12 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './agreement.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
   'studio/artefact-tiers.mjs': [],
   'studio/clause-fixes.mjs': [],
   'studio/mttx-targets.mjs': [],
   'studio/slo-objectives.mjs': [],
+  'studio/agreement.mjs': [],
   'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
@@ -4489,4 +4490,79 @@ test('State objectives…: the board offers it while an SLO carries the scan\'s 
   const cr = controlRoomMttx({ loaded: true, layered, settable: true, objectives: ONE, diagnostic: gradeOf(ONE) });
   assert.deepEqual([cr.objectives, cr.objectivesAction], [ONE, 'State objectives…']);
   assert.ok(!('objectives' in controlRoomMttx({ loaded: true, layered, settable: true })) && !('objectivesAction' in controlRoomMttx({ loaded: true, layered, settable: true })), 'none stated and no grade handed: as before');
+});
+
+test('the agreement: its column on the Services list (drawn only where the host reads agreements), its form — the source, a row per commitment, what the repository covers said as it is typed, several pasted — and Save sending the version only when it differs', async () => {
+  const { agreementCell, agreementFormOpened, agreementFormInput, agreementFormAdd, agreementFormRemove, agreementFormPaste, agreementPlan, agreementWhatIf, formDraft } = await import('../studio/overview-model.mjs');
+  const { agreementRecord } = await import('../studio/agreement.mjs');
+  const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
+  const COMMITMENTS = [
+    { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month', owner: 'service', links: [{ kind: 'slo', name: 'checkout_99_9' }, { kind: 'dashboard', name: 'gone' }] },
+    { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', links: [] },
+  ];
+  const record = agreementRecord({ source: SOURCE, commitments: COMMITMENTS }, { actor: 'ada', now: '2026-11-19T10:00:00Z' });
+  const catalogue = [{ kind: 'slo', name: 'checkout_99_9', guessed: false }, { kind: 'alert', name: 'CheckoutErrorsHigh', guessed: false }, { kind: 'slo', name: 'derived', guessed: true }];
+  const fact = { agreement: record, coverage: { counts: { total: 2, service: 1, consumer: 1, covered: 0, part: 1, notCovered: 0 } }, catalogue, repository: { env: 'prod', pack: 'checkout' } };
+  // The cell.
+  assert.deepEqual(agreementCell({ agreement: null }), { state: 'none', action: 'Record the agreement…' });
+  assert.deepEqual(agreementCell({ agreement: null }, null, { canWrite: false }), { state: 'none', action: null });
+  assert.deepEqual(agreementCell({ agreement: record }, fact), { state: 'recorded', title: 'Platform agreement · 2.1', since: 'in force since 1 Nov 2026', summary: "0 of 1 commitment covered by the repository, 1 in part; 1 more is the consumer's.", tone: 'warn', action: 'Open' });
+  assert.deepEqual([agreementCell({ agreement: record }).summary, agreementCell({ agreement: record }).tone], ['2 commitments.', 'neutral'], 'not loaded yet: the count alone');
+  assert.equal(agreementCell({ agreement: record }, { error: '502: the pack could not be read' }).summary, '2 commitments; what the repository covers was not read: 502: the pack could not be read');
+  assert.equal(agreementCell({ agreement: record }, { coverage: { counts: { total: 1, service: 1, consumer: 0, covered: 1, part: 0, notCovered: 0 } } }).tone, 'ok');
+  // The list: the column only where the host hands agreements in; a host that reads none draws none.
+  const inputs = { services: [svcRow({ agreement: record })], servicesStatus: { kind: 'ok' }, journeys: [], endpoints: [EP], now: NOW };
+  const withThem = serviceListModel({ ...inputs, agreements: { [svcRow().id]: fact } });
+  const without = serviceListModel(inputs);
+  assert.deepEqual([withThem.matrix.agreements, withThem.matrix.services[0].agreement.title, without.matrix.agreements, without.matrix.services[0].agreement], [true, 'Platform agreement · 2.1', undefined, null]);
+  const c = overviewContainer();
+  renderServiceList(c, withThem, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(c.innerHTML.includes('ov-mx--agr') && c.innerHTML.includes('<span>Agreement</span>') && c.innerHTML.includes('data-ux-action="ov-agr-open"') && c.innerHTML.includes('in force since 1 Nov 2026'));
+  renderServiceList(c, without, formModel(FORM_CLOSED), { overview: {} });
+  assert.ok(!c.innerHTML.includes('ov-mx--agr') && !c.innerHTML.includes('Agreement') && !c.innerHTML.includes('ov-agr-open'));
+  // The form.
+  const services = [{ id: 7, name: 'Checkout', agreement: record }];
+  assert.equal(agreementFormOpened(services, { serviceId: 8, fact }), null);
+  let form = agreementFormOpened(services, { serviceId: 7, fact, today: '2026-11-19' });
+  assert.deepEqual([form.agreement, form.values, form.rows], [true, { name: 'Checkout', agrDocument: 'Platform agreement', agrVersion: '2.1', agrEffective: '2026-11-01', agrPaste: '' }, [
+    { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month', owner: 'service', links: 'slo:checkout_99_9, dashboard:gone' },
+    { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', links: '' },
+  ]]);
+  assert.equal(formDraft(form), null, 'never kept as a draft of the service form');
+  assert.deepEqual(agreementWhatIf(form), { summary: "0 of 1 commitment covered by the repository, 1 in part; 1 more is the consumer's.", states: [
+    { words: 'Covered in part: 1 not in the repository', tone: 'warn' },
+    { words: "The consumer's: shown here, not counted. Not covered: linked to nothing", tone: 'fail' },
+  ] });
+  assert.equal(agreementPlan(form, { services }).patch, null, 'as the record has it: nothing to save');
+  // Typed: said at once.
+  form = agreementFormInput(form, 'agr:0:links', 'slo:checkout_99_9, alert:CheckoutErrorsHigh');
+  assert.deepEqual([agreementWhatIf(form).summary, agreementWhatIf(form).states[0]], ["1 of 1 commitment covered by the repository; 1 more is the consumer's.", { words: 'Covered by the repository', tone: 'ok' }]);
+  // A placeholder the scan wrote covers nothing; what is not a link is said, and stops Save.
+  assert.equal(agreementWhatIf(agreementFormInput(form, 'agr:0:links', 'slo:derived')).states[0].words, 'Not covered: 1 only a placeholder the scan wrote');
+  const badLink = agreementFormInput(form, 'agr:0:links', 'CheckoutErrorsHigh');
+  assert.deepEqual([agreementPlan(badLink, { services }).problems, agreementPlan(badLink, { services }).patch], [{ 'agr:0:links': '"CheckoutErrorsHigh" is not a link: write kind:name, such as alert:CheckoutErrorsHigh.' }, null]);
+  // A row added, one removed, several pasted.
+  const added = agreementFormAdd(form);
+  assert.deepEqual([added.rows.length, added.rows[2], added.focus], [3, { id: 'c-1', clause: '', text: '', target: '', owner: 'service', links: '' }, 'agr:2:clause']);
+  assert.deepEqual(agreementPlan(added, { services }).problems, { 'agr:2:text': 'Say what is promised, or remove the row.' });
+  assert.deepEqual(agreementFormRemove(added, 2).rows, form.rows);
+  const pasted = agreementFormPaste(agreementFormInput(added, 'agrPaste', '6.1 | Incidents acknowledged | within 15 minutes | | alert:CheckoutErrorsHigh'));
+  assert.deepEqual([pasted.rows.length, pasted.rows[2], pasted.values.agrPaste, pasted.error], [3, { id: '6-1', clause: '6.1', text: 'Incidents acknowledged', target: 'within 15 minutes', owner: 'service', links: 'alert:CheckoutErrorsHigh' }, '', null], 'the empty row gives way to what was pasted');
+  assert.match(agreementFormPaste(form).error, /Nothing to add: one commitment a line/);
+  // Save: the version as the form reads, named.
+  const plan = agreementPlan(pasted, { services });
+  assert.deepEqual([plan.problems, plan.serviceId, plan.words, plan.patch.agreement.source, plan.patch.agreement.commitments.map((x) => [x.id, x.owner, x.links.length])], [{}, 7, 'Platform agreement · 2.1', SOURCE, [['c-4-1', 'service', 2], ['c-5-2', 'consumer', 0], ['6-1', 'service', 1]]]);
+  assert.deepEqual(agreementPlan(agreementFormInput(form, 'agrVersion', ''), { services }).problems, { agrVersion: "Give that document's version." });
+  assert.equal(agreementPlan(form, { services: [] }).serviceId, null);
+  // None recorded yet: an empty document in force today, one empty row; no pack read is said, never "not covered".
+  const fresh = agreementFormOpened([{ id: 9, name: 'New' }], { serviceId: 9, fact: { agreement: null, coverage: null, catalogue: [], repository: null }, today: '2026-11-19' });
+  assert.deepEqual([fresh.values.agrEffective, fresh.rows.length, fresh.catalogue, fresh.focus], ['2026-11-19', 1, null, 'agrDocument']);
+  const typed = agreementFormInput(fresh, 'agr:0:text', 'Requests succeed');
+  assert.deepEqual(agreementWhatIf(typed), { summary: '1 commitment; the repository is not read yet.', states: [{ words: 'Not looked up: the repository is not read yet', tone: 'neutral' }] });
+  // The form drawn: its rows, the suggestions, the summary, the versions kept.
+  const view = formModel({ ...pasted, versions: [{ words: 'Platform agreement · 2.0', since: '1 Aug 2026', commitments: 1 }, { words: 'Platform agreement · 2.1', since: '1 Nov 2026', commitments: 2 }] }, {});
+  renderServiceList(c, withThem, view, { overview: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('Agreement · Checkout') && html.includes('data-field="agr:2:links"') && html.includes('<option value="alert:CheckoutErrorsHigh">') && !html.includes('<option value="slo:derived">'), 'a placeholder is not offered as something to link to');
+  assert.ok(html.includes('id="ov-agr-summary"') && html.includes('Versions kept: Platform agreement · 2.0 (in force since 1 Aug 2026, 1 commitment)') && html.includes('Looked up in checkout, the pack prod is checked against.'));
 });

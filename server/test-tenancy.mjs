@@ -486,6 +486,7 @@ async function sweep({ root, cookie, who, owner, org, otherOrg, ids, mcp, dir })
     'GET /api/services': ['/api/services', undefined, (r) => assert(r.status === 200 && !r.json.services.some(s => s.id === serviceId), `${who}: GET /api/services lacks the other org's service`)],
     'GET /api/services/:id': [`/api/services/${serviceId}`, undefined, is404('GET /api/services/:id')],
     'GET /api/services/:id/environments': [`/api/services/${serviceId}/environments`, undefined, is404('GET /api/services/:id/environments')],
+    'GET /api/services/:id/agreement': [`/api/services/${serviceId}/agreement`, undefined, is404('GET /api/services/:id/agreement')],
     'GET /api/environments/:id': [`/api/environments/${environmentId}`, undefined, is404('GET /api/environments/:id')],
     'POST /api/services': ['/api/services', {}, (r) => assert(r.status === 400, `${who}: POST /api/services {} → 400`, r.status, 400)],
     'PATCH /api/services/:id': [`/api/services/${serviceId}`, { tier: 'tier-1' }, is404('PATCH /api/services/:id')],

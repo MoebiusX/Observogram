@@ -205,7 +205,7 @@ const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 90071992
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
 const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
-const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'objectives', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'repository', 'gradeOff', 'setAside', 'targets', 'objectives', 'agreement', 'chaosRuns', 'envRefs', 'liveScopes', 'envSurfaces', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'ref', 'livePack', 'liveScope', 'createdAt', 'updatedAt'];
 const isServiceView = (s) => {
   assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
@@ -248,7 +248,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.checkout = json.service.id;
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
   // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
@@ -256,7 +256,7 @@ test('POST /api/services: a service record (201) as the view, its exact row; the
   ids.payments = second.json.service.id;
   assert.deepEqual(stamped(second.json.service), {
     id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
   // tier: null is "graded by the pack", explicitly.
@@ -292,7 +292,7 @@ test('GET /api/services and GET /api/services/:id: the views by slug, as a viewe
   const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
   assert.deepEqual(stamped(one.json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
-    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
   for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
@@ -305,7 +305,7 @@ test('PATCH /api/services/:id: name, owners, tier, description with `changed` an
   assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
   assert.deepEqual(stamped(json.service), {
     id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
-    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+    repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
   });
   assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
   // Only what differs is a change (and a row names only those fields).
@@ -618,6 +618,52 @@ test('a journey\'s run counts its service\'s SLO objectives stated in the studio
   } finally {
     for (const path of [file, FILE_A, join(WORKSPACE, 'orgs', 'acme', 'runs', NAME)]) rmSync(path, { recursive: true, force: true });
     await call('oscar', 'PATCH', P, { objectives: null });
+  }
+});
+
+test('a service\'s agreement: PATCH keeps it in versions, signed and dated — the same issue of the document corrected in place, another added; what is not an agreement is refused; GET /api/services/:id/agreement answers it with what the repository covers, never "not covered" when no pack was read', async () => {
+  const K = 'PATCH /api/services/:id';
+  const P = `/api/services/${ids.ledgerNulls}`;
+  const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
+  const one = { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month, excluding planned maintenance', owner: 'service', links: [{ kind: 'slo', name: 'ledger_availability_99_9' }, { kind: 'dashboard', name: 'ledger-overview' }] };
+  const theirs = { id: 'c-5-2', text: 'Retries back off', owner: 'consumer' };
+  try {
+    assert.equal((await ok('GET /api/services/:id', 'vera', P)).json.service.agreement, null);
+    const empty = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
+    assert.deepEqual([empty.agreement, empty.coverage], [null, null], 'none recorded: nothing to cover');
+    for (const [bad, why] of [
+      [{ source: { ...SOURCE, effective: 'soon' }, commitments: [] }, 'source.effective is the day it comes into force'],
+      [{ source: SOURCE, commitments: [{ id: 'a', text: '' }] }, 'commitments[0].text says what is promised'],
+      [{ source: SOURCE, commitments: [{ id: 'a', text: 'x', links: [{ kind: 'panel', name: 'p' }] }] }, 'links[0] is { kind, name }'],
+      [[], 'agreement is { source'],
+    ]) {
+      const r = await call('oscar', 'PATCH', P, { agreement: bad });
+      assert.ok(r.status === 400 && String(r.json.error).includes(why), `refused: ${JSON.stringify(bad)} → ${r.status} ${r.json?.error}`);
+    }
+    const first = (await ok(K, 'oscar', P, { agreement: { source: SOURCE, commitments: [one] } })).json.service.agreement;
+    assert.deepEqual([first.versions.length, first.versions[0].source, first.versions[0].commitments], [1, SOURCE, [one]]);
+    assert.ok(typeof first.versions[0].by === 'string' && first.versions[0].by && !Number.isNaN(Date.parse(first.versions[0].at)), 'signed and dated');
+    // The same issue, with one more commitment: corrected in place.
+    const corrected = (await ok(K, 'oscar', P, { agreement: { source: SOURCE, commitments: [one, theirs] } })).json.service.agreement;
+    assert.deepEqual([corrected.versions.length, corrected.versions[0].commitments.map((c) => [c.id, c.owner, c.target, c.links.length])], [1, [['c-4-1', 'service', one.target, 2], ['c-5-2', 'consumer', '', 0]]]);
+    // Another issue: a version beside it; the newest is the service's.
+    const NEXT = { ...SOURCE, version: '3.0', effective: '2027-01-01' };
+    const next = (await ok(K, 'oscar', P, { agreement: { source: NEXT, commitments: [one] } })).json.service.agreement;
+    assert.deepEqual(next.versions.map((v) => [v.source.version, v.commitments.length]), [['2.1', 2], ['3.0', 1]]);
+    // Read back with what the repository covers: where no pack is read, nothing is looked up and none reads "not covered".
+    const read = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
+    assert.deepEqual(read.agreement, next);
+    assert.equal(read.coverage.commitments.length, 1);
+    if (read.repository === null) {
+      assert.deepEqual([read.coverage.read, read.coverage.commitments.map((c) => [c.id, c.state]), read.coverage.counts, read.coverage.summary, read.catalogue],
+        [false, [['c-4-1', 'not-read']], { total: 1, service: 1, consumer: 0, covered: null, part: null, notCovered: null }, '1 commitment; the repository is not read yet.', []]);
+    } else {
+      assert.ok(read.coverage.read === true && ['covered', 'part', 'not-covered'].includes(read.coverage.commitments[0].state) && typeof read.repository.pack === 'string');
+    }
+    await refused('GET /api/services/:id/agreement', 'vera', '/api/services/999999/agreement', 404, 'no service 999999');
+    assert.equal((await ok(K, 'oscar', P, { agreement: null })).json.service.agreement, null, 'cleared');
+  } finally {
+    await call('oscar', 'PATCH', P, { agreement: null });
   }
 });
 
@@ -1225,7 +1271,7 @@ test('DELETE /api/services/:id on a record without packs: the view as it was, th
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [],
@@ -1265,7 +1311,7 @@ test('a register writes the service, environment and link rows by the person reg
   ids.demo = demo.id;
   ids.demoProd = demo.environments[0].id;
   assert.deepEqual(stamped(demo), {
-    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
     createdAt: 'T', updatedAt: 'T',
     environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
     packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
@@ -1599,7 +1645,7 @@ test('DELETE /api/services/:id cascades the environments and the pack links; the
   assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
     ok: true,
     deleted: {
-      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, repository: null, gradeOff: [], setAside: [], targets: null, objectives: null, agreement: null, chaosRuns: [], envRefs: {}, liveScopes: {}, envSurfaces: {}, source: { kind: 'observogram' },
       createdAt: 'T', updatedAt: 'T',
       environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, ref: null, livePack: null, liveScope: null, createdAt: 'T', updatedAt: 'T' }],
       packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],

@@ -38,6 +38,7 @@ import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
+import { AGREEMENT_OWNERS, COMMITMENTS_MAX, agreementCurrent, commitmentId, commitmentsFromText, coverageOver, coverageSummary, coverageWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -2152,7 +2153,7 @@ function envScopeCell(own, defaults) {
 // endpoint and a scope typed — or null. The host sends it and hands the answer back with the key:
 // an answer for another key (an older scope) is dropped.
 export function scopeCheckOf(form) {
-  if (!form?.open || form.chaosRun || form.objectives || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
+  if (!form?.open || form.chaosRun || form.objectives || form.agreement || form.targetsOnly || !Number.isInteger(form.serviceId)) return null;
   const v = form.values || {};
   const env = trimmed(v.env);
   if (!env || !v.endpointId || v.endpointId === LIVE_PACK) return null;
@@ -2506,6 +2507,8 @@ export function serviceListModel(input = {}) {
     running = {}, results = {}, showAll = false, heldTokens = [], repoSignIn = null, sources = null,
     // The server's configured snapshot scope (GET /api/mcp/jobs's scope.defaults, compact), or null.
     liveScopeDefaults = null,
+    // Each service's agreement against its repository (overview-api.mjs loadAgreementFacts), by id; null on a host that reads none.
+    agreements = null,
   } = input;
   const canWrite = access?.canWrite !== false;
   const reason = canWrite ? null : (access?.reason || 'Not available for your role here.');
@@ -2558,6 +2561,7 @@ export function serviceListModel(input = {}) {
       listed.push({
         key, serviceId: s.id, name: s.name, slug: s.slug, env: env?.name ?? null, envId: env?.id ?? null,
         repository, live, livePack: exported, last, journey: journey?.name || null, branch,
+        agreement: agreements ? agreementCell(s, agreements[s.id] ?? null, { canWrite }) : null,
         surface: surfaceId ? { id: surfaceId, label: surfaceLabel(surfaceId) } : null,
         // The scope its live read applies (an MCP read): { text: '2 prefixes, 5 folders', from: 'environment' }; none of its
         // own while the server has a default: { text: null, from: null, defaultIgnored, defaultSummary }; else null.
@@ -2614,7 +2618,7 @@ export function serviceMatrix(list) {
   for (const r of list.rows) {
     let svc = services.get(r.serviceId);
     if (!svc) {
-      svc = { serviceId: r.serviceId, name: r.name, slug: r.slug, repository: r.repository, cells: {}, bare: null, rows: [] };
+      svc = { serviceId: r.serviceId, name: r.name, slug: r.slug, repository: r.repository, agreement: r.agreement ?? null, cells: {}, bare: null, rows: [] };
       services.set(r.serviceId, svc);
     }
     if (r.env) svc.cells[r.env] = r; else svc.bare = r;
@@ -2631,7 +2635,8 @@ export function serviceMatrix(list) {
   // The services a person can run first, then the ones still missing a place; by name.
   out.sort((a, b) => (Number(b.complete) - Number(a.complete)) || String(a.name).localeCompare(String(b.name)));
   const legend = INSTRUMENT_GRADE_SCALE.filter((g) => g.minPct !== null).map((g) => ({ letter: g.letter, from: g.minPct, above: !!g.exclusiveMin, tone: GRADE_TONE[g.tier] || 'neutral' }));
-  return { columns, services: out, legend };
+  // The Agreement column is drawn where the host reads agreements (each row then carries its cell).
+  return { columns, services: out, legend, ...(out.some((s) => s.agreement) ? { agreements: true } : {}) };
 }
 
 // The repository hosts whose token a person gives as their own.
@@ -2914,7 +2919,7 @@ const FORM_DRAFT_VALUE_MAX = 2048;
 // pre-fill, or Use the server default) rides along, compact, so the restored form keeps and drops on
 // save what it said it would before the round trip.
 export function formDraft(form, { now = Date.now() } = {}) {
-  if (!form?.open || form.chaosRun || form.objectives) return null;
+  if (!form?.open || form.chaosRun || form.objectives || form.agreement) return null;
   const prefill = form.scopePrefill ? scopeFromValues(scopeFormValues(form.scopePrefill)) : null;
   return { v: 1, at: now, serviceId: form.serviceId ?? null, env: form.envFixed ? form.values.env : null, values: { ...form.values }, targetsTouched: !!form.targetsTouched, ...(prefill ? { scopePrefill: prefill } : {}) };
 }
@@ -2969,6 +2974,158 @@ export function targetsOnlyPlan(values = {}, { services = [], serviceId = null }
   const targets = targetsFromForm(values);
   const changed = !!existing && !Object.keys(problems).length && !sameTargets(existing.targets ?? null, targets ? targetsRecord(targets) : null);
   return { problems, serviceId: existing ? existing.id : null, patch: changed ? { targets } : null, name: existing?.name || trimmed(values.name), envName: trimmed(values.env) };
+}
+
+// ---------- The agreement ----------
+//
+// The stage before the repository (agreement → repository → each environment): what the service
+// promised, kept in versions with the document each one comes from, and what of it the repository
+// covers (studio/agreement.mjs). Never a score and never beside a letter: a commitment is covered,
+// covered in part or not covered, by what it is linked to.
+
+const dayMonthYear = (iso) => {
+  const t = Date.parse(`${iso}T00:00:00Z`);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : String(iso || '');
+};
+const versionWords = (v) => `${v.source.document} · ${v.source.version}`;
+
+// agreementCell(service, fact, { canWrite }) → the list's Agreement cell for a service:
+//   { state: 'none', action } — none recorded; `action` 'Record the agreement…' for a writer, else null
+//   { state: 'recorded', title, since, summary, tone, action: 'Open' } — its current version, and
+//     what the repository covers of it (`fact`: loadServiceAgreement's answer; not loaded yet, or
+//     failed: the count alone, and why)
+export function agreementCell(service, fact = null, { canWrite = true } = {}) {
+  const current = agreementCurrent(service?.agreement ?? null);
+  if (!current) return { state: 'none', action: canWrite ? 'Record the agreement…' : null };
+  const n = current.commitments.length;
+  const counts = fact?.coverage?.counts || null;
+  const summary = fact?.error ? `${n} commitment${n === 1 ? '' : 's'}; what the repository covers was not read: ${fact.error}`
+    : counts ? coverageSummary(counts) : `${n} commitment${n === 1 ? '' : 's'}.`;
+  const tone = !counts || counts.covered === null || !counts.service ? 'neutral' : counts.covered === counts.service ? 'ok' : 'warn';
+  return { state: 'recorded', title: versionWords(current), since: `in force since ${dayMonthYear(current.source.effective)}`, summary, tone, action: 'Open' };
+}
+
+const AGR = 'agr:';
+const rowOfCommitment = (c) => ({ id: c.id, clause: c.clause || '', text: c.text || '', target: c.target || '', owner: c.owner === 'consumer' ? 'consumer' : 'service', links: (c.links || []).map(linkText).join(', ') });
+const versionOfForm = (form) => ({
+  source: { document: trimmed(form.values.agrDocument), version: trimmed(form.values.agrVersion), effective: trimmed(form.values.agrEffective) },
+  commitments: (form.rows || []).map((r) => ({ id: r.id, clause: trimmed(r.clause), text: trimmed(r.text), target: trimmed(r.target), owner: r.owner === 'consumer' ? 'consumer' : 'service', links: linksFromText(r.links).links })),
+});
+
+// agreementFormOpened(services, { serviceId, fact, today }) → the form the list's Agreement cell
+// opens: the current version's source and commitments (none recorded: an empty document in force
+// `today`, one empty commitment), with what the repository declares to link to (`fact.catalogue`).
+// null for a service that is not a record.
+export function agreementFormOpened(services, { serviceId = null, fact = null, today = '' } = {}) {
+  const service = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
+  if (!service) return null;
+  const current = agreementCurrent(service.agreement ?? null);
+  const rows = current ? current.commitments.map(rowOfCommitment) : [{ id: 'c-1', clause: '', text: '', target: '', owner: 'service', links: '' }];
+  return {
+    open: true, mode: 'edit', agreement: true, serviceId: service.id, rows,
+    catalogue: fact && !fact.error && fact.repository ? fact.catalogue : null,
+    repository: fact?.repository ?? null, readError: fact?.error || null,
+    versions: (service.agreement?.versions || []).map((v) => ({ words: versionWords(v), since: dayMonthYear(v.source.effective), commitments: v.commitments.length, by: v.by || '', at: v.at || '' })),
+    values: { name: service.name, agrDocument: current?.source.document || '', agrVersion: current?.source.version || '', agrEffective: current?.source.effective || today, agrPaste: '' },
+    focus: current ? null : 'agrDocument', scroll: true, saving: false, error: null,
+  };
+}
+
+// One answer typed or chosen: a source field, the paste box, or a commitment's ("agr:<row>:<field>").
+export function agreementFormInput(form, field, value) {
+  if (!form?.agreement) return form;
+  const v = String(value ?? '');
+  if (!field.startsWith(AGR)) return { ...form, values: { ...form.values, [field]: v }, error: null };
+  const [, at, key] = field.split(':');
+  const i = Number(at);
+  if (!Number.isInteger(i) || !form.rows[i] || !['clause', 'text', 'target', 'owner', 'links'].includes(key)) return form;
+  return { ...form, rows: form.rows.map((r, j) => (j === i ? { ...r, [key]: key === 'owner' ? (AGREEMENT_OWNERS.includes(v) ? v : 'service') : v } : r)), error: null };
+}
+// Add a commitment: an empty row, the focus on what it promises.
+export function agreementFormAdd(form) {
+  if (!form?.agreement || form.rows.length >= COMMITMENTS_MAX) return form;
+  const id = commitmentId('', form.rows.map((r) => r.id));
+  return { ...form, rows: [...form.rows, { id, clause: '', text: '', target: '', owner: 'service', links: '' }], focus: `${AGR}${form.rows.length}:clause`, scroll: true, error: null };
+}
+export function agreementFormRemove(form, i) {
+  if (!form?.agreement || !form.rows[i]) return form;
+  return { ...form, rows: form.rows.filter((_, j) => j !== i), error: null };
+}
+// Paste several: the box's lines become commitments after the ones there (an empty first row gives way).
+export function agreementFormPaste(form) {
+  if (!form?.agreement) return form;
+  const kept = form.rows.filter((r) => trimmed(r.clause) || trimmed(r.text) || trimmed(r.target) || trimmed(r.links));
+  const { commitments, problems } = commitmentsFromText(form.values.agrPaste, kept.map((r) => r.id));
+  if (!commitments.length) return { ...form, error: problems[0] || 'Nothing to add: one commitment a line — clause | what is promised | target | whose | links.' };
+  if (kept.length + commitments.length > COMMITMENTS_MAX) return { ...form, error: `At most ${COMMITMENTS_MAX} commitments.` };
+  return { ...form, rows: [...kept, ...commitments.map(rowOfCommitment)], values: { ...form.values, agrPaste: '' }, error: problems.length ? `Added ${commitments.length}; ${problems.join('; ')}.` : null };
+}
+
+// What is wrong before Save — { field: sentence }.
+function agreementProblems(form) {
+  const out = {};
+  const v = form.values || {};
+  if (!trimmed(v.agrDocument)) out.agrDocument = 'Name the document the agreement is written in.';
+  if (!trimmed(v.agrVersion)) out.agrVersion = 'Give that document\'s version.';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed(v.agrEffective))) out.agrEffective = 'Say the day it comes into force.';
+  (form.rows || []).forEach((r, i) => {
+    if (!trimmed(r.text)) out[`${AGR}${i}:text`] = 'Say what is promised, or remove the row.';
+    const bad = linksFromText(r.links).problems;
+    if (bad.length) out[`${AGR}${i}:links`] = `${bad.map((b) => JSON.stringify(b)).join(', ')} is not a link: write kind:name, such as alert:CheckoutErrorsHigh.`;
+  });
+  return out;
+}
+
+// agreementPlan(form, { services }) → what Save does: { problems, serviceId, patch, name, words } —
+// `patch` { agreement: { source, commitments } } only when it differs from the record's current version.
+export function agreementPlan(form, { services = [] } = {}) {
+  const existing = (Array.isArray(services) ? services : []).find((s) => s && s.id === form?.serviceId) || null;
+  const name = existing?.name || trimmed(form?.values?.name);
+  if (!existing) return { problems: { agrDocument: 'This service is no longer listed: close the form and open it again.' }, serviceId: null, patch: null, name, words: '' };
+  const problems = agreementProblems(form);
+  const version = versionOfForm(form);
+  const changed = !Object.keys(problems).length && !sameAgreement(existing.agreement ?? null, { versions: [version] });
+  return { problems, serviceId: existing.id, patch: changed ? { agreement: version } : null, name, words: `${version.source.document} · ${version.source.version}` };
+}
+
+// agreementWhatIf(form) → { summary, states: [{ words, tone }] } — what the repository covers of the
+// form as it reads now, said under the rows and beside each at every keystroke.
+export function agreementWhatIf(form) {
+  if (!form?.agreement) return { summary: '', states: [] };
+  const coverage = coverageOver(versionOfForm(form), form.catalogue);
+  const said = coverage.commitments.filter((c) => c.text);
+  const own = said.filter((c) => c.owner === 'service');
+  const n = (state) => (coverage.read ? own.filter((c) => c.state === state).length : null);
+  const counts = { total: said.length, service: own.length, consumer: said.length - own.length, covered: n('covered'), part: n('part'), notCovered: n('not-covered') };
+  return {
+    summary: coverageSummary(counts),
+    states: coverage.commitments.map((c) => ({
+      words: !c.text ? '' : c.owner === 'consumer' ? `The consumer's: shown here, not counted. ${coverageWords(c)}` : coverageWords(c),
+      tone: !c.text || c.state === 'not-read' ? 'neutral' : c.state === 'covered' ? 'ok' : c.state === 'part' ? 'warn' : 'fail',
+    })),
+  };
+}
+
+// What the renderer draws.
+function agreementFormView(form, { access = null } = {}) {
+  const canWrite = access?.canWrite !== false;
+  const whatIf = agreementWhatIf(form);
+  return {
+    open: true, mode: 'edit', agreement: true, saving: !!form.saving, error: form.error || null, focus: form.focus || null, scroll: !!form.scroll,
+    title: `Agreement · ${form.values.name}`,
+    hint: 'What this service promised, as its agreement states it. Each commitment is linked to what the repository declares for it — an objective, an alert rule, a dashboard, a metric — or to nothing, which reads not covered. This is the stage before the repository: it says how much of the agreement the repository covers, and never moves a letter.',
+    values: { ...form.values },
+    rows: (form.rows || []).map((r, i) => ({ ...r, i, state: whatIf.states[i] || { words: '', tone: 'neutral' }, owners: [{ value: 'service', label: 'This service', selected: r.owner !== 'consumer' }, { value: 'consumer', label: 'The consumer', selected: r.owner === 'consumer' }] })),
+    summary: whatIf.summary,
+    repository: form.readError ? `What the repository declares was not read: ${form.readError}`
+      : form.repository ? `Looked up in ${form.repository.pack}${form.repository.env ? `, the pack ${form.repository.env} is checked against` : ''}.`
+        : 'The repository has no pack yet: Run the service once, and the links are looked up.',
+    catalogue: (form.catalogue || []).filter((x) => !x.guessed).map(linkText),
+    versions: form.versions || [],
+    canAdd: (form.rows || []).length < COMMITMENTS_MAX,
+    problems: agreementProblems(form),
+    canWrite, reason: canWrite ? null : (access?.reason || 'Not available for your role here.'),
+  };
 }
 
 // ---------- State objectives… ----------
@@ -3331,6 +3488,7 @@ export function formModel(form, { endpoints = null, register = null, access = nu
   if (!form?.open) return { open: false };
   if (form.chaosRun) return chaosRunFormModel(form, { access, now });
   if (form.objectives) return objectivesFormView(form, { access });
+  if (form.agreement) return agreementFormView(form, { access });
   const v = form.values || {};
   const eps = Array.isArray(endpoints) ? endpoints : [];
   const canWrite = access?.canWrite !== false;

@@ -60,6 +60,8 @@ import { bodyOf, handler, pathId, refused } from './util.mjs';
 import { compactScope, normalizeScope } from '../../tools/lib/live-fetch.mjs';
 import { timedExcludeErrors } from '../../tools/fetch-live-pack.mjs';
 import { scopeCheckAnswer } from '../scope-check.mjs';
+import { adapt } from '../../tools/lib/adapter.mjs';
+import { agreementCatalogue, agreementCoverage, agreementCurrent, coverageSummary } from '../../studio/agreement.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
 function pathService(req, res, db) {
@@ -140,6 +142,33 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     const view = serviceViewOf(db, service);
     if (changed.includes('gradeOff') || changed.includes('setAside') || changed.includes('chaosRuns') || changed.includes('targets') || changed.includes('objectives') || changed.includes('liveScopes')) onGradeOffChanged?.(view);
     res.json({ ok: true, service: view, changed });
+  }));
+
+  // A service's agreement against its repository (studio/agreement.mjs): the record, its current
+  // version with each commitment's links looked up in the repository's pack, and what that pack
+  // declares that a commitment can be linked to. The pack read is the one production is checked
+  // against — the prod environment's last scan, else the first environment's, else the service's own
+  // pack — and the answer names it. Stored packs only: no scan, no MCP call, no row. A pack that
+  // cannot be read leaves every commitment "not looked up", never "not covered".
+  router.get('/api/services/:id/agreement', authorize('GET /api/services/:id/agreement'), handler((req, res, { db }) => {
+    const service = pathService(req, res, db);
+    if (!service) return;
+    const envs = listEnvironments(db, service.id).map((e) => e.name);
+    const env = envs.includes('prod') ? 'prod' : (envs[0] || '');
+    let basis = { declared: null };
+    try { basis = typeof scopeBasisOf === 'function' ? scopeBasisOf(service, env) : basis; } catch (_) { basis = { declared: null }; }
+    let layered = null;
+    try { layered = basis.declared ? adapt(basis.declared.canonical, env ? { environment: env } : {}) : null; } catch (_) { layered = null; }
+    const view = serviceViewOf(db, service);
+    const current = agreementCurrent(view.agreement);
+    const coverage = agreementCoverage(current, layered);
+    res.json({
+      ok: true,
+      agreement: view.agreement ?? null,
+      coverage: current ? { ...coverage, summary: coverageSummary(coverage.counts) } : null,
+      catalogue: layered ? agreementCatalogue(layered).filter((x) => !x.guessed).map(({ kind, name }) => ({ kind, name })) : [],
+      repository: layered ? { env: env || null, pack: basis.declared.label } : null,
+    });
   }));
 
   // The live scope form's check (server/scope-check.mjs): what the scope would leave out of a Run of
