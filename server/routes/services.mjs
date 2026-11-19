@@ -62,6 +62,7 @@ import { timedExcludeErrors } from '../../tools/fetch-live-pack.mjs';
 import { scopeCheckAnswer } from '../scope-check.mjs';
 import { adapt } from '../../tools/lib/adapter.mjs';
 import { withStatedObjectives } from '../../studio/slo-objectives.mjs';
+import { scoreFacts } from '../agreement-scorer.mjs';
 import { agreementCatalogue, agreementCoverage, agreementCurrent, agreementRoutes, commitmentFacts, coverageSummary } from '../../studio/agreement.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
@@ -176,6 +177,8 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
       coverage: current ? { ...coverage, commitments: facts.commitments, summary: coverageSummary(coverage.counts) } : null,
       catalogue: catalogue || [],
       routes,
+      // The agreement scored on those facts (server/agreement-scorer.mjs): the built-in rules, or the host's own scorer.
+      score: current ? scoreFacts(facts, current) : null,
       repository: layered ? { env: env || null, pack: basis.declared.label } : null,
     });
   }));

@@ -107,6 +107,7 @@ import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
+import { loadAgreementScorer } from './agreement-scorer.mjs';
 import { objectivesTermKey } from '../studio/slo-objectives.mjs';
 import { recordIdentityMode, bootStore } from './boot.mjs';
 import { currentStore } from './store/db.mjs';
@@ -3376,6 +3377,8 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   rehydrateOrgs(silent);
   syncTargetsIntoChecks(log);
   syncScopesIntoChecks(log);
+  // The host's own agreement scorer, when OBSERVOGRAM_AGREEMENT_SCORER names one (never a boot failure).
+  await loadAgreementScorer(log);
   noteLegacyLivePack(db, log, legacyLivePack);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process
