@@ -143,7 +143,7 @@ export async function loadServiceListFacts({ fetchFn = requestJson } = {}) {
 export async function loadServiceAgreement(serviceId, { fetchFn = requestJson } = {}) {
   try {
     const body = await fetchFn(`/api/services/${encodeURIComponent(serviceId)}/agreement`);
-    return { agreement: body?.agreement ?? null, coverage: body?.coverage ?? null, catalogue: Array.isArray(body?.catalogue) ? body.catalogue : [], routes: Array.isArray(body?.routes) ? body.routes : [], score: body?.score ?? null, repository: body?.repository ?? null };
+    return { agreement: body?.agreement ?? null, coverage: body?.coverage ?? null, catalogue: Array.isArray(body?.catalogue) ? body.catalogue : [], routes: Array.isArray(body?.routes) ? body.routes : [], score: body?.score ?? null, evidence: body?.evidence && typeof body.evidence === 'object' ? body.evidence : null, repository: body?.repository ?? null };
   } catch (e) { return { error: sentence(e) }; }
 }
 // The same for every service that has one, by id: what the list's Agreement column says.

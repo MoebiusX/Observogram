@@ -397,6 +397,108 @@ export function commitmentFacts(version, known, routes = []) {
   return { read: true, commitments };
 }
 
+// ---------- proven live, per environment ----------
+//
+// Decision Q2 (17 November): runtime evidence is scored per commitment where an environment proved
+// it, in that environment's column, capped by it — 4 only with production, 3 anywhere else — and never
+// inside a letter. An environment proves what its last live check saw: the comparison of its own scan
+// with what it read live, the same the check makes.
+
+const PRODUCTION_RE = /^(prd|prod|production|live)$/i;
+/** Whether an environment is production, by its name (as the Services list orders them). */
+export const isProduction = (env) => PRODUCTION_RE.test(String(env ?? '').trim());
+/** The highest level an environment can prove: 4 in production, 3 anywhere else. */
+export const evidenceCap = (env) => (isProduction(env) ? 4 : 3);
+
+const STATUS_RANK = { absent: 3, unseen: 2, differs: 1, live: 0 };
+/**
+ * What a comparison (tools/lib/diff.mjs diffPacks) says of each artefact the repository declares, by
+ * kind and name: 'live' (live as declared) · 'differs' (live, not as declared) · 'absent' (not live) ·
+ * 'unseen' (the check could not look). Where two declared artefacts share a kind and name, the worse.
+ * A plain object, so a server can send it and a page can read it.
+ */
+export function liveStatusOf(diff) {
+  const out = {};
+  const put = (a, status) => {
+    if (!isObj(a) || typeof a.id !== 'string' || /^METRIC-FAM-/.test(a.id)) return;
+    const kind = PREFIX_KIND.find(([re]) => re.test(a.id))?.[1];
+    if (!kind) return;
+    const name = nameOf(kind, a).trim();
+    if (!name) return;
+    const key = `${kind}:${name}`;
+    if (out[key] === undefined || STATUS_RANK[status] > STATUS_RANK[out[key]]) out[key] = status;
+  };
+  for (const layer of Object.values(isObj(diff?.layers) ? diff.layers : {})) {
+    if (!isObj(layer)) continue;
+    for (const x of Array.isArray(layer.inBoth) ? layer.inBoth : []) put(x?.a, Array.isArray(x?.deltas) && x.deltas.length ? 'differs' : 'live');
+    for (const x of Array.isArray(layer.onlyInA) ? layer.onlyInA : []) put(x?.artefact, 'absent');
+    for (const x of Array.isArray(layer.notObserved) ? layer.notObserved : []) if (x?.side !== 'b') put(x?.artefact, 'unseen');
+  }
+  return out;
+}
+
+const listWords = (xs) => (xs.length <= 3 ? xs.join(', ') : `${xs.slice(0, 3).join(', ')} and ${xs.length - 3} more`);
+/**
+ * One environment's evidence for a version of the agreement.
+ *   `known`   agreementCatalogue of that environment's scan (an objective's indicator and burn-rate
+ *             alert are looked for with it); `status` liveStatusOf its last check, or null for none
+ *   → { env, cap, checkedAt, commitments: [{ id, owner, state, level?, why }], counts }
+ *   state     'proven' (every link live as declared: the cap) · 'part' (some live, or live otherwise:
+ *             2) · 'not-live' (none live: 0) · 'not-checked' (no check, or it could not see one of
+ *             them: no level — never a 0)
+ *   counts    { commitments, proven, part, notLive, notChecked } over the ones the service answers for
+ */
+export function commitmentEvidence(version, known, status, { env = '', checkedAt = null } = {}) {
+  const cap = evidenceCap(env);
+  const list = isObj(version) && Array.isArray(version.commitments) ? version.commitments.filter(isObj) : [];
+  const where = env || 'this environment';
+  const commitments = list.map((c) => {
+    const base = { id: c.id, owner: ownerOf(c) };
+    if (!isObj(status)) return { ...base, state: 'not-checked', why: `No live check of ${where} has been read.` };
+    const links = Array.isArray(c.links) ? c.links : [];
+    if (!links.length) return { ...base, state: 'not-live', level: 0, why: 'It is linked to nothing, so nothing of it can be seen live.' };
+    // What to look for live: each link, and for an objective the indicator and burn-rate alert the scan declares for it.
+    const wanted = [];
+    const add = (kind, name) => { if (name && !wanted.some((w) => w.kind === kind && w.name === name)) wanted.push({ kind, name, label: kind === 'burn_alert' ? `the burn-rate alert on ${name}` : name }); };
+    for (const l of links) {
+      add(l.kind, l.name);
+      if (l.kind !== 'slo') continue;
+      const e = Array.isArray(known) ? known.find((x) => x.kind === 'slo' && x.name === l.name) : null;
+      if (e?.indicator) add('indicator', e.indicator);
+      if (Array.isArray(e?.burn)) add('burn_alert', l.name);
+    }
+    const looked = wanted.map((w) => ({ ...w, status: status[`${w.kind}:${w.name}`] }));
+    const seen = looked.filter((w) => w.status);
+    // A link the scan does not declare is not proven live either (In the repository says it is missing).
+    const undeclared = looked.filter((w) => !w.status).map((w) => w.label);
+    if (!seen.length) return { ...base, state: 'not-live', level: 0, why: `Nothing it is linked to is declared in ${where}'s scan.` };
+    const named = (st) => seen.filter((w) => w.status === st).map((w) => w.label);
+    const [live, differs, absent, unseen] = ['live', 'differs', 'absent', 'unseen'].map(named);
+    if (unseen.length) return { ...base, state: 'not-checked', why: `The last check of ${where} could not see ${listWords(unseen)}.` };
+    if (live.length === seen.length && !undeclared.length) return { ...base, state: 'proven', level: cap, why: `Everything it is linked to runs live as declared in ${where}${cap < 4 ? ` (${cap} is the most ${where} can prove: 4 only with production)` : ''}.` };
+    if (!live.length && !differs.length) return { ...base, state: 'not-live', level: 0, why: `None of it runs live in ${where}: ${listWords(absent)} ${absent.length === 1 ? 'is' : 'are'} not there.` };
+    const why = [
+      live.length ? `${listWords(live)} ${live.length === 1 ? 'runs' : 'run'} live as declared` : '',
+      differs.length ? `${listWords(differs)} ${differs.length === 1 ? 'runs' : 'run'} live, not as declared` : '',
+      absent.length ? `${listWords(absent)} ${absent.length === 1 ? 'is' : 'are'} not live` : '',
+      undeclared.length ? `${listWords(undeclared)} ${undeclared.length === 1 ? 'is' : 'are'} not in its scan` : '',
+    ].filter(Boolean).join('; ');
+    return { ...base, state: 'part', level: Math.min(2, cap), why: `In part, in ${where}: ${why}.` };
+  });
+  const own = commitments.filter((c) => c.owner !== 'consumer');
+  const n = (state) => own.filter((c) => c.state === state).length;
+  return { env, cap, checkedAt, commitments, counts: { commitments: own.length, proven: n('proven'), part: n('part'), notLive: n('not-live'), notChecked: n('not-checked') } };
+}
+
+/** An environment's evidence in one line: "2 of 3 commitments proven live, 1 in part." */
+export function evidenceSummary(ev) {
+  const c = ev?.counts;
+  if (!c || !c.commitments) return '';
+  if (c.notChecked === c.commitments) return 'The agreement is not checked live here yet.';
+  const rest = [c.part ? `${c.part} in part` : '', c.notLive ? `${c.notLive} not live` : '', c.notChecked ? `${c.notChecked} not checked` : ''].filter(Boolean).join(', ');
+  return `${c.proven} of ${c.commitments} commitment${c.commitments === 1 ? '' : 's'} proven live${rest ? `, ${rest}` : ''}.`;
+}
+
 /** A commitment's gaps in one line: "Lacks an alert, a dashboard." — '' when it lacks nothing. */
 const GAP_WORD = { 'in-pack': '', measured: 'a measure', detected: 'an alert', routed: 'a route for its alerts', seen: 'a dashboard', objective: 'a stated objective', target: 'an objective as strict as its target' };
 export function gapsWords(gaps) {

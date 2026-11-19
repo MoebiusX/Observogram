@@ -40,7 +40,13 @@ const unchecked = (why) => ({ state: 'not-checked', why });
 
 /** One commitment's cells under the built-in rules: { [dimension key]: cell }. `fact`: one of commitmentFacts' commitments. */
 export function builtInCells(fact) {
-  const evidence = unchecked('Whether it holds live is not read yet.');
+  // Proven live: production's evidence for it (studio/agreement.mjs commitmentEvidence), which the
+  // facts carry as `live` — the agreement's targets bind production; another environment's evidence
+  // is said in its own column, never here.
+  const live = isObj(fact?.live) ? fact.live : null;
+  const evidence = !live ? unchecked('No live check of production has been read.')
+    : live.state === 'not-checked' ? unchecked(String(live.why || 'Not checked live.'))
+      : scored(Math.max(0, Math.min(LEVEL_MAX, Number(live.level) || 0)), String(live.why || ''));
   if (!isObj(fact) || fact.state === 'not-read') {
     const why = 'The repository is not read yet.';
     return { in_pack: unchecked(why), measurable: unchecked(why), detectable: unchecked(why), actionable: unchecked(why), observable: unchecked(why), target_match: unchecked(why), evidence };

@@ -63,7 +63,28 @@ import { scopeCheckAnswer } from '../scope-check.mjs';
 import { adapt } from '../../tools/lib/adapter.mjs';
 import { withStatedObjectives } from '../../studio/slo-objectives.mjs';
 import { scoreFacts } from '../agreement-scorer.mjs';
-import { agreementCatalogue, agreementCoverage, agreementCurrent, agreementRoutes, commitmentFacts, coverageSummary } from '../../studio/agreement.mjs';
+import { agreementCatalogue, agreementCoverage, agreementCurrent, agreementRoutes, commitmentEvidence, commitmentFacts, coverageSummary, isProduction, liveStatusOf } from '../../studio/agreement.mjs';
+import { diffPacks } from '../../tools/lib/diff.mjs';
+
+// What an environment's last live check saw of its scan (studio/agreement.mjs liveStatusOf), by the
+// two packs it compared: a comparison is not cheap (a tenth of a second on a large pack), and the list
+// asks for every service's agreement. Bounded; a new scan or a new live read is another key.
+const LIVE_STATUS_MAX = 64;
+const liveStatusMemo = new Map();
+function liveStatusFor(basis, env) {
+  if (!basis?.declared || !basis?.live) return null;
+  const key = JSON.stringify([basis.declared.packId, basis.live.packId, basis.live.refreshedAt ?? null, env, basis.scopeMode ?? null, basis.service ?? null]);
+  if (liveStatusMemo.has(key)) return liveStatusMemo.get(key);
+  let status = null;
+  try {
+    const a = adapt(basis.declared.canonical, env ? { environment: env } : {});
+    const b = adapt(basis.live.canonical, {});
+    status = liveStatusOf(diffPacks(a, b, { ...(basis.scopeMode ? { scopeMode: basis.scopeMode } : {}), ...(basis.service ? { service: basis.service } : {}) }));
+  } catch (_) { status = null; }
+  liveStatusMemo.set(key, status);
+  if (liveStatusMemo.size > LIVE_STATUS_MAX) liveStatusMemo.delete(liveStatusMemo.keys().next().value);
+  return status;
+}
 
 // The service a path names — or null, the answer (400 / 404) sent.
 function pathService(req, res, db) {
@@ -171,6 +192,20 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     const catalogue = layered ? agreementCatalogue(layered) : null;
     const routes = layered ? agreementRoutes(layered) : [];
     const facts = current ? commitmentFacts(current, catalogue, routes) : null;
+    // Proven live, per environment (decision Q2): each environment's last live check against its own
+    // scan, capped by the environment. Production's is the agreement's own "proven live".
+    const evidence = {};
+    if (current) {
+      for (const name of envs) {
+        let b = null;
+        try { b = typeof scopeBasisOf === 'function' ? scopeBasisOf(service, name) : null; } catch (_) { b = null; }
+        let known = null;
+        try { known = b?.declared ? agreementCatalogue(withStatedObjectives(adapt(b.declared.canonical, { environment: name }), view.objectives ?? null)) : null; } catch (_) { known = null; }
+        evidence[name] = commitmentEvidence(current, known, liveStatusFor(b, name), { env: name, checkedAt: b?.live?.refreshedAt ?? null });
+      }
+      const prod = envs.find(isProduction);
+      if (prod && facts) facts.commitments = facts.commitments.map((c, i) => ({ ...c, live: evidence[prod].commitments[i] }));
+    }
     res.json({
       ok: true,
       agreement: view.agreement ?? null,
@@ -179,6 +214,7 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
       routes,
       // The agreement scored on those facts (server/agreement-scorer.mjs): the built-in rules, or the host's own scorer.
       score: current ? scoreFacts(facts, current) : null,
+      evidence: current ? evidence : null,
       repository: layered ? { env: env || null, pack: basis.declared.label } : null,
     });
   }));
