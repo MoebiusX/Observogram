@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.8.49 — 2026-11-19
+
+**The agreement's score: each commitment on seven weighted dimensions, with rules a host can replace.** 0.8.48 said what stands behind each commitment and what it lacks. This scores it, with the downstream's seven dimensions and weights and the built-in level rules decided on 19 November, and lets a host swap the rules for its own. It is the stage before the repository: nothing here reaches a letter.
+
+### Added
+- **The built-in score** (`studio/agreement-score.mjs`, new, zero-import; *Built-in levels, version 1*): in the repository 15, measured 20, alerted on 15, routed 15, shown 10, target match 15, proven live 10; levels 0 to 4 — in the repository 0 / 2 some links / 4 all; measured 0 / 2 a metric or recording rule only / 4 an indicator with a series; alerted on 0 / 4; routed 0 / 2 some severities / 4 every one; shown 0 / 4; target match 0 no objective or the scan's default / 1 looser / 3 approximated / 4 the same or stricter. A dimension the commitment's own links do not call for is *not applicable* and left out of its total; one the studio did not look at is *not checked* and has no level — *proven live* is not checked until runtime evidence is read, and nothing is scored where no pack was read. Points are sums: a commitment's, Σ weight × level / 4 over its scored cells; the service's, those over the commitments it answers for, each times its own weight; the consumer's are shown and left out.
+- **A scorer a host can replace** (`server/agreement-scorer.mjs`, new): `OBSERVOGRAM_AGREEMENT_SCORER` names an ES module exporting `scorer = { id, version, label }` and a synchronous `score({ facts, agreement, builtIn })` that answers its own dimensions, level range and a cell per commitment and dimension. Loaded once at start and named in the log. A result names its scorer and is compared only with one from the same scorer, version and dimensions (`resultTermsKey`). A module that does not load, throws, answers a promise or answers what does not read leaves every agreement *not scored*, with why — never the built-in's numbers in its place.
+- **The score on screen**: `GET /api/services/:id/agreement` answers `score`. The form shows a level per dimension beside every row (– does not apply, ? not checked; why and the weight on hover), the row's points and the service's line — *206.3 of 360 points over 2 commitments · Built-in levels, version 1. Proven live is not checked yet.* — again at every keystroke under the built-in's rules; under a host's own scorer, its result as saved, scored again on Save. The Services list's Agreement cell carries the points.
+- **Downstream:** config, api, behaviour — additive. `OBSERVOGRAM_AGREEMENT_SCORER` is new (unset: the built-in). `GET /api/services/:id/agreement` gains `score`; `coverage.commitments[].has` gains `kinds`, `measure`, `severities`, `unrouted`. The board unit imports one more module, `studio/agreement-score.mjs`: copy it with the others (`docs/VENDORING.md`). Nothing reaches `computeDiagnosticGrade`, a run record or a gate.
+
+### Tests
+- `tools/test-agreement-score.mjs` (new, 5): the dimensions and weights; every level of every dimension, not applicable and not checked; the sums with a weighted shared commitment and the consumer's left out; a host's answer read and each way it is refused, with no numbers; the server's scorer built-in, a module loaded, one that throws, one that answers a promise, one missing and one with no scorer, then back to the built-in. `tools/test-agreement.mjs`: `has`' new keys. `tools/test-overview-model.mjs`: the strip and points as typed, a host's result shown as saved, *not scored* said, the list cell's points. Pins moved: the vendored unit's import list, the bundle ceiling (7,500,000; measured 7,478,471).
+- Checked signed in, in a browser at 1366×768, on a scratch studio whose repository was scanned by a real Run: three commitments, each with its seven levels and points beside it — *Repo 4 · Meas 4 · Alert 4 · Route 0 · Shown 4 · Target 3 · Live ? — 71.3 of 90 points* for an objective whose alerts are routed nowhere; *Repo 2 · Shown 4*, the rest not applicable, for a dashboard half found; the consumer's shown with no points — the service's line *88.8 of 115 points over 2 commitments · Built-in levels, version 1. Proven live is not checked yet.* in the form and on the list, nothing past the width, no console error.
+- Suite total 2099 → 2104.
+- **Downstream:** none — tests only.
+
+### Not here
+- **Proven live** is not checked: runtime evidence per commitment, in each environment's column and capped by it (decision Q2), is the next slice.
+- **No gate, notification or history** reads the score yet; a run record carries none.
+- **The rules are version 1, decided here**, not the downstream's own definitions: a host that has its own plugs them in with `OBSERVOGRAM_AGREEMENT_SCORER`.
+- **One word per layer** (decision 3a) is still owed: the board says *promise* where the decision says *chain*.
+- **Downstream:** none — nothing shipped.
+
 ## 0.8.48 — 2026-11-19
 
 **What stands behind each commitment, and what it lacks.** 0.8.47 said whether a commitment's links are in the repository. That is not whether the repository can keep the promise: an objective can be linked and still have no alert, no dashboard and a number nobody stated. The studio now reads the chain behind every link and says what each commitment lacks, with its fix. These are the facts the agreement's score will be built on; nothing is scored yet.

@@ -333,7 +333,10 @@ export function targetMatch(target, objective) {
  * What the repository has behind each commitment, and what it lacks — the facts a scorer reads; no
  * level, no weight added up. `known`: agreementCatalogue's entries (null: no pack read);
  * `routes`: agreementRoutes' severities.
+ *   has.kinds        the kinds of what it is linked to that the repository declares
  *   has.measured     an indicator with a series behind it, a recording rule or a metric
+ *   has.measure      'indicator' (an indicator with a series) · 'series' (a metric or a recording rule only) · null
+ *   has.severities   the severities its alerts page at; has.unrouted the ones routed nowhere
  *   has.alerts       the alert rules and burn-rate alerts that would fire for it
  *   has.routed       every severity those page at goes somewhere (null: no alert to route)
  *   has.dashboards   how many dashboards show it
@@ -382,7 +385,12 @@ export function commitmentFacts(version, known, routes = []) {
     }
     return {
       ...c,
-      has: hits.length ? { measured, alerts: alerts.map(({ kind, name }) => ({ kind, name })), routed: alerts.length ? (severities.length > 0 && !unrouted.length) : null, dashboards, objective } : null,
+      has: hits.length ? {
+        kinds: [...new Set(hits.map((h) => h.kind))].sort(),
+        measured, measure: hits.some((h) => (h.kind === 'slo' || h.kind === 'indicator') && h.measured) ? 'indicator' : measured ? 'series' : null,
+        alerts: alerts.map(({ kind, name }) => ({ kind, name })), severities, unrouted,
+        routed: alerts.length ? (severities.length > 0 && !unrouted.length) : null, dashboards, objective,
+      } : null,
       target, gaps,
     };
   });
