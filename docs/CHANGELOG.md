@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.8.50 — 2026-11-19
+
+**Proven live, per environment: what each environment's last live check proves of the agreement.** The fourth slice of the agreement scorecard, and decision Q2 of 17 November: runtime evidence is scored per commitment where an environment proved it, in that environment's column, capped by it — 4 only with production, 3 anywhere else — and never inside a letter. Until now the score's *Proven live* was always *not checked*.
+
+### Added
+- **What a check proves** (`studio/agreement.mjs` `liveStatusOf`, `commitmentEvidence`, `evidenceSummary`, `evidenceCap`, `isProduction`): each environment's last live reading is compared with that environment's own scan, as its check compares them, and a commitment's links are looked up in it — an objective together with the indicator and burn-rate alert the scan declares for it. Every one live as declared: *proven*, at the environment's cap (4 in production, 3 anywhere else). Some live, or live but not as declared, or one not in the scan: *in part*, 2. None live, or linked to nothing: *not live*, 0. A link the check could not see, or no live check read: *not checked*, with no level — never a 0. Each with its reason (*In part, in staging: s, i run live as declared; the burn-rate alert on s is not live.*). The consumer's are shown and not counted.
+- **In each environment's column**, on the Services list: *Agreement: 2 of 3 commitments proven live, 1 in part.*, green when all are proven, amber when some, the cap and each commitment's reason on hover.
+- **The agreement's Proven live is production's** (`studio/agreement-score.mjs`): the facts a scorer reads carry production's evidence as `live`, and the built-in scores it — the agreement's targets bind production. In the form, a row whose links changed since it was saved reads *not checked* until Save looks it up again.
+- **Nothing is read live for this** (`server/routes/services.mjs`): the reading the environment's last check kept is compared again with its scan — a tenth of a second on a large pack, remembered by the two packs compared — so a new Run is what refreshes it.
+- **Downstream:** api, behaviour — additive. `GET /api/services/:id/agreement` answers `evidence` (by environment name), and the score's *Proven live* is now scored where production has a live check; `studio/agreement.mjs` exports the five above; `serviceListModel` rows carry `proven`. Nothing reaches a letter, a run record or a gate.
+
+### Tests
+- `tools/test-agreement.mjs` +2 (11): the comparison's status per declared artefact, the worse of two of one name; proven, in part, not live, not checked, an objective with its indicator and burn-rate alert, a link not in the scan, the cap in production and staging, no check read. `tools/test-agreement-score.mjs` +1 (6): *Proven live* from production's evidence, and every dimension scored. `tools/test-overview-model.mjs`: the column's line, the cap on hover, production's level in the form and *not checked* once a row's links change. `server/test-services-api.mjs`: two environments answered, capped 4 and 3, nothing with a level without a live check.
+- CHECKED_LINE
+- Suite total 2104 → 2107.
+- **Downstream:** none — tests only.
+
+### Not here
+- **The cap does not age**: a check a month old proves as much as one an hour old; the column says when the environment was checked beside it.
+- **Set-asides do not apply here**: a difference set aside for the grade still counts against *proven live*.
+- **No gate, notification or history** reads the score or the evidence yet.
+- **One word per layer** (decision 3a) is still owed.
+- **Downstream:** none — nothing shipped.
+
 ## 0.8.49 — 2026-11-19
 
 **The agreement's score: each commitment on seven weighted dimensions, with rules a host can replace.** 0.8.48 said what stands behind each commitment and what it lacks. This scores it, with the downstream's seven dimensions and weights and the built-in level rules decided on 19 November, and lets a host swap the rules for its own. It is the stage before the repository: nothing here reaches a letter.
