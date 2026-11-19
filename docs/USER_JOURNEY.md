@@ -468,7 +468,10 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
 ### Overview: the Services list
 
 Overview's front door. One row per service, a column per environment —
-*Service · Repository · dev · stg · prod*, the environments in the order a
+*Service · Agreement · Repository · dev · stg · prod* (the Agreement column:
+what the service promised and how much of it the repository covers, with
+**Record the agreement…** or **Open** for its form — the stage before the
+repository, never a letter), the environments in the order a
 release travels (dev, test, acceptance, staging, production, then any other
 by name) whatever order they were declared in — the services a person can run
 first. Each one is checked where it is declared — its repository — against

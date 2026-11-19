@@ -89,6 +89,26 @@ repository yet are counted under the list.
 
 ![Overview's service list as a matrix: a row per service with its GitHub repository, a column per environment with its live MCP endpoint, branch, grade and last check, and the grade's letters beneath](docs/img/overview-services.png)
 
+**The agreement, before the repository.** The list reads left to right as the
+chain does: *Service · Agreement · Repository · each environment*. The
+Agreement cell holds what the service promised — its operational agreement, as
+one issue of its source document states it — and says how much of it the
+repository covers: *14 of 20 commitments covered by the repository, 2 in part,
+4 not; 3 more are the consumer's.* **Record the agreement…** (or **Open**)
+takes the document, its version and the day it comes into force, then a row
+per commitment: where the document says it, what is promised, the target as
+written (kept as text — a calendar month, exclusions, 100% — and never checked
+against an objective's limits), who answers for it, and what it is linked to.
+A commitment links to anything the repository declares — an objective, an
+indicator, an alert rule, a burn-rate alert, a recording rule, a dashboard, a
+metric, an exporter — or to nothing, which reads *not covered*; what each row
+covers is said as it is typed, and **Paste several…** takes a whole agreement a
+line at a time. Saved under another document, version or date it is kept as a
+new version; under the same one it corrects it. It is its own stage: the grade
+says how a live environment represents the repository, this says how the
+repository covers the agreement, and it never moves a letter. Nothing here is a
+score yet.
+
 **2. Add a service.** Five numbered answers — the service, the environment,
 the repository, the live endpoint (one of the org's, or a new one) and its
 **targets**, how fast an incident should be detected and resolved — then
@@ -2119,8 +2139,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.46 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.46
+docker build -t observogram:0.8.47 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.47
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2183,7 +2203,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.46
+  observogram:0.8.47
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2191,7 +2211,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.46
+    image: observogram:0.8.47
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

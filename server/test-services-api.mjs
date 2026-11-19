@@ -621,6 +621,52 @@ test('a journey\'s run counts its service\'s SLO objectives stated in the studio
   }
 });
 
+test('a service\'s agreement: PATCH keeps it in versions, signed and dated — the same issue of the document corrected in place, another added; what is not an agreement is refused; GET /api/services/:id/agreement answers it with what the repository covers, never "not covered" when no pack was read', async () => {
+  const K = 'PATCH /api/services/:id';
+  const P = `/api/services/${ids.ledgerNulls}`;
+  const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
+  const one = { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month, excluding planned maintenance', owner: 'service', links: [{ kind: 'slo', name: 'ledger_availability_99_9' }, { kind: 'dashboard', name: 'ledger-overview' }] };
+  const theirs = { id: 'c-5-2', text: 'Retries back off', owner: 'consumer' };
+  try {
+    assert.equal((await ok('GET /api/services/:id', 'vera', P)).json.service.agreement, null);
+    const empty = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
+    assert.deepEqual([empty.agreement, empty.coverage], [null, null], 'none recorded: nothing to cover');
+    for (const [bad, why] of [
+      [{ source: { ...SOURCE, effective: 'soon' }, commitments: [] }, 'source.effective is the day it comes into force'],
+      [{ source: SOURCE, commitments: [{ id: 'a', text: '' }] }, 'commitments[0].text says what is promised'],
+      [{ source: SOURCE, commitments: [{ id: 'a', text: 'x', links: [{ kind: 'panel', name: 'p' }] }] }, 'links[0] is { kind, name }'],
+      [[], 'agreement is { source'],
+    ]) {
+      const r = await call('oscar', 'PATCH', P, { agreement: bad });
+      assert.ok(r.status === 400 && String(r.json.error).includes(why), `refused: ${JSON.stringify(bad)} → ${r.status} ${r.json?.error}`);
+    }
+    const first = (await ok(K, 'oscar', P, { agreement: { source: SOURCE, commitments: [one] } })).json.service.agreement;
+    assert.deepEqual([first.versions.length, first.versions[0].source, first.versions[0].commitments], [1, SOURCE, [one]]);
+    assert.ok(typeof first.versions[0].by === 'string' && first.versions[0].by && !Number.isNaN(Date.parse(first.versions[0].at)), 'signed and dated');
+    // The same issue, with one more commitment: corrected in place.
+    const corrected = (await ok(K, 'oscar', P, { agreement: { source: SOURCE, commitments: [one, theirs] } })).json.service.agreement;
+    assert.deepEqual([corrected.versions.length, corrected.versions[0].commitments.map((c) => [c.id, c.owner, c.target, c.links.length])], [1, [['c-4-1', 'service', one.target, 2], ['c-5-2', 'consumer', '', 0]]]);
+    // Another issue: a version beside it; the newest is the service's.
+    const NEXT = { ...SOURCE, version: '3.0', effective: '2027-01-01' };
+    const next = (await ok(K, 'oscar', P, { agreement: { source: NEXT, commitments: [one] } })).json.service.agreement;
+    assert.deepEqual(next.versions.map((v) => [v.source.version, v.commitments.length]), [['2.1', 2], ['3.0', 1]]);
+    // Read back with what the repository covers: where no pack is read, nothing is looked up and none reads "not covered".
+    const read = (await ok('GET /api/services/:id/agreement', 'vera', `${P}/agreement`)).json;
+    assert.deepEqual(read.agreement, next);
+    assert.equal(read.coverage.commitments.length, 1);
+    if (read.repository === null) {
+      assert.deepEqual([read.coverage.read, read.coverage.commitments.map((c) => [c.id, c.state]), read.coverage.counts, read.coverage.summary, read.catalogue],
+        [false, [['c-4-1', 'not-read']], { total: 1, service: 1, consumer: 0, covered: null, part: null, notCovered: null }, '1 commitment; the repository is not read yet.', []]);
+    } else {
+      assert.ok(read.coverage.read === true && ['covered', 'part', 'not-covered'].includes(read.coverage.commitments[0].state) && typeof read.repository.pack === 'string');
+    }
+    await refused('GET /api/services/:id/agreement', 'vera', '/api/services/999999/agreement', 404, 'no service 999999');
+    assert.equal((await ok(K, 'oscar', P, { agreement: null })).json.service.agreement, null, 'cleared');
+  } finally {
+    await call('oscar', 'PATCH', P, { agreement: null });
+  }
+});
+
 test('a service\'s MTTD / MTTR targets reach its saved checks: made with them (a check left under its name gains them), a check saved without them is graded on them through the server, left as it was by a Check now and given them at the next start, and deleting a service whose only studio value is its targets takes them out', async () => {
   const { mkdirSync, writeFileSync } = await import('node:fs');
   const NAME = 'targets-everywhere';
