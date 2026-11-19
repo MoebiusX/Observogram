@@ -210,7 +210,8 @@ test('commitmentFacts: what the repository has behind each commitment and what i
   ]);
   const facts = commitmentFacts(version, agreementCatalogue(chained), agreementRoutes(chained));
   const of = (id) => facts.commitments.find((c) => c.id === id);
-  assert.deepEqual(of('whole').has, { measured: true, alerts: [{ kind: 'burn_alert', name: 'checkout_99_9' }], routed: true, dashboards: 2, objective: { slo: 'checkout_99_9', value: 0.999, window: '30d', source: 'repository' } });
+  assert.deepEqual(of('whole').has, { kinds: ['slo'], measured: true, measure: 'indicator', alerts: [{ kind: 'burn_alert', name: 'checkout_99_9' }], severities: ['SEV1', 'SEV2'], unrouted: [], routed: true, dashboards: 2, objective: { slo: 'checkout_99_9', value: 0.999, window: '30d', source: 'repository' } });
+  assert.deepEqual([of('alert-only').has.kinds, of('alert-only').has.measure, of('alert-only').has.severities, of('alert-only').has.unrouted, of('dash-only').has.kinds], [['alert'], null, ['SEV3'], ['SEV3'], ['dashboard']]);
   assert.deepEqual([of('whole').gaps, of('whole').target, gapsWords(of('whole').gaps)], [[], { state: 'same', words: 'The target and the objective agree: 99.9% over 30 days.' }, '']);
   assert.deepEqual([of('bare').owner, of('bare').weight, of('bare').has.routed, of('bare').gaps.map((g) => g.key), gapsWords(of('bare').gaps)],
     ['both', 3, null, ['measured', 'detected', 'seen', 'objective'], 'Lacks a measure, an alert, a dashboard, a stated objective.']);

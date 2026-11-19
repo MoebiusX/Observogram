@@ -375,7 +375,10 @@ test('T3 buildStudioBundle: a real bundle — every data: module parses, the sty
   // 7,460,000 since the agreement stage (2026-11-19: the two-pack bundle measured 7,434,306 with
   // studio/agreement.mjs, the agreement's cell on the Services list and its form in the board's model
   // and view; no dependency), about 26 KB over.
-  assert.ok(built.bytes < 7_460_000, `the two-pack bundle is under 7,460,000 bytes (${built.bytes})`);
+  // 7,500,000 since the agreement's score (2026-11-19: the two-pack bundle measured 7,478,471 with
+  // studio/agreement-score.mjs, the facts behind each commitment and the levels strip in the form;
+  // no dependency), about 21 KB over.
+  assert.ok(built.bytes < 7_500_000, `the two-pack bundle is under 7,500,000 bytes (${built.bytes})`);
   // Every module decodes and parses.
   const dir = join(TMP, 'modules');
   for (const [key, address] of Object.entries(map.imports)) {

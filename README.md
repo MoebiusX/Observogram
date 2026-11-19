@@ -121,8 +121,30 @@ should have that alert go somewhere; a dashboard or a metric that must exist
 lacks nothing more. The target as written is set beside the objective and read
 as the same, approximated (a calendar month against 30 days; a 100% no
 objective can hold), looser or stricter — never changed. A commitment may be
-answered for by the service, the consumer, or both, and may carry a weight;
-nothing adds the weights up yet.
+answered for by the service, the consumer, or both, and may carry a weight.
+
+**The agreement's score.** Each commitment is scored on seven weighted
+dimensions — in the repository 15, measured 20, alerted on 15, routed 15, shown
+10, target match 15, proven live 10 — at a level from 0 to 4: 0 when the fact is
+missing, 4 when it is all there, and a middle level only where *partly* means
+something (some links in the repository; a metric but no indicator; some
+severities routed; a target approximated, or looser). A dimension a
+commitment's links do not call for is left out of its total (a dashboard that
+must exist has nothing to alert on), and one the studio could not look at —
+proven live, until runtime evidence is read — has no level, never a 0. A
+commitment's points are its weighted levels over the dimensions scored; the
+service's are those sums over the commitments it answers for, each times its own
+weight — the consumer's are shown and left out. The form shows a level per
+dimension beside every row as it is typed, and the Services list the points:
+*206.3 of 360 points over 2 commitments · Built-in levels, version 1.*
+
+The rules are replaceable. `OBSERVOGRAM_AGREEMENT_SCORER` names an ES module
+that exports `scorer = { id, version, label }` and a synchronous
+`score({ facts, agreement, builtIn })` answering its own dimensions and a cell
+per commitment and dimension. Its result names it and is never compared with
+another scorer's; a module that does not load, throws or answers what does not
+read leaves every agreement *not scored*, with why — never the built-in's
+numbers in its place. Nothing here reaches a letter.
 
 **2. Add a service.** Five numbered answers — the service, the environment,
 the repository, the live endpoint (one of the org's, or a new one) and its
@@ -2154,8 +2176,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.48 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.48
+docker build -t observogram:0.8.49 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.49
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2218,7 +2240,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.48
+  observogram:0.8.49
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2226,7 +2248,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.48
+    image: observogram:0.8.49
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

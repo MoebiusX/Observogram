@@ -3579,12 +3579,13 @@ test('renderServiceList: Sign in to … before the token field and Sign out of �
 // here, the way tools/test-diagnostic-grade.mjs holds the grade engine.
 
 const VENDORABLE_OVERVIEW = {
-  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './agreement.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
+  'studio/overview-model.mjs': ['./services-model.mjs', './diagnostic-grade.mjs', './set-asides.mjs', './artefact-tiers.mjs', './mttx-targets.mjs', './slo-objectives.mjs', './agreement.mjs', './agreement-score.mjs', './chaos-runs.mjs', './constants.mjs', './clause-fixes.mjs'],
   'studio/artefact-tiers.mjs': [],
   'studio/clause-fixes.mjs': [],
   'studio/mttx-targets.mjs': [],
   'studio/slo-objectives.mjs': [],
   'studio/agreement.mjs': [],
+  'studio/agreement-score.mjs': [],
   'studio/chaos-runs.mjs': [],
   'studio/set-asides.mjs': [],
   'studio/overview-view.mjs': ['./util.mjs', './host.mjs', './ux-kit-pure.mjs'],
@@ -4533,14 +4534,31 @@ test('the agreement: its column on the Services list (drawn only where the host 
     { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', weight: '', links: '' },
   ]]);
   assert.equal(formDraft(form), null, 'never kept as a draft of the service form');
-  assert.deepEqual(agreementWhatIf(form), { summary: "0 of 1 commitment covered by the repository, 1 in part; 1 more is the consumer's.", states: [
+  // What a row says (its score apart, below).
+  const plain = (w) => ({ summary: w.summary, states: w.states.map(({ words, gaps, tone }) => ({ words, gaps, tone })) });
+  assert.deepEqual(plain(agreementWhatIf(form)), { summary: "0 of 1 commitment covered by the repository, 1 in part; 1 more is the consumer's.", states: [
     { words: 'Covered in part: 1 not in the repository', gaps: [], tone: 'warn' },
     { words: "The consumer's: shown here, not counted. Not covered: linked to nothing", gaps: [], tone: 'fail' },
   ] });
   assert.equal(agreementPlan(form, { services }).patch, null, 'as the record has it: nothing to save');
   // Typed: said at once.
   form = agreementFormInput(form, 'agr:0:links', 'slo:checkout_99_9, alert:CheckoutErrorsHigh');
-  assert.deepEqual([agreementWhatIf(form).summary, agreementWhatIf(form).states[0]], ["1 of 1 commitment covered by the repository; 1 more is the consumer's.", { words: 'Covered by the repository', gaps: [], tone: 'ok' }]);
+  assert.deepEqual([agreementWhatIf(form).summary, plain(agreementWhatIf(form)).states[0]], ["1 of 1 commitment covered by the repository; 1 more is the consumer's.", { words: 'Covered by the repository', gaps: [], tone: 'ok' }]);
+  // The score, said at every keystroke under the built-in's rules: a level per dimension, the points, and the line.
+  const scoredNow = agreementWhatIf(form);
+  assert.deepEqual([scoredNow.states[0].score.points, scoredNow.states[0].score.cells.map((x) => `${x.short}:${x.mark}`).join(' ')], ['86.3 of 90 points', 'Repo:4 Meas:4 Alert:4 Route:4 Shown:4 Target:3 Live:?'], '15 + 20 + 15 + 15 + 10, and three quarters of 15');
+  assert.equal(scoredNow.states[0].score.cells[5].title, 'Target match (weight 15): level 3 of 4. The same number over another period: a calendar month in the agreement, 30 days in the repository.');
+  assert.deepEqual([scoredNow.states[1].score.points, scoredNow.states[1].score.cells.every((x) => x.mark === '0' || x.mark === '–' || x.mark === '?')], ['', true], 'the consumer\'s is shown with no points of its own');
+  assert.equal(scoredNow.score, '86.3 of 90 points over 1 commitment · Built-in levels, version 1. Proven live is not checked yet.');
+  // A host's own scorer scored it on the server: the page shows that result as saved, and does not score with rules it does not have.
+  const hostResult = { state: 'scored', scorer: { id: 'acme.scorecard', version: '3', label: 'Acme scorecard 3' }, levelMax: 2, dimensions: [{ key: 'kept', label: 'Kept', short: 'Kept', weight: 10 }], commitments: [{ id: 'c-4-1', counted: true, weight: 1, cells: { kept: { state: 'scored', level: 1, why: 'half' } }, earned: 5, of: 10 }], total: { commitments: 1, earned: 5, of: 10, notChecked: [] } };
+  const hosted = agreementWhatIf({ ...form, saved: hostResult });
+  assert.deepEqual([hosted.score, hosted.states[0].score.cells.map((x) => `${x.short}:${x.mark}`), hosted.states[0].score.points], ['5 of 10 points over 1 commitment · Acme scorecard 3. Scored when it was saved; it is scored again on Save.', ['Kept:1'], '5 of 10 points']);
+  assert.equal(agreementWhatIf({ ...form, saved: { state: 'not-scored', scorer: { id: 'x', label: 'acme.mjs' }, reason: 'it threw: boom' } }).score, 'Not scored: acme.mjs did not answer — it threw: boom.');
+  // The list's cell carries the points beside the count.
+  const scoredFact = { ...fact, score: { state: 'scored', scorer: { id: 'observogram.levels', version: 1, label: 'Built-in levels, version 1' }, dimensions: [], commitments: [], total: { commitments: 1, earned: 75, of: 90, notChecked: [] } } };
+  assert.deepEqual([agreementCell({ agreement: record }, scoredFact).points, agreementCell({ agreement: record }, scoredFact).pointsTitle, 'points' in agreementCell({ agreement: record }, fact)], ['75 of 90 points', '75 of 90 points over 1 commitment · Built-in levels, version 1.', false]);
+  assert.equal(agreementCell({ agreement: record }, { ...fact, score: { state: 'not-scored', scorer: { label: 'acme.mjs' }, reason: 'boom' } }).points, 'Not scored');
   // Covered, and yet lacking: an objective nobody stated, with no alert and no dashboard — said on the row, each with its fix.
   const lacking = agreementWhatIf(agreementFormInput(form, 'agr:0:links', 'slo:bare_99')).states[0];
   assert.deepEqual([lacking.words, lacking.tone, lacking.gaps], ['Covered by the repository. Lacks an alert, a dashboard, a stated objective.', 'warn', [
@@ -4574,11 +4592,14 @@ test('the agreement: its column on the Services list (drawn only where the host 
   const fresh = agreementFormOpened([{ id: 9, name: 'New' }], { serviceId: 9, fact: { agreement: null, coverage: null, catalogue: [], repository: null }, today: '2026-11-19' });
   assert.deepEqual([fresh.values.agrEffective, fresh.rows.length, fresh.catalogue, fresh.focus], ['2026-11-19', 1, null, 'agrDocument']);
   const typed = agreementFormInput(fresh, 'agr:0:text', 'Requests succeed');
-  assert.deepEqual(agreementWhatIf(typed), { summary: '1 commitment; the repository is not read yet.', states: [{ words: 'Not looked up: the repository is not read yet', gaps: [], tone: 'neutral' }] });
+  assert.equal(agreementWhatIf(typed).score, 'Not scored yet: the repository is not read. Built-in levels, version 1.');
+  assert.deepEqual(agreementWhatIf(typed).states[0].score.cells.map((x) => x.mark).join(''), '???????', 'no pack read: nothing has a level, and nothing reads 0');
+  assert.deepEqual(plain(agreementWhatIf(typed)), { summary: '1 commitment; the repository is not read yet.', states: [{ words: 'Not looked up: the repository is not read yet', gaps: [], tone: 'neutral' }] });
   // The form drawn: its rows, the suggestions, the summary, the versions kept.
   const view = formModel({ ...pasted, versions: [{ words: 'Platform agreement · 2.0', since: '1 Aug 2026', commitments: 1 }, { words: 'Platform agreement · 2.1', since: '1 Nov 2026', commitments: 2 }] }, {});
   renderServiceList(c, withThem, view, { overview: {} });
   const html = c.innerHTML;
   assert.ok(html.includes('Agreement · Checkout') && html.includes('data-field="agr:2:links"') && html.includes('data-field="agr:2:weight"') && html.includes('<option value="both">Both</option>') && html.includes('<option value="alert:CheckoutErrorsHigh">') && !html.includes('<option value="slo:derived">'), 'a placeholder is not offered as something to link to');
+  assert.ok(html.includes('id="ov-agr-score"') && html.includes('data-agr-score="0"') && html.includes('class="ov-agr__lv ov-agr__lv--ok"') && html.includes('points</span>'), 'each row draws its levels and points');
   assert.ok(html.includes('id="ov-agr-summary"') && html.includes('Versions kept: Platform agreement · 2.0 (in force since 1 Aug 2026, 1 commitment)') && html.includes('Looked up in checkout, the pack prod is checked against.'));
 });

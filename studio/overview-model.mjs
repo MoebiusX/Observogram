@@ -39,6 +39,7 @@ import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } 
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
 import { AGREEMENT_OWNERS, COMMITMENTS_MAX, WEIGHT_MAX, agreementCurrent, commitmentFacts, commitmentId, commitmentsFromText, coverageSummary, coverageWords, gapsWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
+import { pointsWords, scoreAgreement, scoreSummary, scoredByBuiltIn } from './agreement-score.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -3002,7 +3003,10 @@ export function agreementCell(service, fact = null, { canWrite = true } = {}) {
   const summary = fact?.error ? `${n} commitment${n === 1 ? '' : 's'}; what the repository covers was not read: ${fact.error}`
     : counts ? coverageSummary(counts) : `${n} commitment${n === 1 ? '' : 's'}.`;
   const tone = !counts || counts.covered === null || !counts.service ? 'neutral' : counts.covered === counts.service ? 'ok' : 'warn';
-  return { state: 'recorded', title: versionWords(current), since: `in force since ${dayMonthYear(current.source.effective)}`, summary, tone, action: 'Open' };
+  // Its points, as the server's scorer gave them (the built-in's rules, or the host's own); none while nothing could be scored.
+  const score = fact && !fact.error && fact.score ? fact.score : null;
+  const points = !score ? '' : score.state === 'not-scored' ? 'Not scored' : score.total?.of > 0 ? pointsWords(score.total) : '';
+  return { state: 'recorded', title: versionWords(current), since: `in force since ${dayMonthYear(current.source.effective)}`, summary, tone, action: 'Open', ...(points ? { points, pointsTitle: scoreSummary(score) } : {}) };
 }
 
 const AGR = 'agr:';
@@ -3027,6 +3031,9 @@ export function agreementFormOpened(services, { serviceId = null, fact = null, t
     open: true, mode: 'edit', agreement: true, serviceId: service.id, rows,
     catalogue: fact && !fact.error && fact.repository ? fact.catalogue : null,
     routes: fact && !fact.error && Array.isArray(fact.routes) ? fact.routes : [],
+    // The server's result for the version as saved. The page scores again as the form is typed only
+    // when it was the built-in's (its rules are here); a host's own scorer runs on the server, at Save.
+    saved: fact && !fact.error && fact.score ? fact.score : null,
     repository: fact?.repository ?? null, readError: fact?.error || null,
     versions: (service.agreement?.versions || []).map((v) => ({ words: versionWords(v), since: dayMonthYear(v.source.effective), commitments: v.commitments.length, by: v.by || '', at: v.at || '' })),
     values: { name: service.name, agrDocument: current?.source.document || '', agrVersion: current?.source.version || '', agrEffective: current?.source.effective || today, agrPaste: '' },
@@ -3102,9 +3109,28 @@ export function agreementWhatIf(form) {
   const own = said.filter((c) => c.owner !== 'consumer');
   const n = (state) => (coverage.read ? own.filter((c) => c.state === state).length : null);
   const counts = { total: said.length, service: own.length, consumer: said.length - own.length, covered: n('covered'), part: n('part'), notCovered: n('not-covered') };
+  const live = !form.saved || scoredByBuiltIn(form.saved);
+  const result = live ? scoreAgreement({ commitments: coverage.commitments.filter((c) => c.text) }) : form.saved;
+  const scoreOf = (id) => {
+    const c = result?.state === 'scored' ? result.commitments.find((x) => x.id === id) : null;
+    if (!c) return null;
+    return {
+      points: c.counted === false ? '' : pointsWords(c),
+      cells: result.dimensions.map((d) => {
+        const cell = c.cells[d.key] || { state: 'not-checked', why: '' };
+        const mark = cell.state === 'scored' ? String(cell.level) : cell.state === 'not-applicable' ? '–' : '?';
+        const tone = cell.state !== 'scored' ? 'none' : cell.level >= result.levelMax ? 'ok' : cell.level > 0 ? 'warn' : 'fail';
+        const said = cell.state === 'scored' ? `level ${cell.level} of ${result.levelMax}` : cell.state === 'not-applicable' ? 'does not apply' : 'not checked';
+        return { key: d.key, short: d.short, mark, tone, title: `${d.label} (weight ${d.weight}): ${said}.${cell.why ? ` ${cell.why}` : ''}` };
+      }),
+    };
+  };
   return {
     summary: coverageSummary(counts),
+    // The points, and who scored: again at every keystroke for the built-in's rules, else as saved.
+    score: result ? `${scoreSummary(result)}${live || result.state !== 'scored' ? '' : ' Scored when it was saved; it is scored again on Save.'}` : '',
     states: coverage.commitments.map((c) => ({
+      score: c.text ? scoreOf(c.id) : null,
       words: !c.text ? '' : c.owner === 'consumer' ? `The consumer's: shown here, not counted. ${coverageWords(c)}` : [coverageWords(c), gapsWords(c.gaps)].filter(Boolean).join('. ').replace(/\.\.$/, '.'),
       // What it lacks, sentence by sentence, each with its fix (a title on the line).
       gaps: !c.text || c.owner === 'consumer' ? [] : c.gaps.filter((g) => g.key !== 'in-pack').map((g) => `${g.words} ${g.fix}`),
@@ -3124,6 +3150,7 @@ function agreementFormView(form, { access = null } = {}) {
     values: { ...form.values },
     rows: (form.rows || []).map((r, i) => ({ ...r, i, state: whatIf.states[i] || { words: '', tone: 'neutral' }, owners: [{ value: 'service', label: 'This service', selected: ownerOfRow(r.owner) === 'service' }, { value: 'consumer', label: 'The consumer', selected: r.owner === 'consumer' }, { value: 'both', label: 'Both', selected: r.owner === 'both' }] })),
     summary: whatIf.summary,
+    score: whatIf.score,
     repository: form.readError ? `What the repository declares was not read: ${form.readError}`
       : form.repository ? `Looked up in ${form.repository.pack}${form.repository.env ? `, the pack ${form.repository.env} is checked against` : ''}.`
         : 'The repository has no pack yet: Run the service once, and the links are looked up.',

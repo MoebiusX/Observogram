@@ -1185,6 +1185,7 @@ function agreementFormHtml(f) {
           <label class="ov-form__f ov-agr__weight"><span class="ov-form__l">Weight</span><input class="og-input" data-field="agr:${r.i}:weight" value="${attr(r.weight)}" inputmode="numeric" autocomplete="off" placeholder="1" size="3">${fieldErr(f, `agr:${r.i}:weight`, shown)}</label>
           <label class="ov-form__f ov-agr__links"><span class="ov-form__l">Linked to <em>(kind:name, separated by commas)</em></span><input class="og-input" data-field="agr:${r.i}:links" value="${attr(r.links)}" autocomplete="off" list="ov-agr-catalogue" placeholder="slo:checkout_availability_99_9, alert:CheckoutErrorsHigh">${fieldErr(f, `agr:${r.i}:links`, shown)}</label>
           <span class="ov-agr__state ov-agr__state--${attr(r.state.tone)}" data-agr-state="${r.i}" title="${attr((r.state.gaps || []).join(' '))}">${escapeHtml(r.state.words)}</span>
+          <span class="ov-agr__strip" data-agr-score="${r.i}">${agrStripHtml(r.state.score)}</span>
           <button type="button" class="og-btn og-btn--text ov-agr__remove" data-ux-action="ov-agr-remove" data-row="${r.i}"${f.saving || off ? ' disabled' : ''} aria-label="Remove the commitment ${attr(r.clause || r.text || String(r.i + 1))}">Remove</button>
         </li>`).join('');
   const versions = f.versions.length > 1 ? `
@@ -1214,6 +1215,7 @@ function agreementFormHtml(f) {
         </details>
       </div>
       <p class="ov-obj__whatif" id="ov-agr-summary" role="status" aria-live="polite">${escapeHtml(f.summary)}</p>
+      <p class="ov-agr__score" id="ov-agr-score">${escapeHtml(f.score || '')}</p>
       <p class="ov-form__hint og-muted">${escapeHtml(f.repository)}</p>${f.error ? `
       <p class="ov-form__error" role="alert">${escapeHtml(f.error)}</p>` : ''}
       <div class="ov-form__acts">
@@ -1223,6 +1225,9 @@ function agreementFormHtml(f) {
     </form>`;
 }
 
+// A commitment's levels, a cell per dimension: its level, – where it does not apply, ? where it was not checked.
+const agrStripHtml = (score) => (score ? `${score.cells.map((c) => `<span class="ov-agr__lv ov-agr__lv--${attr(c.tone)}" title="${attr(c.title)}"><span class="ov-agr__lv-k">${escapeHtml(c.short)}</span><span class="ov-agr__lv-n">${escapeHtml(c.mark)}</span></span>`).join('')}${score.points ? `<span class="ov-agr__pts">${escapeHtml(score.points)}</span>` : ''}` : '');
+
 // The list's Agreement cell: the stage before the repository.
 function mxAgreementHtml(svc) {
   const a = svc.agreement;
@@ -1230,7 +1235,7 @@ function mxAgreementHtml(svc) {
   if (a.state === 'none') {
     return `<span class="og-muted">None recorded</span>${a.action ? `<button type="button" class="ov-svc__fill" data-ux-action="ov-agr-open" data-service="${attr(svc.serviceId)}" aria-label="Record the agreement of ${attr(svc.name)}">${escapeHtml(a.action)}</button>` : ''}`;
   }
-  return `<span class="ov-agr__title">${escapeHtml(a.title)}</span><span class="ov-agr__since og-muted">${escapeHtml(a.since)}</span><span class="ov-agr__sum ov-agr__sum--${attr(a.tone)}">${escapeHtml(a.summary)}</span><button type="button" class="ov-svc__edit" data-ux-action="ov-agr-open" data-service="${attr(svc.serviceId)}" aria-label="Open the agreement of ${attr(svc.name)}">${escapeHtml(a.action)}</button>`;
+  return `<span class="ov-agr__title">${escapeHtml(a.title)}</span><span class="ov-agr__since og-muted">${escapeHtml(a.since)}</span><span class="ov-agr__sum ov-agr__sum--${attr(a.tone)}">${escapeHtml(a.summary)}</span>${a.points ? `<span class="ov-agr__points" title="${attr(a.pointsTitle || '')}">${escapeHtml(a.points)}</span>` : ''}<button type="button" class="ov-svc__edit" data-ux-action="ov-agr-open" data-service="${attr(svc.serviceId)}" aria-label="Open the agreement of ${attr(svc.name)}">${escapeHtml(a.action)}</button>`;
 }
 
 function svcFormHtml(f) {
@@ -1509,6 +1514,9 @@ export function renderServiceList(container, list, form, host = appHost, { draft
           const said = ov.agreementWhatIf?.();
           const sum = said ? formEl.querySelector('#ov-agr-summary') : null;
           if (sum) sum.textContent = said.summary;
+          const pts = said ? formEl.querySelector('#ov-agr-score') : null;
+          if (pts) pts.textContent = said.score || '';
+          (said?.states || []).forEach((st, i) => { const el = formEl.querySelector(`[data-agr-score="${i}"]`); if (el) el.innerHTML = agrStripHtml(st.score); });
           (said?.states || []).forEach((st, i) => { const el = formEl.querySelector(`[data-agr-state="${i}"]`); if (el) { el.textContent = st.words; el.title = (st.gaps || []).join(' '); el.className = `ov-agr__state ov-agr__state--${st.tone}`; } });
         }
         // State objectives…: what the letter would read, said again at every keystroke, in place.
