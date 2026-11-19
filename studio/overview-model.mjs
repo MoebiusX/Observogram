@@ -38,7 +38,7 @@ import { setAsideFingerprint } from './set-asides.mjs';
 import { CHAIN_LINKS, declaredByTier, differencesOf, familyWords as tierWords } from './artefact-tiers.mjs';
 import { MTTX_CUSTOM, MTTX_PROFILES, MTTX_RECOMMENDED, durationSeconds as targetSeconds, targetsTermKey, recommendedProfile, sameTargets, targetsFormProblems, targetsFormValues, targetsFromForm, targetsOptions, targetsRecord, targetsView } from './mttx-targets.mjs';
 import { OBJECTIVE_WINDOWS, objectivesFormModel as objectiveRowsOf, objectivesFromForm, objectivesTermKey, sameObjectives, withStatedObjectives } from './slo-objectives.mjs';
-import { AGREEMENT_OWNERS, COMMITMENTS_MAX, agreementCurrent, commitmentId, commitmentsFromText, coverageOver, coverageSummary, coverageWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
+import { AGREEMENT_OWNERS, COMMITMENTS_MAX, WEIGHT_MAX, agreementCurrent, commitmentFacts, commitmentId, commitmentsFromText, coverageSummary, coverageWords, gapsWords, linkText, linksFromText, sameAgreement } from './agreement.mjs';
 import { CHAOS_RUN_AHEAD_MS, CHAOS_RUN_NOTE_MAX, CHAOS_RUN_OUTCOMES, CHAOS_RUNS_MAX, chaosRunId, chaosRunWords, mttdDuration, parseMttdText } from './chaos-runs.mjs';
 import { LAYER_DEFS } from './constants.mjs';
 import { CLAUSE_FIX } from './clause-fixes.mjs';
@@ -3006,10 +3006,12 @@ export function agreementCell(service, fact = null, { canWrite = true } = {}) {
 }
 
 const AGR = 'agr:';
-const rowOfCommitment = (c) => ({ id: c.id, clause: c.clause || '', text: c.text || '', target: c.target || '', owner: c.owner === 'consumer' ? 'consumer' : 'service', links: (c.links || []).map(linkText).join(', ') });
+const ownerOfRow = (o) => (AGREEMENT_OWNERS.includes(o) ? o : 'service');
+const weightOfRow = (w) => { const n = Number(trimmed(w)); return Number.isInteger(n) && n >= 1 && n <= WEIGHT_MAX ? n : null; };
+const rowOfCommitment = (c) => ({ id: c.id, clause: c.clause || '', text: c.text || '', target: c.target || '', owner: ownerOfRow(c.owner), weight: Number.isInteger(c.weight) && c.weight > 1 ? String(c.weight) : '', links: (c.links || []).map(linkText).join(', ') });
 const versionOfForm = (form) => ({
   source: { document: trimmed(form.values.agrDocument), version: trimmed(form.values.agrVersion), effective: trimmed(form.values.agrEffective) },
-  commitments: (form.rows || []).map((r) => ({ id: r.id, clause: trimmed(r.clause), text: trimmed(r.text), target: trimmed(r.target), owner: r.owner === 'consumer' ? 'consumer' : 'service', links: linksFromText(r.links).links })),
+  commitments: (form.rows || []).map((r) => ({ id: r.id, clause: trimmed(r.clause), text: trimmed(r.text), target: trimmed(r.target), owner: ownerOfRow(r.owner), ...(weightOfRow(r.weight) > 1 ? { weight: weightOfRow(r.weight) } : {}), links: linksFromText(r.links).links })),
 });
 
 // agreementFormOpened(services, { serviceId, fact, today }) → the form the list's Agreement cell
@@ -3020,10 +3022,11 @@ export function agreementFormOpened(services, { serviceId = null, fact = null, t
   const service = (Array.isArray(services) ? services : []).find((s) => s && s.id === serviceId) || null;
   if (!service) return null;
   const current = agreementCurrent(service.agreement ?? null);
-  const rows = current ? current.commitments.map(rowOfCommitment) : [{ id: 'c-1', clause: '', text: '', target: '', owner: 'service', links: '' }];
+  const rows = current ? current.commitments.map(rowOfCommitment) : [{ id: 'c-1', clause: '', text: '', target: '', owner: 'service', weight: '', links: '' }];
   return {
     open: true, mode: 'edit', agreement: true, serviceId: service.id, rows,
     catalogue: fact && !fact.error && fact.repository ? fact.catalogue : null,
+    routes: fact && !fact.error && Array.isArray(fact.routes) ? fact.routes : [],
     repository: fact?.repository ?? null, readError: fact?.error || null,
     versions: (service.agreement?.versions || []).map((v) => ({ words: versionWords(v), since: dayMonthYear(v.source.effective), commitments: v.commitments.length, by: v.by || '', at: v.at || '' })),
     values: { name: service.name, agrDocument: current?.source.document || '', agrVersion: current?.source.version || '', agrEffective: current?.source.effective || today, agrPaste: '' },
@@ -3038,14 +3041,14 @@ export function agreementFormInput(form, field, value) {
   if (!field.startsWith(AGR)) return { ...form, values: { ...form.values, [field]: v }, error: null };
   const [, at, key] = field.split(':');
   const i = Number(at);
-  if (!Number.isInteger(i) || !form.rows[i] || !['clause', 'text', 'target', 'owner', 'links'].includes(key)) return form;
+  if (!Number.isInteger(i) || !form.rows[i] || !['clause', 'text', 'target', 'owner', 'weight', 'links'].includes(key)) return form;
   return { ...form, rows: form.rows.map((r, j) => (j === i ? { ...r, [key]: key === 'owner' ? (AGREEMENT_OWNERS.includes(v) ? v : 'service') : v } : r)), error: null };
 }
 // Add a commitment: an empty row, the focus on what it promises.
 export function agreementFormAdd(form) {
   if (!form?.agreement || form.rows.length >= COMMITMENTS_MAX) return form;
   const id = commitmentId('', form.rows.map((r) => r.id));
-  return { ...form, rows: [...form.rows, { id, clause: '', text: '', target: '', owner: 'service', links: '' }], focus: `${AGR}${form.rows.length}:clause`, scroll: true, error: null };
+  return { ...form, rows: [...form.rows, { id, clause: '', text: '', target: '', owner: 'service', weight: '', links: '' }], focus: `${AGR}${form.rows.length}:clause`, scroll: true, error: null };
 }
 export function agreementFormRemove(form, i) {
   if (!form?.agreement || !form.rows[i]) return form;
@@ -3054,7 +3057,7 @@ export function agreementFormRemove(form, i) {
 // Paste several: the box's lines become commitments after the ones there (an empty first row gives way).
 export function agreementFormPaste(form) {
   if (!form?.agreement) return form;
-  const kept = form.rows.filter((r) => trimmed(r.clause) || trimmed(r.text) || trimmed(r.target) || trimmed(r.links));
+  const kept = form.rows.filter((r) => trimmed(r.clause) || trimmed(r.text) || trimmed(r.target) || trimmed(r.links) || trimmed(r.weight));
   const { commitments, problems } = commitmentsFromText(form.values.agrPaste, kept.map((r) => r.id));
   if (!commitments.length) return { ...form, error: problems[0] || 'Nothing to add: one commitment a line — clause | what is promised | target | whose | links.' };
   if (kept.length + commitments.length > COMMITMENTS_MAX) return { ...form, error: `At most ${COMMITMENTS_MAX} commitments.` };
@@ -3070,6 +3073,7 @@ function agreementProblems(form) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed(v.agrEffective))) out.agrEffective = 'Say the day it comes into force.';
   (form.rows || []).forEach((r, i) => {
     if (!trimmed(r.text)) out[`${AGR}${i}:text`] = 'Say what is promised, or remove the row.';
+    if (trimmed(r.weight) && weightOfRow(r.weight) === null) out[`${AGR}${i}:weight`] = `A whole number from 1 to ${WEIGHT_MAX}, or blank for 1.`;
     const bad = linksFromText(r.links).problems;
     if (bad.length) out[`${AGR}${i}:links`] = `${bad.map((b) => JSON.stringify(b)).join(', ')} is not a link: write kind:name, such as alert:CheckoutErrorsHigh.`;
   });
@@ -3092,16 +3096,19 @@ export function agreementPlan(form, { services = [] } = {}) {
 // form as it reads now, said under the rows and beside each at every keystroke.
 export function agreementWhatIf(form) {
   if (!form?.agreement) return { summary: '', states: [] };
-  const coverage = coverageOver(versionOfForm(form), form.catalogue);
+  // The facts behind each commitment (studio/agreement.mjs commitmentFacts): its state, then what it lacks.
+  const coverage = commitmentFacts(versionOfForm(form), form.catalogue, form.routes);
   const said = coverage.commitments.filter((c) => c.text);
-  const own = said.filter((c) => c.owner === 'service');
+  const own = said.filter((c) => c.owner !== 'consumer');
   const n = (state) => (coverage.read ? own.filter((c) => c.state === state).length : null);
   const counts = { total: said.length, service: own.length, consumer: said.length - own.length, covered: n('covered'), part: n('part'), notCovered: n('not-covered') };
   return {
     summary: coverageSummary(counts),
     states: coverage.commitments.map((c) => ({
-      words: !c.text ? '' : c.owner === 'consumer' ? `The consumer's: shown here, not counted. ${coverageWords(c)}` : coverageWords(c),
-      tone: !c.text || c.state === 'not-read' ? 'neutral' : c.state === 'covered' ? 'ok' : c.state === 'part' ? 'warn' : 'fail',
+      words: !c.text ? '' : c.owner === 'consumer' ? `The consumer's: shown here, not counted. ${coverageWords(c)}` : [coverageWords(c), gapsWords(c.gaps)].filter(Boolean).join('. ').replace(/\.\.$/, '.'),
+      // What it lacks, sentence by sentence, each with its fix (a title on the line).
+      gaps: !c.text || c.owner === 'consumer' ? [] : c.gaps.filter((g) => g.key !== 'in-pack').map((g) => `${g.words} ${g.fix}`),
+      tone: !c.text || c.state === 'not-read' ? 'neutral' : c.state === 'covered' ? (c.owner !== 'consumer' && gapsWords(c.gaps) ? 'warn' : 'ok') : c.state === 'part' ? 'warn' : 'fail',
     })),
   };
 }
@@ -3115,7 +3122,7 @@ function agreementFormView(form, { access = null } = {}) {
     title: `Agreement · ${form.values.name}`,
     hint: 'What this service promised, as its agreement states it. Each commitment is linked to what the repository declares for it — an objective, an alert rule, a dashboard, a metric — or to nothing, which reads not covered. This is the stage before the repository: it says how much of the agreement the repository covers, and never moves a letter.',
     values: { ...form.values },
-    rows: (form.rows || []).map((r, i) => ({ ...r, i, state: whatIf.states[i] || { words: '', tone: 'neutral' }, owners: [{ value: 'service', label: 'This service', selected: r.owner !== 'consumer' }, { value: 'consumer', label: 'The consumer', selected: r.owner === 'consumer' }] })),
+    rows: (form.rows || []).map((r, i) => ({ ...r, i, state: whatIf.states[i] || { words: '', tone: 'neutral' }, owners: [{ value: 'service', label: 'This service', selected: ownerOfRow(r.owner) === 'service' }, { value: 'consumer', label: 'The consumer', selected: r.owner === 'consumer' }, { value: 'both', label: 'Both', selected: r.owner === 'both' }] })),
     summary: whatIf.summary,
     repository: form.readError ? `What the repository declares was not read: ${form.readError}`
       : form.repository ? `Looked up in ${form.repository.pack}${form.repository.env ? `, the pack ${form.repository.env} is checked against` : ''}.`

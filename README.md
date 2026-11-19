@@ -109,6 +109,21 @@ says how a live environment represents the repository, this says how the
 repository covers the agreement, and it never moves a letter. Nothing here is a
 score yet.
 
+Covered is not the whole of it. Behind each link the studio reads the chain the
+repository declares — an objective's indicator and its series, the burn-rate
+alert on it and where its severities are routed, the dashboards that show it,
+and whether its number was stated or is the scan's default — and says what a
+commitment lacks beside its row: *Covered by the repository. Lacks an alert, a
+dashboard, a stated objective.*, each with its fix on hover. Only what the
+commitment's own links call for is asked: one linked to an objective or an
+indicator should be measured, alerted on and shown; one linked to an alert
+should have that alert go somewhere; a dashboard or a metric that must exist
+lacks nothing more. The target as written is set beside the objective and read
+as the same, approximated (a calendar month against 30 days; a 100% no
+objective can hold), looser or stricter — never changed. A commitment may be
+answered for by the service, the consumer, or both, and may carry a weight;
+nothing adds the weights up yet.
+
 **2. Add a service.** Five numbered answers — the service, the environment,
 the repository, the live endpoint (one of the org's, or a new one) and its
 **targets**, how fast an incident should be detected and resolved — then
@@ -2139,8 +2154,8 @@ The whole app is one Express process, so the container story is one image:
 
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
-docker build -t observogram:0.8.47 .
-docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.47
+docker build -t observogram:0.8.48 .
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.8.48
 ```
 
 The image binds `0.0.0.0`, so it needs a seeded sign-in (or
@@ -2203,7 +2218,7 @@ You can also give them to one container:
 docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> \
   -e HTTPS_PROXY=http://proxy.example.com:3128 \
   -e NO_PROXY=localhost,127.0.0.1,.internal.example.com \
-  observogram:0.8.47
+  observogram:0.8.48
 ```
 
 Or put them in a compose file's `environment:`:
@@ -2211,7 +2226,7 @@ Or put them in a compose file's `environment:`:
 ```yaml
 services:
   studio:
-    image: observogram:0.8.47
+    image: observogram:0.8.48
     environment:
       HTTPS_PROXY: http://proxy.example.com:3128
       NO_PROXY: localhost,127.0.0.1,.internal.example.com

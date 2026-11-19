@@ -158,6 +158,20 @@ bucket path with only placeholders to weigh, a live source with no diff that
 asked or recorded no probe family, or whose families returned no data — each
 scored 1 before.
 
+**What stands behind a commitment (0.8.48).** `studio/agreement.mjs` gains
+`commitmentFacts(version, catalogue, routes)` — per commitment `has`
+(`measured`, `alerts`, `routed`, `dashboards`, `objective`), `target`
+(`targetMatch`: `{ state, words }`) and `gaps` (`[{ key, words, fix }]`) —
+`agreementRoutes`, `gapsWords` and `WEIGHT_MAX`. `agreementCatalogue` entries
+for an objective, an indicator, an alert and a burn-rate alert carry more keys
+(`indicator`, `measured`, `objective`, `window`, `objectiveSource`, `burn`,
+`dashboards`, `severities`); `GET /api/services/:id/agreement` answers the
+catalogue with them (and no longer leaves the scan's placeholders out: each is
+marked `guessed`), adds `routes`, and each of `coverage.commitments` carries
+`has`, `target`, `gaps` and `weight`. A commitment's `owner` may be `both`
+and it may carry `weight` (1 to 100). These are the facts a scorer will read;
+nothing here scores.
+
 **The agreement stage (0.8.47).** A service's operational agreement is kept
 with it (`PATCH /api/services/:id { agreement: { source: { document, version,
 effective }, commitments: [{ id, text, clause, target, owner, links: [{ kind,

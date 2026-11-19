@@ -4501,8 +4501,12 @@ test('the agreement: its column on the Services list (drawn only where the host 
     { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', links: [] },
   ];
   const record = agreementRecord({ source: SOURCE, commitments: COMMITMENTS }, { actor: 'ada', now: '2026-11-19T10:00:00Z' });
-  const catalogue = [{ kind: 'slo', name: 'checkout_99_9', guessed: false }, { kind: 'alert', name: 'CheckoutErrorsHigh', guessed: false }, { kind: 'slo', name: 'derived', guessed: true }];
-  const fact = { agreement: record, coverage: { counts: { total: 2, service: 1, consumer: 1, covered: 0, part: 1, notCovered: 0 } }, catalogue, repository: { env: 'prod', pack: 'checkout' } };
+  const catalogue = [
+    { kind: 'slo', name: 'checkout_99_9', guessed: false, indicator: 'checkout', measured: true, objective: 0.999, window: '30d', objectiveSource: 'repository', burn: ['SEV1'], dashboards: 1 },
+    { kind: 'slo', name: 'bare_99', guessed: false, indicator: 'bare', measured: true, objective: 0.99, window: '30d', objectiveSource: 'guessed', burn: null, dashboards: 0 },
+    { kind: 'alert', name: 'CheckoutErrorsHigh', guessed: false, severities: ['SEV1'] }, { kind: 'slo', name: 'derived', guessed: true },
+  ];
+  const fact = { agreement: record, coverage: { counts: { total: 2, service: 1, consumer: 1, covered: 0, part: 1, notCovered: 0 } }, catalogue, routes: ['SEV1'], repository: { env: 'prod', pack: 'checkout' } };
   // The cell.
   assert.deepEqual(agreementCell({ agreement: null }), { state: 'none', action: 'Record the agreement…' });
   assert.deepEqual(agreementCell({ agreement: null }, null, { canWrite: false }), { state: 'none', action: null });
@@ -4525,29 +4529,41 @@ test('the agreement: its column on the Services list (drawn only where the host 
   assert.equal(agreementFormOpened(services, { serviceId: 8, fact }), null);
   let form = agreementFormOpened(services, { serviceId: 7, fact, today: '2026-11-19' });
   assert.deepEqual([form.agreement, form.values, form.rows], [true, { name: 'Checkout', agrDocument: 'Platform agreement', agrVersion: '2.1', agrEffective: '2026-11-01', agrPaste: '' }, [
-    { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month', owner: 'service', links: 'slo:checkout_99_9, dashboard:gone' },
-    { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', links: '' },
+    { id: 'c-4-1', clause: '4.1', text: 'Requests succeed', target: '99.9% per calendar month', owner: 'service', weight: '', links: 'slo:checkout_99_9, dashboard:gone' },
+    { id: 'c-5-2', clause: '5.2', text: 'Retries back off', target: '', owner: 'consumer', weight: '', links: '' },
   ]]);
   assert.equal(formDraft(form), null, 'never kept as a draft of the service form');
   assert.deepEqual(agreementWhatIf(form), { summary: "0 of 1 commitment covered by the repository, 1 in part; 1 more is the consumer's.", states: [
-    { words: 'Covered in part: 1 not in the repository', tone: 'warn' },
-    { words: "The consumer's: shown here, not counted. Not covered: linked to nothing", tone: 'fail' },
+    { words: 'Covered in part: 1 not in the repository', gaps: [], tone: 'warn' },
+    { words: "The consumer's: shown here, not counted. Not covered: linked to nothing", gaps: [], tone: 'fail' },
   ] });
   assert.equal(agreementPlan(form, { services }).patch, null, 'as the record has it: nothing to save');
   // Typed: said at once.
   form = agreementFormInput(form, 'agr:0:links', 'slo:checkout_99_9, alert:CheckoutErrorsHigh');
-  assert.deepEqual([agreementWhatIf(form).summary, agreementWhatIf(form).states[0]], ["1 of 1 commitment covered by the repository; 1 more is the consumer's.", { words: 'Covered by the repository', tone: 'ok' }]);
+  assert.deepEqual([agreementWhatIf(form).summary, agreementWhatIf(form).states[0]], ["1 of 1 commitment covered by the repository; 1 more is the consumer's.", { words: 'Covered by the repository', gaps: [], tone: 'ok' }]);
+  // Covered, and yet lacking: an objective nobody stated, with no alert and no dashboard — said on the row, each with its fix.
+  const lacking = agreementWhatIf(agreementFormInput(form, 'agr:0:links', 'slo:bare_99')).states[0];
+  assert.deepEqual([lacking.words, lacking.tone, lacking.gaps], ['Covered by the repository. Lacks an alert, a dashboard, a stated objective.', 'warn', [
+    'No alert would fire: the objective bare_99 has no burn-rate alert. Remediate compiles a burn-rate alert for each objective.',
+    'No dashboard shows it. Link the dashboard that shows it.',
+    "The objective bare_99 carries the scan's default (99% over 30 days), which nobody stated. State objectives… on the service's board.",
+  ]]);
+  // Both answer for it: counted with the service's. A weight is kept when it is more than 1, and must be a whole number.
+  const shared = agreementFormInput(agreementFormInput(form, 'agr:1:owner', 'both'), 'agr:1:weight', '3');
+  assert.equal(agreementWhatIf(shared).summary, '1 of 2 commitments covered by the repository, 1 not.');
+  assert.deepEqual(agreementPlan(shared, { services }).patch.agreement.commitments.map((x) => [x.id, x.owner, x.weight]), [['c-4-1', 'service', undefined], ['c-5-2', 'both', 3]]);
+  assert.deepEqual(agreementPlan(agreementFormInput(form, 'agr:0:weight', 'lots'), { services }).problems, { 'agr:0:weight': 'A whole number from 1 to 100, or blank for 1.' });
   // A placeholder the scan wrote covers nothing; what is not a link is said, and stops Save.
   assert.equal(agreementWhatIf(agreementFormInput(form, 'agr:0:links', 'slo:derived')).states[0].words, 'Not covered: 1 only a placeholder the scan wrote');
   const badLink = agreementFormInput(form, 'agr:0:links', 'CheckoutErrorsHigh');
   assert.deepEqual([agreementPlan(badLink, { services }).problems, agreementPlan(badLink, { services }).patch], [{ 'agr:0:links': '"CheckoutErrorsHigh" is not a link: write kind:name, such as alert:CheckoutErrorsHigh.' }, null]);
   // A row added, one removed, several pasted.
   const added = agreementFormAdd(form);
-  assert.deepEqual([added.rows.length, added.rows[2], added.focus], [3, { id: 'c-1', clause: '', text: '', target: '', owner: 'service', links: '' }, 'agr:2:clause']);
+  assert.deepEqual([added.rows.length, added.rows[2], added.focus], [3, { id: 'c-1', clause: '', text: '', target: '', owner: 'service', weight: '', links: '' }, 'agr:2:clause']);
   assert.deepEqual(agreementPlan(added, { services }).problems, { 'agr:2:text': 'Say what is promised, or remove the row.' });
   assert.deepEqual(agreementFormRemove(added, 2).rows, form.rows);
   const pasted = agreementFormPaste(agreementFormInput(added, 'agrPaste', '6.1 | Incidents acknowledged | within 15 minutes | | alert:CheckoutErrorsHigh'));
-  assert.deepEqual([pasted.rows.length, pasted.rows[2], pasted.values.agrPaste, pasted.error], [3, { id: '6-1', clause: '6.1', text: 'Incidents acknowledged', target: 'within 15 minutes', owner: 'service', links: 'alert:CheckoutErrorsHigh' }, '', null], 'the empty row gives way to what was pasted');
+  assert.deepEqual([pasted.rows.length, pasted.rows[2], pasted.values.agrPaste, pasted.error], [3, { id: '6-1', clause: '6.1', text: 'Incidents acknowledged', target: 'within 15 minutes', owner: 'service', weight: '', links: 'alert:CheckoutErrorsHigh' }, '', null], 'the empty row gives way to what was pasted');
   assert.match(agreementFormPaste(form).error, /Nothing to add: one commitment a line/);
   // Save: the version as the form reads, named.
   const plan = agreementPlan(pasted, { services });
@@ -4558,11 +4574,11 @@ test('the agreement: its column on the Services list (drawn only where the host 
   const fresh = agreementFormOpened([{ id: 9, name: 'New' }], { serviceId: 9, fact: { agreement: null, coverage: null, catalogue: [], repository: null }, today: '2026-11-19' });
   assert.deepEqual([fresh.values.agrEffective, fresh.rows.length, fresh.catalogue, fresh.focus], ['2026-11-19', 1, null, 'agrDocument']);
   const typed = agreementFormInput(fresh, 'agr:0:text', 'Requests succeed');
-  assert.deepEqual(agreementWhatIf(typed), { summary: '1 commitment; the repository is not read yet.', states: [{ words: 'Not looked up: the repository is not read yet', tone: 'neutral' }] });
+  assert.deepEqual(agreementWhatIf(typed), { summary: '1 commitment; the repository is not read yet.', states: [{ words: 'Not looked up: the repository is not read yet', gaps: [], tone: 'neutral' }] });
   // The form drawn: its rows, the suggestions, the summary, the versions kept.
   const view = formModel({ ...pasted, versions: [{ words: 'Platform agreement · 2.0', since: '1 Aug 2026', commitments: 1 }, { words: 'Platform agreement · 2.1', since: '1 Nov 2026', commitments: 2 }] }, {});
   renderServiceList(c, withThem, view, { overview: {} });
   const html = c.innerHTML;
-  assert.ok(html.includes('Agreement · Checkout') && html.includes('data-field="agr:2:links"') && html.includes('<option value="alert:CheckoutErrorsHigh">') && !html.includes('<option value="slo:derived">'), 'a placeholder is not offered as something to link to');
+  assert.ok(html.includes('Agreement · Checkout') && html.includes('data-field="agr:2:links"') && html.includes('data-field="agr:2:weight"') && html.includes('<option value="both">Both</option>') && html.includes('<option value="alert:CheckoutErrorsHigh">') && !html.includes('<option value="slo:derived">'), 'a placeholder is not offered as something to link to');
   assert.ok(html.includes('id="ov-agr-summary"') && html.includes('Versions kept: Platform agreement · 2.0 (in force since 1 Aug 2026, 1 commitment)') && html.includes('Looked up in checkout, the pack prod is checked against.'));
 });

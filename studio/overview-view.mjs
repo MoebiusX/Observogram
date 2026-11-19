@@ -1182,8 +1182,9 @@ function agreementFormHtml(f) {
           <label class="ov-form__f ov-agr__text"><span class="ov-form__l">What is promised</span><input class="og-input" data-field="agr:${r.i}:text" value="${attr(r.text)}" maxlength="500" autocomplete="off">${fieldErr(f, `agr:${r.i}:text`, shown)}</label>
           <label class="ov-form__f ov-agr__target"><span class="ov-form__l">Target, as written</span><input class="og-input" data-field="agr:${r.i}:target" value="${attr(r.target)}" maxlength="300" autocomplete="off" placeholder="99.9% per calendar month"></label>
           <label class="ov-form__f ov-agr__owner"><span class="ov-form__l">Who answers for it</span><select class="og-input" data-field="agr:${r.i}:owner" data-keep="1">${r.owners.map((o) => `<option value="${attr(o.value)}"${o.selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}</select></label>
+          <label class="ov-form__f ov-agr__weight"><span class="ov-form__l">Weight</span><input class="og-input" data-field="agr:${r.i}:weight" value="${attr(r.weight)}" inputmode="numeric" autocomplete="off" placeholder="1" size="3">${fieldErr(f, `agr:${r.i}:weight`, shown)}</label>
           <label class="ov-form__f ov-agr__links"><span class="ov-form__l">Linked to <em>(kind:name, separated by commas)</em></span><input class="og-input" data-field="agr:${r.i}:links" value="${attr(r.links)}" autocomplete="off" list="ov-agr-catalogue" placeholder="slo:checkout_availability_99_9, alert:CheckoutErrorsHigh">${fieldErr(f, `agr:${r.i}:links`, shown)}</label>
-          <span class="ov-agr__state ov-agr__state--${attr(r.state.tone)}" data-agr-state="${r.i}">${escapeHtml(r.state.words)}</span>
+          <span class="ov-agr__state ov-agr__state--${attr(r.state.tone)}" data-agr-state="${r.i}" title="${attr((r.state.gaps || []).join(' '))}">${escapeHtml(r.state.words)}</span>
           <button type="button" class="og-btn og-btn--text ov-agr__remove" data-ux-action="ov-agr-remove" data-row="${r.i}"${f.saving || off ? ' disabled' : ''} aria-label="Remove the commitment ${attr(r.clause || r.text || String(r.i + 1))}">Remove</button>
         </li>`).join('');
   const versions = f.versions.length > 1 ? `
@@ -1508,7 +1509,7 @@ export function renderServiceList(container, list, form, host = appHost, { draft
           const said = ov.agreementWhatIf?.();
           const sum = said ? formEl.querySelector('#ov-agr-summary') : null;
           if (sum) sum.textContent = said.summary;
-          (said?.states || []).forEach((st, i) => { const el = formEl.querySelector(`[data-agr-state="${i}"]`); if (el) { el.textContent = st.words; el.className = `ov-agr__state ov-agr__state--${st.tone}`; } });
+          (said?.states || []).forEach((st, i) => { const el = formEl.querySelector(`[data-agr-state="${i}"]`); if (el) { el.textContent = st.words; el.title = (st.gaps || []).join(' '); el.className = `ov-agr__state ov-agr__state--${st.tone}`; } });
         }
         // State objectives…: what the letter would read, said again at every keystroke, in place.
         const whatIf = formEl.dataset.objectives && input.tagName !== 'SELECT' ? formEl.querySelector('#ov-obj-whatif') : null;

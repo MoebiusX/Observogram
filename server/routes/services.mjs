@@ -61,7 +61,8 @@ import { compactScope, normalizeScope } from '../../tools/lib/live-fetch.mjs';
 import { timedExcludeErrors } from '../../tools/fetch-live-pack.mjs';
 import { scopeCheckAnswer } from '../scope-check.mjs';
 import { adapt } from '../../tools/lib/adapter.mjs';
-import { agreementCatalogue, agreementCoverage, agreementCurrent, coverageSummary } from '../../studio/agreement.mjs';
+import { withStatedObjectives } from '../../studio/slo-objectives.mjs';
+import { agreementCatalogue, agreementCoverage, agreementCurrent, agreementRoutes, commitmentFacts, coverageSummary } from '../../studio/agreement.mjs';
 
 // The service a path names — or null, the answer (400 / 404) sent.
 function pathService(req, res, db) {
@@ -160,13 +161,21 @@ export function servicesRoutes({ authorize, onGradeOffChanged = null, onServiceD
     let layered = null;
     try { layered = basis.declared ? adapt(basis.declared.canonical, env ? { environment: env } : {}) : null; } catch (_) { layered = null; }
     const view = serviceViewOf(db, service);
+    // The objectives stated for the service in the studio ride on the pack, as they do for the grade.
+    if (layered) layered = withStatedObjectives(layered, view.objectives ?? null);
     const current = agreementCurrent(view.agreement);
     const coverage = agreementCoverage(current, layered);
+    // What stands behind each commitment, and what it lacks (commitmentFacts): the catalogue with the
+    // chain of every objective and indicator, and the severities the repository routes somewhere.
+    const catalogue = layered ? agreementCatalogue(layered) : null;
+    const routes = layered ? agreementRoutes(layered) : [];
+    const facts = current ? commitmentFacts(current, catalogue, routes) : null;
     res.json({
       ok: true,
       agreement: view.agreement ?? null,
-      coverage: current ? { ...coverage, summary: coverageSummary(coverage.counts) } : null,
-      catalogue: layered ? agreementCatalogue(layered).filter((x) => !x.guessed).map(({ kind, name }) => ({ kind, name })) : [],
+      coverage: current ? { ...coverage, commitments: facts.commitments, summary: coverageSummary(coverage.counts) } : null,
+      catalogue: catalogue || [],
+      routes,
       repository: layered ? { env: env || null, pack: basis.declared.label } : null,
     });
   }));

@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import {
   LINK_KINDS, AGREEMENT_VERSIONS_MAX, COMMITMENTS_MAX, LINKS_MAX, agreementErrors, agreementRecord, agreementCurrent, sameAgreement, storedAgreementError,
   agreementCatalogue, agreementCoverage, coverageOver, coverageWords, coverageSummary, linkText, linksFromText, commitmentId, commitmentsFromText, linkKindLabel,
+  agreementRoutes, commitmentFacts, gapsWords, targetMatch, AGREEMENT_OWNERS,
 } from '../studio/agreement.mjs';
 
 const SOURCE = { document: 'Platform agreement', version: '2.1', effective: '2026-11-01' };
@@ -48,7 +49,9 @@ test('agreementErrors: the source document, its version and the day it comes int
   assert.match(agreementErrors(V([C('a', { text: '' })]))[0], /commitments\[0\]\.text says what is promised/);
   assert.match(agreementErrors(V([C('a'), C('a')]))[0], /"a" is used twice/);
   assert.match(agreementErrors(V([C('Not An Id')]))[0], /\.id is a short id/);
-  assert.match(agreementErrors(V([C('a', { owner: 'someone' })]))[0], /\.owner is one of service, consumer/);
+  assert.match(agreementErrors(V([C('a', { owner: 'someone' })]))[0], /\.owner is one of service, consumer, both/);
+  assert.deepEqual(agreementErrors(V([C('a', { owner: 'both', weight: 100 })])), []);
+  for (const weight of [0, 101, 1.5, '3', null]) assert.match(agreementErrors(V([C('a', { weight })]))[0], /\.weight is a whole number from 1 to 100/, String(weight));
   assert.match(agreementErrors(V([C('a', { links: [{ kind: 'panel', name: 'x' }] })]))[0], /links\[0\] is \{ kind, name \}/);
   assert.match(agreementErrors(V([C('a', { links: Array.from({ length: LINKS_MAX + 1 }, (_, i) => ({ kind: 'metric', name: `m${i}` })) })]))[0], /more than 20 links/);
   assert.match(agreementErrors(V(Array.from({ length: COMMITMENTS_MAX + 1 }, (_, i) => C(`c${i}`))))[0], /more than 200 commitments/);
@@ -82,7 +85,7 @@ test('agreementRecord: the same issue of the document corrects the newest versio
 });
 
 test('agreementCatalogue: what the repository declares, by kind and name, each once; a placeholder the scan wrote is marked', () => {
-  assert.deepEqual(agreementCatalogue(layered), [
+  assert.deepEqual(agreementCatalogue(layered).map(({ kind, name, guessed }) => ({ kind, name, guessed })), [
     { kind: 'indicator', name: 'checkout_availability', guessed: false },
     { kind: 'slo', name: 'checkout_availability_99_9', guessed: false },
     { kind: 'slo', name: 'derived_from_alert', guessed: true },
@@ -148,4 +151,99 @@ test('the form: links as kind:name, an id from the clause, several commitments p
   ]);
   assert.deepEqual(pasted.problems, ['line 5: nothing says what is promised', 'line 6: "nonsense" is not kind:name']);
   assert.deepEqual(agreementErrors(V(pasted.commitments)), [], 'what the paste makes is what the server takes');
+});
+
+// A repository with its chains: an objective with all of it, one with nothing but its indicator (the
+// scan's default objective), an alert rule at a severity routed nowhere.
+const chained = {
+  meta: { annotations: { 'crawler.guessMarks': '1', 'crawler.scaffold.slos.bare_99.objective': 'default' }, studioObjectives: {} },
+  layers: {
+    L1: [
+      { id: 'SLI-01', title: 'checkout', spec: { id: 'checkout', good: 'sum(rate(ok[5m]))', total: 'sum(rate(all[5m]))' } },
+      { id: 'SLI-02', title: 'bare', spec: { id: 'bare', description: 'Inferred from recording rules a and b.' } },
+      { id: 'SLO-01', title: 'checkout_99_9', refs: ['slis.checkout'], spec: { id: 'checkout_99_9', sli: 'ref:slis.checkout', objective: 0.999, window: '30d' } },
+      { id: 'SLO-02', title: 'bare_99', refs: ['slis.bare'], spec: { id: 'bare_99', sli: 'ref:slis.bare', objective: 0.99, window: '30d' } },
+    ],
+    L2: [{ id: 'METRIC-SRC-01', title: 'http_requests_total' }],
+    L3: [
+      { id: 'DASH-01', title: 'checkout-overview', refs: ['slos.checkout_99_9'] },
+      { id: 'PANEL-01', title: 'availability', parent: 'checkout-overview', refs: ['slis.checkout'] },
+      { id: 'PANEL-02', title: 'errors', parent: 'checkout-errors', refs: ['slis.checkout'] },
+      { id: 'DASH-02', title: 'retention' },
+    ],
+    L4: {
+      policy: [{ id: 'POL-01', title: 'burn-rate alert: checkout_99_9', refs: ['slos.checkout_99_9'], spec: { slo: 'checkout_99_9', windows: [{ severity: 'SEV1' }, { severity: 'SEV2' }] } }],
+      alerting: [
+        { id: 'ALR-01', title: 'SEV1 routes', spec: { severity: 'SEV1', channels: [{ voice: 'x' }] } },
+        { id: 'ALR-02', title: 'SEV2 routes', spec: { severity: 'SEV2', channels: [{ chat: 'y' }] } },
+        { id: 'ALR-03', title: 'SEV3 routes', spec: { severity: 'SEV3', channels: [] } },
+        { id: 'RULE-01', title: 'QueueStuck', spec: { severity: 'SEV3' } },
+        { id: 'RULE-02', title: 'DiskFull', spec: { labels: { severity: 'SEV1' } } },
+      ],
+    },
+    L5: [], GOV: [],
+  },
+};
+
+test('the catalogue carries what stands behind an objective and an indicator; the routes are the severities that go somewhere', () => {
+  const by = Object.fromEntries(agreementCatalogue(chained).map((x) => [`${x.kind}:${x.name}`, x]));
+  assert.deepEqual(by['slo:checkout_99_9'], { kind: 'slo', name: 'checkout_99_9', guessed: false, indicator: 'checkout', measured: true, objective: 0.999, window: '30d', objectiveSource: 'repository', burn: ['SEV1', 'SEV2'], dashboards: 2 });
+  assert.deepEqual(by['slo:bare_99'], { kind: 'slo', name: 'bare_99', guessed: false, indicator: 'bare', measured: false, objective: 0.99, window: '30d', objectiveSource: 'guessed', burn: null, dashboards: 0 });
+  assert.deepEqual(by['indicator:checkout'], { kind: 'indicator', name: 'checkout', guessed: false, measured: true, dashboards: 2 });
+  assert.deepEqual([by['burn_alert:checkout_99_9'].severities, by['alert:QueueStuck'].severities, by['alert:DiskFull'].severities], [['SEV1', 'SEV2'], ['SEV3'], ['SEV1']]);
+  assert.deepEqual(agreementRoutes(chained), ['SEV1', 'SEV2'], 'a route with no channel goes nowhere');
+  // An objective stated in the studio for a guessed one is a person's.
+  const stated = { ...chained, meta: { ...chained.meta, studioObjectives: { bare_99: { objective: 0.995, window: '30d' } } } };
+  const entry = agreementCatalogue(stated).find((x) => x.name === 'bare_99' && x.kind === 'slo');
+  assert.deepEqual([entry.objectiveSource, entry.objective, entry.window], ['studio', 0.995, '30d'], 'the stated number and window are the objective\'s');
+  assert.equal(commitmentFacts(V([C('a', { target: '99.5% over 30 days', links: [{ kind: 'slo', name: 'bare_99' }] })]), agreementCatalogue(stated), []).commitments[0].target.state, 'same');
+});
+
+test('commitmentFacts: what the repository has behind each commitment and what it lacks, each gap with its fix — only what the commitment\'s own links call for', () => {
+  const version = V([
+    C('whole', { target: '99.9% over 30 days', links: [{ kind: 'slo', name: 'checkout_99_9' }] }),
+    C('bare', { target: '99.5% per calendar month', owner: 'both', weight: 3, links: [{ kind: 'slo', name: 'bare_99' }] }),
+    C('alert-only', { target: 'an alert must exist', links: [{ kind: 'alert', name: 'QueueStuck' }] }),
+    C('routed-alert', { target: '', links: [{ kind: 'alert', name: 'DiskFull' }] }),
+    C('dash-only', { target: 'kept for 13 months', links: [{ kind: 'dashboard', name: 'retention' }] }),
+    C('unlinked', { target: 'within 15 minutes' }),
+  ]);
+  const facts = commitmentFacts(version, agreementCatalogue(chained), agreementRoutes(chained));
+  const of = (id) => facts.commitments.find((c) => c.id === id);
+  assert.deepEqual(of('whole').has, { measured: true, alerts: [{ kind: 'burn_alert', name: 'checkout_99_9' }], routed: true, dashboards: 2, objective: { slo: 'checkout_99_9', value: 0.999, window: '30d', source: 'repository' } });
+  assert.deepEqual([of('whole').gaps, of('whole').target, gapsWords(of('whole').gaps)], [[], { state: 'same', words: 'The target and the objective agree: 99.9% over 30 days.' }, '']);
+  assert.deepEqual([of('bare').owner, of('bare').weight, of('bare').has.routed, of('bare').gaps.map((g) => g.key), gapsWords(of('bare').gaps)],
+    ['both', 3, null, ['measured', 'detected', 'seen', 'objective'], 'Lacks a measure, an alert, a dashboard, a stated objective.']);
+  assert.equal(of('bare').gaps[1].words, 'No alert would fire: the objective bare_99 has no burn-rate alert.');
+  assert.equal(of('bare').target.state, 'guessed');
+  // An alert that must exist: it should go somewhere, and needs no measure, dashboard or objective.
+  assert.deepEqual([of('alert-only').gaps.map((g) => [g.key, g.words]), of('alert-only').has.routed], [[['routed', 'Its alerts page at SEV3, which the repository routes nowhere.']], false]);
+  assert.deepEqual([of('routed-alert').gaps, of('routed-alert').has.routed, of('routed-alert').target.state], [[], true, 'none']);
+  // A dashboard that must exist lacks nothing; its target is in words and is not compared.
+  assert.deepEqual([of('dash-only').gaps, of('dash-only').has.dashboards, of('dash-only').target.state], [[], 1, 'words']);
+  assert.deepEqual([of('unlinked').has, of('unlinked').gaps.map((g) => g.key), of('unlinked').gaps[0].words], [null, ['in-pack'], 'It is linked to nothing in the repository.']);
+  // No pack read: nothing is said to be lacking.
+  const unread = commitmentFacts(version, null);
+  assert.ok(unread.read === false && unread.commitments.every((c) => c.has === null && c.target === null && c.gaps.length === 0 && c.state === 'not-read'));
+  // The service answers for its own and the shared ones; the consumer's alone are apart.
+  assert.deepEqual(AGREEMENT_OWNERS, ['service', 'consumer', 'both']);
+  assert.deepEqual(agreementCoverage(V([C('a', { owner: 'both' }), C('b', { owner: 'consumer' })]), chained).counts, { total: 2, service: 1, consumer: 1, covered: 0, part: 0, notCovered: 1 });
+  // A weight of 1 is not written; a greater one is kept.
+  assert.deepEqual(agreementRecord(V([C('a', { weight: 1 }), C('b', { weight: 5 })]), {}).versions[0].commitments.map((c) => c.weight), [undefined, 5]);
+});
+
+test('targetMatch: the target as written beside the objective — the same, approximated, looser, stricter; never changed, and not compared when it is in words', () => {
+  const objective = (value, window = '30d', source = 'repository') => ({ slo: 's', value, window, source });
+  assert.deepEqual(targetMatch('', objective(0.999)), { state: 'none', words: 'No target is written.' });
+  assert.equal(targetMatch('acknowledged within 15 minutes', objective(0.999)).state, 'words');
+  assert.deepEqual(targetMatch('99.9%', null), { state: 'no-objective', words: 'The target says 99.9%: nothing linked holds an objective to compare it with.' });
+  assert.equal(targetMatch('99.9%', objective(0.99, '30d', 'guessed')).state, 'guessed');
+  assert.equal(targetMatch('99.9% over 30 days', objective(0.999)).state, 'same');
+  assert.equal(targetMatch('99.9%', objective(0.999)).state, 'same', 'no period written: the number alone');
+  assert.equal(targetMatch('99.9 % availability', objective(0.999, '30d', 'studio')).state, 'same', 'an objective stated in the studio is a person\'s');
+  assert.deepEqual(targetMatch('99.9% per calendar month, excluding planned maintenance', objective(0.999)), { state: 'approximated', words: 'The same number over another period: a calendar month in the agreement, 30 days in the repository.' });
+  assert.equal(targetMatch('99.9% over 90 days', objective(0.999)).state, 'approximated');
+  assert.deepEqual(targetMatch('100%', objective(0.9999)), { state: 'approximated', words: 'The target says 100%, which no objective can hold: 99.99% over 30 days approximates it.' });
+  assert.deepEqual(targetMatch('99.9% monthly', objective(0.99)), { state: 'looser', words: 'The target says 99.9%; the objective asks less, 99% over 30 days.' });
+  assert.equal(targetMatch('99%', objective(0.999)).state, 'stricter');
 });
