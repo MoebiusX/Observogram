@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.51 — 2026-11-19
+
+**One word per layer: the repository's are chains.** Decision 3a of 17 November. The agreement and its commitments are the OLA's words; the repository declares **chains** (an objective with what realises it: indicator, recording rules, burn-rate alert, route, dashboards, chaos experiment); an environment says whether a chain **holds live**; an objective stays the SLO's number. The board called a chain a *promise* and the engine a *declared commitment*, the word the agreement now uses for something else.
+
+### Changed
+- **The board's sentences** (`studio/overview-model.mjs`): *5 of 18 chains hold in every link, 1 in part, 12 broken.*; *Of the links in the repository's 18 chains, 84 in 100 hold live; the bar is 85.*; *… so no chain is confirmed to hold live.* (three of them); the placeholder objectives *root no chain*. One chain *holds*.
+- **The engine's sentence** (`studio/diagnostic-grade.mjs`, Drift-free's detail): *requirement-chain integrity 84% - 5/18 chains intact; …*, where it said *declared commitments*. The prototype synthesis view says the same.
+- **Four documents no longer say the repository's pack is the OLA**: README, `docs/USER_JOURNEY.md`, `docs/DRY_RUN.md` and `docs/RELEASE_READINESS.md` say the OLA's commitments are recorded in the studio and scored against the repository's chains. The board's quoted sentences follow in `docs/USER_JOURNEY.md`, `docs/UX_SCREEN_GRAMMAR.md` and `docs/OVERVIEW_DEMO.md`; the engine's comments in `tools/lib/traceability-graph.mjs`, `journey.mjs` and `blast-radius.mjs` say chain.
+- **Downstream:** behaviour — wording only. A copy of the board says *chains* where it said *promises* once it takes the next vendor refresh; a grade detail read as text says *chains intact* where it said *declared commitments intact*. No field, key, score or letter changes.
+
+### Tests
+- `tools/test-overview-model.mjs`: the board's sentences in their new words; `tools/test-match-basis.mjs` and `tools/test-traceability-graph.mjs`: names only.
+- Checked signed in, in a browser at 1366×768, on a scratch studio: the board reads *1 of 1 chain holds in every link.* and *Of the links in the repository's 1 chain, 90 in 100 hold live; the bar is 85.*; no *promise* left on it; nothing past the width, no console error.
+- Suite total 2107 → 2107.
+- **Downstream:** none — tests only.
+
 ## 0.8.50 — 2026-11-19
 
 **Proven live, per environment: what each environment's last live check proves of the agreement.** The fourth slice of the agreement scorecard, and decision Q2 of 17 November: runtime evidence is scored per commitment where an environment proved it, in that environment's column, capped by it — 4 only with production, 3 anywhere else — and never inside a letter. Until now the score's *Proven live* was always *not checked*.

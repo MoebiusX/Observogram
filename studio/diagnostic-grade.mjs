@@ -766,8 +766,8 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         ? 'some inferred edges'
         : 'declared edges';
       driftDetail = (driftFree
-        ? `requirement-chain integrity ${branchRollup.integrityPct}% - ${branchRollup.intact}/${branchRollup.declaredTotal} declared commitment${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`
-        : `requirement-chain integrity ${branchRollup.integrityPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold) - ${branchRollup.intact}/${branchRollup.declaredTotal} declared commitment${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`) + aheadNote + asideNote;
+        ? `requirement-chain integrity ${branchRollup.integrityPct}% - ${branchRollup.intact}/${branchRollup.declaredTotal} chain${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`
+        : `requirement-chain integrity ${branchRollup.integrityPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold) - ${branchRollup.intact}/${branchRollup.declaredTotal} chain${branchRollup.declaredTotal === 1 ? '' : 's'} intact; ${branchRollup.partial} partial, ${branchRollup.broken} broken, ${branchRollup.undeclared} live-only; ${confidence}`) + aheadNote + asideNote;
     } else {
       let alignedLive = 0;
       let declaredMissing = 0;

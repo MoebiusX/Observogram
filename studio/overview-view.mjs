@@ -16,7 +16,7 @@
 // columns under Expert's own words — Discover · Diagnose · Remediate — each
 // a picture of the machine: the stack's four layers with the kinds of signal
 // on each, the grade as a shield with its seven criteria behind a click, the live
-// fidelity as a ring with four counts and the promises that hold, the delta as
+// fidelity as a ring with four counts and the chains that hold, the delta as
 // three counts, the specification's rules not met and the one next step.
 // The simple layout is the three sentences alone. Should the board ever fail
 // to draw, the simple layout is drawn instead and the error logged: the
@@ -395,7 +395,7 @@ function discoverColHtml(L, S = null, C = null) {
 // A, are the right signals in place — the letter as a shield and the seven
 // criteria behind "Why this grade" (the grade alone: the specification's
 // rules are Remediate's, things to add, never a second verdict here); B, can you trust what
-// the signals show — the alignment as a ring, the four counts, the promises
+// the signals show — the alignment as a ring, the four counts, the chains
 // that hold, and the still-true row with its Check button.
 function statusStripHtml(g, s, f) {
   // The families live could not read are named even when the counts are withheld (nothing compared).

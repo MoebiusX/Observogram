@@ -3,7 +3,7 @@
 // Requirement-rooted graph comparison for repo-vs-live diagnostics.
 //
 // The flat diff asks whether two bags of artefacts overlap. This module asks
-// whether each reliability commitment has an intact derivation chain:
+// whether each objective's derivation chain is intact:
 // SLO/SLI -> telemetry -> insight -> action, with branch-local comparison and
 // explicit live-verifiability so "the live connector cannot see this" does not
 // masquerade as "missing in production".
@@ -244,7 +244,7 @@ export function compareBranches(graphA, graphB) {
   const aByRoot = new Map(rootsA.map((key) => [rootCompareKey(graphA.nodes.get(key)), buildBranch(graphA, key)]));
   const bByRoot = new Map(rootsB.map((key) => [rootCompareKey(graphB.nodes.get(key)), buildBranch(graphB, key)]));
   // Grade schema 6: a declared branch rooted on an SLO or SLI the scan invented (a placeholder derived
-  // from an alert name, or its schema-minimum stub) is no commitment anyone declared: it is counted
+  // from an alert name, or its schema-minimum stub) is no chain anyone declared: it is counted
   // beside the rollup (placeholderRoots), never in it, so a repository of alert rules alone is not
   // graded on chains nobody wrote (0.8.43's decision A11, reversed).
   let placeholderRoots = 0;
@@ -256,7 +256,7 @@ export function compareBranches(graphA, graphB) {
   const rootKeys = [...new Set([...aByRoot.keys(), ...bByRoot.keys()])]
     // A live-only branch rooted on a placeholder SLO/SLI (the fetcher's
     // per-service availability guess, `platform_availability`) is not an
-    // undeclared commitment production runs — nothing attested it.
+    // chain production runs that nobody declared — nothing attested it.
     .filter((rootKey) => aByRoot.has(rootKey) || !isScaffoldNode(graphB.nodes.get(bByRoot.get(rootKey).rootKey)))
     .sort();
 
@@ -285,7 +285,7 @@ export function compareBranches(graphA, graphB) {
     declaredTotal,
     total: branches.length,
     integrityMean,
-    // No declared commitment: no integrity figure (an empty set is not 100 % intact).
+    // No declared chain: no integrity figure (an empty set is not 100 % intact).
     integrityPct: integrityMean === null ? null : Math.round(integrityMean * 100),
     ...(placeholderRoots ? { placeholderRoots } : {}),
   };

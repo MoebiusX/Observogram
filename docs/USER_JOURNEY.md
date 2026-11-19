@@ -60,8 +60,13 @@ Reset the studio… and About Observogram (version and build).
 
 ## OLA And Observability Contract
 
-The OLA is the service's observability intent. Observogram represents that intent
-as a canonical ObservabilityPack:
+The OLA is the service's operational agreement: its commitments, recorded in
+the studio in versions (the Agreement column on Services). The repository is
+not the OLA: it declares the chains that cover it — an objective with what
+realises it — as a canonical ObservabilityPack, and each environment says
+whether a chain holds live. One word per layer: commitment for the OLA, chain
+for the repository, holds live for an environment; objective stays the SLO's
+number. The pack carries:
 
 - criticality and ownership
 - SLOs and SLIs
@@ -113,7 +118,7 @@ Open: the board              1 Discover · 2 Diagnose · 3 Remediate
   |-- Layers: what the repository declares, layer by layer,
   |   and what the scan read and left out
   |-- A: the grade, Why this grade
-  |-- B: the alignment, four counts, the promises; Check again
+  |-- B: the alignment, four counts, the chains; Check again
   |-- Changes to apply: to add · to update · to review; the required
   |   rules not met; the next step
   v
@@ -368,8 +373,8 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    is unproven. Each line counts what the engine counted, so the seven lines
    still add up to the letter. Over a check that compared nothing, the
    chains' line says so and why (*Nothing was compared on the last check,
-   so no promise is confirmed live. 28 declared things not read live.*),
-   never *0 in 100 hold up live* over links nothing could read.
+   so no chain is confirmed to hold live. 28 declared things not read live.*),
+   never *0 in 100 hold live* over links nothing could read.
 
 6. **Overview speaks plainly, with one primary button.** Five status words
    on the board and no others — *Never checked · Unchanged · Changed ·
@@ -729,7 +734,7 @@ Belongs here:
   - **B — Can you trust what the signals show?** (*The repository against
     live*): one line per link of the chain (*Exporters 21/21*, *Dashboards 7
     not read live –*, *Alerts 1 not as declared 66/66*), the chain's alignment
-    as the ring; the promises (*5 of 18 promises hold in every link, 1 in part, 12
+    as the ring; the chains (*5 of 18 chains hold in every link, 1 in part, 12
     broken.*), then the status word, one sentence with a time — the chain
     first, in its words (*… — 1 exporter and 2 alerts differ from what the
     repository declares, and 31 details beyond the chain.*; never "the chain
@@ -1146,7 +1151,7 @@ The path a person takes today, end to end:
    …*, which is read as it is, then the grade and the match).
 5. Press **Open →**. On the board, read what the scan left out under
    *Layers*; the grade and *Why this grade*; the four counts and the
-   promises; the status strip, which names any probe family the live side
+   chains; the status strip, which names any probe family the live side
    could not read.
 6. If the board reads *Unreachable*, or *the live side showed less than the
    check before*, press **Check again** before reading any count; if it reads

@@ -5,7 +5,7 @@
 // Thesis. Observogram monitors the artefacts that monitor the system. When
 // one of them dies — a scrape job stops, a recording rule fails, a route is
 // deleted — every artefact that consumes its assurance goes blind with it.
-// The blast radius of a node is the set of reliability commitments (SLOs),
+// The blast radius of a node is the set of chains (SLOs),
 // detections (alerts), views (panels, dashboards) and responses (routes,
 // remediations) that would go blind, transitively, if that node died.
 //

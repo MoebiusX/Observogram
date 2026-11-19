@@ -567,8 +567,8 @@ function chaosLine(crit, liveUnobserved) {
 }
 
 // The two criteria that need the other side, from the run that graded the
-// letter on screen: Drift-free is the integrity of the declared commitment
-// chains (the run's traceability), Fresh the age of the live picture when
+// letter on screen: Drift-free is the integrity of the repository's chains
+// (the run's traceability), Fresh the age of the live picture when
 // the run read it. Null when the run scored drift on another construct.
 // The age is the run's `freshness.liveAgeHours`, null when Pack B carries no
 // `mcp.refreshedAt` (a pack file, a recording): the engine scores that Fresh
@@ -579,7 +579,7 @@ function liveGradeLines(run, { against, where, now }) {
   // Nothing compared (drift.compared 0, or an older record's four counts): the engine scores Drift-free
   // nothing and backs it with no figure — the chains' declared links would read broken for want of
   // anything compared (studio/diagnostic-grade.mjs) — so the line says nothing was compared, and why,
-  // never "0 in 100 hold up".
+  // never "0 in 100 hold".
   const nothing = comparedOf(run.drift) === 0;
   const pct = Number(run.traceability.integrityPct);
   if (!nothing && !Number.isFinite(pct)) return null;
@@ -590,16 +590,16 @@ function liveGradeLines(run, { against, where, now }) {
   // The engine scores this criterion by the integrity itself (0.85 of a
   // point at 85 in 100) and calls it met at the bar: the mark follows the
   // bar, the points follow the integrity, above the bar too.
-  // The integrity is the mean share of each promise's LINKS that hold; the
-  // board's chains strip counts the promises whose every link holds — the
+  // The integrity is the mean share of each chain's LINKS that hold; the
+  // board's chains strip counts the chains whose every link holds — the
   // sentence says which it counts, so 93 in 100 beside "7 of 18" reads as
   // two measures, not a contradiction.
-  const promises = Number(run.traceability.declaredTotal);
+  const declared = Number(run.traceability.declaredTotal);
   return [
     nothing
-      ? { ok: 'no', score: 0, text: `Nothing was compared on the last check, so no promise is confirmed ${where}. ${nothingReason(basisFactsOf(run))}.` }
+      ? { ok: 'no', score: 0, text: `Nothing was compared on the last check, so no chain is confirmed to hold ${where}. ${nothingReason(basisFactsOf(run))}.` }
       : { ok: pct >= GRADE_BAR ? 'yes' : (pct > 0 ? 'partly' : 'no'), score: Math.max(0, Math.min(1, pct / 100)),
-        text: `Of the links in the repository's ${promises} promise${promises === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold up ${where}; the bar is ${GRADE_BAR}.` },
+        text: `Of the links in the repository's ${declared} chain${declared === 1 ? '' : 's'}, ${Math.round(pct)} in 100 hold ${where}; the bar is ${GRADE_BAR}.` },
     { ok: fresh ? 'yes' : 'no',
       text: fresh ? `Checked ${against} ${agoText(run.startedAt, now)}.`
         : dated ? `The ${picture} was more than a day old when it was checked.`
@@ -654,10 +654,10 @@ export function gradeWhy({ diagnostic = null, run = null, letter = '', score = n
   const fixed = repositoryGradeLines(diagnostic, Array.isArray(run?.packB?.unobserved) ? run.packB.unobserved : []);
   if (!fixed) return none;
   const live = run ? liveGradeLines(run, { against, where, now }) : checked ? [
-    { ok: 'no', text: 'The last check does not count for this letter, so no promise is confirmed live.' },
+    { ok: 'no', text: 'The last check does not count for this letter, so no chain is confirmed to hold live.' },
     { ok: 'no', text: 'Checked before, but that check does not count for this letter.' },
   ] : [
-    { ok: 'no', text: 'Nothing live has been checked, so no promise is confirmed live.' },
+    { ok: 'no', text: 'Nothing live has been checked, so no chain is confirmed to hold live.' },
     { ok: 'no', text: 'Never checked against live.' },
   ];
   if (!live) return none;
@@ -718,8 +718,8 @@ export function gradeModel({ pack = null, how = 'none', diagnostic = null, diagn
       tone: toneForLetter(letter), title: `${letter} · ${run.grade.letterLabel || ig.label}${ig.blurb ? ` — ${ig.blurb}` : ''}`,
       basis: recording ? 'recording' : 'live',
       ...criteria,
-      // The objectives the scan derived from alert names root no promise: said where the letter is.
-      ...(Number(run.traceability?.placeholderRoots) > 0 ? { placeholders: `${run.traceability.placeholderRoots} placeholder objective${run.traceability.placeholderRoots === 1 ? '' : 's'} the scan derived from alert names root${run.traceability.placeholderRoots === 1 ? 's' : ''} no promise: what drifted is scored on what was compared.` } : {}),
+      // The objectives the scan derived from alert names root no chain: said where the letter is.
+      ...(Number(run.traceability?.placeholderRoots) > 0 ? { placeholders: `${run.traceability.placeholderRoots} placeholder objective${run.traceability.placeholderRoots === 1 ? '' : 's'} the scan derived from alert names root${run.traceability.placeholderRoots === 1 ? 's' : ''} no chain: what drifted is scored on what was compared.` } : {}),
       ...gradeWhy({ diagnostic, run, letter, score: run.grade.score, against, where: recording ? 'in the recording' : 'live', now, off }),
     };
   }
@@ -1607,9 +1607,9 @@ export function fidelityModel({ run = null, journey = null, pack = null, now = D
   const integrity = Number(t.integrityPct);
   const chains = total ? {
     total, intact: n(t.intact), partial: n(t.partial), broken: n(t.broken), integrityPct: Number.isFinite(integrity) ? integrity : null,
-    // Whole promises: every link holds (intact), a link runs differently
-    // (partial), a link the promise rests on is missing (broken).
-    sentence: `${n(t.intact)} of ${total} promises hold in every link${n(t.partial) ? `, ${n(t.partial)} in part` : ''}${n(t.broken) ? `, ${n(t.broken)} broken` : ''}.`,
+    // Whole chains: every link holds (intact), a link runs differently
+    // (partial), a link the chain rests on is missing (broken).
+    sentence: `${n(t.intact)} of ${total} chain${total === 1 ? '' : 's'} hold${total === 1 ? 's' : ''} in every link${n(t.partial) ? `, ${n(t.partial)} in part` : ''}${n(t.broken) ? `, ${n(t.broken)} broken` : ''}.`,
   } : null;
   // A figure only where the record has one (Number(null) is 0).
   const pct = typeof d.alignmentPct === 'number' ? d.alignmentPct : NaN;
