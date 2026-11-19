@@ -15,7 +15,7 @@
 
 ### Tests
 - `tools/test-agreement.mjs` +2 (11): the comparison's status per declared artefact, the worse of two of one name; proven, in part, not live, not checked, an objective with its indicator and burn-rate alert, a link not in the scan, the cap in production and staging, no check read. `tools/test-agreement-score.mjs` +1 (6): *Proven live* from production's evidence, and every dimension scored. `tools/test-overview-model.mjs`: the column's line, the cap on hover, production's level in the form and *not checked* once a row's links change. `server/test-services-api.mjs`: two environments answered, capped 4 and 3, nothing with a level without a live check.
-- CHECKED_LINE
+- Checked signed in, in a browser at 1366×768, on a scratch studio whose four environments were each Run against a stand-in live endpoint: production — read whole — *Agreement: 1 of 2 commitments proven live, 1 in part.* (a dashboard it links to is not in the scan); staging — its dashboards not readable — *1 of 2 proven live, 1 not checked.*, capped at 3; dev — the live side did not answer — and uat — never run — *not checked live here yet.*; the agreement's points taking production's evidence; nothing past the width, no console error.
 - Suite total 2104 → 2107.
 - **Downstream:** none — tests only.
 

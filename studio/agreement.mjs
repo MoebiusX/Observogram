@@ -494,7 +494,7 @@ export function commitmentEvidence(version, known, status, { env = '', checkedAt
 export function evidenceSummary(ev) {
   const c = ev?.counts;
   if (!c || !c.commitments) return '';
-  if (c.notChecked === c.commitments) return 'The agreement is not checked live here yet.';
+  if (c.notChecked === c.commitments) return 'Not checked live here yet.';
   const rest = [c.part ? `${c.part} in part` : '', c.notLive ? `${c.notLive} not live` : '', c.notChecked ? `${c.notChecked} not checked` : ''].filter(Boolean).join(', ');
   return `${c.proven} of ${c.commitments} commitment${c.commitments === 1 ? '' : 's'} proven live${rest ? `, ${rest}` : ''}.`;
 }

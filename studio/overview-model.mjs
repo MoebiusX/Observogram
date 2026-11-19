@@ -3020,7 +3020,7 @@ export function evidenceCell(fact, env) {
   if (!c || !c.commitments) return null;
   const tone = c.notChecked === c.commitments ? 'neutral' : c.proven === c.commitments ? 'ok' : c.proven || c.part ? 'warn' : 'fail';
   const said = (ev.commitments || []).filter((x) => x.owner !== 'consumer').map((x) => `${x.id}: ${x.why}`);
-  return { words: `Agreement: ${evidenceSummary(ev)}`, tone, title: [`At most level ${ev.cap} here${ev.cap < 4 ? ' — 4 only with production' : ''}.`, ...said].join('\n') };
+  return { words: `Agreement: ${evidenceSummary(ev).replace(/^Not /, 'not ')}`, tone, title: [`At most level ${ev.cap} here${ev.cap < 4 ? ' — 4 only with production' : ''}.`, ...said].join('\n') };
 }
 
 const AGR = 'agr:';

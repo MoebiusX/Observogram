@@ -303,6 +303,6 @@ test('commitmentEvidence: proven (the environment\'s cap), in part (2), not live
   // No live check read: nothing has a level.
   const none = commitmentEvidence(version, known, null, { env: 'dev' });
   assert.ok(none.commitments.every((c) => c.state === 'not-checked' && !('level' in c) && c.why === 'No live check of dev has been read.'));
-  assert.equal(evidenceSummary(none), 'The agreement is not checked live here yet.');
+  assert.equal(evidenceSummary(none), 'Not checked live here yet.');
   assert.equal(evidenceSummary(commitmentEvidence(V([]), known, status, { env: 'prod' })), '');
 });

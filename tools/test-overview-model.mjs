@@ -4567,7 +4567,7 @@ test('the agreement: its column on the Services list (drawn only where the host 
   };
   const withEvidence = { ...fact, evidence };
   assert.deepEqual(evidenceCell(withEvidence, 'prod'), { words: 'Agreement: 1 of 1 commitment proven live.', tone: 'ok', title: 'At most level 4 here.\nc-4-1: Everything it is linked to runs live as declared in prod.' });
-  assert.deepEqual([evidenceCell(withEvidence, 'staging').words, evidenceCell(withEvidence, 'staging').tone, evidenceCell(withEvidence, 'staging').title.split('\n')[0]], ['Agreement: The agreement is not checked live here yet.', 'neutral', 'At most level 3 here — 4 only with production.']);
+  assert.deepEqual([evidenceCell(withEvidence, 'staging').words, evidenceCell(withEvidence, 'staging').tone, evidenceCell(withEvidence, 'staging').title.split('\n')[0]], ['Agreement: not checked live here yet.', 'neutral', 'At most level 3 here — 4 only with production.']);
   assert.deepEqual([evidenceCell(withEvidence, 'dev'), evidenceCell(fact, 'prod'), evidenceCell({ error: 'x' }, 'prod')], [null, null, null]);
   const proofForm = agreementFormOpened(services, { serviceId: 7, fact: withEvidence, today: '2026-11-19' });
   assert.deepEqual([proofForm.proof.env, proofForm.proof.links['c-4-1']], ['prod', 'slo:checkout_99_9, dashboard:gone']);
